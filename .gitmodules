@@ -1,0 +1,15 @@
+[submodule "claude-code"]
+	path = claude-code
+	url = https://github.com/anthropics/claude-code.git
+[submodule "codex"]
+	path = codex
+	url = https://github.com/openai/codex.git
+[submodule "opencode"]
+	path = opencode
+	url = https://github.com/anomalyco/opencode.git
+[submodule "pi"]
+	path = pi
+	url = https://github.com/earendil-works/pi.git
+[submodule "aider"]
+	path = aider
+	url = https://github.com/Aider-AI/aider.git
