@@ -1,6 +1,19 @@
-# AI Agent — 编码 Agent 构建参考仓库
+# AI Agent
 
-从零构建最优编码 Agent 的参考资料集合。包含业界主流编码 Agent 的源码（作为 git submodule）和技术调研报告。
+从零构建最优编码 Agent。`keel/` 是项目本体，其余为参考资料。
+
+## 项目结构
+
+```
+ai_agent/
+├── keel/                # 本项目 — 编码 Agent 开发目录
+├── final-report.md      # 技术报告《从零构建最优编码 Agent》
+├── claude-code/         # [submodule] anthropics/claude-code
+├── codex/               # [submodule] openai/codex
+├── opencode/            # [submodule] anomalyco/opencode
+├── pi/                  # [submodule] earendil-works/pi
+└── aider/               # [submodule] Aider-AI/aider
+```
 
 ## 参考项目
 
