@@ -39,6 +39,10 @@ Layer rules (enforced by `tests/invariants/boundaries.test.ts`):
 - All interface properties `readonly`.
 - Pre-commit hook auto-formats staged files.
 
+## Development
+
+**BDD: test first, then implement.** Every feature starts with a failing test in GWTE format. Write the test, watch it fail, then write the minimum code to make it pass. Do not write implementation code without a corresponding test.
+
 ## Testing
 
 See [TESTING.md](TESTING.md). Summary:
