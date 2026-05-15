@@ -3,9 +3,13 @@ name: CI
 on:
   push:
     branches: [main]
-    paths: [keel/**]
+    paths:
+      - keel/**
+      - "!keel/**/*.md"
   pull_request:
-    paths: [keel/**]
+    paths:
+      - keel/**
+      - "!keel/**/*.md"
 
 defaults:
   run:
