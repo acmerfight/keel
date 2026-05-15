@@ -1,5 +1,9 @@
 #!/bin/sh
 
-cd keel || exit 0
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
-pnpm biome check --write --staged --files-ignore-unknown=true --no-errors-on-unmatched && git update-index --again
+cd keel || exit 0
+nvm use > /dev/null 2>&1
+
+pnpm tsc --noEmit && pnpm biome check --write --staged --files-ignore-unknown=true --no-errors-on-unmatched && git update-index --again
