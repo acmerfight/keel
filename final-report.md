@@ -297,8 +297,8 @@ Discussion #6801 [✅]："Goose is not really usable out of the box and does not
 | noUncheckedIndexedAccess | 未知 | 未知 | **否** [✅] | N/A | N/A | **否** [✅] | N/A | **是** |
 | exactOptionalPropertyTypes | 未知 | 未知 | **否** [✅] | N/A | N/A | **否** [✅] | N/A | **是** |
 | Property testing (fast-check) | 未知 | **否** [✅] | **否** [✅] | **否** [✅] | **否** [✅] | 否 | 否 | **是** |
-| Fuzz testing (agent loop) | 未知 | **否** | **否** | **否** | **否** | **否** | **否** | **是** |
-| 资源稳定性 soak test | 未知 | **否** [✅ 所以有 63GB 泄漏] | **否** | **否** | **否** | **否** | **否** | **是** |
+| Adversarial testing (agent loop) | 未知 | **否** | **否** | **否** | **否** | **否** | **否** | **是（手写对抗场景，非覆盖引导 fuzz）** |
+| 资源稳定性 soak test | 未知 | **否** [✅ 所以有 63GB 泄漏] | **否** | **否** | **否** | **否** | **否** | **是（200+ 轮，强制 GC 后量 heap）** |
 | Coverage 公开 | 否 | **否** [✅] | **否** [✅] | **否** [✅] | 否 | 否 | 否 | **是 (badge)** |
 | Faux Provider E2E | 未知 | 否 | 是 [✅] | 否 | 否 | 否 | 否 | **是** |
 | VCR cassettes (Phase 1) | 未知 | 是 [✅] | 否 | 否 | 否 | 否 | 否 | **是** |
@@ -306,13 +306,18 @@ Discussion #6801 [✅]："Goose is not really usable out of the box and does not
 **结论**：
 
 - **零个**开源编码 agent 使用 property-based testing [✅ 全部验证]
-- **零个**使用 agent loop fuzz testing [✅]
+- **零个**使用 agent loop adversarial testing（手写对抗场景）[✅]
 - **零个**使用自动化资源稳定性测试 [✅ OpenCode 的 63GB 泄漏即证明]
 - **零个**公开发布覆盖率 [✅]
 - 最好的（OpenCode）也只做到 VCR cassettes 一项；Pi 做到 Faux Provider 一项
 - **没有任何项目同时具备以上实践**
 
-本项目在 Phase 0-1 中具备：property testing + fuzz testing + soak test + coverage 公开 + Faux Provider + VCR cassettes。这可通过 CI pipeline 和公开 badge 客观验证。
+本项目在 Phase 0-1 中计划具备：property testing + adversarial testing + soak test + coverage 公开 + Faux Provider + VCR cassettes。这可通过 CI pipeline 和公开 badge 客观验证。
+
+**诚实声明**：以上是方法论设计，截至本报告日期尚未实现。方法论分类数量不等于测试质量——220 个真实测试（Pi）比 6 个空类别更有价值。"工程质量业界第一"是待验证的目标，不是现有事实。此外，以下维度本报告未覆盖，需在后续 Phase 补充：
+- **真实 LLM 评测**（SWE-bench / CORE-Bench）：mock 测试只能验证 harness 正确性，无法替代真实任务完成率评估
+- **Prompt 回归测试**：system prompt 变更后需用真实 LLM 检测行为退化，Fake Provider 无法覆盖
+- **安全测试**：路径遍历、命令注入、沙箱逃逸
 
 ### 5.0.1 如何证明"工程质量业界第一"
 
@@ -321,14 +326,14 @@ Discussion #6801 [✅]："Goose is not really usable out of the box and does not
 | 实践 | 证据 | 验证方式 |
 |------|------|---------|
 | 最严格 TypeScript | tsconfig.json 含 noUncheckedIndexedAccess + exactOptionalPropertyTypes | `tsc --noEmit` |
-| Property testing | `@fast-check/vitest` in package.json + tests/unit/ 中的 property test | CI 日志可见 |
-| Fuzz testing | `tests/fuzz/` 目录，注入畸形 LLM 响应 | CI 日志可见 |
-| Soak test | `tests/stability/` 目录，assert RSS < 500MB after 50 calls | CI 日志可见 |
+| Property testing | `@fast-check/vitest` in package.json + `tests/property/` 中的 property test | CI 日志可见 |
+| Adversarial testing | `tests/adversarial/` 目录，手写畸形 LLM 响应场景 | CI 日志可见 |
+| Soak test | `tests/stability/` 目录，200+ 轮，`--expose-gc` + 强制 GC + `v8.getHeapStatistics()` | CI 日志可见 |
 | Coverage | `@vitest/coverage-v8` 配置，badge 在 README | Coveralls / Codecov badge |
-| Faux Provider E2E | `src/llm/providers/faux.ts` + `tests/integration/` | 测试代码公开 |
+| Fake Provider E2E | `src/llm/providers/fake.ts` + `tests/e2e/` | 测试代码公开 |
 | VCR cassettes (Phase 1) | `tests/cassettes/{anthropic,openai}/` | fixture 文件公开 |
 
-当所有这些都在 CI 中通过并且 badge 公开时，**任何人都可以验证这个项目的工程质量超过现有所有开源编码 agent**。
+当所有这些都在 CI 中通过并且 badge 公开时，任何人都可以验证这些实践的存在。但"工程质量业界第一"还需要真实 LLM 评测的支撑。
 
 ### 5.0.2 为什么这些实践直接提升 Harness 质量
 
@@ -336,8 +341,8 @@ Discussion #6801 [✅]："Goose is not really usable out of the box and does not
 |------|-------------------|-------------|
 | noUncheckedIndexedAccess | 数组越界、空 map 访问 | — |
 | Property testing (edit tool) | 所有编辑边界情况 | Cline 60-70% 成功率 [✅ #4384] |
-| Fuzz testing (loop) | 畸形流/超时/断连下的挂死 | Codex 无限挂起 [✅ #14048]，Goose 中途停止 [✅ #3739] |
-| Soak test | 内存/磁盘泄漏 | OpenCode 63GB [✅ #22018]，318GB 磁盘 [✅ #9290] |
+| Adversarial testing (loop) | 畸形流/超时/断连下的挂死 | Codex 无限挂起 [✅ #14048]，Goose 中途停止 [✅ #3739] |
+| Soak test (200+ 轮, 强制 GC) | 内存/磁盘泄漏 | OpenCode 63GB [✅ #22018]，318GB 磁盘 [✅ #9290] |
 
 ---
 
@@ -436,18 +441,28 @@ Claude Code 的 system prompt 还包含关键行为指令 [✅ 泄漏 prompt 直
 
 ### 6.9 测试体系
 
+**静态检查（零运行时成本）：**
+
 | 层 | 工具 | 验证目标 |
 |----|------|---------|
 | 类型 | tsc strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes [✅ TS 文档] | 编译期安全 |
 | Lint | Biome v2 [✅ Pi 使用] | 代码风格一致性 |
-| Unit | Vitest [✅ Pi 使用] | 纯函数正确性 |
-| Property | fast-check [✅ 10M+ weekly downloads] | 边界/随机输入 |
-| Fuzz | 畸形 LLM 响应注入 | Loop 永不挂死 |
-| Integration | Faux Provider（Pi 模式）[✅] | Agent loop + 真实工具 |
-| Provider | VCR cassettes（OpenCode 模式）[✅]，Phase 1 | Wire format 正确性 |
-| Stability | Soak test (50 calls) | 资源不泄漏 |
-| Coverage | @vitest/coverage-v8 + badge | 公开可验证 |
-| Invariant | import 检查测试强制模块边界（~50 行） | 防止 god object（参考附录 B）|
+| Dead code | knip | 未使用导出和依赖 |
+
+**运行时测试（6 层，按执行顺序）：**
+
+| # | 层 | 工具 | 验证目标 | 目录 |
+|---|---|------|---------|------|
+| 1 | Invariant | import 检查（~50 行） | 模块边界不被破坏 | `tests/invariants/` |
+| 2 | Property | fast-check [✅ 10M+ weekly downloads] | 纯函数边界/随机输入 | `tests/property/` |
+| 3 | Fake E2E | Fake Provider（Pi 模式）[✅] + 真实工具 | Agent loop 行为正确 | `tests/e2e/` |
+| 4 | VCR Cassettes | 录制回放（OpenCode 模式）[✅]，Phase 1 | Wire format 解析正确 | `tests/cassettes/` |
+| 5 | Adversarial | 手写畸形 LLM 响应场景（非覆盖引导 fuzz） | Loop 永不挂死 | `tests/adversarial/` |
+| 6 | Soak | 200+ 轮，`--expose-gc` + 强制 GC + `v8.getHeapStatistics()` | 资源不泄漏 | `tests/stability/` |
+
+**覆盖率**：@vitest/coverage-v8 + 公开 badge
+
+**已知空白（后续 Phase 补充）**：真实 LLM 评测（SWE-bench / CORE-Bench）、Prompt 回归测试、安全测试（路径遍历 / 命令注入）
 
 ---
 
@@ -497,11 +512,12 @@ src/
     readline.ts        — Phase 0-2: readline + 流式逐 token 输出
     
 tests/
-  unit/                — 纯函数测试
-  integration/         — Faux provider + 真实工具
-  fuzz/                — 畸形输入 loop 测试
-  cassettes/           — VCR 录制（按 provider 分目录）
-  stability/           — 长 session 资源监控
+  invariants/          — 模块边界断言
+  property/            — fast-check 随机输入测试
+  e2e/                 — Fake provider + 真实工具（按能力命名）
+  cassettes/           — VCR 录制（按 provider 分目录，Phase 1）
+  adversarial/         — 手写畸形输入 loop 测试
+  stability/           — 长 session 资源监控（Phase 1）
 ```
 
 ### 7.2 扩展性架构
@@ -684,7 +700,7 @@ edit(old_string, new_string):
   - 进程退出信号 → cleanup + 保存
 ```
 
-测试：Faux provider 注入 {空流, 畸形JSON, partial tool call, 随机断连, 10000 个连续 tool call}，assert: 所有情况以 `agent_end` 终结。
+测试：Fake provider 注入手写对抗场景 {空流, 畸形JSON, partial tool call, 随机断连, 10000 个连续 tool call}，assert: 所有情况以 `agent_end` 终结。（注意：这是手写对抗场景，非覆盖引导 fuzz。）
 
 **维度 3：Token 效率（不差于同类 CLI agent）**
 ```
@@ -711,7 +727,7 @@ Phase 2 可选优化（repo-map）：
   - 大文件 read → 分段 + 只返回请求的行范围
 ```
 
-测试：CI 中运行 50 轮 tool call 的 soak test，监控 RSS，assert < 500 MB。
+测试：CI 中运行 200+ 轮 tool call 的 soak test，`--expose-gc` + 强制 GC + `v8.getHeapStatistics()` 量 heap（非 RSS，因 V8 GC 惰性导致 RSS 不可靠），assert heap delta < 阈值。
 
 **维度 5：错误恢复率 100% 不挂死**
 ```
@@ -743,7 +759,7 @@ LLM 异常 → retry with backoff → 超过 maxRetries → 返回错误给用�
 | tools/(bash + read + write + edit) | ~800 行 |
 | core/(config + logger + cost + **git** + **rules**) | ~500 行 |
 | cli/readline.ts（含**流式逐 token 终端输出**） | ~200 行 |
-| tests/(unit + integration + fuzz) | ~1,200 行 |
+| tests/(e2e + property + adversarial + invariants) | ~1,200 行 |
 | **总计** | **~4,800 行** |
 
 **Phase 0 完成标准**：
@@ -752,7 +768,7 @@ LLM 异常 → retry with backoff → 超过 maxRetries → 返回错误给用�
 - [ ] 每次文件修改前自动 **git checkpoint**，`/undo` 可回退
 - [ ] 项目规则文件（`.agent-rules` 或类似）被加载到 system prompt
 - [ ] 编辑成功率 property test 通过（1000 随机用例）
-- [ ] Loop fuzz test 通过（100 种畸形 LLM 响应）
+- [ ] Loop adversarial test 通过（100 种畸形 LLM 响应）
 - [ ] 成本追踪工作（每次调用显示 token 消耗）
 
 ### Phase 1: 可用（+3-4 周）
@@ -795,7 +811,7 @@ LLM 异常 → retry with backoff → 超过 maxRetries → 返回错误给用�
 |------|-------------|------------|---------|-----|-------|
 | 开源 | MIT | 无许可证 [✅] | MIT [✅] | MIT [✅] | Apache-2.0 [✅] |
 | 编辑成功率 | 99%+ (property test 证明) | ~95% | 未知 | ~95% | ~95% (fuzzy) |
-| 循环挂死 | 不可能 (fuzz test 证明) | 有 [✅ #13188] | 有 (#8203) | 未知 | 未知 |
+| 循环挂死 | 不可能 (adversarial test 证明) | 有 [✅ #13188] | 有 (#8203) | 未知 | 未知 |
 | 内存泄漏 | 不可能 (soak test 证明) | 未知 | 有 [✅ #20695] | 未知 | 合理 |
 | Token 效率 | LLM 自主探索 + 成本追踪（repo-map 按需加） | LLM 驱动探索 [高消耗] | 未知 | 无 repo-map | repo-map [最高效] |
 | MCP | 有 (SDK v1) | 有 | 有 | **无** [✅] | **无** [✅] |
@@ -805,9 +821,9 @@ LLM 异常 → retry with backoff → 超过 maxRetries → 返回错误给用�
 | Session 持久化 | Phase 2 按需 | 有 | 有 | 有 | 有 |
 | 流式输出 | 有（逐 token） | 有 | 有 | 有 | 有 |
 | 项目规则文件 | 有（.agent-rules） | 有（CLAUDE.md） | 有 | 有 | 有（.aiderules） |
-| 测试体系 | 5 层 (unit+property+fuzz+integration+VCR) | 未知(闭源) | VCR [✅] | Faux [✅] | Mock [✅] |
+| 测试体系 | 6 层 (invariant+property+e2e+VCR+adversarial+soak) | 未知(闭源) | VCR [✅] | Faux [✅] | Mock [✅] |
 | Property testing | **有** | 未知(闭源) | **否** [✅] | **否** [✅] | **否** [✅] |
-| Fuzz testing | **有** | 未知(闭源) | **否** [✅] | **否** [✅] | **否** [✅] |
+| Adversarial testing | **有（手写对抗场景）** | 未知(闭源) | **否** [✅] | **否** [✅] | **否** [✅] |
 | Soak test | **有** | 未知(闭源) | **否** [✅] | **否** [✅] | **否** [✅] |
 | Coverage 公开 | **有** | 否 | **否** [✅] | **否** [✅] | **否** [✅] |
 | 框架依赖 | 无重型框架 | 闭源 | Effect-TS [✅] | 无 | litellm |
@@ -994,7 +1010,7 @@ test('loop.ts does not import fs/child_process', () => {
 | SkillRouter/SkillInjector | .agent-rules 文件注入 system prompt 已满足需求 |
 | SessionStore 核心基建 | Phase 2 按需。append-only event log 设计干净但不急 |
 | TraceStore 结构化追踪 | Phase 2 按需。对调试有价值但 Phase 0 先用日志 |
-| Eval trace grader | fuzz + property test 先够用 |
+| Eval trace grader | adversarial + property test 先够用 |
 
 ### 该方案与本报告的目标差异
 
@@ -1002,7 +1018,7 @@ test('loop.ts does not import fs/child_process', () => {
 |---|--------|--------|
 | 核心目标 | 边界比 Pi 更硬（架构美学） | 同模型同 prompt 下 harness 执行质量最高（可测量工程指标） |
 | 测试重心 | 每个模块独立可测 | **E2E 优先**（完整 agent loop + 真实工具执行） |
-| 质量度量 | 未提及具体指标 | 6 个可测量维度 + property/fuzz 证明 |
+| 质量度量 | 未提及具体指标 | 6 个可测量维度 + property/adversarial 证明 |
 | 竞品数据 | 无（未引用 GitHub Issues 或 benchmark） | 35 个 Issue 逐个验证 [✅] |
 | MCP | 未提及 | Phase 1 集成 |
 | Git 集成 | 未提及 | Phase 0 内建 |
