@@ -1,5 +1,38 @@
-import type { LLMProvider } from "../types.ts";
+import type { LLMProvider, Usage } from "../types.ts";
 
-export const fakeProvider: LLMProvider = {
-  id: "fake",
-};
+export interface FakeResponse {
+  readonly text: string;
+  readonly tokenize?: boolean;
+  readonly usage?: Usage;
+}
+
+export function createFakeProvider(
+  script: readonly FakeResponse[],
+): LLMProvider {
+  let turn = 0;
+
+  return {
+    id: "fake",
+    async *stream() {
+      const response = script[turn];
+      turn++;
+
+      if (response === undefined) {
+        throw new Error("fake provider: script exhausted");
+      }
+
+      if (response.tokenize) {
+        for (const char of response.text) {
+          yield { type: "text" as const, text: char };
+        }
+      } else {
+        yield { type: "text" as const, text: response.text };
+      }
+
+      yield {
+        type: "stop" as const,
+        usage: response.usage ?? { inputTokens: 0, outputTokens: 0 },
+      };
+    },
+  };
+}

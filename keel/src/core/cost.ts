@@ -1,4 +1,1 @@
-export interface Usage {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-}
+export type { Usage } from "../llm/types.ts";
