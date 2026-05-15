@@ -23,14 +23,14 @@ export function createFakeProvider(
 
       if (response.tokenize) {
         for (const char of response.text) {
-          yield { type: "text" as const, text: char };
+          yield { type: "text", text: char };
         }
       } else {
-        yield { type: "text" as const, text: response.text };
+        yield { type: "text", text: response.text };
       }
 
       yield {
-        type: "stop" as const,
+        type: "stop",
         usage: response.usage ?? { inputTokens: 0, outputTokens: 0 },
       };
     },

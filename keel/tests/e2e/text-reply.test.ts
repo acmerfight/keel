@@ -1,6 +1,27 @@
 import { describe, expect, test } from "vitest";
-import { runAgent } from "../../src/agent/loop.ts";
+import { type AgentEvent, runAgent } from "../../src/agent/loop.ts";
 import { createFakeProvider } from "../../src/llm/providers/fake.ts";
+
+type TextEvent = Extract<AgentEvent, { readonly type: "text" }>;
+type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
+
+function isText(e: AgentEvent): e is TextEvent {
+  return e.type === "text";
+}
+
+function isEnd(e: AgentEvent): e is EndEvent {
+  return e.type === "end";
+}
+
+async function collect(
+  source: AsyncIterable<AgentEvent>,
+): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+  for await (const event of source) {
+    events.push(event);
+  }
+  return events;
+}
 
 describe("Text Reply", () => {
   test("Given a fake LLM, When user sends a message, Then agent replies with text", async () => {
@@ -8,23 +29,22 @@ describe("Text Reply", () => {
     const provider = createFakeProvider([{ text: "Hello! How can I help?" }]);
 
     // When
-    const events: Array<{ readonly type: string; readonly text?: string }> = [];
-    for await (const event of runAgent({
-      provider,
-      userMessage: "hi",
-      systemPrompt: "You are a helpful assistant.",
-    })) {
-      events.push(event);
-    }
+    const events = await collect(
+      runAgent({
+        provider,
+        userMessage: "hi",
+        systemPrompt: "You are a helpful assistant.",
+      }),
+    );
 
     // Then
-    const textEvents = events.filter((e) => e.type === "text");
+    const textEvents = events.filter(isText);
     expect(textEvents.length).toBeGreaterThan(0);
     expect(textEvents.map((e) => e.text).join("")).toBe(
       "Hello! How can I help?",
     );
 
-    const endEvents = events.filter((e) => e.type === "end");
+    const endEvents = events.filter(isEnd);
     expect(endEvents).toHaveLength(1);
   });
 
@@ -33,17 +53,16 @@ describe("Text Reply", () => {
     const provider = createFakeProvider([{ text: "Hi", tokenize: true }]);
 
     // When
-    const events: Array<{ readonly type: string; readonly text?: string }> = [];
-    for await (const event of runAgent({
-      provider,
-      userMessage: "hello",
-      systemPrompt: "You are a helpful assistant.",
-    })) {
-      events.push(event);
-    }
+    const events = await collect(
+      runAgent({
+        provider,
+        userMessage: "hello",
+        systemPrompt: "You are a helpful assistant.",
+      }),
+    );
 
     // Then
-    const textEvents = events.filter((e) => e.type === "text");
+    const textEvents = events.filter(isText);
     expect(textEvents).toHaveLength(2);
     expect(textEvents[0]?.text).toBe("H");
     expect(textEvents[1]?.text).toBe("i");
@@ -56,23 +75,16 @@ describe("Text Reply", () => {
     ]);
 
     // When
-    const events: Array<{
-      readonly type: string;
-      readonly usage?: {
-        readonly inputTokens: number;
-        readonly outputTokens: number;
-      };
-    }> = [];
-    for await (const event of runAgent({
-      provider,
-      userMessage: "summarize",
-      systemPrompt: "You are a helpful assistant.",
-    })) {
-      events.push(event);
-    }
+    const events = await collect(
+      runAgent({
+        provider,
+        userMessage: "summarize",
+        systemPrompt: "You are a helpful assistant.",
+      }),
+    );
 
     // Then
-    const endEvent = events.find((e) => e.type === "end");
+    const endEvent = events.find(isEnd);
     expect(endEvent?.usage).toEqual({ inputTokens: 100, outputTokens: 10 });
   });
 
@@ -84,18 +96,17 @@ describe("Text Reply", () => {
     ]);
 
     // When
-    const events: Array<{ readonly type: string; readonly text?: string }> = [];
-    for await (const event of runAgent({
-      provider,
-      userMessage: "hi",
-      systemPrompt: "You are helpful.",
-    })) {
-      events.push(event);
-    }
+    const events = await collect(
+      runAgent({
+        provider,
+        userMessage: "hi",
+        systemPrompt: "You are helpful.",
+      }),
+    );
 
     // Then
     const textContent = events
-      .filter((e) => e.type === "text")
+      .filter(isText)
       .map((e) => e.text)
       .join("");
     expect(textContent).toBe("First reply.");
