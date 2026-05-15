@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@9.7.0",
   "engines": {
     "node": ">=24.13.1"
   },
@@ -22,7 +23,7 @@
     "postinstall": "simple-git-hooks"
   },
   "simple-git-hooks": {
-    "pre-commit": "pnpm biome check --write --staged --files-ignore-unknown=true --no-errors-on-unmatched && git update-index --again"
+    "pre-commit": "pnpm tsc --noEmit && pnpm biome check --write --staged --files-ignore-unknown=true --no-errors-on-unmatched && git update-index --again"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.13",
