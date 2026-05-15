@@ -54,6 +54,13 @@ Never push directly to main. Always use a PR and wait for CI to pass. Workflow:
 3. Wait for CI (typecheck → lint → test → knip) to pass
 4. Squash merge to main (only merge strategy allowed)
 
+PR summary format (English, diff against latest main before writing):
+
+- **Problem:** what was wrong or missing
+- **Solution:** what this PR changes
+- **Why:** why this approach solves the problem
+- **Effect:** what improves after merge
+
 ## Testing
 
 See [TESTING.md](TESTING.md). Summary:
