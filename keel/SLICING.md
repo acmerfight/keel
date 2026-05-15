@@ -2,6 +2,14 @@
 
 How to slice work in this project. Every task, feature, and iteration follows these rules.
 
+## Checklist (execute before every implementation task)
+
+1. **State the slice in one sentence:** "After this, a user can ___." If you can't fill the blank, you're slicing horizontally — shrink scope.
+2. **Write the e2e test first** (GWTE format). The test is the slice definition.
+3. **Implement only what the failing test demands.** Do not create files, types, or modules that no test requires.
+4. **Build on the existing working system.** Do not rewrite or replace what already works.
+5. **Before opening a PR, verify:** can someone run the result and see it do something? If no, the slice is not done.
+
 ## The Rule
 
 Each deliverable is a vertical slice: a user can run it end-to-end and get a result. If a user can't use what you shipped, you shipped nothing.
