@@ -3,8 +3,8 @@
 ## Principles
 
 1. **Only mock LLM.** `fake` provider is the sole seam. Everything else — filesystem, processes, git — is real. Isolation means tmpdir, not mock.
-2. **BDD.** GWTE format (Given-When-Then-Expect). Business language. `vitest --reporter=verbose` output reads as product spec.
-3. **If it's not tested, it doesn't exist.**
+2. **BDD.** Tests are written in business language using GWTE (Given-When-Then-Expect). PM can read `vitest --reporter=verbose` output as product spec — no code knowledge required.
+3. **Tests = product documentation.** If a behavior isn't in the test suite, it doesn't exist. If a test passes, the feature works.
 
 ## Shape
 
@@ -23,16 +23,24 @@ test("Given a buggy file, When user asks to fix it, Then the file is corrected",
 });
 ```
 
-## Layers
+PM sees:
+
+```
+File Editing
+  ✓ Given a buggy file, When user asks to fix it, Then the file is corrected
+  ✓ Given a multi-file project, When user renames a variable, Then all references are updated
+Error Recovery
+  ✓ Given a read-only file, When agent tries to edit it, Then agent reports the failure
+Cost Control
+  ✓ Given a session cost limit, When cost exceeds the limit, Then agent stops
+```
+
+## Structure
 
 ```
 tests/
-  invariants/    — Module boundary assertions
-  property/      — fast-check random inputs for pure functions
-  e2e/           — Agent behaviors via Fake Provider + real tools in tmpdir
-  cassettes/     — VCR recorded responses per provider (Phase 1)
-  adversarial/   — Hand-written hostile LLM scenarios (not coverage-guided fuzz)
-  stability/     — 200+ round soak, forced GC, heap delta assertion (Phase 1)
+  e2e/           — Agent behaviors, named by capability (file-editing, error-recovery, ...)
+  invariants/    — Architecture guards (module boundary assertions)
 ```
 
 ## Do NOT
