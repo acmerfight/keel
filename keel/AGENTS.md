@@ -59,3 +59,5 @@ See [TESTING.md](TESTING.md). Summary:
 1. Only mock LLM (`fake` provider). Everything else is real.
 2. BDD with GWTE format. Business language. Tests = product spec.
 3. No vi.mock, no mocking internals, no testing private functions.
+4. Six runtime layers: invariant → property → e2e → VCR → adversarial → soak.
+5. "Adversarial" = hand-written hostile scenarios. Do not call it "fuzz testing."
