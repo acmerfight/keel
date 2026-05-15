@@ -1,0 +1,12 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/core/*.ts",
+    "src/llm/**/*.ts",
+    "src/agent/*.ts",
+    "src/tools/*.ts",
+    "src/mcp/*.ts"
+  ],
+  "project": ["src/**/*.ts"],
+  "ignoreDependencies": ["@fast-check/vitest", "fast-check", "zod"]
+}

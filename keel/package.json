@@ -1,0 +1,44 @@
+{
+  "name": "keel",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.13.1"
+  },
+  "bin": {
+    "keel": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "dev": "node --watch src/cli/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "knip": "knip",
+    "postinstall": "simple-git-hooks"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm biome check --write --staged --files-ignore-unknown=true --no-errors-on-unmatched && git update-index --again"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.13",
+    "@fast-check/vitest": "^0.4.1",
+    "@types/node": "^24.12.4",
+    "@vitest/coverage-v8": "^4.1.6",
+    "fast-check": "^4.8.0",
+    "knip": "^6.13.1",
+    "simple-git-hooks": "^2.13.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6",
+    "zod": "^4.4.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "simple-git-hooks"
+    ]
+  }
+}
