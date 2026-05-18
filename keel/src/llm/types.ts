@@ -19,5 +19,5 @@ export interface StreamOptions {
 
 export interface LLMProvider {
   readonly id: string;
-  stream(options: StreamOptions): AsyncIterable<LLMEvent>;
+  readonly stream: (options: StreamOptions) => AsyncIterable<LLMEvent>;
 }
