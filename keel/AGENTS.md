@@ -38,6 +38,7 @@ Layer rules (enforced by `tests/invariants/boundaries.test.ts`):
 - No comments unless the WHY is non-obvious.
 - All interface properties `readonly`.
 - Use function property syntax for interface methods (`readonly fn: (x: T) => R`), not method syntax (`fn(x: T): R`). Method syntax bypasses `strictFunctionTypes`.
+- No `as` type assertions. Use type guards, `satisfies`, or schema validation (Zod) to prove types. `as const` is allowed.
 - Pre-commit hook auto-formats staged files.
 
 ## Type Precision
