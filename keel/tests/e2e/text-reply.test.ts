@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 import { type AgentEvent, runAgent } from "../../src/agent/loop.ts";
-import { createFakeProvider } from "../../src/llm/providers/fake.ts";
+import {
+  createFakeProvider,
+  fakeResponse,
+} from "../../src/llm/providers/fake.ts";
 
 type TextEvent = Extract<AgentEvent, { readonly type: "text" }>;
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
@@ -26,7 +29,9 @@ async function collect(
 describe("Text Reply", () => {
   test("Given a fake LLM, When user sends a message, Then agent replies with text", async () => {
     // Given
-    const provider = createFakeProvider([{ text: "Hello! How can I help?" }]);
+    const provider = createFakeProvider([
+      fakeResponse("Hello! How can I help?"),
+    ]);
 
     // When
     const events = await collect(
@@ -50,7 +55,7 @@ describe("Text Reply", () => {
 
   test("Given a fake LLM that streams token-by-token, When user sends a message, Then agent emits each token as a separate text event", async () => {
     // Given
-    const provider = createFakeProvider([{ text: "Hi", tokenize: true }]);
+    const provider = createFakeProvider([fakeResponse("Hi", true)]);
 
     // When
     const events = await collect(
@@ -71,7 +76,7 @@ describe("Text Reply", () => {
   test("Given a fake LLM with usage info, When agent finishes, Then end event contains usage", async () => {
     // Given
     const provider = createFakeProvider([
-      { text: "Done.", usage: { inputTokens: 100, outputTokens: 10 } },
+      fakeResponse("Done.", false, { inputTokens: 100, outputTokens: 10 }),
     ]);
 
     // When
@@ -91,8 +96,8 @@ describe("Text Reply", () => {
   test("Given a fake LLM with multiple turns scripted, When agent runs, Then only the first turn is consumed for a text-only reply", async () => {
     // Given
     const provider = createFakeProvider([
-      { text: "First reply." },
-      { text: "Second reply (should not be reached)." },
+      fakeResponse("First reply."),
+      fakeResponse("Second reply (should not be reached)."),
     ]);
 
     // When

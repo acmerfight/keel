@@ -2,8 +2,16 @@ import type { LLMProvider, Usage } from "../types.ts";
 
 export interface FakeResponse {
   readonly text: string;
-  readonly tokenize?: boolean;
-  readonly usage?: Usage;
+  readonly tokenize: boolean;
+  readonly usage: Usage;
+}
+
+export function fakeResponse(
+  text: string,
+  tokenize = false,
+  usage: Usage = { inputTokens: 0, outputTokens: 0 },
+): FakeResponse {
+  return { text, tokenize, usage };
 }
 
 export function createFakeProvider(
@@ -29,10 +37,7 @@ export function createFakeProvider(
         yield { type: "text", text: response.text };
       }
 
-      yield {
-        type: "stop",
-        usage: response.usage ?? { inputTokens: 0, outputTokens: 0 },
-      };
+      yield { type: "stop", usage: response.usage };
     },
   };
 }
