@@ -39,6 +39,47 @@ Layer rules (enforced by `tests/invariants/boundaries.test.ts`):
 - All interface properties `readonly`.
 - Pre-commit hook auto-formats staged files.
 
+## Type Precision
+
+Default to required. Only use `?` or `| undefined` when you can name the semantic reason.
+
+Decision:
+
+1. "Does this field always exist at runtime?" → required
+2. "Is absence meaningful (not the same as a default value)?" → `?` (property can be omitted)
+3. "Must be present, but value can be explicitly nothing?" → `| null`
+4. Never use `| undefined` on data types — with `exactOptionalPropertyTypes`, use `?` for absence or redesign to avoid it
+
+Common mistakes:
+
+- ❌ `?` because "the caller might not pass it" — put defaults in a factory function
+- ❌ `?` because "it might be zero/empty string" — zero and empty string are values, not absence
+- ❌ `Partial<T>` as the data type — use it only at call boundaries (function params, spread overrides)
+
+Pattern:
+
+```typescript
+// Data type: all required
+interface Response {
+  readonly text: string;
+  readonly tokenize: boolean;
+  readonly usage: Usage;
+}
+
+// Construction: factory with defaults
+function response(text: string, tokenize = false, usage = DEFAULT_USAGE): Response {
+  return { text, tokenize, usage };
+}
+```
+
+When `?` IS correct:
+
+- Config the user may omit (absence = use system default)
+- External API fields that may be absent
+- PATCH DTOs (only send changed fields)
+
+Litmus test: if you would write `?? defaultValue` every time you read this field, it is required — the default belongs in a factory, not in the type.
+
 ## Development
 
 **BDD: test first, then implement.** Every feature starts with a failing test in GWTE format. Write the test, watch it fail, then write the minimum code to make it pass. Do not write implementation code without a corresponding test.
