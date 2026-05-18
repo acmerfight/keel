@@ -4,6 +4,7 @@ import {
   createFakeProvider,
   fakeResponse,
 } from "../../src/llm/providers/fake.ts";
+import type { LLMProvider } from "../../src/llm/types.ts";
 
 type TextEvent = Extract<AgentEvent, { readonly type: "text" }>;
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
@@ -97,5 +98,28 @@ describe("Text Reply", () => {
     // Then
     const endEvent = events.find(isEnd);
     expect(endEvent?.usage).toEqual({ inputTokens: 100, outputTokens: 10 });
+  });
+
+  test(`Given the LLM stream ends unexpectedly,
+    When agent detects missing stop signal,
+    Then agent throws an error`, async () => {
+    // Given
+    const brokenProvider: LLMProvider = {
+      id: "broken",
+      async *stream() {
+        yield { type: "text", text: "partial respon" };
+      },
+    };
+
+    // When / Then
+    await expect(
+      collect(
+        runAgent({
+          provider: brokenProvider,
+          userMessage: "hi",
+          systemPrompt: "You are helpful.",
+        }),
+      ),
+    ).rejects.toThrow("LLM stream ended without stop event");
   });
 });

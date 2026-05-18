@@ -1,3 +1,4 @@
+import { KeelError } from "../core/error.ts";
 import type { LLMProvider, Usage } from "../llm/types.ts";
 
 export type AgentEvent =
@@ -16,6 +17,7 @@ export async function* runAgent(
   const { provider, userMessage, systemPrompt } = options;
 
   let totalUsage: Usage = { inputTokens: 0, outputTokens: 0 };
+  let sawStop = false;
 
   const stream = provider.stream({
     systemPrompt,
@@ -28,12 +30,17 @@ export async function* runAgent(
         yield { type: "text", text: event.text };
         break;
       case "stop":
+        sawStop = true;
         totalUsage = {
           inputTokens: totalUsage.inputTokens + event.usage.inputTokens,
           outputTokens: totalUsage.outputTokens + event.usage.outputTokens,
         };
         break;
     }
+  }
+
+  if (!sawStop) {
+    throw new KeelError("LLM stream ended without stop event");
   }
 
   yield { type: "end", usage: totalUsage };
