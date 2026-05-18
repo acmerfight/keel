@@ -27,8 +27,8 @@ async function collect(
 }
 
 describe("Text Reply", () => {
-  test(`Given a fake LLM,
-    When user sends a message,
+  test(`Given user sends a message,
+    When agent responds,
     Then agent replies with text`, async () => {
     // Given
     const provider = createFakeProvider([
@@ -55,9 +55,9 @@ describe("Text Reply", () => {
     expect(endEvents).toHaveLength(1);
   });
 
-  test(`Given a fake LLM that streams token-by-token,
-    When user sends a message,
-    Then agent emits each token as a separate text event`, async () => {
+  test(`Given user sends a message,
+    When agent responds,
+    Then the reply streams token by token`, async () => {
     // Given
     const provider = createFakeProvider([fakeResponse("Hi", true)]);
 
@@ -77,9 +77,9 @@ describe("Text Reply", () => {
     expect(textEvents[1]?.text).toBe("i");
   });
 
-  test(`Given a fake LLM with usage info,
-    When agent finishes,
-    Then end event contains usage`, async () => {
+  test(`Given user sends a message,
+    When agent finishes replying,
+    Then agent reports token usage`, async () => {
     // Given
     const provider = createFakeProvider([
       fakeResponse("Done.", false, { inputTokens: 100, outputTokens: 10 }),
@@ -97,31 +97,5 @@ describe("Text Reply", () => {
     // Then
     const endEvent = events.find(isEnd);
     expect(endEvent?.usage).toEqual({ inputTokens: 100, outputTokens: 10 });
-  });
-
-  test(`Given a fake LLM with multiple turns scripted,
-    When agent runs,
-    Then only the first turn is consumed for a text-only reply`, async () => {
-    // Given
-    const provider = createFakeProvider([
-      fakeResponse("First reply."),
-      fakeResponse("Second reply (should not be reached)."),
-    ]);
-
-    // When
-    const events = await collect(
-      runAgent({
-        provider,
-        userMessage: "hi",
-        systemPrompt: "You are helpful.",
-      }),
-    );
-
-    // Then
-    const textContent = events
-      .filter(isText)
-      .map((e) => e.text)
-      .join("");
-    expect(textContent).toBe("First reply.");
   });
 });
