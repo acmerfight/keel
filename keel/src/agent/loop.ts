@@ -16,13 +16,13 @@ export async function* runAgent(
 ): AsyncGenerator<AgentEvent> {
   const { provider, userMessage, systemPrompt } = options;
 
-  let totalUsage: Usage = { inputTokens: 0, outputTokens: 0 };
-  let sawStop = false;
-
   const stream = provider.stream({
     systemPrompt,
     messages: [{ role: "user", content: userMessage }],
   });
+
+  let receivedStop = false;
+  let totalUsage: Usage = { inputTokens: 0, outputTokens: 0 };
 
   for await (const event of stream) {
     switch (event.type) {
@@ -30,7 +30,7 @@ export async function* runAgent(
         yield { type: "text", text: event.text };
         break;
       case "stop":
-        sawStop = true;
+        receivedStop = true;
         totalUsage = {
           inputTokens: totalUsage.inputTokens + event.usage.inputTokens,
           outputTokens: totalUsage.outputTokens + event.usage.outputTokens,
@@ -39,7 +39,7 @@ export async function* runAgent(
     }
   }
 
-  if (!sawStop) {
+  if (!receivedStop) {
     throw new KeelError("LLM stream ended without stop event");
   }
 
