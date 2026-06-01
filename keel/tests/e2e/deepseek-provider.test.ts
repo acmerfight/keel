@@ -31,6 +31,13 @@ function sseFinish(
   return `data: ${chunk}\n\ndata: [DONE]\n\n`;
 }
 
+function sseFinishWithoutUsage(): string {
+  const chunk = JSON.stringify({
+    choices: [{ delta: {}, finish_reason: "stop" }],
+  });
+  return `data: ${chunk}\n\ndata: [DONE]\n\n`;
+}
+
 async function collect(stream: AsyncIterable<LLMEvent>): Promise<LLMEvent[]> {
   const events: LLMEvent[] = [];
   for await (const event of stream) {
@@ -84,6 +91,18 @@ describe("DeepSeek Provider", () => {
             });
             res.write(sseChunk("partial output"));
             res.write(sseFinish(10, 4096, "length"));
+            res.end();
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "missing-usage") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(sseChunk("metered output"));
+            res.write(sseFinishWithoutUsage());
             res.end();
             return;
           }
@@ -208,6 +227,28 @@ describe("DeepSeek Provider", () => {
         }),
       ),
     ).rejects.toThrow("DeepSeek stream finished with reason: length");
+  });
+
+  test(`Given the stream ends without usage,
+    When provider finishes reading,
+    Then it throws instead of reporting zero tokens`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "missing-usage" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toThrow("DeepSeek stream ended without usage");
   });
 
   test(`Given the caller aborts the request,

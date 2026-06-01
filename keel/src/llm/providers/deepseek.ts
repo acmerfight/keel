@@ -1,4 +1,4 @@
-import type { LLMEvent, LLMProvider, StreamOptions } from "../types.ts";
+import type { LLMEvent, LLMProvider, StreamOptions, Usage } from "../types.ts";
 
 export interface DeepseekConfig {
   readonly apiKey: string;
@@ -47,8 +47,7 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
 
       const decoder = new TextDecoder();
       let buffer = "";
-      let inputTokens = 0;
-      let outputTokens = 0;
+      let usage: Usage | null = null;
       let receivedDone = false;
       let finishReason: string | undefined;
 
@@ -85,8 +84,10 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
             }
 
             if (chunk.usage) {
-              inputTokens = chunk.usage.prompt_tokens ?? 0;
-              outputTokens = chunk.usage.completion_tokens ?? 0;
+              usage = {
+                inputTokens: chunk.usage.prompt_tokens ?? 0,
+                outputTokens: chunk.usage.completion_tokens ?? 0,
+              };
             }
           }
         }
@@ -104,7 +105,11 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
         );
       }
 
-      yield { type: "stop", usage: { inputTokens, outputTokens } };
+      if (usage === null) {
+        throw new Error("DeepSeek stream ended without usage");
+      }
+
+      yield { type: "stop", usage };
     },
   };
 }
