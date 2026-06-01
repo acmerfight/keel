@@ -15,6 +15,7 @@ export type LLMEvent =
 export interface StreamOptions {
   readonly systemPrompt: string;
   readonly messages: readonly Message[];
+  readonly signal: AbortSignal;
 }
 
 export interface LLMProvider {

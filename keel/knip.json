@@ -8,5 +8,5 @@
     "src/mcp/*.ts"
   ],
   "project": ["src/**/*.ts"],
-  "ignoreDependencies": ["@fast-check/vitest", "fast-check", "zod"]
+  "ignoreDependencies": ["@fast-check/vitest", "fast-check"]
 }

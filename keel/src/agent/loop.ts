@@ -9,16 +9,18 @@ export interface RunAgentOptions {
   readonly provider: LLMProvider;
   readonly userMessage: string;
   readonly systemPrompt: string;
+  readonly signal: AbortSignal;
 }
 
 export async function* runAgent(
   options: RunAgentOptions,
 ): AsyncGenerator<AgentEvent> {
-  const { provider, userMessage, systemPrompt } = options;
+  const { provider, userMessage, systemPrompt, signal } = options;
 
   const stream = provider.stream({
     systemPrompt,
     messages: [{ role: "user", content: userMessage }],
+    signal,
   });
 
   let receivedStop = false;
@@ -40,7 +42,10 @@ export async function* runAgent(
   }
 
   if (!receivedStop) {
-    throw new KeelError("LLM stream ended without stop event");
+    throw new KeelError(
+      "agent_missing_stop",
+      "LLM stream ended without stop event",
+    );
   }
 
   yield { type: "end", usage: totalUsage };
