@@ -1,4 +1,31 @@
+import { z } from "zod";
 import type { LLMEvent, LLMProvider, StreamOptions, Usage } from "../types.ts";
+
+const deepseekChoiceSchema = z
+  .object({
+    delta: z
+      .object({
+        content: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    finish_reason: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const deepseekStreamChunkSchema = z
+  .object({
+    choices: z.array(deepseekChoiceSchema).optional(),
+    usage: z
+      .object({
+        prompt_tokens: z.number(),
+        completion_tokens: z.number(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough()
+  .refine((chunk) => chunk.choices !== undefined || chunk.usage !== undefined);
 
 export interface DeepseekConfig {
   readonly apiKey: string;
@@ -51,6 +78,43 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
       let receivedDone = false;
       let finishReason: string | undefined;
 
+      function* parseLine(line: string): Generator<LLMEvent> {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data: ")) return;
+
+        const data = trimmed.slice(6);
+        if (data === "[DONE]") {
+          receivedDone = true;
+          return;
+        }
+
+        const parsed: unknown = JSON.parse(data);
+        const result = deepseekStreamChunkSchema.safeParse(parsed);
+        if (!result.success) {
+          throw new Error("DeepSeek stream chunk has invalid schema");
+        }
+
+        const chunk = result.data;
+        const choice = chunk.choices?.[0];
+
+        if (choice) {
+          const content = choice.delta?.content;
+          if (content) {
+            yield { type: "text", text: content };
+          }
+          if (choice.finish_reason) {
+            finishReason = choice.finish_reason;
+          }
+        }
+
+        if (chunk.usage) {
+          usage = {
+            inputTokens: chunk.usage.prompt_tokens,
+            outputTokens: chunk.usage.completion_tokens,
+          };
+        }
+      }
+
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -61,34 +125,16 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
           buffer = lines.pop() ?? "";
 
           for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed?.startsWith("data: ")) continue;
-
-            const data = trimmed.slice(6);
-            if (data === "[DONE]") {
-              receivedDone = true;
-              continue;
+            for (const event of parseLine(line)) {
+              yield event;
             }
+          }
+        }
 
-            const chunk = JSON.parse(data);
-            const choice = chunk.choices?.[0];
-
-            if (choice) {
-              const content = choice.delta?.content;
-              if (content) {
-                yield { type: "text", text: content };
-              }
-              if (choice.finish_reason) {
-                finishReason = choice.finish_reason;
-              }
-            }
-
-            if (chunk.usage) {
-              usage = {
-                inputTokens: chunk.usage.prompt_tokens ?? 0,
-                outputTokens: chunk.usage.completion_tokens ?? 0,
-              };
-            }
+        buffer += decoder.decode();
+        if (buffer.trim() !== "") {
+          for (const event of parseLine(buffer)) {
+            yield event;
           }
         }
       } finally {

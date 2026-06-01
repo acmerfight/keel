@@ -19,6 +19,10 @@ function sseChunk(content: string): string {
   return `data: ${chunk}\n\n`;
 }
 
+function sseData(payload: unknown): string {
+  return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
 function sseFinish(
   inputTokens: number,
   outputTokens: number,
@@ -29,6 +33,17 @@ function sseFinish(
     usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens },
   });
   return `data: ${chunk}\n\ndata: [DONE]\n\n`;
+}
+
+function sseFinishWithoutTrailingNewline(
+  inputTokens: number,
+  outputTokens: number,
+): string {
+  const chunk = JSON.stringify({
+    choices: [{ delta: {}, finish_reason: "stop" }],
+    usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens },
+  });
+  return `data: ${chunk}\n\ndata: [DONE]`;
 }
 
 function sseFinishWithoutUsage(): string {
@@ -91,6 +106,48 @@ describe("DeepSeek Provider", () => {
             });
             res.write(sseChunk("partial output"));
             res.write(sseFinish(10, 4096, "length"));
+            res.end();
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "invalid-choices") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(sseData({ choices: null }));
+            res.write(sseFinish(1, 1));
+            res.end();
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "invalid-usage") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(sseChunk("metered output"));
+            res.write(
+              sseData({
+                choices: [{ delta: {}, finish_reason: "stop" }],
+                usage: { prompt_tokens: "7", completion_tokens: 3 },
+              }),
+            );
+            res.write("data: [DONE]\n\n");
+            res.end();
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "done-without-final-newline") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(sseChunk("complete"));
+            res.write(sseFinishWithoutTrailingNewline(7, 3));
             res.end();
             return;
           }
@@ -227,6 +284,80 @@ describe("DeepSeek Provider", () => {
         }),
       ),
     ).rejects.toThrow("DeepSeek stream finished with reason: length");
+  });
+
+  test(`Given a stream chunk has invalid choices,
+    When provider reads the chunk,
+    Then it throws a stream schema error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "invalid-choices" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toThrow("DeepSeek stream chunk has invalid schema");
+  });
+
+  test(`Given a stream chunk has invalid usage tokens,
+    When provider reads the chunk,
+    Then it throws a stream schema error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "invalid-usage" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toThrow("DeepSeek stream chunk has invalid schema");
+  });
+
+  test(`Given the final DONE line has no trailing newline,
+    When provider finishes reading,
+    Then it still parses the final signal and usage`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "done-without-final-newline" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    const textEvents = events.filter((e) => e.type === "text");
+    expect(textEvents.map((e) => e.text).join("")).toBe("complete");
+
+    const stopEvent = events.find((e) => e.type === "stop");
+    expect(stopEvent).toEqual({
+      type: "stop",
+      usage: { inputTokens: 7, outputTokens: 3 },
+    });
   });
 
   test(`Given the stream ends without usage,
