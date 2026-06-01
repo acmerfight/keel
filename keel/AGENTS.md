@@ -88,6 +88,8 @@ Litmus test: if you would write `?? defaultValue` every time you read this field
 
 **Vertical slicing.** Every deliverable is end-to-end: a user can run it and get a result. See [SLICING.md](SLICING.md).
 
+Before choosing the next feature, inspect the current product entrypoint. Prefer the smallest user-runnable slice over the next internal architecture step. Examples in SLICING.md are illustrative, not a fixed roadmap.
+
 ## Merge to Main
 
 Never push directly to main. Always use a PR and wait for CI to pass. Workflow:
