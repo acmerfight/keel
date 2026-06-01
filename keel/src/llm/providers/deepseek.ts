@@ -23,6 +23,7 @@ const deepseekStreamChunkSchema = z
         completion_tokens: z.number(),
       })
       .passthrough()
+      .nullable()
       .optional(),
   })
   .passthrough()

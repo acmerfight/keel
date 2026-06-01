@@ -200,6 +200,25 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (
+            parsed.messages?.[1]?.content === "usage-null-before-final-usage"
+          ) {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(
+              sseData({
+                choices: [{ delta: { content: "metered" } }],
+                usage: null,
+              }),
+            );
+            res.write(sseFinish(8, 4));
+            res.end();
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "done-without-final-newline") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -573,6 +592,36 @@ describe("DeepSeek Provider", () => {
       name: "KeelError",
       code: "provider_protocol_error",
       message: "DeepSeek stream chunk has invalid schema",
+    });
+  });
+
+  test(`Given a stream chunk contains null usage before final usage,
+    When provider reads the stream,
+    Then it ignores null usage and reports the final usage`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "usage-null-before-final-usage" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    const textEvents = events.filter((e) => e.type === "text");
+    expect(textEvents.map((e) => e.text).join("")).toBe("metered");
+
+    const stopEvent = events.find((e) => e.type === "stop");
+    expect(stopEvent).toEqual({
+      type: "stop",
+      usage: { inputTokens: 8, outputTokens: 4 },
     });
   });
 
