@@ -41,6 +41,23 @@ function httpErrorCode(status: number): KeelErrorCode {
   return "provider_http_error";
 }
 
+function isAbortError(error: unknown, signal: AbortSignal): boolean {
+  if (signal.aborted) return true;
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function transportError(
+  error: unknown,
+  signal: AbortSignal,
+  message: string,
+): KeelError {
+  if (error instanceof KeelError) return error;
+  if (isAbortError(error, signal)) {
+    return new KeelError("provider_aborted", "DeepSeek request was aborted");
+  }
+  return new KeelError("provider_network_error", message);
+}
+
 export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
   const { baseUrl, model } = config;
 
@@ -60,15 +77,24 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
         ],
       });
 
-      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${config.apiKey}`,
-        },
-        body,
-        signal: options.signal,
-      });
+      let response: Response;
+      try {
+        response = await fetch(`${baseUrl}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${config.apiKey}`,
+          },
+          body,
+          signal: options.signal,
+        });
+      } catch (error) {
+        throw transportError(
+          error,
+          options.signal,
+          "DeepSeek request failed before response",
+        );
+      }
 
       if (!response.ok) {
         const text = await response.text();
@@ -99,10 +125,21 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
           return;
         }
 
-        const parsed: unknown = JSON.parse(data);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          throw new KeelError(
+            "provider_protocol_error",
+            "DeepSeek stream chunk has invalid JSON",
+          );
+        }
         const result = deepseekStreamChunkSchema.safeParse(parsed);
         if (!result.success) {
-          throw new Error("DeepSeek stream chunk has invalid schema");
+          throw new KeelError(
+            "provider_protocol_error",
+            "DeepSeek stream chunk has invalid schema",
+          );
         }
 
         const chunk = result.data;
@@ -148,22 +185,31 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
             yield event;
           }
         }
+      } catch (error) {
+        throw transportError(error, options.signal, "DeepSeek stream failed");
       } finally {
         reader.releaseLock();
       }
 
       if (!receivedDone) {
-        throw new Error("DeepSeek stream ended without [DONE] signal");
+        throw new KeelError(
+          "provider_protocol_error",
+          "DeepSeek stream ended without [DONE] signal",
+        );
       }
 
       if (finishReason !== "stop") {
-        throw new Error(
+        throw new KeelError(
+          "provider_protocol_error",
           `DeepSeek stream finished with reason: ${finishReason ?? "none"}`,
         );
       }
 
       if (usage === null) {
-        throw new Error("DeepSeek stream ended without usage");
+        throw new KeelError(
+          "provider_protocol_error",
+          "DeepSeek stream ended without usage",
+        );
       }
 
       yield { type: "stop", usage };

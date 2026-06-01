@@ -65,6 +65,24 @@ function freshSignal(): AbortSignal {
   return new AbortController().signal;
 }
 
+async function unusedLocalPort(): Promise<number> {
+  const probe = createServer();
+  await new Promise<void>((resolve) => {
+    probe.listen(0, "127.0.0.1", resolve);
+  });
+  const port = getPort(probe);
+  await new Promise<void>((resolve, reject) => {
+    probe.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+  return port;
+}
+
 describe("DeepSeek Provider", () => {
   let server: Server;
   let baseUrl: string;
@@ -87,9 +105,27 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "forbidden") {
+            res.writeHead(403, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "Forbidden" } }));
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "rate-limited") {
             res.writeHead(429, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: { message: "Rate limited" } }));
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "server-error") {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "Server error" } }));
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "bad-request") {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "Bad request" } }));
             return;
           }
 
@@ -167,6 +203,16 @@ describe("DeepSeek Provider", () => {
             res.write(sseChunk("metered output"));
             res.write(sseFinishWithoutUsage());
             res.end();
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "abort-during-stream") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(sseChunk("partial"));
             return;
           }
 
@@ -252,6 +298,32 @@ describe("DeepSeek Provider", () => {
     });
   });
 
+  test(`Given the API rejects authorization,
+    When provider attempts to stream,
+    Then it throws an auth error with status and message`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "forbidden" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_auth_failed",
+      message: expect.stringMatching(/DeepSeek API error \(403\)/),
+    });
+  });
+
   test(`Given the API rate limits the request,
     When provider attempts to stream,
     Then it throws a rate limit error with status and message`, async () => {
@@ -278,9 +350,61 @@ describe("DeepSeek Provider", () => {
     });
   });
 
+  test(`Given the API returns a server error,
+    When provider attempts to stream,
+    Then it throws a provider server error with status and message`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "server-error" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_server_error",
+      message: expect.stringMatching(/DeepSeek API error \(500\)/),
+    });
+  });
+
+  test(`Given the API returns another HTTP error,
+    When provider attempts to stream,
+    Then it throws a provider HTTP error with status and message`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "bad-request" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_http_error",
+      message: expect.stringMatching(/DeepSeek API error \(400\)/),
+    });
+  });
+
   test(`Given the stream ends without [DONE] signal,
     When provider finishes reading,
-    Then it throws an error`, async () => {
+    Then it throws a protocol error`, async () => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "test-key",
@@ -297,12 +421,16 @@ describe("DeepSeek Provider", () => {
           signal: freshSignal(),
         }),
       ),
-    ).rejects.toThrow("DeepSeek stream ended without [DONE] signal");
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream ended without [DONE] signal",
+    });
   });
 
   test(`Given the model hits max tokens,
     When finish_reason is "length",
-    Then provider throws instead of yielding stop`, async () => {
+    Then provider throws a protocol error instead of yielding stop`, async () => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "test-key",
@@ -319,12 +447,16 @@ describe("DeepSeek Provider", () => {
           signal: freshSignal(),
         }),
       ),
-    ).rejects.toThrow("DeepSeek stream finished with reason: length");
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream finished with reason: length",
+    });
   });
 
   test(`Given a stream chunk has invalid choices,
     When provider reads the chunk,
-    Then it throws a stream schema error`, async () => {
+    Then it throws a protocol error`, async () => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "test-key",
@@ -341,12 +473,16 @@ describe("DeepSeek Provider", () => {
           signal: freshSignal(),
         }),
       ),
-    ).rejects.toThrow("DeepSeek stream chunk has invalid schema");
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream chunk has invalid schema",
+    });
   });
 
   test(`Given a stream chunk has invalid usage tokens,
     When provider reads the chunk,
-    Then it throws a stream schema error`, async () => {
+    Then it throws a protocol error`, async () => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "test-key",
@@ -363,7 +499,11 @@ describe("DeepSeek Provider", () => {
           signal: freshSignal(),
         }),
       ),
-    ).rejects.toThrow("DeepSeek stream chunk has invalid schema");
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream chunk has invalid schema",
+    });
   });
 
   test(`Given the final DONE line has no trailing newline,
@@ -398,7 +538,7 @@ describe("DeepSeek Provider", () => {
 
   test(`Given the stream ends without usage,
     When provider finishes reading,
-    Then it throws instead of reporting zero tokens`, async () => {
+    Then it throws a protocol error instead of reporting zero tokens`, async () => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "test-key",
@@ -415,12 +555,16 @@ describe("DeepSeek Provider", () => {
           signal: freshSignal(),
         }),
       ),
-    ).rejects.toThrow("DeepSeek stream ended without usage");
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream ended without usage",
+    });
   });
 
   test(`Given the caller aborts the request,
     When provider attempts to stream,
-    Then the DeepSeek request is cancelled`, async () => {
+    Then it throws an aborted provider error`, async () => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "test-key",
@@ -439,7 +583,72 @@ describe("DeepSeek Provider", () => {
           signal: controller.signal,
         }),
       ),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_aborted",
+      message: "DeepSeek request was aborted",
+    });
+  });
+
+  test(`Given the provider cannot connect to the API,
+    When provider attempts to stream,
+    Then it throws a provider network error`, async () => {
+    // Given
+    const port = await unusedLocalPort();
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl: `http://127.0.0.1:${port}`,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "hi" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_network_error",
+      message: "DeepSeek request failed before response",
+    });
+  });
+
+  test(`Given the caller aborts while streaming,
+    When provider reads the next chunk,
+    Then it throws an aborted provider error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+    const controller = new AbortController();
+    const iterator = provider
+      .stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "abort-during-stream" }],
+        signal: controller.signal,
+      })
+      [Symbol.asyncIterator]();
+
+    // When
+    const first = await iterator.next();
+    controller.abort();
+
+    // Then
+    expect(first).toEqual({
+      done: false,
+      value: { type: "text", text: "partial" },
+    });
+    await expect(iterator.next()).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_aborted",
+      message: "DeepSeek request was aborted",
+    });
   });
 
   test(`Given a streaming request,

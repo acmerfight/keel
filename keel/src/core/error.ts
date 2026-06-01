@@ -3,7 +3,10 @@ export type KeelErrorCode =
   | "provider_auth_failed"
   | "provider_rate_limited"
   | "provider_server_error"
-  | "provider_http_error";
+  | "provider_http_error"
+  | "provider_protocol_error"
+  | "provider_aborted"
+  | "provider_network_error";
 
 export class KeelError extends Error {
   readonly code: KeelErrorCode;
