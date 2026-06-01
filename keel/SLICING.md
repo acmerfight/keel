@@ -4,7 +4,8 @@ How to slice work in this project. Every task, feature, and iteration follows th
 
 ## Checklist (execute before every implementation task)
 
-1. **State the slice in one sentence:** "After this, a user can ___." If you can't fill the blank, you're slicing horizontally — shrink scope.
+0. **Find the current user entrypoint:** What command can a user run today? If there is no real runnable entrypoint, the next slice must create the smallest runnable path before adding deeper agent capabilities.
+1. **State the slice in one sentence:** "After this, a user can run ___ and see ___." If you can't name the command and observable result, the slice is too internal.
 2. **Write the e2e test first** (GWTE format). The test is the slice definition.
 3. **Implement only what the failing test demands.** Do not create files, types, or modules that no test requires.
 4. **Build on the existing working system.** Do not rewrite or replace what already works.
@@ -45,6 +46,22 @@ Slice 3: Agent loop
 Slice 4: CLI entry point
 → Nothing works until slice 4 is done.
 ```
+
+Another wrong way:
+
+```
+Slice 2: Add edit tool calls to the agent loop
+→ The CLI still only prints a version, so users still cannot run the agent.
+```
+
+Better:
+
+```
+Slice 2: CLI + real provider text reply
+→ A user can set OPENAI_API_KEY, run `keel "hi"`, and see streamed text.
+```
+
+Examples are illustrative, not a fixed roadmap. Always re-check the current product entrypoint before choosing the next slice.
 
 ## Applying to Tests (BDD)
 
