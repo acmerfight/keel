@@ -17,6 +17,8 @@ const deepseekChoiceSchema = z
 const deepseekStreamChunkSchema = z
   .object({
     choices: z.array(deepseekChoiceSchema).optional(),
+    // Some OpenAI-compatible streams emit usage: null on non-final chunks.
+    // Accept it here; the stream still requires real usage before stop.
     usage: z
       .object({
         prompt_tokens: z.number(),
