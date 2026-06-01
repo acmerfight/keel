@@ -243,6 +243,63 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "reasoning-with-null-content") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(
+              sseData({
+                choices: [
+                  {
+                    index: 0,
+                    delta: {
+                      role: "assistant",
+                      content: null,
+                      reasoning_content: "",
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+            );
+            res.write(
+              sseData({
+                choices: [
+                  {
+                    index: 0,
+                    delta: { content: null, reasoning_content: "thinking..." },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+            );
+            res.write(
+              sseData({
+                choices: [
+                  {
+                    index: 0,
+                    delta: { content: "Hello!", reasoning_content: null },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+            );
+            res.write(
+              sseData({
+                choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+                usage: { prompt_tokens: 12, completion_tokens: 6 },
+              }),
+            );
+            res.write("data: [DONE]\n\n");
+            res.end();
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "abort-during-stream") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -767,6 +824,36 @@ describe("DeepSeek Provider", () => {
       name: "KeelError",
       code: "provider_aborted",
       message: "DeepSeek request was aborted",
+    });
+  });
+
+  test(`Given the API returns delta with content null and reasoning_content,
+    When provider reads the stream,
+    Then it ignores null content and emits only non-null text`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "reasoning-with-null-content" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    const textEvents = events.filter((e) => e.type === "text");
+    expect(textEvents.map((e) => e.text).join("")).toBe("Hello!");
+
+    const stopEvent = events.find((e) => e.type === "stop");
+    expect(stopEvent).toEqual({
+      type: "stop",
+      usage: { inputTokens: 12, outputTokens: 6 },
     });
   });
 

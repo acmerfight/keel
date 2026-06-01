@@ -6,7 +6,8 @@ const deepseekChoiceSchema = z
   .object({
     delta: z
       .object({
-        content: z.string().optional(),
+        // DeepSeek emits content: null while streaming reasoning_content.
+        content: z.string().nullable().optional(),
       })
       .passthrough()
       .optional(),
