@@ -106,7 +106,10 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
 
       const reader = response.body?.getReader();
       if (!reader) {
-        throw new Error("DeepSeek API returned no response body");
+        throw new KeelError(
+          "provider_protocol_error",
+          "DeepSeek API returned no response body",
+        );
       }
 
       const decoder = new TextDecoder();
