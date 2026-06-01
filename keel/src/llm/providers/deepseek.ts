@@ -2,13 +2,12 @@ import type { LLMEvent, LLMProvider, StreamOptions } from "../types.ts";
 
 export interface DeepseekConfig {
   readonly apiKey: string;
-  readonly baseUrl?: string;
-  readonly model?: string;
+  readonly baseUrl: string;
+  readonly model: string;
 }
 
 export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
-  const baseUrl = config.baseUrl ?? "https://api.deepseek.com";
-  const model = config.model ?? "deepseek-v4-flash";
+  const { baseUrl, model } = config;
 
   return {
     id: "deepseek",

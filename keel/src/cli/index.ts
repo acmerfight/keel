@@ -24,7 +24,11 @@ function resolveProvider(): LLMProvider {
       );
       process.exit(1);
     }
-    return createDeepseekProvider({ apiKey });
+    return createDeepseekProvider({
+      apiKey,
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-flash",
+    });
   }
 
   process.stderr.write(`Error: unknown provider "${providerId}"\n`);

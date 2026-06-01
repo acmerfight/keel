@@ -117,6 +117,7 @@ describe("DeepSeek Provider", () => {
     const provider = createDeepseekProvider({
       apiKey: "test-key",
       baseUrl,
+      model: "deepseek-v4-flash",
     });
 
     // When
@@ -145,6 +146,7 @@ describe("DeepSeek Provider", () => {
     const provider = createDeepseekProvider({
       apiKey: "bad-key",
       baseUrl,
+      model: "deepseek-v4-flash",
     });
 
     // When / Then
@@ -165,6 +167,7 @@ describe("DeepSeek Provider", () => {
     const provider = createDeepseekProvider({
       apiKey: "test-key",
       baseUrl,
+      model: "deepseek-v4-flash",
     });
 
     // When / Then
@@ -185,6 +188,7 @@ describe("DeepSeek Provider", () => {
     const provider = createDeepseekProvider({
       apiKey: "test-key",
       baseUrl,
+      model: "deepseek-v4-flash",
     });
 
     // When / Then
@@ -222,6 +226,7 @@ describe("DeepSeek Provider", () => {
     const provider = createDeepseekProvider({
       apiKey: "test-key",
       baseUrl: `http://127.0.0.1:${getPort(captureServer)}`,
+      model: "deepseek-v4-flash",
     });
 
     // When
