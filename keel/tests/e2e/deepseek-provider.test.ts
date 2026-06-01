@@ -152,6 +152,18 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "invalid-json") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write("data: {not-json}\n\n");
+            res.write(sseFinish(1, 1));
+            res.end();
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "invalid-choices") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -451,6 +463,32 @@ describe("DeepSeek Provider", () => {
       name: "KeelError",
       code: "provider_protocol_error",
       message: "DeepSeek stream finished with reason: length",
+    });
+  });
+
+  test(`Given a stream chunk contains invalid JSON,
+    When provider reads the chunk,
+    Then it throws a protocol error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "invalid-json" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream chunk has invalid JSON",
     });
   });
 
