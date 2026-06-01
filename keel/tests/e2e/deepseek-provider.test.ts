@@ -91,7 +91,7 @@ describe("DeepSeek Provider", () => {
     server = createServer((req, res) => {
       const url = req.url ?? "";
 
-      if (url === "/v1/chat/completions") {
+      if (url === "/chat/completions") {
         let body = "";
         req.on("data", (chunk) => {
           body += chunk;

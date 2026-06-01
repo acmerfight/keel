@@ -167,7 +167,7 @@ describe("CLI Text Reply", () => {
       closeResponse = resolve;
     });
     const server = createServer((req, res) => {
-      if (req.url !== "/v1/chat/completions") {
+      if (req.url !== "/chat/completions") {
         res.writeHead(404);
         res.end();
         return;

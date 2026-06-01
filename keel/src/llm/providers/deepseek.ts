@@ -83,7 +83,7 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
 
       let response: Response;
       try {
-        response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        response = await fetch(`${baseUrl}/chat/completions`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
