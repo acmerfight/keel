@@ -26,7 +26,7 @@ function resolveProvider(): LLMProvider {
     }
     return createDeepseekProvider({
       apiKey,
-      baseUrl: "https://api.deepseek.com",
+      baseUrl: env("DEEPSEEK_BASE_URL") ?? "https://api.deepseek.com",
       model: "deepseek-v4-flash",
     });
   }
@@ -44,19 +44,34 @@ async function main(): Promise<void> {
 
   const provider = resolveProvider();
   const abortController = new AbortController();
-  const stream = runAgent({
-    provider,
-    userMessage,
-    systemPrompt: "You are a helpful assistant.",
-    signal: abortController.signal,
-  });
+  const abort = () => {
+    abortController.abort();
+  };
+  process.once("SIGINT", abort);
 
-  for await (const event of stream) {
-    if (event.type === "text") {
-      process.stdout.write(event.text);
+  try {
+    const stream = runAgent({
+      provider,
+      userMessage,
+      systemPrompt: "You are a helpful assistant.",
+      signal: abortController.signal,
+    });
+
+    for await (const event of stream) {
+      if (event.type === "text") {
+        process.stdout.write(event.text);
+      }
     }
+    process.stdout.write("\n");
+  } catch (error) {
+    if (!abortController.signal.aborted) {
+      throw error;
+    }
+    process.stdout.write("\n");
+    process.exitCode = 130;
+  } finally {
+    process.off("SIGINT", abort);
   }
-  process.stdout.write("\n");
 }
 
 main();
