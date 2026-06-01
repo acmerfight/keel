@@ -1,3 +1,1 @@
-export interface LLMEvent {
-  readonly type: "text" | "tool_call" | "stop";
-}
+export type { LLMEvent } from "./types.ts";
