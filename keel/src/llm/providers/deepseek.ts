@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { KeelError, type KeelErrorCode } from "../../core/error.ts";
 import type { LLMEvent, LLMProvider, StreamOptions, Usage } from "../types.ts";
 
 const deepseekChoiceSchema = z
@@ -33,6 +34,13 @@ export interface DeepseekConfig {
   readonly model: string;
 }
 
+function httpErrorCode(status: number): KeelErrorCode {
+  if (status === 401 || status === 403) return "provider_auth_failed";
+  if (status === 429) return "provider_rate_limited";
+  if (status >= 500) return "provider_server_error";
+  return "provider_http_error";
+}
+
 export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
   const { baseUrl, model } = config;
 
@@ -64,7 +72,10 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
 
       if (!response.ok) {
         const text = await response.text();
-        throw new Error(`DeepSeek API error (${response.status}): ${text}`);
+        throw new KeelError(
+          httpErrorCode(response.status),
+          `DeepSeek API error (${response.status}): ${text}`,
+        );
       }
 
       const reader = response.body?.getReader();

@@ -42,7 +42,10 @@ export async function* runAgent(
   }
 
   if (!receivedStop) {
-    throw new KeelError("LLM stream ended without stop event");
+    throw new KeelError(
+      "agent_missing_stop",
+      "LLM stream ended without stop event",
+    );
   }
 
   yield { type: "end", usage: totalUsage };

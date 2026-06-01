@@ -87,6 +87,12 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "rate-limited") {
+            res.writeHead(429, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "Rate limited" } }));
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "truncated") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -220,9 +226,9 @@ describe("DeepSeek Provider", () => {
     });
   });
 
-  test(`Given the API returns an HTTP error,
+  test(`Given the API rejects authentication,
     When provider attempts to stream,
-    Then it throws with status and message`, async () => {
+    Then it throws an auth error with status and message`, async () => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "bad-key",
@@ -239,7 +245,37 @@ describe("DeepSeek Provider", () => {
           signal: freshSignal(),
         }),
       ),
-    ).rejects.toThrow(/DeepSeek API error \(401\)/);
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_auth_failed",
+      message: expect.stringMatching(/DeepSeek API error \(401\)/),
+    });
+  });
+
+  test(`Given the API rate limits the request,
+    When provider attempts to stream,
+    Then it throws a rate limit error with status and message`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "rate-limited" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_rate_limited",
+      message: expect.stringMatching(/DeepSeek API error \(429\)/),
+    });
   });
 
   test(`Given the stream ends without [DONE] signal,
