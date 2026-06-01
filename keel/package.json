@@ -25,6 +25,9 @@
   "simple-git-hooks": {
     "pre-commit": "pnpm tsc --noEmit && pnpm biome check --write --staged --files-ignore-unknown=true --no-errors-on-unmatched && git update-index --again"
   },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
   "devDependencies": {
     "@biomejs/biome": "2.4.13",
     "@fast-check/vitest": "^0.4.1",
@@ -34,8 +37,7 @@
     "knip": "^6.13.1",
     "simple-git-hooks": "^2.13.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.6",
-    "zod": "^4.4.3"
+    "vitest": "^4.1.6"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

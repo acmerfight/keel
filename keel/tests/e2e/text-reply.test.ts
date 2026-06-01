@@ -27,6 +27,10 @@ async function collect(
   return events;
 }
 
+function freshSignal(): AbortSignal {
+  return new AbortController().signal;
+}
+
 describe("Text Reply", () => {
   test(`Given user sends a message,
     When agent responds,
@@ -42,6 +46,7 @@ describe("Text Reply", () => {
         provider,
         userMessage: "hi",
         systemPrompt: "You are a helpful assistant.",
+        signal: freshSignal(),
       }),
     );
 
@@ -68,6 +73,7 @@ describe("Text Reply", () => {
         provider,
         userMessage: "hello",
         systemPrompt: "You are a helpful assistant.",
+        signal: freshSignal(),
       }),
     );
 
@@ -92,12 +98,41 @@ describe("Text Reply", () => {
         provider,
         userMessage: "summarize",
         systemPrompt: "You are a helpful assistant.",
+        signal: freshSignal(),
       }),
     );
 
     // Then
     const endEvent = events.find(isEnd);
     expect(endEvent?.usage).toEqual({ inputTokens: 100, outputTokens: 10 });
+  });
+
+  test(`Given a request has an abort signal,
+    When agent calls the LLM provider,
+    Then the same signal is passed through`, async () => {
+    // Given
+    const controller = new AbortController();
+    let providerSignal: AbortSignal | null = null;
+    const provider: LLMProvider = {
+      id: "observed",
+      async *stream(options) {
+        providerSignal = options.signal;
+        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+    };
+
+    // When
+    await collect(
+      runAgent({
+        provider,
+        userMessage: "hi",
+        systemPrompt: "You are helpful.",
+        signal: controller.signal,
+      }),
+    );
+
+    // Then
+    expect(providerSignal).toBe(controller.signal);
   });
 
   test(`Given the LLM stream ends unexpectedly,
@@ -118,6 +153,7 @@ describe("Text Reply", () => {
           provider: brokenProvider,
           userMessage: "hi",
           systemPrompt: "You are helpful.",
+          signal: freshSignal(),
         }),
       ),
     ).rejects.toThrow("LLM stream ended without stop event");
