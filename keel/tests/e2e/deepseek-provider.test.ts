@@ -39,6 +39,10 @@ async function collect(stream: AsyncIterable<LLMEvent>): Promise<LLMEvent[]> {
   return events;
 }
 
+function freshSignal(): AbortSignal {
+  return new AbortController().signal;
+}
+
 describe("DeepSeek Provider", () => {
   let server: Server;
   let baseUrl: string;
@@ -125,6 +129,7 @@ describe("DeepSeek Provider", () => {
       provider.stream({
         systemPrompt: "You are helpful.",
         messages: [{ role: "user", content: "hi" }],
+        signal: freshSignal(),
       }),
     );
 
@@ -155,6 +160,7 @@ describe("DeepSeek Provider", () => {
         provider.stream({
           systemPrompt: "You are helpful.",
           messages: [{ role: "user", content: "trigger-error" }],
+          signal: freshSignal(),
         }),
       ),
     ).rejects.toThrow(/DeepSeek API error \(401\)/);
@@ -176,6 +182,7 @@ describe("DeepSeek Provider", () => {
         provider.stream({
           systemPrompt: "You are helpful.",
           messages: [{ role: "user", content: "truncated" }],
+          signal: freshSignal(),
         }),
       ),
     ).rejects.toThrow("DeepSeek stream ended without [DONE] signal");
@@ -197,9 +204,34 @@ describe("DeepSeek Provider", () => {
         provider.stream({
           systemPrompt: "You are helpful.",
           messages: [{ role: "user", content: "length-limit" }],
+          signal: freshSignal(),
         }),
       ),
     ).rejects.toThrow("DeepSeek stream finished with reason: length");
+  });
+
+  test(`Given the caller aborts the request,
+    When provider attempts to stream,
+    Then the DeepSeek request is cancelled`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "hi" }],
+          signal: controller.signal,
+        }),
+      ),
+    ).rejects.toThrow();
   });
 
   test(`Given a streaming request,
@@ -234,6 +266,7 @@ describe("DeepSeek Provider", () => {
       provider.stream({
         systemPrompt: "sys",
         messages: [{ role: "user", content: "hi" }],
+        signal: freshSignal(),
       }),
     );
 

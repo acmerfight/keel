@@ -43,10 +43,12 @@ async function main(): Promise<void> {
   }
 
   const provider = resolveProvider();
+  const abortController = new AbortController();
   const stream = runAgent({
     provider,
     userMessage,
     systemPrompt: "You are a helpful assistant.",
+    signal: abortController.signal,
   });
 
   for await (const event of stream) {

@@ -32,6 +32,7 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
           Authorization: `Bearer ${config.apiKey}`,
         },
         body,
+        signal: options.signal,
       });
 
       if (!response.ok) {
