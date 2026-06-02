@@ -51,6 +51,7 @@ async function main(): Promise<void> {
 
   try {
     const stream = runAgent({
+      workspace: process.cwd(),
       provider,
       userMessage,
       systemPrompt: "You are a helpful assistant.",

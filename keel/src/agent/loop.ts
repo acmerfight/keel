@@ -1,11 +1,13 @@
 import { KeelError } from "../core/error.ts";
 import type { LLMProvider, Usage } from "../llm/types.ts";
+import { executeEdit } from "../tools/edit.ts";
 
 export type AgentEvent =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "end"; readonly usage: Usage };
 
 export interface RunAgentOptions {
+  readonly workspace: string;
   readonly provider: LLMProvider;
   readonly userMessage: string;
   readonly systemPrompt: string;
@@ -15,7 +17,7 @@ export interface RunAgentOptions {
 export async function* runAgent(
   options: RunAgentOptions,
 ): AsyncGenerator<AgentEvent> {
-  const { provider, userMessage, systemPrompt, signal } = options;
+  const { workspace, provider, userMessage, systemPrompt, signal } = options;
 
   const stream = provider.stream({
     systemPrompt,
@@ -31,6 +33,16 @@ export async function* runAgent(
       case "text":
         yield { type: "text", text: event.text };
         break;
+      case "tool_call": {
+        const result = executeEdit(
+          workspace,
+          event.path,
+          event.oldString,
+          event.newString,
+        );
+        yield { type: "text", text: result.content };
+        break;
+      }
       case "stop":
         receivedStop = true;
         totalUsage = {

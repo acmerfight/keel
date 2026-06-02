@@ -31,6 +31,10 @@ function freshSignal(): AbortSignal {
   return new AbortController().signal;
 }
 
+function workspace(): string {
+  return process.cwd();
+}
+
 describe("Text Reply", () => {
   test(`Given user sends a message,
     When agent responds,
@@ -43,6 +47,7 @@ describe("Text Reply", () => {
     // When
     const events = await collect(
       runAgent({
+        workspace: workspace(),
         provider,
         userMessage: "hi",
         systemPrompt: "You are a helpful assistant.",
@@ -70,6 +75,7 @@ describe("Text Reply", () => {
     // When
     const events = await collect(
       runAgent({
+        workspace: workspace(),
         provider,
         userMessage: "hello",
         systemPrompt: "You are a helpful assistant.",
@@ -95,6 +101,7 @@ describe("Text Reply", () => {
     // When
     const events = await collect(
       runAgent({
+        workspace: workspace(),
         provider,
         userMessage: "summarize",
         systemPrompt: "You are a helpful assistant.",
@@ -124,6 +131,7 @@ describe("Text Reply", () => {
     // When
     await collect(
       runAgent({
+        workspace: workspace(),
         provider,
         userMessage: "hi",
         systemPrompt: "You are helpful.",
@@ -150,6 +158,7 @@ describe("Text Reply", () => {
     await expect(
       collect(
         runAgent({
+          workspace: workspace(),
           provider: brokenProvider,
           userMessage: "hi",
           systemPrompt: "You are helpful.",
