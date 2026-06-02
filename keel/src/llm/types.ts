@@ -10,6 +10,13 @@ export interface Message {
 
 export type LLMEvent =
   | { readonly type: "text"; readonly text: string }
+  | {
+      readonly type: "tool_call";
+      readonly tool: "edit";
+      readonly path: string;
+      readonly oldString: string;
+      readonly newString: string;
+    }
   | { readonly type: "stop"; readonly usage: Usage };
 
 export interface StreamOptions {
