@@ -2,18 +2,63 @@
 
 import { runAgent } from "../agent/loop.ts";
 import { createDeepseekProvider } from "../llm/providers/deepseek.ts";
-import { createFakeProvider, fakeResponse } from "../llm/providers/fake.ts";
+import {
+  createFakeProvider,
+  fakeEditResponse,
+  fakeResponse,
+} from "../llm/providers/fake.ts";
 import type { LLMProvider } from "../llm/types.ts";
+
+interface CliEditRequest {
+  readonly path: string;
+  readonly oldString: string;
+  readonly newString: string;
+}
 
 function env(key: string): string | undefined {
   return process.env[key];
 }
 
-function resolveProvider(): LLMProvider {
+function parseCliEditDemo(message: string): CliEditRequest | null {
+  const prefix = "replace ";
+  const withToken = " with ";
+  const inToken = " in ";
+
+  if (!message.startsWith(prefix)) return null;
+
+  const body = message.slice(prefix.length);
+  const withIndex = body.indexOf(withToken);
+  if (withIndex < 0) return null;
+
+  const newStringStart = withIndex + withToken.length;
+  const inIndex = body.indexOf(inToken, newStringStart);
+  if (inIndex < 0) return null;
+
+  const oldString = body.slice(0, withIndex);
+  const newString = body.slice(newStringStart, inIndex);
+  const path = body.slice(inIndex + inToken.length);
+
+  if (oldString === "" || newString === "" || path === "") return null;
+
+  return { path, oldString, newString };
+}
+
+function createCliFakeProvider(userMessage: string): LLMProvider {
+  const edit = parseCliEditDemo(userMessage);
+  if (edit === null) {
+    return createFakeProvider([fakeResponse("Hello from fake provider.")]);
+  }
+
+  return createFakeProvider([
+    fakeEditResponse(edit.path, edit.oldString, edit.newString),
+  ]);
+}
+
+function resolveProvider(userMessage: string): LLMProvider {
   const providerId = env("KEEL_PROVIDER") ?? "deepseek";
 
   if (providerId === "fake") {
-    return createFakeProvider([fakeResponse("Hello from fake provider.")]);
+    return createCliFakeProvider(userMessage);
   }
 
   if (providerId === "deepseek") {
@@ -42,7 +87,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const provider = resolveProvider();
+  const provider = resolveProvider(userMessage);
   const abortController = new AbortController();
   const abort = () => {
     abortController.abort();
