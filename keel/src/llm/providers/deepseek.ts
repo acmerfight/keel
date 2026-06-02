@@ -2,12 +2,60 @@ import { z } from "zod";
 import { KeelError, type KeelErrorCode } from "../../core/error.ts";
 import type { LLMEvent, LLMProvider, StreamOptions, Usage } from "../types.ts";
 
+const editTool = {
+  type: "function",
+  function: {
+    name: "edit",
+    description: "Replace one exact string in a workspace file.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Workspace-relative file path to edit.",
+        },
+        oldString: {
+          type: "string",
+          description: "Exact text to replace. Must appear exactly once.",
+        },
+        newString: {
+          type: "string",
+          description: "Replacement text.",
+        },
+      },
+      required: ["path", "oldString", "newString"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const editToolArgumentsSchema = z
+  .object({
+    path: z.string(),
+    oldString: z.string(),
+    newString: z.string(),
+  })
+  .strict();
+
+const deepseekToolCallSchema = z
+  .object({
+    function: z
+      .object({
+        name: z.string().optional(),
+        arguments: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
 const deepseekChoiceSchema = z
   .object({
     delta: z
       .object({
         // DeepSeek emits content: null while streaming reasoning_content.
         content: z.string().nullable().optional(),
+        tool_calls: z.array(deepseekToolCallSchema).optional(),
       })
       .passthrough()
       .optional(),
@@ -72,6 +120,8 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
         model,
         stream: true,
         stream_options: { include_usage: true },
+        tools: [editTool],
+        tool_choice: "auto",
         messages: [
           { role: "system", content: options.systemPrompt },
           ...options.messages.map((m) => ({
@@ -121,6 +171,44 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
       let usage: Usage | null = null;
       let receivedDone = false;
       let finishReason: string | undefined;
+      let toolCallName: string | null = null;
+      let toolCallArguments = "";
+      let yieldedToolCall = false;
+
+      function parseEditToolCall(): LLMEvent {
+        if (toolCallName !== "edit") {
+          throw new KeelError(
+            "provider_protocol_error",
+            `DeepSeek returned unsupported tool call: ${toolCallName ?? "none"}`,
+          );
+        }
+
+        let parsedArguments: unknown;
+        try {
+          parsedArguments = JSON.parse(toolCallArguments);
+        } catch {
+          throw new KeelError(
+            "provider_protocol_error",
+            "DeepSeek edit tool call has invalid JSON arguments",
+          );
+        }
+
+        const result = editToolArgumentsSchema.safeParse(parsedArguments);
+        if (!result.success) {
+          throw new KeelError(
+            "provider_protocol_error",
+            "DeepSeek edit tool call has invalid arguments",
+          );
+        }
+
+        return {
+          type: "tool_call",
+          tool: "edit",
+          path: result.data.path,
+          oldString: result.data.oldString,
+          newString: result.data.newString,
+        };
+      }
 
       function* parseLine(line: string): Generator<LLMEvent> {
         const trimmed = line.trim();
@@ -157,8 +245,26 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
           if (content) {
             yield { type: "text", text: content };
           }
+          const toolCall = choice.delta?.tool_calls?.[0];
+          const toolFunction = toolCall?.function;
+          if (toolFunction?.name) {
+            toolCallName = toolFunction.name;
+          }
+          if (toolFunction?.arguments) {
+            toolCallArguments += toolFunction.arguments;
+          }
           if (choice.finish_reason) {
             finishReason = choice.finish_reason;
+            if (choice.finish_reason === "tool_calls") {
+              if (yieldedToolCall) {
+                throw new KeelError(
+                  "provider_protocol_error",
+                  "DeepSeek returned more than one tool call",
+                );
+              }
+              yield parseEditToolCall();
+              yieldedToolCall = true;
+            }
           }
         }
 
@@ -205,7 +311,14 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
         );
       }
 
-      if (finishReason !== "stop") {
+      if (finishReason === "tool_calls") {
+        if (!yieldedToolCall) {
+          throw new KeelError(
+            "provider_protocol_error",
+            "DeepSeek stream finished with tool_calls but no tool call",
+          );
+        }
+      } else if (finishReason !== "stop") {
         throw new KeelError(
           "provider_protocol_error",
           `DeepSeek stream finished with reason: ${finishReason ?? "none"}`,
