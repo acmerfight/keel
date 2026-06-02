@@ -39,6 +39,7 @@ const editToolArgumentsSchema = z
 
 const deepseekToolCallSchema = z
   .object({
+    index: z.number().optional(),
     function: z
       .object({
         name: z.string().optional(),
@@ -173,9 +174,15 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
       let finishReason: string | undefined;
       let toolCallName: string | null = null;
       let toolCallArguments = "";
-      let yieldedToolCall = false;
+      let pendingToolCall: Extract<
+        LLMEvent,
+        { readonly type: "tool_call" }
+      > | null = null;
 
-      function parseEditToolCall(): LLMEvent {
+      function parseEditToolCall(): Extract<
+        LLMEvent,
+        { readonly type: "tool_call" }
+      > {
         if (toolCallName !== "edit") {
           throw new KeelError(
             "provider_protocol_error",
@@ -245,25 +252,39 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
           if (content) {
             yield { type: "text", text: content };
           }
-          const toolCall = choice.delta?.tool_calls?.[0];
-          const toolFunction = toolCall?.function;
-          if (toolFunction?.name) {
-            toolCallName = toolFunction.name;
+          const toolCalls = choice.delta?.tool_calls ?? [];
+          if (toolCalls.length > 1) {
+            throw new KeelError(
+              "provider_protocol_error",
+              "DeepSeek returned more than one tool call",
+            );
           }
-          if (toolFunction?.arguments) {
-            toolCallArguments += toolFunction.arguments;
+          const toolCall = toolCalls[0];
+          if (toolCall) {
+            if (toolCall.index !== 0) {
+              throw new KeelError(
+                "provider_protocol_error",
+                `DeepSeek returned unsupported tool call index: ${toolCall.index ?? "none"}`,
+              );
+            }
+            const toolFunction = toolCall.function;
+            if (toolFunction?.name) {
+              toolCallName = toolFunction.name;
+            }
+            if (toolFunction?.arguments) {
+              toolCallArguments += toolFunction.arguments;
+            }
           }
           if (choice.finish_reason) {
             finishReason = choice.finish_reason;
             if (choice.finish_reason === "tool_calls") {
-              if (yieldedToolCall) {
+              if (pendingToolCall !== null) {
                 throw new KeelError(
                   "provider_protocol_error",
                   "DeepSeek returned more than one tool call",
                 );
               }
-              yield parseEditToolCall();
-              yieldedToolCall = true;
+              pendingToolCall = parseEditToolCall();
             }
           }
         }
@@ -312,7 +333,7 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
       }
 
       if (finishReason === "tool_calls") {
-        if (!yieldedToolCall) {
+        if (pendingToolCall === null) {
           throw new KeelError(
             "provider_protocol_error",
             "DeepSeek stream finished with tool_calls but no tool call",
@@ -332,6 +353,9 @@ export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
         );
       }
 
+      if (pendingToolCall !== null) {
+        yield pendingToolCall;
+      }
       yield { type: "stop", usage };
     },
   };
