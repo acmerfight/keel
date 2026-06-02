@@ -4,11 +4,11 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgent } from "../../src/agent/loop.ts";
-import type { LLMProvider } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
   fakeEditResponse,
 } from "../../src/llm/providers/fake.ts";
+import type { LLMProvider } from "../../src/llm/types.ts";
 
 async function collect(
   source: AsyncIterable<AgentEvent>,
