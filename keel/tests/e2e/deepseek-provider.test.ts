@@ -55,24 +55,29 @@ function sseFinishWithoutUsage(): string {
 
 function editToolCallDelta(
   index: number,
-  argumentsJson: string,
+  argumentsJson?: string,
 ): {
   readonly index: number;
   readonly id: string;
   readonly type: "function";
   readonly function: {
     readonly name: "edit";
-    readonly arguments: string;
+    readonly arguments?: string;
   };
 } {
+  const toolFunction: {
+    readonly name: "edit";
+    arguments?: string;
+  } = { name: "edit" };
+  if (argumentsJson !== undefined) {
+    toolFunction.arguments = argumentsJson;
+  }
+
   return {
     index,
     id: `call_edit_${index}`,
     type: "function",
-    function: {
-      name: "edit",
-      arguments: argumentsJson,
-    },
+    function: toolFunction,
   };
 }
 
@@ -334,6 +339,66 @@ describe("DeepSeek Provider", () => {
                           }),
                         ),
                       ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+            );
+            res.write(
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 30, completion_tokens: 8 },
+              }),
+            );
+            res.write("data: [DONE]\n\n");
+            res.end();
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "missing-tool-arguments") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [editToolCallDelta(0)],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+            );
+            res.write(
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 30, completion_tokens: 8 },
+              }),
+            );
+            res.write("data: [DONE]\n\n");
+            res.end();
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "empty-tool-arguments") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [editToolCallDelta(0, "")],
                     },
                     finish_reason: null,
                   },
@@ -896,6 +961,58 @@ describe("DeepSeek Provider", () => {
       name: "KeelError",
       code: "provider_protocol_error",
       message: "DeepSeek returned unsupported tool call index: 1",
+    });
+  });
+
+  test(`Given an edit tool call never sends arguments,
+    When provider finishes the tool call,
+    Then it throws a protocol error with an empty arguments message`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "missing-tool-arguments" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek edit tool call has empty arguments",
+    });
+  });
+
+  test(`Given an edit tool call sends empty arguments,
+    When provider finishes the tool call,
+    Then it throws a protocol error with an empty arguments message`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "empty-tool-arguments" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek edit tool call has empty arguments",
     });
   });
 
