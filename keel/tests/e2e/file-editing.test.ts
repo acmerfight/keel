@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgent } from "../../src/agent/loop.ts";
+import type { LLMProvider } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
   fakeEditResponse,
@@ -242,6 +243,46 @@ describe("File Editing", () => {
       ).rejects.toThrow("old string is not unique");
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "old then old\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the LLM stream yields a tool_call but never yields stop,
+    When the agent finishes reading the stream,
+    Then it throws and the file is unchanged`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    const provider: LLMProvider = {
+      id: "broken",
+      async *stream() {
+        yield {
+          type: "tool_call",
+          tool: "edit",
+          path: "note.txt",
+          oldString: "old",
+          newString: "new",
+        };
+      },
+    };
+
+    try {
+      // When / Then
+      await expect(
+        collect(
+          runAgent({
+            workspace,
+            provider,
+            userMessage: "edit the file",
+            systemPrompt: "You are a helpful assistant.",
+            signal: freshSignal(),
+          }),
+        ),
+      ).rejects.toThrow("LLM stream ended without stop event");
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello old world\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
