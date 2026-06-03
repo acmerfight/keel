@@ -97,6 +97,32 @@ function sseEditToolCall(): string {
   });
 }
 
+function sseReadToolCall(): string {
+  return sseData({
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_read",
+              type: "function",
+              function: {
+                name: "read",
+                arguments: JSON.stringify({
+                  path: "note.txt",
+                }),
+              },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+    usage: null,
+  });
+}
+
 function sseMultipleEditToolCalls(): string {
   return sseData({
     choices: [
@@ -229,7 +255,105 @@ describe("CLI File Editing", () => {
       expect(result.stderr).toBe("");
 
       const request = JSON.parse(capturedBody);
-      expect(request.tools?.[0]?.function?.name).toBe("edit");
+      expect(
+        request.tools?.map(
+          (tool: { readonly function?: { readonly name?: string } }) =>
+            tool.function?.name,
+        ),
+      ).toEqual(["read", "edit"]);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a DeepSeek-compatible API first asks to read a workspace file,
+    When user asks the CLI to fix that file,
+    Then the agent sends the read result back and edits the file`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-read-edit-"));
+    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+
+        if (capturedBodies.length === 1) {
+          res.write(sseReadToolCall());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 20, completion_tokens: 5 }),
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.write(sseEditToolCall());
+        res.write(
+          sseEditToolFinish({ prompt_tokens: 25, completion_tokens: 8 }),
+        );
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["fix note.txt"], {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello new world\n",
+      );
+      expect(result.stdout).toBe("Edited note.txt\n");
+      expect(result.stderr).toBe("");
+      expect(capturedBodies).toHaveLength(2);
+
+      const firstRequest = capturedBodies[0] as {
+        readonly tools?: readonly {
+          readonly function?: { readonly name?: string };
+        }[];
+      };
+      expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([
+        "read",
+        "edit",
+      ]);
+
+      const secondRequest = capturedBodies[1] as {
+        readonly messages?: readonly {
+          readonly role?: string;
+          readonly tool_call_id?: string;
+          readonly content?: string;
+        }[];
+      };
+      expect(secondRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_read",
+        content: "hello old world\n",
+      });
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
