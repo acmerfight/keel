@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { KeelError, type KeelErrorCode } from "../../core/error.ts";
-import type { LLMEvent, LLMProvider, StreamOptions, Usage } from "../types.ts";
+import type {
+  LLMEvent,
+  LLMProvider,
+  Message,
+  StreamOptions,
+  ToolCall,
+  Usage,
+} from "../types.ts";
 
 const editTool = {
   type: "function",
@@ -29,6 +36,44 @@ const editTool = {
   },
 };
 
+const readTool = {
+  type: "function",
+  function: {
+    name: "read",
+    description:
+      "Read a workspace file. Output is capped at 2000 lines or 50KB; use offset and limit to read later sections.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Workspace-relative file path to read.",
+        },
+        offset: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional 1-indexed line number to start reading from.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum number of lines to read.",
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const readToolArgumentsSchema = z
+  .object({
+    path: z.string(),
+    offset: z.number().int().positive().optional(),
+    limit: z.number().int().positive().optional(),
+  })
+  .strict();
+
 const editToolArgumentsSchema = z
   .object({
     path: z.string(),
@@ -39,6 +84,7 @@ const editToolArgumentsSchema = z
 
 const deepseekToolCallSchema = z
   .object({
+    id: z.string().optional(),
     index: z.number().optional(),
     function: z
       .object({
@@ -111,7 +157,7 @@ function transportError(
   return new KeelError("provider_network_error", message);
 }
 
-type EditToolCallEvent = Extract<LLMEvent, { readonly type: "tool_call" }>;
+type ToolCallEvent = Extract<LLMEvent, { readonly type: "tool_call" }>;
 type DeepseekStreamChunk = z.infer<typeof deepseekStreamChunkSchema>;
 type DeepseekToolCall = z.infer<typeof deepseekToolCallSchema>;
 
@@ -119,9 +165,10 @@ interface DeepseekStreamState {
   usage: Usage | null;
   receivedDone: boolean;
   finishReason: string | undefined;
+  toolCallId: string | null;
   toolCallName: string | null;
   toolCallArguments: string | null;
-  pendingToolCall: EditToolCallEvent | null;
+  pendingToolCall: ToolCallEvent | null;
 }
 
 function createChatCompletionsBody(
@@ -132,16 +179,58 @@ function createChatCompletionsBody(
     model,
     stream: true,
     stream_options: { include_usage: true },
-    tools: [editTool],
+    tools: [readTool, editTool],
     tool_choice: "auto",
     messages: [
       { role: "system", content: options.systemPrompt },
-      ...options.messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      })),
+      ...options.messages.map(toDeepseekMessage),
     ],
   });
+}
+
+function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
+  switch (toolCall.tool) {
+    case "read":
+      return {
+        path: toolCall.path,
+        ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
+        ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
+      };
+    case "edit":
+      return {
+        path: toolCall.path,
+        oldString: toolCall.oldString,
+        newString: toolCall.newString,
+      };
+  }
+}
+
+function toDeepseekMessage(message: Message): Record<string, unknown> {
+  switch (message.role) {
+    case "user":
+      return { role: "user", content: message.content };
+    case "assistant": {
+      const toolCalls = message.toolCalls?.map((toolCall) => ({
+        id: toolCall.id,
+        type: "function",
+        function: {
+          name: toolCall.tool,
+          arguments: JSON.stringify(toolCallArguments(toolCall)),
+        },
+      }));
+      return {
+        role: "assistant",
+        content: toolCalls && toolCalls.length > 0 ? null : message.content,
+        ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      };
+    }
+    case "tool":
+      return {
+        role: "tool",
+        tool_call_id: message.toolCallId,
+        content: message.content,
+      };
+  }
 }
 
 async function requestChatCompletions(
@@ -197,24 +286,34 @@ function createStreamState(): DeepseekStreamState {
     usage: null,
     receivedDone: false,
     finishReason: undefined,
+    toolCallId: null,
     toolCallName: null,
     toolCallArguments: null,
     pendingToolCall: null,
   };
 }
 
-function parseEditToolCall(state: DeepseekStreamState): EditToolCallEvent {
-  if (state.toolCallName !== "edit") {
+function parseToolCall(state: DeepseekStreamState): ToolCallEvent {
+  const toolCallId = state.toolCallId;
+  if (toolCallId === null || toolCallId === "") {
     throw new KeelError(
       "provider_protocol_error",
-      `DeepSeek returned unsupported tool call: ${state.toolCallName ?? "none"}`,
+      "DeepSeek tool call is missing id",
+    );
+  }
+
+  const toolCallName = state.toolCallName;
+  if (toolCallName !== "read" && toolCallName !== "edit") {
+    throw new KeelError(
+      "provider_protocol_error",
+      `DeepSeek returned unsupported tool call: ${toolCallName ?? "none"}`,
     );
   }
 
   if (state.toolCallArguments === null || state.toolCallArguments === "") {
     throw new KeelError(
       "provider_protocol_error",
-      "DeepSeek edit tool call has empty arguments",
+      `DeepSeek ${toolCallName} tool call has empty arguments`,
     );
   }
 
@@ -224,8 +323,29 @@ function parseEditToolCall(state: DeepseekStreamState): EditToolCallEvent {
   } catch {
     throw new KeelError(
       "provider_protocol_error",
-      "DeepSeek edit tool call has invalid JSON arguments",
+      `DeepSeek ${toolCallName} tool call has invalid JSON arguments`,
     );
+  }
+
+  if (toolCallName === "read") {
+    const result = readToolArgumentsSchema.safeParse(parsedArguments);
+    if (!result.success) {
+      throw new KeelError(
+        "provider_protocol_error",
+        "DeepSeek read tool call has invalid arguments",
+      );
+    }
+
+    return {
+      type: "tool_call",
+      id: toolCallId,
+      tool: "read",
+      path: result.data.path,
+      ...(result.data.offset !== undefined
+        ? { offset: result.data.offset }
+        : {}),
+      ...(result.data.limit !== undefined ? { limit: result.data.limit } : {}),
+    };
   }
 
   const result = editToolArgumentsSchema.safeParse(parsedArguments);
@@ -235,9 +355,9 @@ function parseEditToolCall(state: DeepseekStreamState): EditToolCallEvent {
       "DeepSeek edit tool call has invalid arguments",
     );
   }
-
   return {
     type: "tool_call",
+    id: toolCallId,
     tool: "edit",
     path: result.data.path,
     oldString: result.data.oldString,
@@ -278,6 +398,9 @@ function appendToolCallDelta(
   }
 
   const toolFunction = toolCall.function;
+  if (toolCall.id) {
+    state.toolCallId = toolCall.id;
+  }
   if (toolFunction?.name) {
     state.toolCallName = toolFunction.name;
   }
@@ -293,7 +416,7 @@ function completePendingToolCall(state: DeepseekStreamState): void {
       "DeepSeek returned more than one tool call",
     );
   }
-  state.pendingToolCall = parseEditToolCall(state);
+  state.pendingToolCall = parseToolCall(state);
 }
 
 function* parseSseLine(

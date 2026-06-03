@@ -3,20 +3,44 @@ export interface Usage {
   readonly outputTokens: number;
 }
 
-export interface Message {
-  readonly role: "user" | "assistant";
+export interface UserMessage {
+  readonly role: "user";
   readonly content: string;
 }
 
-export type LLMEvent =
-  | { readonly type: "text"; readonly text: string }
+export type ToolCall =
   | {
-      readonly type: "tool_call";
+      readonly id: string;
+      readonly tool: "read";
+      readonly path: string;
+      readonly offset?: number;
+      readonly limit?: number;
+    }
+  | {
+      readonly id: string;
       readonly tool: "edit";
       readonly path: string;
       readonly oldString: string;
       readonly newString: string;
-    }
+    };
+
+export interface AssistantMessage {
+  readonly role: "assistant";
+  readonly content: string;
+  readonly toolCalls?: readonly ToolCall[];
+}
+
+export interface ToolMessage {
+  readonly role: "tool";
+  readonly toolCallId: string;
+  readonly content: string;
+}
+
+export type Message = UserMessage | AssistantMessage | ToolMessage;
+
+export type LLMEvent =
+  | { readonly type: "text"; readonly text: string }
+  | ({ readonly type: "tool_call" } & ToolCall)
   | { readonly type: "stop"; readonly usage: Usage };
 
 export interface StreamOptions {

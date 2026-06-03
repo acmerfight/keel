@@ -81,6 +81,26 @@ function editToolCallDelta(
   };
 }
 
+function readToolCallDelta(argumentsJson: string): {
+  readonly index: number;
+  readonly id: string;
+  readonly type: "function";
+  readonly function: {
+    readonly name: "read";
+    readonly arguments: string;
+  };
+} {
+  return {
+    index: 0,
+    id: "call_read_0",
+    type: "function",
+    function: {
+      name: "read",
+      arguments: argumentsJson,
+    },
+  };
+}
+
 async function collect(stream: AsyncIterable<LLMEvent>): Promise<LLMEvent[]> {
   const events: LLMEvent[] = [];
   for await (const event of stream) {
@@ -297,6 +317,44 @@ describe("DeepSeek Provider", () => {
                             path: "two.txt",
                             oldString: "old",
                             newString: "new",
+                          }),
+                        ),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+            );
+            res.write(
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 30, completion_tokens: 8 },
+              }),
+            );
+            res.write("data: [DONE]\n\n");
+            res.end();
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "read-window-tool-call") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        readToolCallDelta(
+                          JSON.stringify({
+                            path: "large.txt",
+                            offset: 607,
+                            limit: 20,
                           }),
                         ),
                       ],
@@ -910,6 +968,39 @@ describe("DeepSeek Provider", () => {
       code: "provider_protocol_error",
       message: "DeepSeek stream ended without usage",
     });
+  });
+
+  test(`Given a read tool call includes an offset and limit,
+    When provider finishes the tool call,
+    Then it yields the read tool call with that requested window`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "read-window-tool-call" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_read_0",
+        tool: "read",
+        path: "large.txt",
+        offset: 607,
+        limit: 20,
+      },
+      { type: "stop", usage: { inputTokens: 30, outputTokens: 8 } },
+    ]);
   });
 
   test(`Given a stream chunk contains multiple tool calls,
