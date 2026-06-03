@@ -15,6 +15,46 @@ export interface RunAgentOptions {
   readonly signal: AbortSignal;
 }
 
+interface AgentTurn {
+  readonly text: string;
+  readonly toolCall: ToolCall | null;
+  readonly usage: Usage;
+}
+
+function addUsage(left: Usage, right: Usage): Usage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+  };
+}
+
+function finishAgentTurn(
+  assistantText: readonly string[],
+  pendingToolCalls: readonly ToolCall[],
+  usage: Usage | null,
+): AgentTurn {
+  if (!usage) {
+    throw new KeelError(
+      "agent_missing_stop",
+      "LLM stream ended without stop event",
+    );
+  }
+
+  const [toolCall, extraToolCall] = pendingToolCalls;
+  if (extraToolCall) {
+    throw new KeelError(
+      "agent_unsupported_tool_calls",
+      "Keel does not support multiple tool calls in one turn",
+    );
+  }
+
+  return {
+    text: assistantText.join(""),
+    toolCall: toolCall ?? null,
+    usage,
+  };
+}
+
 export async function* runAgent(
   options: RunAgentOptions,
 ): AsyncGenerator<AgentEvent> {
@@ -29,7 +69,7 @@ export async function* runAgent(
       signal,
     });
 
-    let receivedStop = false;
+    let usage: Usage | null = null;
     const assistantText: string[] = [];
     const pendingToolCalls: ToolCall[] = [];
 
@@ -43,39 +83,23 @@ export async function* runAgent(
           pendingToolCalls.push(event);
           break;
         case "stop":
-          receivedStop = true;
-          totalUsage = {
-            inputTokens: totalUsage.inputTokens + event.usage.inputTokens,
-            outputTokens: totalUsage.outputTokens + event.usage.outputTokens,
-          };
+          usage = event.usage;
           break;
       }
     }
 
-    if (!receivedStop) {
-      throw new KeelError(
-        "agent_missing_stop",
-        "LLM stream ended without stop event",
-      );
-    }
+    const turnResult = finishAgentTurn(assistantText, pendingToolCalls, usage);
+    totalUsage = addUsage(totalUsage, turnResult.usage);
 
-    const [toolCall, extraToolCall] = pendingToolCalls;
-
+    const toolCall = turnResult.toolCall;
     if (!toolCall) {
       yield { type: "end", usage: totalUsage };
       return;
     }
 
-    if (extraToolCall) {
-      throw new KeelError(
-        "agent_unsupported_tool_calls",
-        "Keel does not support multiple tool calls in one turn",
-      );
-    }
-
     messages.push({
       role: "assistant",
-      content: assistantText.join(""),
+      content: turnResult.text,
       toolCalls: [toolCall],
     });
 
