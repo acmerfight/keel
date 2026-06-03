@@ -17,32 +17,77 @@ const READ_CHUNK_BYTES = 8192;
 const BINARY_EXTENSIONS = new Set([
   ".7z",
   ".a",
+  ".aac",
+  ".apk",
+  ".avif",
+  ".avi",
   ".bin",
+  ".bmp",
+  ".bz2",
   ".class",
   ".dat",
+  ".db",
   ".dll",
+  ".dmg",
   ".doc",
   ".docx",
+  ".dylib",
+  ".eot",
   ".exe",
+  ".flac",
+  ".gif",
   ".gz",
+  ".heic",
+  ".heif",
+  ".ico",
+  ".iso",
   ".jar",
+  ".jpeg",
+  ".jpg",
   ".lib",
+  ".m4a",
+  ".m4v",
+  ".mkv",
+  ".mov",
+  ".mp3",
+  ".mp4",
+  ".mpeg",
+  ".mpg",
   ".o",
   ".obj",
   ".odt",
   ".ods",
   ".odp",
+  ".ogg",
+  ".ogv",
+  ".otf",
+  ".pdf",
+  ".png",
   ".ppt",
   ".pptx",
   ".pyc",
   ".pyo",
+  ".rar",
   ".so",
+  ".sqlite",
+  ".sqlite3",
   ".tar",
+  ".tgz",
+  ".tif",
+  ".tiff",
+  ".ttf",
   ".war",
   ".wasm",
+  ".wav",
+  ".webm",
+  ".webp",
+  ".woff",
+  ".woff2",
   ".xls",
   ".xlsx",
+  ".xz",
   ".zip",
+  ".zst",
 ]);
 
 export interface ReadOptions {
@@ -93,19 +138,66 @@ function normalizeReadOptions(
   };
 }
 
-function isBinarySample(filePath: string, sample: Uint8Array): boolean {
-  if (BINARY_EXTENSIONS.has(extname(filePath).toLowerCase())) return true;
-  if (sample.length === 0) return false;
+function startsWithBytes(
+  bytes: Uint8Array,
+  expected: readonly number[],
+): boolean {
+  if (bytes.length < expected.length) return false;
+  return expected.every((byte, index) => bytes[index] === byte);
+}
 
+function hasMagicBinaryHeader(bytes: Uint8Array): boolean {
+  return (
+    startsWithBytes(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d]) ||
+    startsWithBytes(bytes, [0x89, 0x50, 0x4e, 0x47]) ||
+    startsWithBytes(bytes, [0xff, 0xd8, 0xff]) ||
+    startsWithBytes(bytes, [0x47, 0x49, 0x46, 0x38]) ||
+    startsWithBytes(bytes, [0x42, 0x4d]) ||
+    startsWithBytes(bytes, [0x50, 0x4b, 0x03, 0x04]) ||
+    startsWithBytes(bytes, [0x1f, 0x8b]) ||
+    startsWithBytes(bytes, [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]) ||
+    startsWithBytes(bytes, [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07]) ||
+    startsWithBytes(bytes, [0x7f, 0x45, 0x4c, 0x46]) ||
+    (bytes.length >= 12 &&
+      startsWithBytes(bytes.subarray(0, 4), [0x52, 0x49, 0x46, 0x46]) &&
+      startsWithBytes(bytes.subarray(8, 12), [0x57, 0x45, 0x42, 0x50])) ||
+    (bytes.length >= 12 &&
+      startsWithBytes(bytes.subarray(4, 8), [0x66, 0x74, 0x79, 0x70]))
+  );
+}
+
+function hasBinaryControlBytes(bytes: Uint8Array): boolean {
+  if (bytes.length === 0) return false;
   let nonPrintable = 0;
-  for (const byte of sample) {
+  for (const byte of bytes) {
     if (byte === 0) return true;
     if (byte < 9 || (byte > 13 && byte < 32)) {
       nonPrintable++;
     }
   }
 
-  return nonPrintable / sample.length > 0.3;
+  return nonPrintable / bytes.length > 0.3;
+}
+
+function isBinarySample(filePath: string, sample: Uint8Array): boolean {
+  return (
+    BINARY_EXTENSIONS.has(extname(filePath).toLowerCase()) ||
+    hasMagicBinaryHeader(sample) ||
+    hasBinaryControlBytes(sample)
+  );
+}
+
+function decodeUtf8(
+  filePath: string,
+  decoder: TextDecoder,
+  input?: Uint8Array,
+  options?: TextDecodeOptions,
+): string {
+  try {
+    return decoder.decode(input, options);
+  } catch {
+    throw new Error(`read failed: binary file is not supported: ${filePath}`);
+  }
 }
 
 function readSample(fd: number, fileSize: number): Uint8Array {
@@ -139,8 +231,12 @@ function appendTruncationNotice(
   return `${content}\n\n${notice}`;
 }
 
-function readTextWindow(fd: number, options: NormalizedReadOptions): string {
-  const decoder = new TextDecoder("utf-8");
+function readTextWindow(
+  fd: number,
+  filePath: string,
+  options: NormalizedReadOptions,
+): string {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
   let lineBuffer = "";
   let lineBytes = 0;
@@ -228,11 +324,16 @@ function readTextWindow(fd: number, options: NormalizedReadOptions): string {
     const bytesRead = readSync(fd, chunk, 0, chunk.length, null);
     if (bytesRead === 0) break;
 
-    consumeText(decoder.decode(chunk.subarray(0, bytesRead), { stream: true }));
+    const bytes = chunk.subarray(0, bytesRead);
+    if (hasBinaryControlBytes(bytes)) {
+      throw new Error(`read failed: binary file is not supported: ${filePath}`);
+    }
+
+    consumeText(decodeUtf8(filePath, decoder, bytes, { stream: true }));
   }
 
   if (keepReading) {
-    const remaining = decoder.decode();
+    const remaining = decodeUtf8(filePath, decoder);
     if (remaining !== "") {
       consumeText(remaining);
     }
@@ -298,7 +399,7 @@ export function executeRead(
       throw new Error(`read failed: binary file is not supported: ${filePath}`);
     }
 
-    return { content: readTextWindow(fd, normalizedOptions) };
+    return { content: readTextWindow(fd, filePath, normalizedOptions) };
   } finally {
     closeSync(fd);
   }

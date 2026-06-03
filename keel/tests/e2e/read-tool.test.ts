@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, open, rm } from "node:fs/promises";
+import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { executeRead } from "../../src/tools/read.ts";
 
 async function writeRepeated(
   filePath: string,
@@ -60,6 +61,80 @@ function runReadToolInSmallHeap(workspace: string): Promise<{
 }
 
 describe("Read Tool", () => {
+  test(`Given a PDF file,
+    When the read tool runs,
+    Then it rejects the file as binary`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await writeFile(join(workspace, "document.pdf"), "%PDF-1.7\n");
+
+    try {
+      // When / Then
+      expect(() => executeRead(workspace, "document.pdf")).toThrow(
+        "binary file",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an image file,
+    When the read tool runs,
+    Then it rejects the file as binary`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await writeFile(
+      join(workspace, "image.png"),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+
+    try {
+      // When / Then
+      expect(() => executeRead(workspace, "image.png")).toThrow("binary file");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a text-named PDF,
+    When the read tool runs,
+    Then it rejects the file by magic bytes`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await writeFile(join(workspace, "document.txt"), "%PDF-1.7\n");
+
+    try {
+      // When / Then
+      expect(() => executeRead(workspace, "document.txt")).toThrow(
+        "binary file",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a file starts as text and later contains a binary byte,
+    When the read tool streams past the sample window,
+    Then it rejects the file before returning content`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await writeFile(
+      join(workspace, "mixed.txt"),
+      Buffer.concat([
+        Buffer.alloc(5000, "a"),
+        Buffer.from([0]),
+        Buffer.from("b"),
+      ]),
+    );
+
+    try {
+      // When / Then
+      expect(() => executeRead(workspace, "mixed.txt")).toThrow("binary file");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given offset skips a very long first line,
     When read runs in a constrained heap,
     Then it returns the requested later line without buffering the skipped line`, async () => {
