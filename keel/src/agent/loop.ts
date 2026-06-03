@@ -3,6 +3,8 @@ import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
 import { executeEdit } from "../tools/edit.ts";
 import { executeRead } from "../tools/read.ts";
 
+const MAX_AGENT_TURNS = 8;
+
 export type AgentEvent =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "end"; readonly usage: Usage };
@@ -62,7 +64,7 @@ export async function* runAgent(
   const messages: Message[] = [{ role: "user", content: userMessage }];
   let totalUsage: Usage = { inputTokens: 0, outputTokens: 0 };
 
-  for (let turn = 0; turn < 8; turn++) {
+  for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
     const stream = provider.stream({
       systemPrompt,
       messages,
@@ -135,5 +137,8 @@ export async function* runAgent(
     }
   }
 
-  throw new KeelError("agent_missing_stop", "Agent exceeded tool call limit");
+  throw new KeelError(
+    "agent_tool_call_limit_exceeded",
+    "Agent exceeded tool call limit",
+  );
 }
