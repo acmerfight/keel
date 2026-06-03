@@ -8,7 +8,7 @@ import {
   createFakeProvider,
   fakeEditResponse,
 } from "../../src/llm/providers/fake.ts";
-import type { LLMProvider } from "../../src/llm/types.ts";
+import type { LLMProvider, Message } from "../../src/llm/types.ts";
 
 async function collect(
   source: AsyncIterable<AgentEvent>,
@@ -215,6 +215,176 @@ describe("File Editing", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a workspace file exceeds the read output budget,
+    When the LLM asks the agent to read it,
+    Then the next LLM request receives capped content with a continuation hint`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const largeContent = `${Array.from(
+      { length: 700 },
+      (_, index) => `${String(index).padStart(4, "0")}:${"x".repeat(100)}`,
+    ).join("\n")}\n`;
+    await writeFile(join(workspace, "large.txt"), largeContent, "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "capture-read",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_large",
+            tool: "read",
+            path: "large.txt",
+          };
+          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          return;
+        }
+
+        secondTurnMessages = options.messages;
+        yield { type: "text", text: "done" };
+        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+    };
+
+    try {
+      // When
+      await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "read the large file",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const toolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessage?.content).toContain("0000:");
+      expect(toolMessage?.content).not.toContain("0699:");
+      expect(
+        Buffer.byteLength(toolMessage?.content ?? "", "utf8"),
+      ).toBeLessThan(Buffer.byteLength(largeContent, "utf8"));
+      expect(toolMessage?.content).toContain("Read output truncated");
+      expect(toolMessage?.content).toContain("Use offset=");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the LLM asks to read a later file window,
+    When the agent runs the read tool,
+    Then the next LLM request receives only that requested window`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(
+      join(workspace, "note.txt"),
+      "one\ntwo\nthree\nfour\nfive\n",
+      "utf8",
+    );
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "windowed-read",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_window",
+            tool: "read",
+            path: "note.txt",
+            offset: 3,
+            limit: 2,
+          };
+          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          return;
+        }
+
+        secondTurnMessages = options.messages;
+        yield { type: "text", text: "done" };
+        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+    };
+
+    try {
+      // When
+      await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "read a file window",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const toolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      const content = toolMessage?.content ?? "";
+      expect(content).toContain("three\nfour\n");
+      expect(content).not.toContain("one\n");
+      expect(content).not.toContain("two\n");
+      expect(content).not.toContain("five\n");
+      expect(content).toContain("Use offset=5");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a workspace file contains binary bytes,
+    When the LLM asks the agent to read it,
+    Then the read is rejected before content is sent back to the LLM`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(
+      join(workspace, "blob.bin"),
+      Buffer.from([0, 1, 2, 3, 0, 255]),
+    );
+    let streamCalls = 0;
+    const provider: LLMProvider = {
+      id: "binary-read",
+      async *stream() {
+        streamCalls++;
+        if (streamCalls > 1) {
+          throw new Error("binary read content reached the second LLM request");
+        }
+
+        yield {
+          type: "tool_call",
+          id: "read_binary",
+          tool: "read",
+          path: "blob.bin",
+        };
+        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+    };
+
+    try {
+      // When / Then
+      await expect(
+        collect(
+          runAgent({
+            workspace,
+            provider,
+            userMessage: "read the binary file",
+            systemPrompt: "You are a helpful assistant.",
+            signal: freshSignal(),
+          }),
+        ),
+      ).rejects.toThrow("binary file");
+      expect(streamCalls).toBe(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
     }
   });
 

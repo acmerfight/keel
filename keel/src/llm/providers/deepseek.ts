@@ -40,13 +40,24 @@ const readTool = {
   type: "function",
   function: {
     name: "read",
-    description: "Read a workspace file.",
+    description:
+      "Read a workspace file. Output is capped at 2000 lines or 50KB; use offset and limit to read later sections.",
     parameters: {
       type: "object",
       properties: {
         path: {
           type: "string",
           description: "Workspace-relative file path to read.",
+        },
+        offset: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional 1-indexed line number to start reading from.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional maximum number of lines to read.",
         },
       },
       required: ["path"],
@@ -58,6 +69,8 @@ const readTool = {
 const readToolArgumentsSchema = z
   .object({
     path: z.string(),
+    offset: z.number().int().positive().optional(),
+    limit: z.number().int().positive().optional(),
   })
   .strict();
 
@@ -175,10 +188,14 @@ function createChatCompletionsBody(
   });
 }
 
-function toolCallArguments(toolCall: ToolCall): Record<string, string> {
+function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
   switch (toolCall.tool) {
     case "read":
-      return { path: toolCall.path };
+      return {
+        path: toolCall.path,
+        ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
+        ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
+      };
     case "edit":
       return {
         path: toolCall.path,
@@ -324,6 +341,10 @@ function parseToolCall(state: DeepseekStreamState): ToolCallEvent {
       id: toolCallId,
       tool: "read",
       path: result.data.path,
+      ...(result.data.offset !== undefined
+        ? { offset: result.data.offset }
+        : {}),
+      ...(result.data.limit !== undefined ? { limit: result.data.limit } : {}),
     };
   }
 

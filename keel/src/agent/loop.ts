@@ -74,7 +74,10 @@ export async function* runAgent(
     for (const toolCall of pendingToolCalls) {
       switch (toolCall.tool) {
         case "read": {
-          const result = executeRead(workspace, toolCall.path);
+          const result = executeRead(workspace, toolCall.path, {
+            offset: toolCall.offset,
+            limit: toolCall.limit,
+          });
           messages.push({
             role: "tool",
             toolCallId: toolCall.id,

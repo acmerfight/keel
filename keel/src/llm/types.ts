@@ -13,6 +13,8 @@ export type ToolCall =
       readonly id: string;
       readonly tool: "read";
       readonly path: string;
+      readonly offset?: number;
+      readonly limit?: number;
     }
   | {
       readonly id: string;

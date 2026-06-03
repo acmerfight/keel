@@ -18,6 +18,8 @@ interface FakeEditResponse {
 interface FakeReadResponse {
   readonly type: "read";
   readonly path: string;
+  readonly offset?: number;
+  readonly limit?: number;
   readonly usage: Usage;
 }
 
@@ -46,8 +48,9 @@ export function fakeEditResponse(
 export function fakeReadResponse(
   path: string,
   usage: Usage = { inputTokens: 0, outputTokens: 0 },
+  options: { readonly offset?: number; readonly limit?: number } = {},
 ): FakeResponse {
-  return { type: "read", path, usage };
+  return { type: "read", path, usage, ...options };
 }
 
 export function createFakeProvider(
@@ -91,6 +94,10 @@ export function createFakeProvider(
             id: `fake_tool_call_${turn}`,
             tool: "read",
             path: response.path,
+            ...(response.offset !== undefined
+              ? { offset: response.offset }
+              : {}),
+            ...(response.limit !== undefined ? { limit: response.limit } : {}),
           };
           break;
       }
