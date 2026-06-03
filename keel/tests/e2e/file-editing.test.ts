@@ -442,6 +442,50 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given a text-named workspace file contains binary bytes,
+    When the LLM asks the agent to read it,
+    Then the read is rejected by content sniffing before reaching the LLM`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "blob.txt"), Buffer.from([65, 0, 66]));
+    let streamCalls = 0;
+    const provider: LLMProvider = {
+      id: "binary-sniff-read",
+      async *stream() {
+        streamCalls++;
+        if (streamCalls > 1) {
+          throw new Error("binary read content reached the second LLM request");
+        }
+
+        yield {
+          type: "tool_call",
+          id: "read_binary_text",
+          tool: "read",
+          path: "blob.txt",
+        };
+        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+    };
+
+    try {
+      // When / Then
+      await expect(
+        collect(
+          runAgent({
+            workspace,
+            provider,
+            userMessage: "read the text-named binary file",
+            systemPrompt: "You are a helpful assistant.",
+            signal: freshSignal(),
+          }),
+        ),
+      ).rejects.toThrow("binary file");
+      expect(streamCalls).toBe(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the old text appears more than once,
     When the LLM asks the agent to edit that text,
     Then the edit is rejected and the file is unchanged`, async () => {

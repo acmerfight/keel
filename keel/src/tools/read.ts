@@ -142,19 +142,45 @@ function appendTruncationNotice(
 function readTextWindow(fd: number, options: NormalizedReadOptions): string {
   const decoder = new TextDecoder("utf-8");
   const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
-  let buffer = "";
+  let lineBuffer = "";
+  let lineBytes = 0;
+  let lineNumber = 1;
+  let countedLines = 0;
   let content = "";
   let outputBytes = 0;
   let outputLines = 0;
-  let currentLine = 0;
   let truncated = false;
   let truncatedReason: "budget" | "line-limit" = "budget";
   let firstLineExceedsLimit = false;
   let keepReading = true;
+  let hasCurrentLineContent = false;
 
-  const consumeSegment = (segment: string): void => {
-    currentLine++;
-    if (currentLine < options.offset) return;
+  const finishLine = (): void => {
+    countedLines = lineNumber;
+    lineNumber++;
+    hasCurrentLineContent = false;
+  };
+
+  const flushOutputLine = (): void => {
+    content += lineBuffer;
+    outputBytes += lineBytes;
+    outputLines++;
+    lineBuffer = "";
+    lineBytes = 0;
+    finishLine();
+  };
+
+  const consumeLinePiece = (piece: string, completesLine: boolean): void => {
+    if (piece !== "") {
+      hasCurrentLineContent = true;
+    }
+
+    if (lineNumber < options.offset) {
+      if (completesLine) {
+        finishLine();
+      }
+      return;
+    }
 
     if (outputLines >= options.limit) {
       truncated = true;
@@ -163,8 +189,9 @@ function readTextWindow(fd: number, options: NormalizedReadOptions): string {
       return;
     }
 
-    const segmentBytes = Buffer.byteLength(segment, "utf8");
-    if (outputBytes + segmentBytes > MAX_READ_BYTES) {
+    const pieceBytes = Buffer.byteLength(piece, "utf8");
+    const projectedLineBytes = lineBytes + pieceBytes;
+    if (outputBytes + projectedLineBytes > MAX_READ_BYTES) {
       truncated = true;
       truncatedReason = "budget";
       firstLineExceedsLimit = outputLines === 0;
@@ -172,19 +199,28 @@ function readTextWindow(fd: number, options: NormalizedReadOptions): string {
       return;
     }
 
-    content += segment;
-    outputBytes += segmentBytes;
-    outputLines++;
+    lineBuffer += piece;
+    lineBytes = projectedLineBytes;
+
+    if (completesLine) {
+      flushOutputLine();
+    }
   };
 
-  const consumeCompleteLines = (): void => {
+  const consumeText = (text: string): void => {
+    let cursor = 0;
     while (keepReading) {
-      const newlineIndex = buffer.indexOf("\n");
-      if (newlineIndex < 0) break;
+      const newlineIndex = text.indexOf("\n", cursor);
+      if (newlineIndex < 0) {
+        const piece = text.slice(cursor);
+        if (piece !== "") {
+          consumeLinePiece(piece, false);
+        }
+        break;
+      }
 
-      const segment = buffer.slice(0, newlineIndex + 1);
-      buffer = buffer.slice(newlineIndex + 1);
-      consumeSegment(segment);
+      consumeLinePiece(text.slice(cursor, newlineIndex + 1), true);
+      cursor = newlineIndex + 1;
     }
   };
 
@@ -192,38 +228,30 @@ function readTextWindow(fd: number, options: NormalizedReadOptions): string {
     const bytesRead = readSync(fd, chunk, 0, chunk.length, null);
     if (bytesRead === 0) break;
 
-    buffer += decoder.decode(chunk.subarray(0, bytesRead), { stream: true });
-    consumeCompleteLines();
-
-    const pendingLine = currentLine + 1;
-    if (
-      keepReading &&
-      pendingLine >= options.offset &&
-      outputLines < options.limit &&
-      outputBytes + Buffer.byteLength(buffer, "utf8") > MAX_READ_BYTES
-    ) {
-      truncated = true;
-      truncatedReason = "budget";
-      firstLineExceedsLimit = outputLines === 0;
-      keepReading = false;
-    }
+    consumeText(decoder.decode(chunk.subarray(0, bytesRead), { stream: true }));
   }
 
   if (keepReading) {
-    buffer += decoder.decode();
-    consumeCompleteLines();
-    if (keepReading && buffer !== "") {
-      consumeSegment(buffer);
+    const remaining = decoder.decode();
+    if (remaining !== "") {
+      consumeText(remaining);
+    }
+    if (keepReading && hasCurrentLineContent) {
+      if (lineNumber < options.offset) {
+        finishLine();
+      } else {
+        flushOutputLine();
+      }
     }
   }
 
   if (
-    currentLine < options.offset &&
+    countedLines < options.offset &&
     options.offset !== 1 &&
     outputLines === 0
   ) {
     throw new Error(
-      `read failed: offset ${options.offset} is beyond end of file (${currentLine} lines)`,
+      `read failed: offset ${options.offset} is beyond end of file (${countedLines} lines)`,
     );
   }
 
