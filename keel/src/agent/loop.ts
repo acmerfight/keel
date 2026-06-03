@@ -59,12 +59,14 @@ export async function* runAgent(
       );
     }
 
-    if (pendingToolCalls.length === 0) {
+    const [toolCall, extraToolCall] = pendingToolCalls;
+
+    if (!toolCall) {
       yield { type: "end", usage: totalUsage };
       return;
     }
 
-    if (pendingToolCalls.length > 1) {
+    if (extraToolCall) {
       throw new KeelError(
         "agent_unsupported_tool_calls",
         "Keel does not support multiple tool calls in one turn",
@@ -74,39 +76,37 @@ export async function* runAgent(
     messages.push({
       role: "assistant",
       content: assistantText.join(""),
-      toolCalls: pendingToolCalls,
+      toolCalls: [toolCall],
     });
 
-    for (const toolCall of pendingToolCalls) {
-      switch (toolCall.tool) {
-        case "read": {
-          const result = executeRead(workspace, toolCall.path, {
-            offset: toolCall.offset,
-            limit: toolCall.limit,
-          });
-          messages.push({
-            role: "tool",
-            toolCallId: toolCall.id,
-            content: result.content,
-          });
-          break;
-        }
-        case "edit": {
-          const result = executeEdit(
-            workspace,
-            toolCall.path,
-            toolCall.oldString,
-            toolCall.newString,
-          );
-          messages.push({
-            role: "tool",
-            toolCallId: toolCall.id,
-            content: result.content,
-          });
-          yield { type: "text", text: result.content };
-          yield { type: "end", usage: totalUsage };
-          return;
-        }
+    switch (toolCall.tool) {
+      case "read": {
+        const result = executeRead(workspace, toolCall.path, {
+          offset: toolCall.offset,
+          limit: toolCall.limit,
+        });
+        messages.push({
+          role: "tool",
+          toolCallId: toolCall.id,
+          content: result.content,
+        });
+        break;
+      }
+      case "edit": {
+        const result = executeEdit(
+          workspace,
+          toolCall.path,
+          toolCall.oldString,
+          toolCall.newString,
+        );
+        messages.push({
+          role: "tool",
+          toolCallId: toolCall.id,
+          content: result.content,
+        });
+        yield { type: "text", text: result.content };
+        yield { type: "end", usage: totalUsage };
+        return;
       }
     }
   }
