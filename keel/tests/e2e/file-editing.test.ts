@@ -260,6 +260,7 @@ describe("File Editing", () => {
       async *stream() {
         yield {
           type: "tool_call",
+          id: "broken_edit",
           tool: "edit",
           path: "note.txt",
           oldString: "old",
