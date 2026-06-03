@@ -64,6 +64,60 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given one LLM turn contains an edit followed by another edit,
+    When the agent runs tool calls,
+    Then it treats the first edit as terminal and skips later tool calls`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    const provider: LLMProvider = {
+      id: "multiple-edits",
+      async *stream() {
+        yield {
+          type: "tool_call",
+          id: "first_edit",
+          tool: "edit",
+          path: "note.txt",
+          oldString: "old",
+          newString: "new",
+        };
+        yield {
+          type: "tool_call",
+          id: "second_edit",
+          tool: "edit",
+          path: "note.txt",
+          oldString: "new",
+          newString: "second",
+        };
+        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "edit once",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello new world\n",
+      );
+      expect(events).toEqual([
+        { type: "text", text: "Edited note.txt" },
+        { type: "end", usage: { inputTokens: 1, outputTokens: 1 } },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the LLM asks to edit a file outside the workspace,
     When the agent runs the edit tool,
     Then the edit is rejected and the outside file is unchanged`, async () => {

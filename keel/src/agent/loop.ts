@@ -70,7 +70,6 @@ export async function* runAgent(
       toolCalls: pendingToolCalls,
     });
 
-    let shouldContinue = true;
     for (const toolCall of pendingToolCalls) {
       switch (toolCall.tool) {
         case "read": {
@@ -98,15 +97,10 @@ export async function* runAgent(
             content: result.content,
           });
           yield { type: "text", text: result.content };
-          shouldContinue = false;
-          break;
+          yield { type: "end", usage: totalUsage };
+          return;
         }
       }
-    }
-
-    if (!shouldContinue) {
-      yield { type: "end", usage: totalUsage };
-      return;
     }
   }
 
