@@ -1,5 +1,6 @@
 export type KeelErrorCode =
   | "agent_missing_stop"
+  | "agent_unsupported_tool_calls"
   | "provider_auth_failed"
   | "provider_rate_limited"
   | "provider_server_error"

@@ -64,6 +64,13 @@ export async function* runAgent(
       return;
     }
 
+    if (pendingToolCalls.length > 1) {
+      throw new KeelError(
+        "agent_unsupported_tool_calls",
+        "Keel does not support multiple tool calls in one turn",
+      );
+    }
+
     messages.push({
       role: "assistant",
       content: assistantText.join(""),

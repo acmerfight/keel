@@ -64,9 +64,9 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given one LLM turn contains an edit followed by another edit,
+  test(`Given one LLM turn contains multiple tool calls,
     When the agent runs tool calls,
-    Then it treats the first edit as terminal and skips later tool calls`, async () => {
+    Then it rejects the turn and leaves the file unchanged`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
@@ -94,25 +94,21 @@ describe("File Editing", () => {
     };
 
     try {
-      // When
-      const events = await collect(
-        runAgent({
-          workspace,
-          provider,
-          userMessage: "edit once",
-          systemPrompt: "You are a helpful assistant.",
-          signal: freshSignal(),
-        }),
-      );
-
-      // Then
+      // When / Then
+      await expect(
+        collect(
+          runAgent({
+            workspace,
+            provider,
+            userMessage: "edit once",
+            systemPrompt: "You are a helpful assistant.",
+            signal: freshSignal(),
+          }),
+        ),
+      ).rejects.toThrow("multiple tool calls");
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
-        "hello new world\n",
+        "hello old world\n",
       );
-      expect(events).toEqual([
-        { type: "text", text: "Edited note.txt" },
-        { type: "end", usage: { inputTokens: 1, outputTokens: 1 } },
-      ]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
