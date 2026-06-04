@@ -167,4 +167,38 @@ describe("Text Reply", () => {
       ),
     ).rejects.toThrow("LLM stream ended without stop event");
   });
+
+  test(`Given the LLM keeps asking to read files,
+    When the agent exceeds its tool turn limit,
+    Then agent throws a tool call limit error`, async () => {
+    // Given
+    const loopingProvider: LLMProvider = {
+      id: "looping-tools",
+      async *stream() {
+        yield {
+          type: "tool_call",
+          id: "read_package",
+          tool: "read",
+          path: "package.json",
+        };
+        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+    };
+
+    // When / Then
+    await expect(
+      collect(
+        runAgent({
+          workspace: workspace(),
+          provider: loopingProvider,
+          userMessage: "inspect forever",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "agent_tool_call_limit_exceeded",
+      message: "Agent exceeded tool call limit",
+    });
+  });
 });
