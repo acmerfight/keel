@@ -53,7 +53,7 @@ function finishAgentTurn(
   pendingToolCalls: readonly ToolCall[],
   usage: Usage | null,
 ): AgentTurn {
-  if (!usage) {
+  if (usage === null) {
     throw new KeelError(
       "agent_missing_stop",
       "LLM stream ended without stop event",
@@ -61,7 +61,7 @@ function finishAgentTurn(
   }
 
   const [toolCall, extraToolCall] = pendingToolCalls;
-  if (extraToolCall) {
+  if (extraToolCall !== undefined) {
     throw new KeelError(
       "agent_unsupported_tool_calls",
       "Keel does not support multiple tool calls in one turn",
@@ -112,7 +112,7 @@ export async function* runAgent(
     totalUsage = addUsage(totalUsage, turnResult.usage);
 
     const toolCall = turnResult.toolCall;
-    if (!toolCall) {
+    if (toolCall === null) {
       yield { type: "end", usage: totalUsage };
       return;
     }
