@@ -2,7 +2,7 @@
 
 ## Principles
 
-1. **Only mock LLM.** `fake` provider is the sole seam. Everything else — filesystem, processes, git — is real. Isolation means tmpdir, not mock.
+1. **Only mock LLM in agent-facing tests.** `fake` provider is the agent seam. Everything else — filesystem, processes, git — is real. Provider contract tests may use a local protocol server instead of the real upstream API. Isolation means tmpdir, not mock.
 2. **BDD.** Tests are written in business language using GWTE (Given-When-Then-Expect). PM can read `vitest --reporter=verbose` output as product spec — no code knowledge required.
 3. **Tests = product documentation.** If a behavior isn't in the test suite, it doesn't exist. If a test passes, the feature works.
 
@@ -39,8 +39,11 @@ Cost Control
 
 ```
 tests/
-  e2e/           — Agent behaviors, named by capability (file-editing, error-recovery, ...)
-  invariants/    — Architecture guards (module boundary assertions)
+  agent/       — runAgent behaviors with fake LLM and real tools/filesystem
+  cli/         — CLI subprocess behavior and user-visible process results
+  providers/   — Provider protocol contracts with local HTTP/SSE servers
+  tools/       — Direct tool boundaries, safety checks, and resource limits
+  invariants/  — Architecture guards (module boundary assertions)
 ```
 
 ## Do NOT
