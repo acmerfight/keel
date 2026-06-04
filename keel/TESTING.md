@@ -46,6 +46,11 @@ tests/
   invariants/  — Architecture guards (module boundary assertions)
 ```
 
+## Test Infrastructure
+
+Test support code, such as fake providers and fixture factories, lives in `src/testing/`.
+This directory is excluded from coverage reports.
+
 ## Choosing A Test Boundary
 
 Prefer the highest product boundary that still gives a clear, stable failure:

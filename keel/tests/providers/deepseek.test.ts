@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import type { Server } from "node:net";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createDeepseekProvider } from "../../src/llm/providers/deepseek.ts";
@@ -51,6 +51,21 @@ function sseFinishWithoutUsage(): string {
     choices: [{ delta: {}, finish_reason: "stop" }],
   });
   return `data: ${chunk}\n\ndata: [DONE]\n\n`;
+}
+
+function writeSseResponse(
+  res: ServerResponse,
+  chunks: readonly string[],
+): void {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  for (const chunk of chunks) {
+    res.write(chunk);
+  }
+  res.end();
 }
 
 function editToolCallDelta(
@@ -113,6 +128,30 @@ function freshSignal(): AbortSignal {
   return new AbortController().signal;
 }
 
+function objectProperty(value: unknown, property: string): unknown {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`Expected object before reading ${property}`);
+  }
+  return Reflect.get(value, property);
+}
+
+function arrayElement(values: unknown, index: number): unknown {
+  if (!Array.isArray(values)) {
+    throw new Error(`Expected array before reading index ${index}`);
+  }
+  return values[index];
+}
+
+function expectJsonString(
+  value: unknown,
+  expected: Record<string, unknown>,
+): void {
+  if (typeof value !== "string") {
+    throw new Error("Expected JSON string");
+  }
+  expect(JSON.parse(value)).toEqual(expected);
+}
+
 async function unusedLocalPort(): Promise<number> {
   const probe = createServer();
   await new Promise<void>((resolve) => {
@@ -134,6 +173,7 @@ async function unusedLocalPort(): Promise<number> {
 describe("DeepSeek Provider", () => {
   let server: Server;
   let baseUrl: string;
+  let capturedMessages: unknown;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -146,6 +186,9 @@ describe("DeepSeek Provider", () => {
         });
         req.on("end", () => {
           const parsed = JSON.parse(body);
+          if (parsed.messages?.[1]?.content === "serialize-history") {
+            capturedMessages = parsed.messages;
+          }
 
           if (parsed.messages?.[1]?.content === "trigger-error") {
             res.writeHead(401, { "Content-Type": "application/json" });
@@ -218,6 +261,11 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "empty-schema-chunk") {
+            writeSseResponse(res, [sseData({}), sseFinish(1, 1)]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "invalid-choices") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -276,6 +324,18 @@ describe("DeepSeek Provider", () => {
             res.write(sseChunk("complete"));
             res.write(sseFinishWithoutTrailingNewline(7, 3));
             res.end();
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "missing-finish-reason") {
+            writeSseResponse(res, [
+              sseChunk("partial output"),
+              sseData({
+                choices: [{ delta: {} }],
+                usage: { prompt_tokens: 10, completion_tokens: 4 },
+              }),
+              "data: [DONE]\n\n",
+            ]);
             return;
           }
 
@@ -475,6 +535,140 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "missing-tool-call-id") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          index: 0,
+                          type: "function",
+                          function: {
+                            name: "edit",
+                            arguments: JSON.stringify({
+                              path: "note.txt",
+                              oldString: "old",
+                              newString: "new",
+                            }),
+                          },
+                        },
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 30, completion_tokens: 8 },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "unsupported-tool-name") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          id: "call_delete_0",
+                          index: 0,
+                          type: "function",
+                          function: {
+                            name: "delete",
+                            arguments: JSON.stringify({ path: "note.txt" }),
+                          },
+                        },
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 30, completion_tokens: 8 },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "invalid-read-arguments") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        readToolCallDelta(
+                          JSON.stringify({ path: "note.txt", offset: 0 }),
+                        ),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 30, completion_tokens: 8 },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "invalid-edit-arguments") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        editToolCallDelta(
+                          0,
+                          JSON.stringify({
+                            path: "note.txt",
+                            oldString: "old",
+                          }),
+                        ),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 30, completion_tokens: 8 },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "tool-calls-without-delta") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 30, completion_tokens: 8 },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "reasoning-with-null-content") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -596,6 +790,115 @@ describe("DeepSeek Provider", () => {
       type: "stop",
       usage: { inputTokens: 10, outputTokens: 5 },
     });
+  });
+
+  test(`Given prior assistant and tool messages,
+    When provider sends the next request,
+    Then it serializes the conversation history in DeepSeek format`, async () => {
+    // Given
+    capturedMessages = undefined;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [
+          { role: "user", content: "serialize-history" },
+          { role: "assistant", content: "plain answer" },
+          {
+            role: "assistant",
+            content: "I need to inspect and edit.",
+            toolCalls: [
+              {
+                id: "read_1",
+                tool: "read",
+                path: "src/index.ts",
+                offset: 2,
+                limit: 3,
+              },
+              {
+                id: "edit_1",
+                tool: "edit",
+                path: "src/index.ts",
+                oldString: "old",
+                newString: "new",
+              },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "read_1",
+            content: "file body\n",
+          },
+        ],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(capturedMessages).toEqual([
+      { role: "system", content: "You are helpful." },
+      { role: "user", content: "serialize-history" },
+      { role: "assistant", content: "plain answer" },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "read_1",
+            type: "function",
+            function: {
+              name: "read",
+              arguments: expect.any(String),
+            },
+          },
+          {
+            id: "edit_1",
+            type: "function",
+            function: {
+              name: "edit",
+              arguments: expect.any(String),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "read_1",
+        content: "file body\n",
+      },
+    ]);
+    const toolCalls = objectProperty(
+      arrayElement(capturedMessages, 3),
+      "tool_calls",
+    );
+    expectJsonString(
+      objectProperty(
+        objectProperty(arrayElement(toolCalls, 0), "function"),
+        "arguments",
+      ),
+      {
+        path: "src/index.ts",
+        offset: 2,
+        limit: 3,
+      },
+    );
+    expectJsonString(
+      objectProperty(
+        objectProperty(arrayElement(toolCalls, 1), "function"),
+        "arguments",
+      ),
+      {
+        path: "src/index.ts",
+        oldString: "old",
+        newString: "new",
+      },
+    );
   });
 
   test(`Given the API rejects authentication,
@@ -806,6 +1109,32 @@ describe("DeepSeek Provider", () => {
     });
   });
 
+  test(`Given the stream ends without a finish reason,
+    When provider validates the completed stream,
+    Then it throws a protocol error instead of yielding stop`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "missing-finish-reason" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream finished with reason: none",
+    });
+  });
+
   test(`Given a stream chunk contains invalid JSON,
     When provider reads the chunk,
     Then it throws a protocol error`, async () => {
@@ -829,6 +1158,32 @@ describe("DeepSeek Provider", () => {
       name: "KeelError",
       code: "provider_protocol_error",
       message: "DeepSeek stream chunk has invalid JSON",
+    });
+  });
+
+  test(`Given a stream chunk has neither choices nor usage,
+    When provider validates the chunk,
+    Then it throws an invalid schema protocol error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "empty-schema-chunk" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream chunk has invalid schema",
     });
   });
 
@@ -1104,6 +1459,136 @@ describe("DeepSeek Provider", () => {
       name: "KeelError",
       code: "provider_protocol_error",
       message: "DeepSeek edit tool call has empty arguments",
+    });
+  });
+
+  test(`Given a tool call is missing an id,
+    When provider finishes the tool call,
+    Then it throws a protocol error before exposing the tool call`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "missing-tool-call-id" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek tool call is missing id",
+    });
+  });
+
+  test(`Given a tool call names an unsupported tool,
+    When provider finishes the tool call,
+    Then it throws a protocol error instead of yielding the tool call`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "unsupported-tool-name" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek returned unsupported tool call: delete",
+    });
+  });
+
+  test(`Given a read tool call has invalid arguments,
+    When provider validates the completed tool call,
+    Then it throws a read argument protocol error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "invalid-read-arguments" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek read tool call has invalid arguments",
+    });
+  });
+
+  test(`Given an edit tool call is missing replacement text,
+    When provider validates the completed tool call,
+    Then it throws an edit argument protocol error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "invalid-edit-arguments" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek edit tool call has invalid arguments",
+    });
+  });
+
+  test(`Given the stream claims tool_calls without sending a tool call,
+    When provider reads the stream,
+    Then it throws a protocol error instead of yielding an empty tool call`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "tool-calls-without-delta" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream finished with tool_calls but no tool call",
     });
   });
 

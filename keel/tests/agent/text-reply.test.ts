@@ -1,10 +1,10 @@
 import { describe, expect, test } from "vitest";
 import { type AgentEvent, runAgent } from "../../src/agent/loop.ts";
+import type { LLMProvider } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
   fakeResponse,
-} from "../../src/llm/providers/fake.ts";
-import type { LLMProvider } from "../../src/llm/types.ts";
+} from "../../src/testing/fake-provider.ts";
 
 type TextEvent = Extract<AgentEvent, { readonly type: "text" }>;
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
