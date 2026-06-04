@@ -272,7 +272,7 @@ function getResponseReader(
   response: Response,
 ): ReadableStreamDefaultReader<Uint8Array> {
   const reader = response.body?.getReader();
-  if (!reader) {
+  if (reader === undefined) {
     throw new KeelError(
       "provider_protocol_error",
       "DeepSeek API returned no response body",
@@ -445,7 +445,7 @@ function* parseSseLine(
   const chunk = parseSseData(data);
   const choice = chunk.choices?.[0];
 
-  if (choice) {
+  if (choice !== undefined) {
     const content = choice.delta?.content;
     if (content) {
       yield { type: "text", text: content };
@@ -460,7 +460,7 @@ function* parseSseLine(
     }
 
     const toolCall = toolCalls[0];
-    if (toolCall) {
+    if (toolCall !== undefined) {
       appendToolCallDelta(state, toolCall);
     }
 
@@ -472,7 +472,7 @@ function* parseSseLine(
     }
   }
 
-  if (chunk.usage) {
+  if (chunk.usage !== undefined && chunk.usage !== null) {
     state.usage = {
       inputTokens: chunk.usage.prompt_tokens,
       outputTokens: chunk.usage.completion_tokens,

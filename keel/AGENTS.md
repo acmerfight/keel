@@ -58,6 +58,7 @@ Common mistakes:
 - ❌ `?` because "the caller might not pass it" — put defaults in a factory function
 - ❌ `?` because "it might be zero/empty string" — zero and empty string are values, not absence
 - ❌ `Partial<T>` as the data type — use it only at call boundaries (function params, spread overrides)
+- ❌ Broad truthy/falsy checks for sentinel values — use `value === null`, `value !== undefined`, `value === ""`, or `value === 0` to name the exact state being checked
 
 Pattern:
 
