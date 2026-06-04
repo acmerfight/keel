@@ -399,12 +399,7 @@ describe("DeepSeek Provider", () => {
           }
 
           if (parsed.messages?.[1]?.content === "read-window-tool-call") {
-            res.writeHead(200, {
-              "Content-Type": "text/event-stream",
-              "Cache-Control": "no-cache",
-              Connection: "keep-alive",
-            });
-            res.write(
+            writeSseResponse(res, [
               sseData({
                 choices: [
                   {
@@ -424,15 +419,40 @@ describe("DeepSeek Provider", () => {
                 ],
                 usage: null,
               }),
-            );
-            res.write(
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
                 usage: { prompt_tokens: 30, completion_tokens: 8 },
               }),
-            );
-            res.write("data: [DONE]\n\n");
-            res.end();
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "read-basic-tool-call") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        readToolCallDelta(
+                          JSON.stringify({
+                            path: "note.txt",
+                          }),
+                        ),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 24, completion_tokens: 6 },
+              }),
+              "data: [DONE]\n\n",
+            ]);
             return;
           }
 
@@ -815,6 +835,11 @@ describe("DeepSeek Provider", () => {
             content: "I need to inspect and edit.",
             toolCalls: [
               {
+                id: "read_0",
+                tool: "read",
+                path: "README.md",
+              },
+              {
                 id: "read_1",
                 tool: "read",
                 path: "src/index.ts",
@@ -850,6 +875,14 @@ describe("DeepSeek Provider", () => {
         content: null,
         tool_calls: [
           {
+            id: "read_0",
+            type: "function",
+            function: {
+              name: "read",
+              arguments: expect.any(String),
+            },
+          },
+          {
             id: "read_1",
             type: "function",
             function: {
@@ -883,6 +916,15 @@ describe("DeepSeek Provider", () => {
         "arguments",
       ),
       {
+        path: "README.md",
+      },
+    );
+    expectJsonString(
+      objectProperty(
+        objectProperty(arrayElement(toolCalls, 1), "function"),
+        "arguments",
+      ),
+      {
         path: "src/index.ts",
         offset: 2,
         limit: 3,
@@ -890,7 +932,7 @@ describe("DeepSeek Provider", () => {
     );
     expectJsonString(
       objectProperty(
-        objectProperty(arrayElement(toolCalls, 1), "function"),
+        objectProperty(arrayElement(toolCalls, 2), "function"),
         "arguments",
       ),
       {
@@ -1355,6 +1397,37 @@ describe("DeepSeek Provider", () => {
         limit: 20,
       },
       { type: "stop", usage: { inputTokens: 30, outputTokens: 8 } },
+    ]);
+  });
+
+  test(`Given a read tool call only includes a path,
+    When provider finishes the tool call,
+    Then it yields the read tool call without a requested window`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "read-basic-tool-call" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_read_0",
+        tool: "read",
+        path: "note.txt",
+      },
+      { type: "stop", usage: { inputTokens: 24, outputTokens: 6 } },
     ]);
   });
 
