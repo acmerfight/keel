@@ -7,6 +7,7 @@ import {
   statSync,
 } from "node:fs";
 import { extname, isAbsolute, relative, resolve } from "node:path";
+import { KeelError } from "../core/error.ts";
 import type { ToolResult } from "./types.ts";
 
 export const MAX_READ_LINES = 2000;
@@ -114,6 +115,13 @@ function formatSize(bytes: number): string {
   return `${Math.round(bytes / (1024 * 1024))}MB`;
 }
 
+function binaryFileError(filePath: string): KeelError {
+  return new KeelError(
+    "tool_binary_file",
+    `read failed: binary file is not supported: ${filePath}`,
+  );
+}
+
 function normalizeReadOptions(
   filePath: string,
   options: ReadOptions,
@@ -122,12 +130,14 @@ function normalizeReadOptions(
   const requestedLimit = options.limit ?? MAX_READ_LINES;
 
   if (!Number.isInteger(offset) || offset < 1) {
-    throw new Error(
+    throw new KeelError(
+      "tool_invalid_read_options",
       `read failed: offset must be a positive integer in ${filePath}`,
     );
   }
   if (!Number.isInteger(requestedLimit) || requestedLimit < 1) {
-    throw new Error(
+    throw new KeelError(
+      "tool_invalid_read_options",
       `read failed: limit must be a positive integer in ${filePath}`,
     );
   }
@@ -196,7 +206,7 @@ function decodeUtf8(
   try {
     return decoder.decode(input, options);
   } catch {
-    throw new Error(`read failed: binary file is not supported: ${filePath}`);
+    throw binaryFileError(filePath);
   }
 }
 
@@ -326,7 +336,7 @@ function readTextWindow(
 
     const bytes = chunk.subarray(0, bytesRead);
     if (hasBinaryControlBytes(bytes)) {
-      throw new Error(`read failed: binary file is not supported: ${filePath}`);
+      throw binaryFileError(filePath);
     }
 
     consumeText(decodeUtf8(filePath, decoder, bytes, { stream: true }));
@@ -351,7 +361,8 @@ function readTextWindow(
     options.offset !== 1 &&
     outputLines === 0
   ) {
-    throw new Error(
+    throw new KeelError(
+      "tool_read_offset_out_of_range",
       `read failed: offset ${options.offset} is beyond end of file (${countedLines} lines)`,
     );
   }
@@ -377,18 +388,27 @@ export function executeRead(
     ? resolve(filePath)
     : resolve(workspacePath, filePath);
   if (!existsSync(requestedPath)) {
-    throw new Error(`read failed: file not found: ${filePath}`);
+    throw new KeelError(
+      "tool_file_not_found",
+      `read failed: file not found: ${filePath}`,
+    );
   }
 
   const targetPath = realpathSync(requestedPath);
 
   if (!isInsideWorkspace(workspacePath, targetPath)) {
-    throw new Error(`read failed: path is outside the workspace: ${filePath}`);
+    throw new KeelError(
+      "tool_path_outside_workspace",
+      `read failed: path is outside the workspace: ${filePath}`,
+    );
   }
 
   const stat = statSync(targetPath);
   if (!stat.isFile()) {
-    throw new Error(`read failed: not a file: ${filePath}`);
+    throw new KeelError(
+      "tool_not_file",
+      `read failed: not a file: ${filePath}`,
+    );
   }
 
   const normalizedOptions = normalizeReadOptions(filePath, options);
@@ -396,7 +416,7 @@ export function executeRead(
   try {
     const sample = readSample(fd, stat.size);
     if (isBinarySample(targetPath, sample)) {
-      throw new Error(`read failed: binary file is not supported: ${filePath}`);
+      throw binaryFileError(filePath);
     }
 
     return { content: readTextWindow(fd, filePath, normalizedOptions) };
