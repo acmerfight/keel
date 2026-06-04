@@ -2,12 +2,12 @@
 
 import { runAgent } from "../agent/loop.ts";
 import { createDeepseekProvider } from "../llm/providers/deepseek.ts";
+import type { LLMProvider } from "../llm/types.ts";
 import {
   createFakeProvider,
   fakeEditResponse,
   fakeResponse,
-} from "../llm/providers/fake.ts";
-import type { LLMProvider } from "../llm/types.ts";
+} from "../testing/fake-provider.ts";
 
 interface CliEditRequest {
   readonly path: string;

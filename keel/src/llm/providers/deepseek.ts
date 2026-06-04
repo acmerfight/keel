@@ -416,6 +416,16 @@ function completePendingToolCall(state: DeepseekStreamState): void {
       "DeepSeek returned more than one tool call",
     );
   }
+  if (
+    state.toolCallId === null &&
+    state.toolCallName === null &&
+    state.toolCallArguments === null
+  ) {
+    throw new KeelError(
+      "provider_protocol_error",
+      "DeepSeek stream finished with tool_calls but no tool call",
+    );
+  }
   state.pendingToolCall = parseToolCall(state);
 }
 

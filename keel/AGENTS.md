@@ -12,7 +12,7 @@ pnpm lint           # biome check --error-on-warnings
 pnpm lint:fix       # biome check --write --error-on-warnings
 pnpm test           # vitest run
 pnpm test:watch     # vitest (watch mode)
-pnpm test:coverage  # vitest run --coverage
+pnpm test:coverage  # Final verification: vitest run --coverage
 pnpm knip           # Dead code detection
 ```
 
@@ -23,7 +23,8 @@ src/
   cli/         → Entry point
   core/        → Config, error, logger, git, cost, rules
   agent/       → Agent loop, context, compaction
-  llm/         → Provider abstraction (anthropic, openai, fake)
+  llm/         → Provider abstraction (deepseek, anthropic, openai)
+  testing/     → Test support code (fake providers, fixture factories)
   tools/       → bash, edit, find, grep, read, write
   mcp/         → MCP client and registry
 ```
@@ -96,7 +97,7 @@ Never push directly to main. Always use a PR and wait for CI to pass. Workflow:
 
 1. Create a feature branch
 2. Push and open a PR
-3. Wait for CI (typecheck → lint → test → knip) to pass
+3. Wait for CI (typecheck → lint → test:coverage → knip) to pass
 4. Squash merge to main (only merge strategy allowed)
 
 PR summary format (English, diff against latest main before writing):
@@ -112,4 +113,5 @@ See [TESTING.md](TESTING.md). Summary:
 
 1. Only mock LLM (`fake` provider). Everything else is real.
 2. BDD with GWTE format. Business language. Tests = product spec.
-3. No vi.mock, no mocking internals, no testing private functions.
+3. Final verification uses `pnpm test:coverage`, not `pnpm test`.
+4. No vi.mock, no mocking internals, no testing private functions.

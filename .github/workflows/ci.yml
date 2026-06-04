@@ -35,8 +35,16 @@ jobs:
 
       - run: pnpm typecheck
 
+      - run: pnpm build
+
       - run: pnpm lint
 
-      - run: pnpm test
+      - run: pnpm test:coverage
+
+      - uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: keel/coverage/lcov.info
+          fail_ci_if_error: false
 
       - run: pnpm knip
