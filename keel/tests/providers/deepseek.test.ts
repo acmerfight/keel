@@ -128,6 +128,18 @@ function freshSignal(): AbortSignal {
   return new AbortController().signal;
 }
 
+function closeServer(server: Server): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
 function objectProperty(value: unknown, property: string): unknown {
   if (typeof value !== "object" || value === null) {
     throw new Error(`Expected object before reading ${property}`);
@@ -158,15 +170,7 @@ async function unusedLocalPort(): Promise<number> {
     probe.listen(0, "127.0.0.1", resolve);
   });
   const port = getPort(probe);
-  await new Promise<void>((resolve, reject) => {
-    probe.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
+  await closeServer(probe);
   return port;
 }
 
@@ -778,8 +782,8 @@ describe("DeepSeek Provider", () => {
     baseUrl = `http://127.0.0.1:${getPort(server)}`;
   });
 
-  afterAll(() => {
-    server.close();
+  afterAll(async () => {
+    await closeServer(server);
   });
 
   test(`Given a DeepSeek-compatible API,
@@ -1863,19 +1867,21 @@ describe("DeepSeek Provider", () => {
       model: "deepseek-v4-flash",
     });
 
-    // When
-    await collect(
-      provider.stream({
-        systemPrompt: "sys",
-        messages: [{ role: "user", content: "hi" }],
-        signal: freshSignal(),
-      }),
-    );
+    try {
+      // When
+      await collect(
+        provider.stream({
+          systemPrompt: "sys",
+          messages: [{ role: "user", content: "hi" }],
+          signal: freshSignal(),
+        }),
+      );
 
-    // Then
-    const parsed = JSON.parse(capturedBody);
-    expect(parsed.stream_options).toEqual({ include_usage: true });
-
-    captureServer.close();
+      // Then
+      const parsed = JSON.parse(capturedBody);
+      expect(parsed.stream_options).toEqual({ include_usage: true });
+    } finally {
+      await closeServer(captureServer);
+    }
   });
 });
