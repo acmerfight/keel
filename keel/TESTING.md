@@ -56,7 +56,7 @@ Prefer the highest product boundary that still gives a clear, stable failure:
 4. **Tool safety and resource boundaries stay in `tests/tools/`.** Use tool tests for path safety, binary rejection, exact edit semantics, output caps, and memory-sensitive file behavior.
 5. **Architecture rules stay in `tests/invariants/`.** Use invariants when the behavior is a module boundary, not a user workflow.
 
-Do not force every behavior through the CLI or agent loop. A narrower provider or tool test is better when the risk lives at that boundary and a full agent test would only make failures slower or harder to diagnose.
+This means new user-facing behavior should usually add agent coverage, and CLI-visible behavior should add a CLI smoke test. It does not mean provider or tool boundary tests should be promoted into agent or CLI tests when the risk lives at that narrower boundary.
 
 ## Do NOT
 
