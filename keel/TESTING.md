@@ -46,6 +46,15 @@ tests/
   invariants/  — Architecture guards (module boundary assertions)
 ```
 
+## Test Infrastructure
+
+Test support code, such as fake providers and fixture factories, lives in `src/testing/`.
+This directory is excluded from coverage reports.
+
+## Verification
+
+Use `pnpm test:coverage` for final verification before pushing or merging. `pnpm test` is acceptable for fast local iteration, but PR-ready verification must run the coverage command so regressions in covered branches are visible.
+
 ## Choosing A Test Boundary
 
 Prefer the highest product boundary that still gives a clear, stable failure:

@@ -1,4 +1,4 @@
-import type { LLMProvider, Usage } from "../types.ts";
+import type { LLMProvider, Usage } from "../llm/types.ts";
 
 interface FakeTextResponse {
   readonly type: "text";
@@ -43,14 +43,6 @@ export function fakeEditResponse(
   usage: Usage = { inputTokens: 0, outputTokens: 0 },
 ): FakeResponse {
   return { type: "edit", path, oldString, newString, usage };
-}
-
-export function fakeReadResponse(
-  path: string,
-  usage: Usage = { inputTokens: 0, outputTokens: 0 },
-  options: { readonly offset?: number; readonly limit?: number } = {},
-): FakeResponse {
-  return { type: "read", path, usage, ...options };
 }
 
 export function createFakeProvider(

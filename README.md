@@ -1,5 +1,8 @@
 # keel
 
+[![CI](https://github.com/acmerfight/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/acmerfight/keel/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/acmerfight/keel/branch/main/graph/badge.svg)](https://codecov.io/gh/acmerfight/keel)
+
 AI coding agent. Built from scratch for maximum harness execution quality.
 
 Development lives in `keel/`. See `keel/CLAUDE.md` for architecture, commands, and conventions.
@@ -19,7 +22,7 @@ Included for study during development. Will be removed once keel is self-suffici
 ## Setup
 
 ```bash
-git clone --recurse-submodules git@github.com:acmerfight/ai-agent.git
-cd ai-agent/keel
+git clone --recurse-submodules git@github.com:acmerfight/keel.git
+cd keel/keel
 pnpm install
 ```

@@ -5,8 +5,43 @@ import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { z } from "zod";
 
 const CLI_PATH = join(import.meta.dirname, "../../src/cli/index.ts");
+
+const requestWithToolsSchema = z
+  .object({
+    tools: z
+      .array(
+        z
+          .object({
+            function: z
+              .object({
+                name: z.string().optional(),
+              })
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
+const requestWithMessagesSchema = z
+  .object({
+    messages: z
+      .array(
+        z
+          .object({
+            role: z.string().optional(),
+            tool_call_id: z.string().optional(),
+            content: z.string().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
 
 function runCli(
   args: readonly string[],
@@ -332,23 +367,13 @@ describe("CLI File Editing", () => {
       expect(result.stderr).toBe("");
       expect(capturedBodies).toHaveLength(2);
 
-      const firstRequest = capturedBodies[0] as {
-        readonly tools?: readonly {
-          readonly function?: { readonly name?: string };
-        }[];
-      };
+      const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
       expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([
         "read",
         "edit",
       ]);
 
-      const secondRequest = capturedBodies[1] as {
-        readonly messages?: readonly {
-          readonly role?: string;
-          readonly tool_call_id?: string;
-          readonly content?: string;
-        }[];
-      };
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
       expect(secondRequest.messages).toContainEqual({
         role: "tool",
         tool_call_id: "call_read",
