@@ -122,6 +122,20 @@ function withTimeout<T>(
 }
 
 describe("CLI Text Reply", () => {
+  test(`Given no user message,
+    When user runs the CLI,
+    Then the CLI exits with usage instructions`, async () => {
+    // Given
+    const args: readonly string[] = [];
+
+    // When
+    const result = await runCli(args);
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toBe("Usage: keel <message>\n");
+  });
+
   test(`Given a user message and a configured provider,
     When user runs the CLI with the message,
     Then the agent's text reply is printed to stdout`, async () => {
@@ -152,6 +166,20 @@ describe("CLI Text Reply", () => {
     // Then
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toMatch(/api key/i);
+  });
+
+  test(`Given an unknown provider is configured,
+    When user runs the CLI,
+    Then the CLI exits with a provider configuration error`, async () => {
+    // Given
+    const env = { KEEL_PROVIDER: "unknown" };
+
+    // When
+    const result = await runCli(["hello"], env);
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toBe('Error: unknown provider "unknown"\n');
   });
 
   test(`Given a DeepSeek request is still streaming,
