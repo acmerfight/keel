@@ -554,6 +554,81 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given the LLM first reads a directory as a file,
+    When the tool reports the failure and the LLM retries with a file,
+    Then the next LLM request receives the file content`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    let thirdTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "recover-read-directory-as-file",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "directory_read",
+            tool: "read",
+            path: ".",
+          };
+          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "file_read",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          return;
+        }
+
+        thirdTurnMessages = options.messages;
+        yield { type: "text", text: "done" };
+        yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "inspect the workspace",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const failedToolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(failedToolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "directory_read",
+        content: expect.stringContaining("not a file"),
+      });
+      const successfulToolMessage = thirdTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "file_read",
+      );
+      expect(successfulToolMessage?.content).toBe("hello world\n");
+      expect(events).toContainEqual({ type: "text", text: "done" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a workspace file contains binary bytes,
     When the LLM asks the agent to read it,
     Then the read is rejected before content is sent back to the LLM`, async () => {

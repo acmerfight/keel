@@ -7,6 +7,7 @@ import { executeRead } from "../tools/read.ts";
 const MAX_AGENT_TURNS = 8;
 const RECOVERABLE_TOOL_ERRORS = new Set<KeelErrorCode>([
   "tool_file_not_found",
+  "tool_not_file",
   "tool_old_string_not_found",
 ]);
 
