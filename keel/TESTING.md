@@ -46,6 +46,18 @@ tests/
   invariants/  — Architecture guards (module boundary assertions)
 ```
 
+## Choosing A Test Boundary
+
+Prefer the highest product boundary that still gives a clear, stable failure:
+
+1. **New user-visible agent behavior starts in `tests/agent/`.** These tests are the product spec for how Keel reasons across LLM turns, tool calls, tool results, recovery, and final output.
+2. **CLI-visible behavior gets a `tests/cli/` smoke test.** Use CLI tests for env handling, process exit, stdout/stderr, signals, and the main user entrypoint.
+3. **Provider protocol details stay in `tests/providers/`.** Use provider tests for HTTP/SSE parsing, upstream error classification, usage accounting, abort behavior, and tool-call protocol contracts.
+4. **Tool safety and resource boundaries stay in `tests/tools/`.** Use tool tests for path safety, binary rejection, exact edit semantics, output caps, and memory-sensitive file behavior.
+5. **Architecture rules stay in `tests/invariants/`.** Use invariants when the behavior is a module boundary, not a user workflow.
+
+Do not force every behavior through the CLI or agent loop. A narrower provider or tool test is better when the risk lives at that boundary and a full agent test would only make failures slower or harder to diagnose.
+
 ## Do NOT
 
 - Mock anything except LLM
