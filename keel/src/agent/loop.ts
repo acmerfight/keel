@@ -1,9 +1,14 @@
+import type { KeelErrorCode } from "../core/error.ts";
 import { KeelError } from "../core/error.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
 import { executeEdit } from "../tools/edit.ts";
 import { executeRead } from "../tools/read.ts";
 
 const MAX_AGENT_TURNS = 8;
+const RECOVERABLE_TOOL_ERRORS = new Set<KeelErrorCode>([
+  "tool_file_not_found",
+  "tool_old_string_not_found",
+]);
 
 export type AgentEvent =
   | { readonly type: "text"; readonly text: string }
@@ -34,8 +39,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isRecoverableEditError(error: unknown): boolean {
-  return errorMessage(error).includes("old string not found");
+function isRecoverableToolError(error: unknown): boolean {
+  return error instanceof KeelError && RECOVERABLE_TOOL_ERRORS.has(error.code);
+}
+
+function toolFailureMessage(error: unknown): string {
+  return `Tool failed: ${errorMessage(error)}`;
 }
 
 function finishAgentTurn(
@@ -115,10 +124,24 @@ export async function* runAgent(
 
     switch (toolCall.tool) {
       case "read": {
-        const result = executeRead(workspace, toolCall.path, {
-          offset: toolCall.offset,
-          limit: toolCall.limit,
-        });
+        let result: { readonly content: string };
+        try {
+          result = executeRead(workspace, toolCall.path, {
+            offset: toolCall.offset,
+            limit: toolCall.limit,
+          });
+        } catch (error) {
+          if (!isRecoverableToolError(error)) {
+            throw error;
+          }
+          messages.push({
+            role: "tool",
+            toolCallId: toolCall.id,
+            content: toolFailureMessage(error),
+          });
+          break;
+        }
+
         messages.push({
           role: "tool",
           toolCallId: toolCall.id,
@@ -136,13 +159,13 @@ export async function* runAgent(
             toolCall.newString,
           );
         } catch (error) {
-          if (!isRecoverableEditError(error)) {
+          if (!isRecoverableToolError(error)) {
             throw error;
           }
           messages.push({
             role: "tool",
             toolCallId: toolCall.id,
-            content: `Tool failed: ${errorMessage(error)}`,
+            content: toolFailureMessage(error),
           });
           break;
         }

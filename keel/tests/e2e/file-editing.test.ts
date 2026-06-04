@@ -252,28 +252,72 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the LLM references a nonexistent file,
-    When the agent runs the edit tool,
-    Then the edit is rejected`, async () => {
+  test(`Given the LLM first edits a nonexistent file,
+    When the tool reports the failure and the LLM retries with an existing file,
+    Then the file is updated on disk`, async () => {
     // Given
     const workspace = await createWorkspace();
-    const provider = createFakeProvider([
-      fakeEditResponse("missing.txt", "old", "new"),
-    ]);
+    await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "recover-missing-edit-file",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "missing_edit",
+            tool: "edit",
+            path: "missing.txt",
+            oldString: "world",
+            newString: "there",
+          };
+          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          return;
+        }
+
+        secondTurnMessages = options.messages;
+        yield {
+          type: "tool_call",
+          id: "correct_edit",
+          tool: "edit",
+          path: "note.txt",
+          oldString: "world",
+          newString: "there",
+        };
+        yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+      },
+    };
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "edit missing file",
-            systemPrompt: "You are a helpful assistant.",
-            signal: freshSignal(),
-          }),
-        ),
-      ).rejects.toThrow("file not found");
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "edit missing file",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const toolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "missing_edit",
+        content: expect.stringContaining("file not found"),
+      });
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello there\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Edited note.txt",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -430,6 +474,81 @@ describe("File Editing", () => {
       expect(content).not.toContain("two\n");
       expect(content).not.toContain("five\n");
       expect(content).toContain("Use offset=5");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the LLM first reads a nonexistent file,
+    When the tool reports the failure and the LLM retries with an existing file,
+    Then the next LLM request receives the existing file content`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    let thirdTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "recover-missing-read-file",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "missing_read",
+            tool: "read",
+            path: "missing.txt",
+          };
+          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "correct_read",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          return;
+        }
+
+        thirdTurnMessages = options.messages;
+        yield { type: "text", text: "done" };
+        yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "read missing file",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const failedToolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(failedToolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "missing_read",
+        content: expect.stringContaining("file not found"),
+      });
+      const successfulToolMessage = thirdTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "correct_read",
+      );
+      expect(successfulToolMessage?.content).toBe("hello world\n");
+      expect(events).toContainEqual({ type: "text", text: "done" });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
