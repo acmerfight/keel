@@ -1,5 +1,8 @@
 # keel
 
+[![CI](https://github.com/acmerfight/ai-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/acmerfight/ai-agent/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/acmerfight/ai-agent/branch/main/graph/badge.svg)](https://codecov.io/gh/acmerfight/ai-agent)
+
 AI coding agent. Built from scratch for maximum harness execution quality.
 
 Development lives in `keel/`. See `keel/CLAUDE.md` for architecture, commands, and conventions.
