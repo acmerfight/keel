@@ -832,13 +832,24 @@ describe("DeepSeek Provider", () => {
           { role: "assistant", content: "plain answer" },
           {
             role: "assistant",
-            content: "I need to inspect and edit.",
+            content: "I need to inspect the readme.",
             toolCalls: [
               {
                 id: "read_0",
                 tool: "read",
                 path: "README.md",
               },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "read_0",
+            content: "readme body\n",
+          },
+          {
+            role: "assistant",
+            content: "I need to inspect a file window.",
+            toolCalls: [
               {
                 id: "read_1",
                 tool: "read",
@@ -846,6 +857,17 @@ describe("DeepSeek Provider", () => {
                 offset: 2,
                 limit: 3,
               },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "read_1",
+            content: "file body\n",
+          },
+          {
+            role: "assistant",
+            content: "I can now edit.",
+            toolCalls: [
               {
                 id: "edit_1",
                 tool: "edit",
@@ -857,8 +879,8 @@ describe("DeepSeek Provider", () => {
           },
           {
             role: "tool",
-            toolCallId: "read_1",
-            content: "file body\n",
+            toolCallId: "edit_1",
+            content: "edited\n",
           },
         ],
         signal: freshSignal(),
@@ -882,6 +904,17 @@ describe("DeepSeek Provider", () => {
               arguments: expect.any(String),
             },
           },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "read_0",
+        content: "readme body\n",
+      },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
           {
             id: "read_1",
             type: "function",
@@ -890,6 +923,17 @@ describe("DeepSeek Provider", () => {
               arguments: expect.any(String),
             },
           },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "read_1",
+        content: "file body\n",
+      },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
           {
             id: "edit_1",
             type: "function",
@@ -902,12 +946,16 @@ describe("DeepSeek Provider", () => {
       },
       {
         role: "tool",
-        tool_call_id: "read_1",
-        content: "file body\n",
+        tool_call_id: "edit_1",
+        content: "edited\n",
       },
     ]);
     const toolCalls = objectProperty(
       arrayElement(capturedMessages, 3),
+      "tool_calls",
+    );
+    const windowedToolCalls = objectProperty(
+      arrayElement(capturedMessages, 5),
       "tool_calls",
     );
     expectJsonString(
@@ -921,7 +969,7 @@ describe("DeepSeek Provider", () => {
     );
     expectJsonString(
       objectProperty(
-        objectProperty(arrayElement(toolCalls, 1), "function"),
+        objectProperty(arrayElement(windowedToolCalls, 0), "function"),
         "arguments",
       ),
       {
@@ -930,9 +978,13 @@ describe("DeepSeek Provider", () => {
         limit: 3,
       },
     );
+    const editToolCalls = objectProperty(
+      arrayElement(capturedMessages, 7),
+      "tool_calls",
+    );
     expectJsonString(
       objectProperty(
-        objectProperty(arrayElement(toolCalls, 2), "function"),
+        objectProperty(arrayElement(editToolCalls, 0), "function"),
         "arguments",
       ),
       {
