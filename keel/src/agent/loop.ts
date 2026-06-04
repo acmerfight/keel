@@ -30,6 +30,14 @@ function addUsage(left: Usage, right: Usage): Usage {
   };
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRecoverableEditError(error: unknown): boolean {
+  return errorMessage(error).includes("old string not found");
+}
+
 function finishAgentTurn(
   assistantText: readonly string[],
   pendingToolCalls: readonly ToolCall[],
@@ -119,12 +127,26 @@ export async function* runAgent(
         break;
       }
       case "edit": {
-        const result = executeEdit(
-          workspace,
-          toolCall.path,
-          toolCall.oldString,
-          toolCall.newString,
-        );
+        let result: { readonly content: string };
+        try {
+          result = executeEdit(
+            workspace,
+            toolCall.path,
+            toolCall.oldString,
+            toolCall.newString,
+          );
+        } catch (error) {
+          if (!isRecoverableEditError(error)) {
+            throw error;
+          }
+          messages.push({
+            role: "tool",
+            toolCallId: toolCall.id,
+            content: `Tool failed: ${errorMessage(error)}`,
+          });
+          break;
+        }
+
         messages.push({
           role: "tool",
           toolCallId: toolCall.id,

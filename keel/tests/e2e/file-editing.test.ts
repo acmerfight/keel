@@ -146,32 +146,76 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given a file does not contain the target text,
-    When the LLM asks the agent to edit that text,
-    Then the edit is rejected and the file is unchanged`, async () => {
+  test(`Given the LLM first edits text that is not in the file,
+    When the tool reports the failure and the LLM retries with the right text,
+    Then the file is updated on disk`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
-    const provider = createFakeProvider([
-      fakeEditResponse("note.txt", "missing", "new"),
-    ]);
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "recover-edit",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "wrong_edit",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "missing",
+            newString: "new",
+          };
+          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          return;
+        }
+
+        secondTurnMessages = options.messages;
+        yield {
+          type: "tool_call",
+          id: "correct_edit",
+          tool: "edit",
+          path: "note.txt",
+          oldString: "world",
+          newString: "there",
+        };
+        yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+      },
+    };
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "replace missing text",
-            systemPrompt: "You are a helpful assistant.",
-            signal: freshSignal(),
-          }),
-        ),
-      ).rejects.toThrow("old string not found");
-      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
-        "hello world\n",
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "replace the word",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
       );
+
+      // Then
+      const toolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "wrong_edit",
+        content: expect.stringContaining("old string not found"),
+      });
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello there\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Edited note.txt",
+      });
+      expect(events).toContainEqual({
+        type: "end",
+        usage: { inputTokens: 3, outputTokens: 3 },
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
