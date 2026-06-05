@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
+import { rgPath } from "@vscode/ripgrep";
 import { z } from "zod";
 import { KeelError } from "../core/error.ts";
 import type { ToolResult } from "./types.ts";
@@ -171,7 +172,7 @@ function runRipgrep(
       callback();
     };
 
-    const child = spawn("rg", ripgrepArgs(pattern, targetPath), {
+    const child = spawn(rgPath, ripgrepArgs(pattern, targetPath), {
       cwd: workspacePath,
       stdio: ["ignore", "pipe", "pipe"],
       ...(signal !== undefined ? { signal } : {}),
@@ -221,7 +222,7 @@ function runRipgrep(
           rejectResult(
             new KeelError(
               "tool_unavailable",
-              "grep failed: ripgrep (rg) is not available",
+              "grep failed: bundled ripgrep is not available",
             ),
           );
           return;

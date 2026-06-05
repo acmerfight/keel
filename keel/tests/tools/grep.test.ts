@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import {
   chmod,
   mkdir,
@@ -8,7 +9,8 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { PassThrough } from "node:stream";
+import { describe, expect, test, vi } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
 import { executeGrep } from "../../src/tools/grep.ts";
 
@@ -261,9 +263,9 @@ describe("Grep Tool", () => {
     }
   });
 
-  test.sequential(`Given ripgrep is unavailable on PATH,
+  test.sequential(`Given ripgrep is unavailable on PATH but bundled with Keel,
     When the grep tool starts a search,
-    Then it reports that the grep tool is unavailable`, async () => {
+    Then it still searches with the bundled ripgrep binary`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
     const pathEnvKey = "PATH";
@@ -272,18 +274,65 @@ describe("Grep Tool", () => {
     process.env[pathEnvKey] = workspace;
 
     try {
-      // When / Then
-      await expectGrepError(
-        () => executeGrep(workspace, "needle"),
-        "tool_unavailable",
-        "ripgrep (rg) is not available",
-      );
+      // When
+      const result = await executeGrep(workspace, "needle");
+
+      // Then
+      expect(result.content).toBe("app.ts:1:needle");
     } finally {
       if (originalPath === undefined) {
         delete process.env[pathEnvKey];
       } else {
         process.env[pathEnvKey] = originalPath;
       }
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.sequential(`Given the bundled ripgrep binary cannot be spawned,
+    When the grep tool starts a search,
+    Then it reports that the grep tool is unavailable`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
+
+    class MissingRipgrepProcess extends EventEmitter {
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+
+      kill(): boolean {
+        return true;
+      }
+    }
+
+    vi.resetModules();
+    vi.doMock("node:child_process", () => ({
+      spawn() {
+        const child = new MissingRipgrepProcess();
+        queueMicrotask(() => {
+          child.emit(
+            "error",
+            Object.assign(new Error("missing"), {
+              code: "ENOENT",
+            }),
+          );
+        });
+        return child;
+      },
+    }));
+
+    try {
+      const grepModule = await import("../../src/tools/grep.ts");
+
+      // When / Then
+      await expectGrepError(
+        () => grepModule.executeGrep(workspace, "needle"),
+        "tool_unavailable",
+        "bundled ripgrep is not available",
+      );
+    } finally {
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
       await rm(workspace, { recursive: true, force: true });
     }
   });
