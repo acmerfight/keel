@@ -23,10 +23,18 @@ interface FakeReadResponse {
   readonly usage: Usage;
 }
 
+interface FakeGrepResponse {
+  readonly type: "grep";
+  readonly pattern: string;
+  readonly path?: string;
+  readonly usage: Usage;
+}
+
 export type FakeResponse =
   | FakeTextResponse
   | FakeEditResponse
-  | FakeReadResponse;
+  | FakeReadResponse
+  | FakeGrepResponse;
 
 export function fakeResponse(
   text: string,
@@ -43,6 +51,33 @@ export function fakeEditResponse(
   usage: Usage = { inputTokens: 0, outputTokens: 0 },
 ): FakeResponse {
   return { type: "edit", path, oldString, newString, usage };
+}
+
+export function fakeReadResponse(
+  path: string,
+  usage: Usage = { inputTokens: 0, outputTokens: 0 },
+  options: { readonly offset?: number; readonly limit?: number } = {},
+): FakeResponse {
+  return {
+    type: "read",
+    path,
+    ...(options.offset !== undefined ? { offset: options.offset } : {}),
+    ...(options.limit !== undefined ? { limit: options.limit } : {}),
+    usage,
+  };
+}
+
+export function fakeGrepResponse(
+  pattern: string,
+  usage: Usage = { inputTokens: 0, outputTokens: 0 },
+  options: { readonly path?: string } = {},
+): FakeResponse {
+  return {
+    type: "grep",
+    pattern,
+    ...(options.path !== undefined ? { path: options.path } : {}),
+    usage,
+  };
 }
 
 export function createFakeProvider(
@@ -90,6 +125,15 @@ export function createFakeProvider(
               ? { offset: response.offset }
               : {}),
             ...(response.limit !== undefined ? { limit: response.limit } : {}),
+          };
+          break;
+        case "grep":
+          yield {
+            type: "tool_call",
+            id: `fake_tool_call_${turn}`,
+            tool: "grep",
+            pattern: response.pattern,
+            ...(response.path !== undefined ? { path: response.path } : {}),
           };
           break;
       }

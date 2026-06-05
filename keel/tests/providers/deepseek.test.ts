@@ -116,6 +116,26 @@ function readToolCallDelta(argumentsJson: string): {
   };
 }
 
+function grepToolCallDelta(argumentsJson: string): {
+  readonly index: number;
+  readonly id: string;
+  readonly type: "function";
+  readonly function: {
+    readonly name: "grep";
+    readonly arguments: string;
+  };
+} {
+  return {
+    index: 0,
+    id: "call_grep_0",
+    type: "function",
+    function: {
+      name: "grep",
+      arguments: argumentsJson,
+    },
+  };
+}
+
 async function collect(stream: AsyncIterable<LLMEvent>): Promise<LLMEvent[]> {
   const events: LLMEvent[] = [];
   for await (const event of stream) {
@@ -460,6 +480,35 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "grep-tool-call") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        grepToolCallDelta(
+                          JSON.stringify({
+                            pattern: "handleSubmit",
+                            path: "src",
+                          }),
+                        ),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 26, completion_tokens: 7 },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "nonzero-tool-call-index") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -636,6 +685,30 @@ describe("DeepSeek Provider", () => {
                         readToolCallDelta(
                           JSON.stringify({ path: "note.txt", offset: 0 }),
                         ),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 30, completion_tokens: 8 },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "invalid-grep-arguments") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        grepToolCallDelta(JSON.stringify({ path: "src" })),
                       ],
                     },
                     finish_reason: null,
@@ -870,6 +943,23 @@ describe("DeepSeek Provider", () => {
           },
           {
             role: "assistant",
+            content: "I need to search the workspace.",
+            toolCalls: [
+              {
+                id: "grep_1",
+                tool: "grep",
+                pattern: "handleSubmit",
+                path: "src",
+              },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "grep_1",
+            content: "src/index.ts:1:handleSubmit()\n",
+          },
+          {
+            role: "assistant",
             content: "I can now edit.",
             toolCalls: [
               {
@@ -939,6 +1029,25 @@ describe("DeepSeek Provider", () => {
         content: null,
         tool_calls: [
           {
+            id: "grep_1",
+            type: "function",
+            function: {
+              name: "grep",
+              arguments: expect.any(String),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "grep_1",
+        content: "src/index.ts:1:handleSubmit()\n",
+      },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
             id: "edit_1",
             type: "function",
             function: {
@@ -983,8 +1092,22 @@ describe("DeepSeek Provider", () => {
       },
     );
     const editToolCalls = objectProperty(
+      arrayElement(capturedMessages, 9),
+      "tool_calls",
+    );
+    const grepToolCalls = objectProperty(
       arrayElement(capturedMessages, 7),
       "tool_calls",
+    );
+    expectJsonString(
+      objectProperty(
+        objectProperty(arrayElement(grepToolCalls, 0), "function"),
+        "arguments",
+      ),
+      {
+        pattern: "handleSubmit",
+        path: "src",
+      },
     );
     expectJsonString(
       objectProperty(
@@ -1487,6 +1610,38 @@ describe("DeepSeek Provider", () => {
     ]);
   });
 
+  test(`Given a grep tool call includes a pattern and path,
+    When provider finishes the tool call,
+    Then it yields the grep tool call with that requested search path`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "grep-tool-call" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_grep_0",
+        tool: "grep",
+        pattern: "handleSubmit",
+        path: "src",
+      },
+      { type: "stop", usage: { inputTokens: 26, outputTokens: 7 } },
+    ]);
+  });
+
   test(`Given a stream chunk contains multiple tool calls,
     When provider reads the chunk,
     Then it throws a protocol error instead of ignoring extra tool calls`, async () => {
@@ -1666,6 +1821,32 @@ describe("DeepSeek Provider", () => {
       name: "KeelError",
       code: "provider_protocol_error",
       message: "DeepSeek read tool call has invalid arguments",
+    });
+  });
+
+  test(`Given a grep tool call is missing its pattern,
+    When provider validates the completed tool call,
+    Then it throws a grep argument protocol error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "invalid-grep-arguments" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek grep tool call has invalid arguments",
     });
   });
 

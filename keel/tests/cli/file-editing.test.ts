@@ -158,6 +158,32 @@ function sseReadToolCall(): string {
   });
 }
 
+function sseGrepToolCall(): string {
+  return sseData({
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_grep",
+              type: "function",
+              function: {
+                name: "grep",
+                arguments: JSON.stringify({
+                  pattern: "handleSubmit",
+                }),
+              },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+    usage: null,
+  });
+}
+
 function sseMultipleEditToolCalls(): string {
   return sseData({
     choices: [
@@ -206,6 +232,23 @@ function sseEditToolFinish(usage?: {
   return sseData({
     choices: [{ delta: {}, finish_reason: "tool_calls" }],
     ...(usage ? { usage } : {}),
+  });
+}
+
+function sseTextReply(text: string): string {
+  return sseData({
+    choices: [{ delta: { content: text }, finish_reason: null }],
+    usage: null,
+  });
+}
+
+function sseStopFinish(usage: {
+  readonly prompt_tokens: number;
+  readonly completion_tokens: number;
+}): string {
+  return sseData({
+    choices: [{ delta: {}, finish_reason: "stop" }],
+    usage,
   });
 }
 
@@ -295,7 +338,7 @@ describe("CLI File Editing", () => {
           (tool: { readonly function?: { readonly name?: string } }) =>
             tool.function?.name,
         ),
-      ).toEqual(["read", "edit"]);
+      ).toEqual(["read", "grep", "edit"]);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -370,6 +413,7 @@ describe("CLI File Editing", () => {
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
       expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([
         "read",
+        "grep",
         "edit",
       ]);
 
@@ -378,6 +422,82 @@ describe("CLI File Editing", () => {
         role: "tool",
         tool_call_id: "call_read",
         content: "hello old world\n",
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a DeepSeek-compatible API asks to grep the workspace,
+    When user asks the CLI to find a symbol,
+    Then the agent sends grep matches back before the final answer`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-grep-"));
+    await writeFile(
+      join(workspace, "app.ts"),
+      "export function handleSubmit() {}\n",
+      "utf8",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+
+        if (capturedBodies.length === 1) {
+          res.write(sseGrepToolCall());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 20, completion_tokens: 5 }),
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.write(sseTextReply("Found app.ts."));
+        res.write(sseStopFinish({ prompt_tokens: 25, completion_tokens: 4 }));
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["find handleSubmit"], {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Found app.ts.\n");
+      expect(result.stderr).toBe("");
+      expect(capturedBodies).toHaveLength(2);
+
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_grep",
+        content: "app.ts:1:export function handleSubmit() {}",
       });
     } finally {
       await close(server);

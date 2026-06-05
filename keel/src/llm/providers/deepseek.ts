@@ -66,11 +66,43 @@ const readTool = {
   },
 };
 
+const grepTool = {
+  type: "function",
+  function: {
+    name: "grep",
+    description:
+      "Search workspace text files for a literal string. Returns capped path:line:snippet matches.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: {
+          type: "string",
+          description: "Literal text to search for.",
+        },
+        path: {
+          type: "string",
+          description:
+            "Optional workspace-relative file or directory to search. Defaults to the whole workspace.",
+        },
+      },
+      required: ["pattern"],
+      additionalProperties: false,
+    },
+  },
+};
+
 const readToolArgumentsSchema = z
   .object({
     path: z.string(),
     offset: z.number().int().positive().optional(),
     limit: z.number().int().positive().optional(),
+  })
+  .strict();
+
+const grepToolArgumentsSchema = z
+  .object({
+    pattern: z.string(),
+    path: z.string().optional(),
   })
   .strict();
 
@@ -179,7 +211,7 @@ function createChatCompletionsBody(
     model,
     stream: true,
     stream_options: { include_usage: true },
-    tools: [readTool, editTool],
+    tools: [readTool, grepTool, editTool],
     tool_choice: "auto",
     messages: [
       { role: "system", content: options.systemPrompt },
@@ -195,6 +227,11 @@ function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
         path: toolCall.path,
         ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
         ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
+      };
+    case "grep":
+      return {
+        pattern: toolCall.pattern,
+        ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
       };
     case "edit":
       return {
@@ -303,7 +340,11 @@ function parseToolCall(state: DeepseekStreamState): ToolCallEvent {
   }
 
   const toolCallName = state.toolCallName;
-  if (toolCallName !== "read" && toolCallName !== "edit") {
+  if (
+    toolCallName !== "read" &&
+    toolCallName !== "grep" &&
+    toolCallName !== "edit"
+  ) {
     throw new KeelError(
       "provider_protocol_error",
       `DeepSeek returned unsupported tool call: ${toolCallName ?? "none"}`,
@@ -345,6 +386,24 @@ function parseToolCall(state: DeepseekStreamState): ToolCallEvent {
         ? { offset: result.data.offset }
         : {}),
       ...(result.data.limit !== undefined ? { limit: result.data.limit } : {}),
+    };
+  }
+
+  if (toolCallName === "grep") {
+    const result = grepToolArgumentsSchema.safeParse(parsedArguments);
+    if (!result.success) {
+      throw new KeelError(
+        "provider_protocol_error",
+        "DeepSeek grep tool call has invalid arguments",
+      );
+    }
+
+    return {
+      type: "tool_call",
+      id: toolCallId,
+      tool: "grep",
+      pattern: result.data.pattern,
+      ...(result.data.path !== undefined ? { path: result.data.path } : {}),
     };
   }
 
