@@ -8,6 +8,9 @@ import type { LLMProvider, Message } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
   fakeEditResponse,
+  fakeGrepResponse,
+  fakeReadResponse,
+  fakeResponse,
 } from "../../src/testing/fake-provider.ts";
 
 async function collect(
@@ -671,6 +674,129 @@ describe("File Editing", () => {
         ),
       ).rejects.toThrow("binary file");
       expect(streamCalls).toBe(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user asks about an unknown symbol,
+    When the LLM searches the workspace and then reads a matching file,
+    Then the agent sends grep matches and file content back to the LLM`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(
+      join(workspace, "app.ts"),
+      "export function handleSubmit() {\n  return true;\n}\n",
+      "utf8",
+    );
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    let thirdTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "grep-then-read",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "grep_symbol",
+            tool: "grep",
+            pattern: "handleSubmit",
+          };
+          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "read_match",
+            tool: "read",
+            path: "app.ts",
+          };
+          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          return;
+        }
+
+        thirdTurnMessages = options.messages;
+        yield { type: "text", text: "Found it." };
+        yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "find handleSubmit",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const grepMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(grepMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "grep_symbol",
+        content: expect.stringContaining(
+          "app.ts:1:export function handleSubmit() {",
+        ),
+      });
+      const readMessage = thirdTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "read_match",
+      );
+      expect(readMessage?.content).toContain("return true;");
+      expect(events).toContainEqual({ type: "text", text: "Found it." });
+      expect(events).toContainEqual({
+        type: "end",
+        usage: { inputTokens: 6, outputTokens: 6 },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a fake provider searches then reads a file,
+    When the agent runs the scripted tool calls,
+    Then the user receives the final answer`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(
+      join(workspace, "app.ts"),
+      "const target = true;\n",
+      "utf8",
+    );
+    const provider = createFakeProvider([
+      fakeGrepResponse("target"),
+      fakeReadResponse("app.ts"),
+      fakeResponse("Inspected app.ts."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "inspect target",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Inspected app.ts.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

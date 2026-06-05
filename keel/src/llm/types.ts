@@ -18,6 +18,12 @@ export type ToolCall =
     }
   | {
       readonly id: string;
+      readonly tool: "grep";
+      readonly pattern: string;
+      readonly path?: string;
+    }
+  | {
+      readonly id: string;
       readonly tool: "edit";
       readonly path: string;
       readonly oldString: string;
