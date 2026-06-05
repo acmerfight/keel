@@ -1,17 +1,24 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
 import { executeGrep } from "../../src/tools/grep.ts";
 
-function expectGrepError(
-  action: () => unknown,
+async function expectGrepError(
+  action: () => unknown | Promise<unknown>,
   code: KeelErrorCode,
   message: string,
-): void {
+): Promise<void> {
   try {
-    action();
+    await action();
     throw new Error("Expected grep tool to throw");
   } catch (error) {
     expect(error).toMatchObject({
@@ -42,7 +49,7 @@ describe("Grep Tool", () => {
 
     try {
       // When
-      const result = executeGrep(workspace, "handleSubmit");
+      const result = await executeGrep(workspace, "handleSubmit");
 
       // Then
       expect(result.content).toContain(
@@ -66,7 +73,7 @@ describe("Grep Tool", () => {
 
     try {
       // When
-      const result = executeGrep(workspace, "needle", { path: "src" });
+      const result = await executeGrep(workspace, "needle", { path: "src" });
 
       // Then
       expect(result.content).toContain("src/app.ts:1:needle");
@@ -87,12 +94,50 @@ describe("Grep Tool", () => {
 
     try {
       // When
-      const result = executeGrep(workspace, "needle", {
+      const result = await executeGrep(workspace, "needle", {
         path: "src/app.ts",
       });
 
       // Then
       expect(result.content).toBe("src/app.ts:2:needle");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the search pattern contains regex metacharacters,
+    When the grep tool searches the workspace,
+    Then it treats the pattern as literal text`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, "exact.txt"), "a.b\n", "utf8");
+    await writeFile(join(workspace, "regex.txt"), "axb\n", "utf8");
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "a.b");
+
+      // Then
+      expect(result.content).toBe("exact.txt:1:a.b");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a matching line is longer than the snippet budget,
+    When the grep tool searches the workspace,
+    Then it truncates that snippet before returning it`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    const longLine = `needle ${"x".repeat(260)}`;
+    await writeFile(join(workspace, "app.ts"), `${longLine}\n`, "utf8");
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "needle");
+
+      // Then
+      expect(result.content).toBe(`app.ts:1:${longLine.slice(0, 240)}...`);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -107,10 +152,29 @@ describe("Grep Tool", () => {
 
     try {
       // When
-      const result = executeGrep(workspace, "missing");
+      const result = await executeGrep(workspace, "missing");
 
       // Then
       expect(result.content).toBe('No matches found for "missing"');
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the requested search path does not exist,
+    When the grep tool validates the requested path,
+    Then it reports that the file was not found`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle", { path: "missing.ts" }),
+        "tool_file_not_found",
+        "file not found",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -139,13 +203,12 @@ describe("Grep Tool", () => {
 
     try {
       // When
-      const result = executeGrep(workspace, "needle");
+      const result = await executeGrep(workspace, "needle");
 
       // Then
-      expect(result.content.split("\n")).toEqual([
-        "src/other.ts:1:needle src",
-        "app.ts:1:needle root",
-      ]);
+      expect(result.content.split("\n").sort()).toEqual(
+        ["src/other.ts:1:needle src", "app.ts:1:needle root"].sort(),
+      );
       expect(result.content).not.toContain("secret");
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -164,7 +227,7 @@ describe("Grep Tool", () => {
 
     try {
       // When / Then
-      expectGrepError(
+      await expectGrepError(
         () => executeGrep(workspace, "secret", { path: outsidePath }),
         "tool_path_outside_workspace",
         "outside the workspace",
@@ -187,7 +250,7 @@ describe("Grep Tool", () => {
 
     try {
       // When / Then
-      expectGrepError(
+      await expectGrepError(
         () => executeGrep(workspace, "secret", { path: "link.txt" }),
         "tool_path_outside_workspace",
         "outside the workspace",
@@ -198,6 +261,33 @@ describe("Grep Tool", () => {
     }
   });
 
+  test.sequential(`Given ripgrep is unavailable on PATH,
+    When the grep tool starts a search,
+    Then it reports that the grep tool is unavailable`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    const pathEnvKey = "PATH";
+    const originalPath = process.env[pathEnvKey];
+    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
+    process.env[pathEnvKey] = workspace;
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle"),
+        "tool_unavailable",
+        "ripgrep (rg) is not available",
+      );
+    } finally {
+      if (originalPath === undefined) {
+        delete process.env[pathEnvKey];
+      } else {
+        process.env[pathEnvKey] = originalPath;
+      }
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given ignored generated directories contain matching text,
     When the grep tool searches the workspace,
     Then it skips those generated matches`, async () => {
@@ -205,6 +295,9 @@ describe("Grep Tool", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
     await mkdir(join(workspace, "src"), { recursive: true });
     await mkdir(join(workspace, "node_modules", "pkg"), { recursive: true });
+    await mkdir(join(workspace, "src", "node_modules", "pkg"), {
+      recursive: true,
+    });
     await mkdir(join(workspace, "coverage"), { recursive: true });
     await writeFile(join(workspace, "src", "app.ts"), "needle\n", "utf8");
     await writeFile(
@@ -212,16 +305,66 @@ describe("Grep Tool", () => {
       "needle\n",
       "utf8",
     );
+    await writeFile(
+      join(workspace, "src", "node_modules", "pkg", "index.js"),
+      "needle\n",
+      "utf8",
+    );
     await writeFile(join(workspace, "coverage", "lcov.info"), "needle\n");
 
     try {
       // When
-      const result = executeGrep(workspace, "needle");
+      const result = await executeGrep(workspace, "needle");
 
       // Then
       expect(result.content).toContain("src/app.ts:1:needle");
       expect(result.content).not.toContain("node_modules");
       expect(result.content).not.toContain("coverage");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an ignored generated directory is requested explicitly,
+    When the grep tool validates the requested path,
+    Then it rejects that ignored path before searching`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await mkdir(join(workspace, "node_modules", "pkg"), { recursive: true });
+    await writeFile(
+      join(workspace, "node_modules", "pkg", "index.js"),
+      "needle\n",
+      "utf8",
+    );
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle", { path: "node_modules" }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a gitignore rule excludes a matching file,
+    When the grep tool searches the workspace,
+    Then it respects that ignore rule`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
+    await writeFile(join(workspace, "secret.txt"), "needle\n", "utf8");
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "needle");
+
+      // Then
+      expect(result.content).toContain("app.ts:1:needle");
+      expect(result.content).not.toContain("secret.txt");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -240,7 +383,7 @@ describe("Grep Tool", () => {
 
     try {
       // When
-      const result = executeGrep(workspace, "needle");
+      const result = await executeGrep(workspace, "needle");
 
       // Then
       expect(result.content).toContain("app.ts:1:needle");
@@ -265,14 +408,15 @@ describe("Grep Tool", () => {
 
     try {
       // When
-      const result = executeGrep(workspace, "needle");
+      const result = await executeGrep(workspace, "needle");
 
       // Then
-      expect(result.content).toContain("00.txt:1:needle");
-      expect(result.content).toContain("49.txt:1:needle");
-      expect(result.content).not.toContain("50.txt:1:needle");
+      const lines = result.content.split("\n");
+      const matchLines = lines.filter((line) => !line.startsWith("["));
+      expect(matchLines).toHaveLength(50);
+      expect(matchLines.every((line) => line.endsWith(":needle"))).toBe(true);
       expect(result.content).toContain(
-        "[grep output truncated: showing 50 of 60 matches]",
+        "[grep output truncated: showing first 50 matches]",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -288,12 +432,38 @@ describe("Grep Tool", () => {
 
     try {
       // When / Then
-      expectGrepError(
+      await expectGrepError(
         () => executeGrep(workspace, ""),
         "tool_empty_pattern",
         "pattern is empty",
       );
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a matching file cannot be read,
+    When the grep tool searches that file,
+    Then it reports an inaccessible-path warning instead of leaking a raw fs error`, async () => {
+    if (process.platform === "win32") return;
+
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    const unreadablePath = join(workspace, "locked.txt");
+    await writeFile(unreadablePath, "needle\n", "utf8");
+    await chmod(unreadablePath, 0);
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "needle", {
+        path: "locked.txt",
+      });
+
+      // Then
+      expect(result.content).toContain('No matches found for "needle"');
+      expect(result.content).toContain("inaccessible");
+    } finally {
+      await chmod(unreadablePath, 0o600);
       await rm(workspace, { recursive: true, force: true });
     }
   });

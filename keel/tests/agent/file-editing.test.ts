@@ -802,6 +802,87 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given the LLM first sends an empty grep pattern,
+    When the grep tool reports the failure and the LLM retries with a real pattern,
+    Then the agent sends the corrected grep matches back to the LLM`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(
+      join(workspace, "app.ts"),
+      "const target = true;\n",
+      "utf8",
+    );
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    let thirdTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "recover-empty-grep",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "empty_grep",
+            tool: "grep",
+            pattern: "",
+          };
+          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "correct_grep",
+            tool: "grep",
+            pattern: "target",
+          };
+          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          return;
+        }
+
+        thirdTurnMessages = options.messages;
+        yield { type: "text", text: "Search recovered." };
+        yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "find target",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const emptyPatternMessage = secondTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "empty_grep",
+      );
+      expect(emptyPatternMessage?.content).toContain("pattern is empty");
+      const correctedGrepMessage = thirdTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "correct_grep",
+      );
+      expect(correctedGrepMessage?.content).toContain(
+        "app.ts:1:const target = true;",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Search recovered.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a text-named workspace file contains binary bytes,
     When the LLM asks the agent to read it,
     Then the read is rejected by content sniffing before reaching the LLM`, async () => {

@@ -1,98 +1,46 @@
-import {
-  existsSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-} from "node:fs";
-import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { spawn } from "node:child_process";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import { createInterface } from "node:readline";
+import { z } from "zod";
 import { KeelError } from "../core/error.ts";
 import type { ToolResult } from "./types.ts";
 
 export const MAX_GREP_MATCHES = 50;
 
-const BINARY_SAMPLE_BYTES = 4096;
 const MAX_SNIPPET_CHARS = 240;
+const RIPGREP_INACCESSIBLE_WARNING =
+  "[grep warning: some paths were inaccessible and skipped]";
 const IGNORED_DIRECTORIES = new Set([
   ".git",
   "coverage",
   "dist",
   "node_modules",
 ]);
-const BINARY_EXTENSIONS = new Set([
-  ".7z",
-  ".a",
-  ".aac",
-  ".apk",
-  ".avif",
-  ".avi",
-  ".bin",
-  ".bmp",
-  ".bz2",
-  ".class",
-  ".dat",
-  ".db",
-  ".dll",
-  ".dmg",
-  ".doc",
-  ".docx",
-  ".dylib",
-  ".eot",
-  ".exe",
-  ".flac",
-  ".gif",
-  ".gz",
-  ".heic",
-  ".heif",
-  ".ico",
-  ".iso",
-  ".jar",
-  ".jpeg",
-  ".jpg",
-  ".lib",
-  ".m4a",
-  ".m4v",
-  ".mkv",
-  ".mov",
-  ".mp3",
-  ".mp4",
-  ".mpeg",
-  ".mpg",
-  ".o",
-  ".obj",
-  ".odt",
-  ".ods",
-  ".odp",
-  ".ogg",
-  ".ogv",
-  ".otf",
-  ".pdf",
-  ".png",
-  ".ppt",
-  ".pptx",
-  ".pyc",
-  ".pyo",
-  ".rar",
-  ".so",
-  ".sqlite",
-  ".sqlite3",
-  ".tar",
-  ".tgz",
-  ".tif",
-  ".tiff",
-  ".ttf",
-  ".war",
-  ".wav",
-  ".webm",
-  ".webp",
-  ".woff",
-  ".woff2",
-  ".zip",
-]);
 
 export interface GrepOptions {
   readonly path?: string;
+  readonly signal?: AbortSignal;
 }
+
+interface RipgrepMatch {
+  readonly path: string;
+  readonly lineNumber: number;
+  readonly line: string;
+}
+
+const ripgrepMatchSchema = z.object({
+  type: z.literal("match"),
+  data: z.object({
+    path: z.object({
+      text: z.string(),
+    }),
+    lines: z.object({
+      text: z.string(),
+    }),
+    line_number: z.number().int().positive(),
+  }),
+});
 
 function isInsideWorkspace(workspace: string, target: string): boolean {
   const targetFromWorkspace = relative(workspace, target);
@@ -108,29 +56,231 @@ function displayPath(workspacePath: string, targetPath: string): string {
   return workspaceRelativePath.split(sep).join("/");
 }
 
-function hasBinaryControlBytes(bytes: Uint8Array): boolean {
-  for (const byte of bytes) {
-    if (byte === 0) return true;
-    if (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) return true;
-  }
-  return false;
-}
-
-function isBinaryFile(filePath: string, content: Uint8Array): boolean {
-  if (BINARY_EXTENSIONS.has(extname(filePath).toLowerCase())) return true;
-  return hasBinaryControlBytes(content.subarray(0, BINARY_SAMPLE_BYTES));
-}
-
 function snippet(line: string): string {
   if (line.length <= MAX_SNIPPET_CHARS) return line;
   return `${line.slice(0, MAX_SNIPPET_CHARS)}...`;
 }
 
-export function executeGrep(
+function parseRipgrepMatch(line: string): RipgrepMatch | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+
+  const result = ripgrepMatchSchema.safeParse(parsed);
+  if (!result.success) return null;
+
+  return {
+    path: result.data.data.path.text,
+    lineNumber: result.data.data.line_number,
+    line: result.data.data.lines.text.replace(/\r?\n$/, ""),
+  };
+}
+
+function hasIgnoredPathSegment(
+  workspacePath: string,
+  targetPath: string,
+): boolean {
+  const workspaceRelativePath = relative(workspacePath, targetPath);
+  if (workspaceRelativePath === "") return false;
+  return workspaceRelativePath
+    .split(sep)
+    .some((segment) => IGNORED_DIRECTORIES.has(segment));
+}
+
+function ignoredGlobArgs(): string[] {
+  return [...IGNORED_DIRECTORIES].flatMap((directory) => [
+    "--glob",
+    `!**/${directory}/**`,
+  ]);
+}
+
+function normalizeRipgrepPath(
+  workspacePath: string,
+  ripgrepPath: string,
+): string {
+  const absolutePath = isAbsolute(ripgrepPath)
+    ? resolve(ripgrepPath)
+    : resolve(workspacePath, ripgrepPath);
+  return displayPath(workspacePath, absolutePath);
+}
+
+function formatGrepResult(
+  pattern: string,
+  matches: readonly string[],
+  options: {
+    readonly truncated: boolean;
+    readonly partial: boolean;
+  },
+): ToolResult {
+  const output = [...matches];
+
+  if (options.truncated) {
+    output.push(
+      `[grep output truncated: showing first ${matches.length} matches]`,
+    );
+  }
+  if (options.partial) {
+    output.push(RIPGREP_INACCESSIBLE_WARNING);
+  }
+
+  if (output.length === 0 || (matches.length === 0 && options.partial)) {
+    return {
+      content: [
+        `No matches found for "${pattern}"`,
+        ...(options.partial ? [RIPGREP_INACCESSIBLE_WARNING] : []),
+      ].join("\n"),
+    };
+  }
+
+  return { content: output.join("\n") };
+}
+
+function ripgrepArgs(pattern: string, targetPath: string): string[] {
+  return [
+    "--no-config",
+    "--json",
+    "--fixed-strings",
+    "--hidden",
+    "--no-messages",
+    "--no-require-git",
+    ...ignoredGlobArgs(),
+    "--",
+    pattern,
+    targetPath,
+  ];
+}
+
+function runRipgrep(
+  workspacePath: string,
+  targetPath: string,
+  pattern: string,
+  signal?: AbortSignal,
+): Promise<ToolResult> {
+  return new Promise<ToolResult>((resolveResult, rejectResult) => {
+    let settled = false;
+    let killedForLimit = false;
+    let stderr = "";
+    const matches: string[] = [];
+
+    const settle = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      callback();
+    };
+
+    const child = spawn("rg", ripgrepArgs(pattern, targetPath), {
+      cwd: workspacePath,
+      stdio: ["ignore", "pipe", "pipe"],
+      ...(signal !== undefined ? { signal } : {}),
+    });
+
+    if (child.stdout === null || child.stderr === null) {
+      child.kill();
+      settle(() => {
+        rejectResult(
+          new KeelError(
+            "tool_unavailable",
+            "grep failed: ripgrep streams are unavailable",
+          ),
+        );
+      });
+      return;
+    }
+
+    const stdout = createInterface({ input: child.stdout });
+    const cleanup = () => {
+      stdout.close();
+    };
+
+    stdout.on("line", (line) => {
+      if (matches.length >= MAX_GREP_MATCHES) return;
+
+      const match = parseRipgrepMatch(line);
+      if (match === null) return;
+
+      const matchPath = normalizeRipgrepPath(workspacePath, match.path);
+      matches.push(`${matchPath}:${match.lineNumber}:${snippet(match.line)}`);
+
+      if (matches.length >= MAX_GREP_MATCHES) {
+        killedForLimit = true;
+        child.kill();
+      }
+    });
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      cleanup();
+      settle(() => {
+        if (error.code === "ENOENT") {
+          rejectResult(
+            new KeelError(
+              "tool_unavailable",
+              "grep failed: ripgrep (rg) is not available",
+            ),
+          );
+          return;
+        }
+        rejectResult(error);
+      });
+    });
+
+    child.on("close", (code) => {
+      cleanup();
+      settle(() => {
+        if (killedForLimit) {
+          resolveResult(
+            formatGrepResult(pattern, matches, {
+              truncated: true,
+              partial: false,
+            }),
+          );
+          return;
+        }
+
+        if (code === 0 || code === 1) {
+          resolveResult(
+            formatGrepResult(pattern, matches, {
+              truncated: false,
+              partial: false,
+            }),
+          );
+          return;
+        }
+
+        if (code === 2 && stderr.trim() === "") {
+          resolveResult(
+            formatGrepResult(pattern, matches, {
+              truncated: false,
+              partial: true,
+            }),
+          );
+          return;
+        }
+
+        rejectResult(
+          new KeelError(
+            "tool_unavailable",
+            `grep failed: ripgrep exited with code ${code ?? "unknown"}${
+              stderr.trim() ? `: ${stderr.trim()}` : ""
+            }`,
+          ),
+        );
+      });
+    });
+  });
+}
+
+export async function executeGrep(
   workspace: string,
   pattern: string,
   options: GrepOptions = {},
-): ToolResult {
+): Promise<ToolResult> {
   if (pattern === "") {
     throw new KeelError("tool_empty_pattern", "grep failed: pattern is empty");
   }
@@ -155,94 +305,25 @@ export function executeGrep(
       `grep failed: path is outside the workspace: ${requestedPath}`,
     );
   }
-
-  const matches: string[] = [];
-  let totalMatches = 0;
-  const visitedDirectories = new Set<string>();
-  const visitedFiles = new Set<string>();
-
-  const addMatch = (filePath: string, lineNumber: number, line: string) => {
-    totalMatches++;
-    if (matches.length < MAX_GREP_MATCHES) {
-      matches.push(
-        `${displayPath(workspacePath, filePath)}:${lineNumber}:${snippet(line)}`,
-      );
-    }
-  };
-
-  const searchFile = (filePath: string) => {
-    if (visitedFiles.has(filePath)) return;
-    visitedFiles.add(filePath);
-
-    const content = readFileSync(filePath);
-    if (isBinaryFile(filePath, content)) return;
-
-    for (const [index, line] of content
-      .toString("utf8")
-      .split(/\r?\n/)
-      .entries()) {
-      if (line.includes(pattern)) {
-        addMatch(filePath, index + 1, line);
-      }
-    }
-  };
-
-  const searchDirectory = (directoryPath: string) => {
-    if (visitedDirectories.has(directoryPath)) return;
-    visitedDirectories.add(directoryPath);
-
-    const entries = readdirSync(directoryPath, { withFileTypes: true }).sort(
-      (left, right) => left.name.localeCompare(right.name),
+  if (hasIgnoredPathSegment(workspacePath, targetPath)) {
+    throw new KeelError(
+      "tool_path_ignored",
+      `grep failed: ignored path: ${requestedPath}`,
     );
-
-    for (const entry of entries) {
-      if (entry.isDirectory() && IGNORED_DIRECTORIES.has(entry.name)) {
-        continue;
-      }
-
-      const entryPath = join(directoryPath, entry.name);
-      let resolvedEntryPath: string;
-      try {
-        resolvedEntryPath = realpathSync(entryPath);
-      } catch {
-        continue;
-      }
-      if (!isInsideWorkspace(workspacePath, resolvedEntryPath)) {
-        continue;
-      }
-
-      const entryStat = statSync(resolvedEntryPath);
-      if (entryStat.isDirectory()) {
-        searchDirectory(resolvedEntryPath);
-        continue;
-      }
-      if (entryStat.isFile()) {
-        searchFile(resolvedEntryPath);
-      }
-    }
-  };
+  }
 
   const targetStat = statSync(targetPath);
-  if (targetStat.isDirectory()) {
-    searchDirectory(targetPath);
-  } else if (targetStat.isFile()) {
-    searchFile(targetPath);
-  } else {
+  if (!targetStat.isDirectory() && !targetStat.isFile()) {
     throw new KeelError(
       "tool_not_file",
       `grep failed: not a file or directory: ${requestedPath}`,
     );
   }
 
-  if (totalMatches === 0) {
-    return { content: `No matches found for "${pattern}"` };
-  }
-
-  if (totalMatches > matches.length) {
-    matches.push(
-      `[grep output truncated: showing ${matches.length} of ${totalMatches} matches]`,
-    );
-  }
-
-  return { content: matches.join("\n") };
+  return await runRipgrep(
+    workspacePath,
+    displayPath(workspacePath, targetPath),
+    pattern,
+    options.signal,
+  );
 }

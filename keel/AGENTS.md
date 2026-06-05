@@ -40,6 +40,8 @@ Layer rules (enforced by `tests/invariants/boundaries.test.ts`):
 - All interface properties `readonly`.
 - Use function property syntax for interface methods (`readonly fn: (x: T) => R`), not method syntax (`fn(x: T): R`). Method syntax bypasses `strictFunctionTypes`.
 - No `as` type assertions. Use type guards, `satisfies`, or schema validation (Zod) to prove types. `as const` is allowed.
+- External data boundaries must parse `unknown` through an explicit schema before business logic. Use Zod for JSON from HTTP/SSE, LLM/tool arguments, child process stdout, config files, disk JSON, and environment-derived structured data. Do not use `Record<string, unknown>` property-access helpers for known external protocols; model the protocol shape with a schema and access typed data only after `safeParse` or `parse`.
+- In review, any `JSON.parse`, process output parsing, HTTP response parsing, or LLM argument parsing must show the schema boundary in the same module.
 - Pre-commit hook auto-formats staged files.
 
 ## Type Precision

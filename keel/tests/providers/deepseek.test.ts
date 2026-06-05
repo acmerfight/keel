@@ -509,6 +509,34 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "empty-grep-pattern") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        grepToolCallDelta(
+                          JSON.stringify({
+                            pattern: "",
+                          }),
+                        ),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 25, completion_tokens: 6 },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "nonzero-tool-call-index") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -1640,6 +1668,32 @@ describe("DeepSeek Provider", () => {
       },
       { type: "stop", usage: { inputTokens: 26, outputTokens: 7 } },
     ]);
+  });
+
+  test(`Given a grep tool call sends an empty pattern,
+    When provider validates the completed tool call,
+    Then it throws a grep argument protocol error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "empty-grep-pattern" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek grep tool call has invalid arguments",
+    });
   });
 
   test(`Given a stream chunk contains multiple tool calls,

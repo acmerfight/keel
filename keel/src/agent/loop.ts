@@ -8,8 +8,10 @@ import { executeRead } from "../tools/read.ts";
 const MAX_AGENT_TURNS = 8;
 const RECOVERABLE_TOOL_ERRORS = new Set<KeelErrorCode>([
   "tool_file_not_found",
+  "tool_empty_pattern",
   "tool_not_file",
   "tool_old_string_not_found",
+  "tool_path_ignored",
 ]);
 
 export type AgentEvent =
@@ -128,8 +130,9 @@ export async function* runAgent(
       case "grep": {
         let result: { readonly content: string };
         try {
-          result = executeGrep(workspace, toolCall.pattern, {
+          result = await executeGrep(workspace, toolCall.pattern, {
             ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
+            signal,
           });
         } catch (error) {
           if (!isRecoverableToolError(error)) {
