@@ -2,6 +2,7 @@ import type { KeelErrorCode } from "../core/error.ts";
 import { KeelError } from "../core/error.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
 import { executeEdit } from "../tools/edit.ts";
+import { executeGrep } from "../tools/grep.ts";
 import { executeRead } from "../tools/read.ts";
 
 const MAX_AGENT_TURNS = 8;
@@ -124,6 +125,31 @@ export async function* runAgent(
     });
 
     switch (toolCall.tool) {
+      case "grep": {
+        let result: { readonly content: string };
+        try {
+          result = executeGrep(workspace, toolCall.pattern, {
+            ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
+          });
+        } catch (error) {
+          if (!isRecoverableToolError(error)) {
+            throw error;
+          }
+          messages.push({
+            role: "tool",
+            toolCallId: toolCall.id,
+            content: toolFailureMessage(error),
+          });
+          break;
+        }
+
+        messages.push({
+          role: "tool",
+          toolCallId: toolCall.id,
+          content: result.content,
+        });
+        break;
+      }
       case "read": {
         let result: { readonly content: string };
         try {

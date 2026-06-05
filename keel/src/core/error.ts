@@ -4,6 +4,7 @@ export type KeelErrorCode =
   | "agent_unsupported_tool_calls"
   | "tool_binary_file"
   | "tool_empty_old_string"
+  | "tool_empty_pattern"
   | "tool_file_not_found"
   | "tool_invalid_read_options"
   | "tool_not_file"
