@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import type { Dirent } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { z } from "zod";
@@ -33,6 +34,15 @@ interface RipgrepMatch {
   readonly line: string;
 }
 
+interface RipgrepProcessOptions<T> {
+  readonly workspacePath: string;
+  readonly args: readonly string[];
+  readonly signal?: AbortSignal;
+  readonly timeoutMs: number;
+  readonly onLine: (line: string, stopRipgrep: () => void) => void;
+  readonly onClose: (code: number | null, stderr: string) => T;
+}
+
 const ripgrepMatchSchema = z.object({
   type: z.literal("match"),
   data: z.object({
@@ -45,6 +55,7 @@ const ripgrepMatchSchema = z.object({
     line_number: z.number().int().positive(),
   }),
 });
+const ripgrepFilePathSchema = z.string().min(1);
 
 function isInsideWorkspace(workspace: string, target: string): boolean {
   const targetFromWorkspace = relative(workspace, target);
@@ -99,6 +110,19 @@ function ignoredGlobArgs(): string[] {
     "--glob",
     `!**/${directory}/**`,
   ]);
+}
+
+function ripgrepFilesArgs(includeGlob?: string): string[] {
+  return [
+    "--no-config",
+    "--files",
+    "--hidden",
+    "--no-messages",
+    "--no-require-git",
+    ...(includeGlob !== undefined ? ["--glob", includeGlob] : []),
+    ...ignoredGlobArgs(),
+    ".",
+  ];
 }
 
 function normalizeRipgrepPath(
@@ -157,20 +181,42 @@ function ripgrepArgs(pattern: string, targetPath: string): string[] {
   ];
 }
 
-async function runRipgrep(
-  workspacePath: string,
-  targetPath: string,
-  pattern: string,
-  signal?: AbortSignal,
-  timeoutMs: number = DEFAULT_RIPGREP_TIMEOUT_MS,
-): Promise<ToolResult> {
+function readDirectoryEntries(directoryPath: string): readonly Dirent[] {
+  try {
+    return readdirSync(directoryPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+function directoryContainsFile(directoryPath: string): boolean {
+  for (const entry of readDirectoryEntries(directoryPath)) {
+    const entryPath = resolve(directoryPath, entry.name);
+    if (entry.isFile()) return true;
+    if (entry.isDirectory() && directoryContainsFile(entryPath)) return true;
+  }
+  return false;
+}
+
+function containsChildPath(
+  files: ReadonlySet<string>,
+  directoryPath: string,
+): boolean {
+  const directoryPrefix = `${directoryPath}/`;
+  for (const file of files) {
+    if (file.startsWith(directoryPrefix)) return true;
+  }
+  return false;
+}
+
+async function runRipgrepProcess<T>(
+  options: RipgrepProcessOptions<T>,
+): Promise<T> {
   const ripgrep = await resolveRipgrep();
 
-  return new Promise<ToolResult>((resolveResult, rejectResult) => {
+  return new Promise<T>((resolveResult, rejectResult) => {
     let settled = false;
-    let killedForLimit = false;
     let stderr = "";
-    const matches: string[] = [];
 
     const settle = (callback: () => void) => {
       if (settled) return;
@@ -178,10 +224,10 @@ async function runRipgrep(
       callback();
     };
 
-    const child = spawn(ripgrep.path, ripgrepArgs(pattern, targetPath), {
-      cwd: workspacePath,
+    const child = spawn(ripgrep.path, options.args, {
+      cwd: options.workspacePath,
       stdio: ["ignore", "pipe", "pipe"],
-      ...(signal !== undefined ? { signal } : {}),
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
 
     if (child.stdout === null || child.stderr === null) {
@@ -234,25 +280,14 @@ async function runRipgrep(
         rejectResult(
           new KeelError(
             "tool_unavailable",
-            `grep failed: ripgrep timed out after ${timeoutMs}ms`,
+            `grep failed: ripgrep timed out after ${options.timeoutMs}ms`,
           ),
         );
       });
-    }, timeoutMs);
+    }, options.timeoutMs);
 
     stdout.on("line", (line) => {
-      if (matches.length >= MAX_GREP_MATCHES) return;
-
-      const match = parseRipgrepMatch(line);
-      if (match === null) return;
-
-      const matchPath = normalizeRipgrepPath(workspacePath, match.path);
-      matches.push(`${matchPath}:${match.lineNumber}:${snippet(match.line)}`);
-
-      if (matches.length >= MAX_GREP_MATCHES) {
-        killedForLimit = true;
-        stopRipgrep();
-      }
+      options.onLine(line, stopRipgrep);
     });
 
     child.stderr.on("data", (chunk: Buffer) => {
@@ -278,46 +313,132 @@ async function runRipgrep(
     child.on("close", (code) => {
       cleanup();
       settle(() => {
-        if (killedForLimit) {
-          resolveResult(
-            formatGrepResult(pattern, matches, {
-              truncated: true,
-              partial: false,
-            }),
-          );
-          return;
+        try {
+          resolveResult(options.onClose(code, stderr));
+        } catch (error) {
+          rejectResult(error);
         }
-
-        if (code === 0 || code === 1) {
-          resolveResult(
-            formatGrepResult(pattern, matches, {
-              truncated: false,
-              partial: false,
-            }),
-          );
-          return;
-        }
-
-        if (code === 2 && stderr.trim() === "") {
-          resolveResult(
-            formatGrepResult(pattern, matches, {
-              truncated: false,
-              partial: true,
-            }),
-          );
-          return;
-        }
-
-        rejectResult(
-          new KeelError(
-            "tool_unavailable",
-            `grep failed: ripgrep exited with code ${code ?? "unknown"}${
-              stderr.trim() ? `: ${stderr.trim()}` : ""
-            }`,
-          ),
-        );
       });
     });
+  });
+}
+
+async function listRipgrepFiles(
+  workspacePath: string,
+  includeGlob?: string,
+  signal?: AbortSignal,
+  timeoutMs: number = DEFAULT_RIPGREP_TIMEOUT_MS,
+): Promise<Set<string>> {
+  const files = new Set<string>();
+  return await runRipgrepProcess({
+    workspacePath,
+    args: ripgrepFilesArgs(includeGlob),
+    ...(signal !== undefined ? { signal } : {}),
+    timeoutMs,
+    onLine: (line) => {
+      const result = ripgrepFilePathSchema.safeParse(line);
+      if (!result.success) return;
+      files.add(normalizeRipgrepPath(workspacePath, result.data));
+    },
+    onClose: (code, stderr) => {
+      if (code === 0 || code === 1) return files;
+      throw new KeelError(
+        "tool_unavailable",
+        `grep failed: ripgrep exited with code ${code ?? "unknown"}${
+          stderr.trim() ? `: ${stderr.trim()}` : ""
+        }`,
+      );
+    },
+  });
+}
+
+async function isSearchableByRipgrepTraversal(
+  workspacePath: string,
+  targetPath: string,
+  targetIsDirectory: boolean,
+  signal?: AbortSignal,
+  timeoutMs?: number,
+): Promise<boolean> {
+  const targetDisplayPath = displayPath(workspacePath, targetPath);
+  if (targetDisplayPath === ".") return true;
+
+  const searchableFiles = await listRipgrepFiles(
+    workspacePath,
+    undefined,
+    signal,
+    timeoutMs,
+  );
+  if (!targetIsDirectory) return searchableFiles.has(targetDisplayPath);
+  if (containsChildPath(searchableFiles, targetDisplayPath)) return true;
+  if (!directoryContainsFile(targetPath)) return true;
+
+  const includedFiles = await listRipgrepFiles(
+    workspacePath,
+    `${targetDisplayPath}/**`,
+    signal,
+    timeoutMs,
+  );
+  return containsChildPath(includedFiles, targetDisplayPath);
+}
+
+async function runRipgrep(
+  workspacePath: string,
+  targetPath: string,
+  pattern: string,
+  signal?: AbortSignal,
+  timeoutMs: number = DEFAULT_RIPGREP_TIMEOUT_MS,
+): Promise<ToolResult> {
+  let killedForLimit = false;
+  const matches: string[] = [];
+
+  return await runRipgrepProcess({
+    workspacePath,
+    args: ripgrepArgs(pattern, targetPath),
+    ...(signal !== undefined ? { signal } : {}),
+    timeoutMs,
+    onLine: (line, stopRipgrep) => {
+      if (matches.length >= MAX_GREP_MATCHES) return;
+
+      const match = parseRipgrepMatch(line);
+      if (match === null) return;
+
+      const matchPath = normalizeRipgrepPath(workspacePath, match.path);
+      matches.push(`${matchPath}:${match.lineNumber}:${snippet(match.line)}`);
+
+      if (matches.length >= MAX_GREP_MATCHES) {
+        killedForLimit = true;
+        stopRipgrep();
+      }
+    },
+    onClose: (code, stderr) => {
+      if (killedForLimit) {
+        return formatGrepResult(pattern, matches, {
+          truncated: true,
+          partial: false,
+        });
+      }
+
+      if (code === 0 || code === 1) {
+        return formatGrepResult(pattern, matches, {
+          truncated: false,
+          partial: false,
+        });
+      }
+
+      if (code === 2 && stderr.trim() === "") {
+        return formatGrepResult(pattern, matches, {
+          truncated: false,
+          partial: true,
+        });
+      }
+
+      throw new KeelError(
+        "tool_unavailable",
+        `grep failed: ripgrep exited with code ${code ?? "unknown"}${
+          stderr.trim() ? `: ${stderr.trim()}` : ""
+        }`,
+      );
+    },
   });
 }
 
@@ -362,6 +483,21 @@ export async function executeGrep(
     throw new KeelError(
       "tool_not_file",
       `grep failed: not a file or directory: ${requestedPath}`,
+    );
+  }
+  if (
+    options.path !== undefined &&
+    !(await isSearchableByRipgrepTraversal(
+      workspacePath,
+      targetPath,
+      targetStat.isDirectory(),
+      options.signal,
+      options.timeoutMs,
+    ))
+  ) {
+    throw new KeelError(
+      "tool_path_ignored",
+      `grep failed: ignored path: ${requestedPath}`,
     );
   }
 

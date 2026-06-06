@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import {
   chmod,
   mkdir,
@@ -8,9 +9,12 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
 import { executeGrep } from "../../src/tools/grep.ts";
+
+const execFileAsync = promisify(execFile);
 
 async function expectGrepError(
   action: () => unknown | Promise<unknown>,
@@ -83,6 +87,24 @@ describe("Grep Tool", () => {
     }
   });
 
+  test(`Given the workspace root is requested explicitly,
+    When the grep tool searches that root path,
+    Then it treats the request as a normal workspace search`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "needle", { path: "." });
+
+      // Then
+      expect(result.content).toBe("app.ts:1:needle");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a specific workspace file is requested,
     When the grep tool searches that file,
     Then it returns only matches from that file`, async () => {
@@ -100,6 +122,24 @@ describe("Grep Tool", () => {
 
       // Then
       expect(result.content).toBe("src/app.ts:2:needle");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an empty directory is requested explicitly,
+    When the grep tool searches that directory,
+    Then it reports no matches instead of treating the directory as ignored`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await mkdir(join(workspace, "empty"), { recursive: true });
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "needle", { path: "empty" });
+
+      // Then
+      expect(result.content).toBe('No matches found for "needle"');
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -174,6 +214,27 @@ describe("Grep Tool", () => {
         () => executeGrep(workspace, "needle", { path: "missing.ts" }),
         "tool_file_not_found",
         "file not found",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the requested search path is not a regular file or directory,
+    When the grep tool validates the requested path,
+    Then it rejects that special path before searching`, async () => {
+    if (process.platform === "win32") return;
+
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await execFileAsync("mkfifo", [join(workspace, "pipe")]);
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle", { path: "pipe" }),
+        "tool_not_file",
+        "not a file or directory",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -412,6 +473,70 @@ describe("Grep Tool", () => {
       // Then
       expect(result.content).toContain("app.ts:1:needle");
       expect(result.content).not.toContain("secret.txt");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a gitignore rule excludes an explicitly requested file,
+    When the grep tool validates the requested path,
+    Then it rejects that ignored file before searching`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(join(workspace, "secret.txt"), "needle\n", "utf8");
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle", { path: "secret.txt" }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a gitignore rule excludes an explicitly requested directory,
+    When the grep tool validates the requested path,
+    Then it rejects that ignored directory before searching`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await mkdir(join(workspace, "secret-dir", "nested"), { recursive: true });
+    await writeFile(join(workspace, ".gitignore"), "secret-dir/\n", "utf8");
+    await writeFile(
+      join(workspace, "secret-dir", "nested", "secret.txt"),
+      "needle\n",
+    );
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle", { path: "secret-dir" }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a gitignore rule excludes only a child file in an explicit directory,
+    When the grep tool searches that directory,
+    Then it does not leak the ignored child file`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await mkdir(join(workspace, "src"), { recursive: true });
+    await writeFile(join(workspace, ".gitignore"), "src/secret.txt\n", "utf8");
+    await writeFile(join(workspace, "src", "secret.txt"), "needle\n", "utf8");
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "needle", { path: "src" });
+
+      // Then
+      expect(result.content).toBe('No matches found for "needle"');
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
