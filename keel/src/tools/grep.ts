@@ -1,6 +1,5 @@
-import { spawn } from "node:child_process";
-import type { Dirent } from "node:fs";
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { z } from "zod";
@@ -55,7 +54,6 @@ const ripgrepMatchSchema = z.object({
     line_number: z.number().int().positive(),
   }),
 });
-const ripgrepFilePathSchema = z.string().min(1);
 
 function isInsideWorkspace(workspace: string, target: string): boolean {
   const targetFromWorkspace = relative(workspace, target);
@@ -110,19 +108,6 @@ function ignoredGlobArgs(): string[] {
     "--glob",
     `!**/${directory}/**`,
   ]);
-}
-
-function ripgrepFilesArgs(includeGlob?: string): string[] {
-  return [
-    "--no-config",
-    "--files",
-    "--hidden",
-    "--no-messages",
-    "--no-require-git",
-    ...(includeGlob !== undefined ? ["--glob", includeGlob] : []),
-    ...ignoredGlobArgs(),
-    ".",
-  ];
 }
 
 function normalizeRipgrepPath(
@@ -181,34 +166,6 @@ function ripgrepArgs(pattern: string, targetPath: string): string[] {
     pattern,
     targetPath,
   ];
-}
-
-function readDirectoryEntries(directoryPath: string): readonly Dirent[] {
-  try {
-    return readdirSync(directoryPath, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-}
-
-function directoryContainsFile(directoryPath: string): boolean {
-  for (const entry of readDirectoryEntries(directoryPath)) {
-    const entryPath = resolve(directoryPath, entry.name);
-    if (entry.isFile()) return true;
-    if (entry.isDirectory() && directoryContainsFile(entryPath)) return true;
-  }
-  return false;
-}
-
-function containsChildPath(
-  files: ReadonlySet<string>,
-  directoryPath: string,
-): boolean {
-  const directoryPrefix = `${directoryPath}/`;
-  for (const file of files) {
-    if (file.startsWith(directoryPrefix)) return true;
-  }
-  return false;
 }
 
 async function runRipgrepProcess<T>(
@@ -325,62 +282,20 @@ async function runRipgrepProcess<T>(
   });
 }
 
-async function listRipgrepFiles(
-  workspacePath: string,
-  includeGlob?: string,
-  signal?: AbortSignal,
-  timeoutMs: number = DEFAULT_RIPGREP_TIMEOUT_MS,
-): Promise<Set<string>> {
-  const files = new Set<string>();
-  return await runRipgrepProcess({
-    workspacePath,
-    args: ripgrepFilesArgs(includeGlob),
-    ...(signal !== undefined ? { signal } : {}),
-    timeoutMs,
-    onLine: (line) => {
-      const result = ripgrepFilePathSchema.safeParse(line);
-      if (!result.success) return;
-      files.add(normalizeRipgrepPath(workspacePath, result.data));
-    },
-    onClose: (code, stderr) => {
-      if (code === 0 || code === 1) return files;
-      throw new KeelError(
-        "tool_unavailable",
-        `grep failed: ripgrep exited with code ${code ?? "unknown"}${
-          stderr.trim() ? `: ${stderr.trim()}` : ""
-        }`,
-      );
-    },
-  });
-}
-
-async function isSearchableByRipgrepTraversal(
-  workspacePath: string,
-  targetPath: string,
-  targetIsDirectory: boolean,
-  signal?: AbortSignal,
-  timeoutMs?: number,
-): Promise<boolean> {
+function isIgnoredByGit(workspacePath: string, targetPath: string): boolean {
   const targetDisplayPath = displayPath(workspacePath, targetPath);
-  if (targetDisplayPath === ".") return true;
+  if (targetDisplayPath === ".") return false;
 
-  const searchableFiles = await listRipgrepFiles(
-    workspacePath,
-    undefined,
-    signal,
-    timeoutMs,
-  );
-  if (!targetIsDirectory) return searchableFiles.has(targetDisplayPath);
-  if (containsChildPath(searchableFiles, targetDisplayPath)) return true;
-  if (!directoryContainsFile(targetPath)) return true;
-
-  const includedFiles = await listRipgrepFiles(
-    workspacePath,
-    `${targetDisplayPath}/**`,
-    signal,
-    timeoutMs,
-  );
-  return containsChildPath(includedFiles, targetDisplayPath);
+  try {
+    execFileSync(
+      "git",
+      ["check-ignore", "--no-index", "-q", "--", targetDisplayPath],
+      { cwd: workspacePath, stdio: "ignore" },
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function runRipgrep(
@@ -487,16 +402,7 @@ export async function executeGrep(
       `grep failed: not a file or directory: ${requestedPath}`,
     );
   }
-  if (
-    options.path !== undefined &&
-    !(await isSearchableByRipgrepTraversal(
-      workspacePath,
-      targetPath,
-      targetStat.isDirectory(),
-      options.signal,
-      options.timeoutMs,
-    ))
-  ) {
+  if (options.path !== undefined && isIgnoredByGit(workspacePath, targetPath)) {
     throw new KeelError(
       "tool_path_ignored",
       `grep failed: ignored path: ${requestedPath}`,
