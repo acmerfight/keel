@@ -1672,7 +1672,7 @@ describe("DeepSeek Provider", () => {
 
   test(`Given a grep tool call sends an empty pattern,
     When provider validates the completed tool call,
-    Then it throws a grep argument protocol error`, async () => {
+    Then it yields the tool call so grep can return a recoverable error`, async () => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "test-key",
@@ -1680,20 +1680,25 @@ describe("DeepSeek Provider", () => {
       model: "deepseek-v4-flash",
     });
 
-    // When / Then
-    await expect(
-      collect(
-        provider.stream({
-          systemPrompt: "You are helpful.",
-          messages: [{ role: "user", content: "empty-grep-pattern" }],
-          signal: freshSignal(),
-        }),
-      ),
-    ).rejects.toMatchObject({
-      name: "KeelError",
-      code: "provider_protocol_error",
-      message: "DeepSeek grep tool call has invalid arguments",
-    });
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "empty-grep-pattern" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_grep_0",
+        tool: "grep",
+        pattern: "",
+      },
+      { type: "stop", usage: { inputTokens: 25, outputTokens: 6 } },
+    ]);
   });
 
   test(`Given a stream chunk contains multiple tool calls,
@@ -2115,6 +2120,67 @@ describe("DeepSeek Provider", () => {
       // Then
       const parsed = JSON.parse(capturedBody);
       expect(parsed.stream_options).toEqual({ include_usage: true });
+    } finally {
+      await closeServer(captureServer);
+    }
+  });
+
+  test(`Given provider advertises the grep tool,
+    When it sends the request body,
+    Then empty-pattern validation remains owned by the grep tool`, async () => {
+    // Given
+    let capturedBody = "";
+    const captureServer = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBody = body;
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(sseChunk("ok"));
+        res.write(sseFinish(1, 1));
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => {
+      captureServer.listen(0, "127.0.0.1", resolve);
+    });
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl: `http://127.0.0.1:${getPort(captureServer)}`,
+      model: "deepseek-v4-flash",
+    });
+
+    try {
+      // When
+      await collect(
+        provider.stream({
+          systemPrompt: "sys",
+          messages: [{ role: "user", content: "hi" }],
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const parsed = JSON.parse(capturedBody);
+      const tools = objectProperty(parsed, "tools");
+      if (!Array.isArray(tools)) {
+        throw new Error("Expected tools array");
+      }
+      const grepToolDefinition = tools.find(
+        (tool) =>
+          objectProperty(objectProperty(tool, "function"), "name") === "grep",
+      );
+      if (grepToolDefinition === undefined) {
+        throw new Error("Expected grep tool definition");
+      }
+      const grepFunction = objectProperty(grepToolDefinition, "function");
+      const parameters = objectProperty(grepFunction, "parameters");
+      const properties = objectProperty(parameters, "properties");
+      const patternSchema = objectProperty(properties, "pattern");
+      expect(patternSchema).toMatchObject({ type: "string" });
+      expect(patternSchema).not.toHaveProperty("minLength");
     } finally {
       await closeServer(captureServer);
     }

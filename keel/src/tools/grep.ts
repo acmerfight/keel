@@ -174,6 +174,8 @@ function ripgrepArgs(pattern: string, targetPath: string): string[] {
     "--hidden",
     "--no-messages",
     "--no-require-git",
+    "--sort",
+    "path",
     ...ignoredGlobArgs(),
     "--",
     pattern,

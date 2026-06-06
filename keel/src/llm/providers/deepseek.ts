@@ -77,7 +77,6 @@ const grepTool = {
       properties: {
         pattern: {
           type: "string",
-          minLength: 1,
           description: "Literal text to search for.",
         },
         path: {
@@ -102,7 +101,7 @@ const readToolArgumentsSchema = z
 
 const grepToolArgumentsSchema = z
   .object({
-    pattern: z.string().min(1),
+    pattern: z.string(),
     path: z.string().optional(),
   })
   .strict();

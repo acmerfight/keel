@@ -567,10 +567,10 @@ describe("Grep Tool", () => {
 
   test(`Given more files match than the output budget allows,
     When the grep tool searches the workspace,
-    Then it caps the output and reports the omitted matches`, async () => {
+    Then it returns the first capped matches in stable path order`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
-    for (let i = 0; i < 60; i++) {
+    for (let i = 59; i >= 0; i--) {
       await writeFile(
         join(workspace, `${String(i).padStart(2, "0")}.txt`),
         "needle\n",
@@ -586,7 +586,12 @@ describe("Grep Tool", () => {
       const lines = result.content.split("\n");
       const matchLines = lines.filter((line) => !line.startsWith("["));
       expect(matchLines).toHaveLength(50);
-      expect(matchLines.every((line) => line.endsWith(":needle"))).toBe(true);
+      expect(matchLines).toEqual(
+        Array.from(
+          { length: 50 },
+          (_, index) => `${String(index).padStart(2, "0")}.txt:1:needle`,
+        ),
+      );
       expect(result.content).toContain(
         "[grep output truncated: showing first 50 matches]",
       );
