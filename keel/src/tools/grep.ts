@@ -1,16 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
+import ignore from "ignore";
 import { z } from "zod";
 import { KeelError } from "../core/error.ts";
 import { resolveRipgrep } from "./ripgrep.ts";
@@ -297,6 +289,84 @@ async function runRipgrepProcess<T>(
   });
 }
 
+function pathForIgnoreFile(
+  basePath: string,
+  targetPath: string,
+): string | null {
+  const relativePath = relative(basePath, targetPath);
+  if (relativePath === "") return null;
+  return relativePath.split(sep).join("/");
+}
+
+function ignoreFileDirectories(
+  workspacePath: string,
+  targetPath: string,
+): readonly string[] {
+  const deepestDirectory = dirname(targetPath);
+  const relativeDirectory = relative(workspacePath, deepestDirectory);
+  const directories = [workspacePath];
+  if (relativeDirectory === "") return directories;
+
+  let currentDirectory = workspacePath;
+  for (const segment of relativeDirectory.split(sep)) {
+    currentDirectory = join(currentDirectory, segment);
+    directories.push(currentDirectory);
+  }
+  return directories;
+}
+
+function ancestorDirectoryIgnorePaths(
+  basePath: string,
+  targetPath: string,
+  targetIsDirectory: boolean,
+): readonly string[] {
+  const deepestDirectory = targetIsDirectory ? targetPath : dirname(targetPath);
+  const relativeDirectory = relative(basePath, deepestDirectory);
+  if (relativeDirectory === "") return [];
+
+  const paths: string[] = [];
+  let currentPath = "";
+  for (const segment of relativeDirectory.split(sep)) {
+    currentPath = currentPath === "" ? segment : `${currentPath}/${segment}`;
+    paths.push(`${currentPath}/`);
+  }
+  return paths;
+}
+
+function isIgnoredByIgnoreFiles(
+  workspacePath: string,
+  targetPath: string,
+  targetIsDirectory: boolean,
+): boolean {
+  let ignored = false;
+
+  for (const directory of ignoreFileDirectories(workspacePath, targetPath)) {
+    const ignorePath = join(directory, ".gitignore");
+    if (!existsSync(ignorePath)) continue;
+
+    const matcher = ignore().add(readFileSync(ignorePath, "utf8"));
+
+    for (const ancestorPath of ancestorDirectoryIgnorePaths(
+      directory,
+      targetPath,
+      targetIsDirectory,
+    )) {
+      if (matcher.test(ancestorPath).ignored) return true;
+    }
+
+    const targetIgnorePath = pathForIgnoreFile(directory, targetPath);
+    if (targetIgnorePath === null) continue;
+
+    const targetResult = matcher.test(
+      targetIsDirectory ? `${targetIgnorePath}/` : targetIgnorePath,
+    );
+    if (targetResult.ignored) ignored = true;
+    if (targetResult.unignored) ignored = false;
+  }
+
+  return ignored;
+}
+
 function gitCheckIgnoreStatus(
   args: readonly string[],
   cwd: string,
@@ -313,44 +383,11 @@ function gitCheckIgnoreStatus(
   }
 }
 
-function createSyntheticGitDir(): string {
-  const gitDir = mkdtempSync(join(tmpdir(), "keel-gitignore-"));
-  mkdirSync(join(gitDir, "objects"), { recursive: true });
-  mkdirSync(join(gitDir, "refs", "heads"), { recursive: true });
-  writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main\n", "utf8");
-  return gitDir;
-}
-
-function isIgnoredWithSyntheticGit(
+function isIgnoredByGitignore(
   workspacePath: string,
-  targetDisplayPath: string,
+  targetPath: string,
+  targetIsDirectory: boolean,
 ): boolean {
-  const gitDir = createSyntheticGitDir();
-  try {
-    return (
-      gitCheckIgnoreStatus(
-        [
-          "--git-dir",
-          gitDir,
-          "--work-tree",
-          workspacePath,
-          "-C",
-          workspacePath,
-          "check-ignore",
-          "--no-index",
-          "-q",
-          "--",
-          targetDisplayPath,
-        ],
-        workspacePath,
-      ) === "ignored"
-    );
-  } finally {
-    rmSync(gitDir, { recursive: true, force: true });
-  }
-}
-
-function isIgnoredByGit(workspacePath: string, targetPath: string): boolean {
   const targetDisplayPath = displayPath(workspacePath, targetPath);
   if (targetDisplayPath === ".") return false;
 
@@ -360,10 +397,7 @@ function isIgnoredByGit(workspacePath: string, targetPath: string): boolean {
   );
   if (directStatus === "ignored") return true;
   if (directStatus === "not_ignored") return false;
-  if (directStatus === "not_git") {
-    return isIgnoredWithSyntheticGit(workspacePath, targetDisplayPath);
-  }
-  return false;
+  return isIgnoredByIgnoreFiles(workspacePath, targetPath, targetIsDirectory);
 }
 
 async function runRipgrep(
@@ -470,7 +504,10 @@ export async function executeGrep(
       `grep failed: not a file or directory: ${requestedPath}`,
     );
   }
-  if (options.path !== undefined && isIgnoredByGit(workspacePath, targetPath)) {
+  if (
+    options.path !== undefined &&
+    isIgnoredByGitignore(workspacePath, targetPath, targetStat.isDirectory())
+  ) {
     throw new KeelError(
       "tool_path_ignored",
       `grep failed: ignored path: ${requestedPath}`,
