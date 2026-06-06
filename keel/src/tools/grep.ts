@@ -2,9 +2,9 @@ import { spawn } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
-import { rgPath } from "@vscode/ripgrep";
 import { z } from "zod";
 import { KeelError } from "../core/error.ts";
+import { resolveRipgrep } from "./ripgrep.ts";
 import type { ToolResult } from "./types.ts";
 
 export const MAX_GREP_MATCHES = 50;
@@ -154,12 +154,14 @@ function ripgrepArgs(pattern: string, targetPath: string): string[] {
   ];
 }
 
-function runRipgrep(
+async function runRipgrep(
   workspacePath: string,
   targetPath: string,
   pattern: string,
   signal?: AbortSignal,
 ): Promise<ToolResult> {
+  const ripgrep = await resolveRipgrep();
+
   return new Promise<ToolResult>((resolveResult, rejectResult) => {
     let settled = false;
     let killedForLimit = false;
@@ -172,7 +174,7 @@ function runRipgrep(
       callback();
     };
 
-    const child = spawn(rgPath, ripgrepArgs(pattern, targetPath), {
+    const child = spawn(ripgrep.path, ripgrepArgs(pattern, targetPath), {
       cwd: workspacePath,
       stdio: ["ignore", "pipe", "pipe"],
       ...(signal !== undefined ? { signal } : {}),
@@ -222,7 +224,7 @@ function runRipgrep(
           rejectResult(
             new KeelError(
               "tool_unavailable",
-              "grep failed: bundled ripgrep is not available",
+              `grep failed: bundled ripgrep is not available (${ripgrep.provider})`,
             ),
           );
           return;

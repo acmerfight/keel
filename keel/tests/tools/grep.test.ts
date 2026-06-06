@@ -289,6 +289,62 @@ describe("Grep Tool", () => {
     }
   });
 
+  test.sequential(`Given the bundled ripgrep provider cannot be loaded,
+    When the grep tool module is imported and then starts a search,
+    Then it reports the provider failure as a grep tool error`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
+
+    vi.resetModules();
+    vi.doMock("@vscode/ripgrep", () => {
+      throw new Error("platform package missing");
+    });
+
+    try {
+      const grepModule = await import("../../src/tools/grep.ts");
+
+      // When / Then
+      await expectGrepError(
+        () => grepModule.executeGrep(workspace, "needle"),
+        "tool_unavailable",
+        "bundled ripgrep is not available",
+      );
+    } finally {
+      vi.doUnmock("@vscode/ripgrep");
+      vi.resetModules();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.sequential(`Given the bundled ripgrep provider has an invalid contract,
+    When the grep tool resolves the ripgrep binary,
+    Then it reports the invalid provider contract as a grep tool error`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
+
+    vi.resetModules();
+    vi.doMock("@vscode/ripgrep", () => ({
+      rgPath: "",
+    }));
+
+    try {
+      const grepModule = await import("../../src/tools/grep.ts");
+
+      // When / Then
+      await expectGrepError(
+        () => grepModule.executeGrep(workspace, "needle"),
+        "tool_unavailable",
+        "valid rgPath",
+      );
+    } finally {
+      vi.doUnmock("@vscode/ripgrep");
+      vi.resetModules();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test.sequential(`Given the bundled ripgrep binary cannot be spawned,
     When the grep tool starts a search,
     Then it reports that the grep tool is unavailable`, async () => {
