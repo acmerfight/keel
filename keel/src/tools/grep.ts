@@ -10,6 +10,7 @@ import type { ToolResult } from "./types.ts";
 export const MAX_GREP_MATCHES = 50;
 
 const DEFAULT_RIPGREP_TIMEOUT_MS = 20_000;
+const RIPGREP_KILL_GRACE_MS = 1_000;
 const MAX_SNIPPET_CHARS = 240;
 const RIPGREP_INACCESSIBLE_WARNING =
   "[grep warning: some paths were inaccessible and skipped]";
@@ -198,13 +199,37 @@ async function runRipgrep(
 
     const stdout = createInterface({ input: child.stdout });
     let timeout: NodeJS.Timeout | undefined;
-    const cleanup = () => {
-      if (timeout !== undefined) clearTimeout(timeout);
+    let forceKillTimeout: NodeJS.Timeout | undefined;
+    let stdoutClosed = false;
+    const closeStdout = () => {
+      if (stdoutClosed) return;
+      stdoutClosed = true;
       stdout.close();
     };
+    const clearSearchTimeout = () => {
+      if (timeout === undefined) return;
+      clearTimeout(timeout);
+      timeout = undefined;
+    };
+    const cleanup = () => {
+      clearSearchTimeout();
+      if (forceKillTimeout !== undefined) {
+        clearTimeout(forceKillTimeout);
+        forceKillTimeout = undefined;
+      }
+      closeStdout();
+    };
+    const stopRipgrep = () => {
+      child.kill("SIGTERM");
+      if (forceKillTimeout !== undefined) return;
+      forceKillTimeout = setTimeout(() => {
+        child.kill("SIGKILL");
+      }, RIPGREP_KILL_GRACE_MS);
+    };
     timeout = setTimeout(() => {
-      child.kill();
-      cleanup();
+      stopRipgrep();
+      clearSearchTimeout();
+      closeStdout();
       settle(() => {
         rejectResult(
           new KeelError(
@@ -226,7 +251,7 @@ async function runRipgrep(
 
       if (matches.length >= MAX_GREP_MATCHES) {
         killedForLimit = true;
-        child.kill();
+        stopRipgrep();
       }
     });
 

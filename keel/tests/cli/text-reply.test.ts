@@ -153,6 +153,7 @@ describe("CLI Text Reply", () => {
     expect(result.stdout).toContain("Keel doctor");
     expect(result.stdout).toContain("ripgrep: ok (vscode-ripgrep)");
     expect(result.stdout).toContain("ripgrep path:");
+    expect(result.stdout).toMatch(/^ripgrep version: ripgrep\s+\S+/m);
     expect(result.stderr).toBe("");
   });
 

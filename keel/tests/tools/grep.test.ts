@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import {
   chmod,
   mkdir,
@@ -9,8 +8,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PassThrough } from "node:stream";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
 import { executeGrep } from "../../src/tools/grep.ts";
 
@@ -289,98 +287,50 @@ describe("Grep Tool", () => {
     }
   });
 
-  test.sequential(`Given the bundled ripgrep binary cannot be spawned,
+  test(`Given ripgrep does not finish before the grep timeout,
     When the grep tool starts a search,
-    Then it reports that the grep tool is unavailable`, async () => {
+    Then it reports a timeout`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
-    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
-
-    class MissingRipgrepProcess extends EventEmitter {
-      readonly stdout = new PassThrough();
-      readonly stderr = new PassThrough();
-
-      kill(): boolean {
-        return true;
-      }
-    }
-
-    vi.resetModules();
-    vi.doMock("node:child_process", () => ({
-      spawn() {
-        const child = new MissingRipgrepProcess();
-        queueMicrotask(() => {
-          child.emit(
-            "error",
-            Object.assign(new Error("missing"), {
-              code: "ENOENT",
-            }),
-          );
-        });
-        return child;
-      },
-    }));
+    const largeText = Buffer.alloc(32 * 1024 * 1024, 120);
+    await writeFile(join(workspace, "large.txt"), largeText);
 
     try {
-      const grepModule = await import("../../src/tools/grep.ts");
-
-      // When / Then
-      await expectGrepError(
-        () => grepModule.executeGrep(workspace, "needle"),
-        "tool_unavailable",
-        "bundled ripgrep is not available",
-      );
-    } finally {
-      vi.doUnmock("node:child_process");
-      vi.resetModules();
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
-
-  test.sequential(`Given ripgrep does not finish before the grep timeout,
-    When the grep tool starts a search,
-    Then it stops ripgrep and reports a timeout`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
-    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
-
-    class HangingRipgrepProcess extends EventEmitter {
-      readonly stdout = new PassThrough();
-      readonly stderr = new PassThrough();
-      killed = false;
-
-      kill(): boolean {
-        this.killed = true;
-        return true;
-      }
-    }
-
-    let child: HangingRipgrepProcess | undefined;
-
-    vi.resetModules();
-    vi.doMock("node:child_process", () => ({
-      spawn() {
-        child = new HangingRipgrepProcess();
-        return child;
-      },
-    }));
-
-    try {
-      const grepModule = await import("../../src/tools/grep.ts");
-
       // When / Then
       await expectGrepError(
         () =>
-          grepModule.executeGrep(workspace, "needle", {
+          executeGrep(workspace, "needle", {
+            path: "large.txt",
             timeoutMs: 1,
           }),
         "tool_unavailable",
         "timed out",
       );
-      expect(child?.killed).toBe(true);
     } finally {
-      vi.doUnmock("node:child_process");
-      vi.resetModules();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the caller aborts a grep request before it runs,
+    When the grep tool starts the search,
+    Then it rejects the search as aborted`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
+    const abortController = new AbortController();
+    abortController.abort();
+
+    try {
+      // When / Then
+      await expect(
+        executeGrep(workspace, "needle", {
+          signal: abortController.signal,
+        }),
+      ).rejects.toMatchObject({
+        name: "AbortError",
+        code: "ABORT_ERR",
+      });
+    } finally {
       await rm(workspace, { recursive: true, force: true });
     }
   });

@@ -38,16 +38,9 @@ function validateRipgrepBinary(path: string): void {
   }
 }
 
-export async function resolveRipgrep(): Promise<RipgrepCommand> {
-  if (cachedRipgrepCommand !== undefined) return cachedRipgrepCommand;
-
-  let ripgrepModule: unknown;
-  try {
-    ripgrepModule = await import("@vscode/ripgrep");
-  } catch (error) {
-    throw ripgrepUnavailable(error);
-  }
-
+export function createRipgrepCommandFromVscodeModule(
+  ripgrepModule: unknown,
+): RipgrepCommand {
   const result = vscodeRipgrepModuleSchema.safeParse(ripgrepModule);
   if (!result.success) {
     throw new KeelError(
@@ -58,9 +51,22 @@ export async function resolveRipgrep(): Promise<RipgrepCommand> {
 
   validateRipgrepBinary(result.data.rgPath);
 
-  cachedRipgrepCommand = {
+  return {
     path: result.data.rgPath,
     provider: "vscode-ripgrep",
   };
+}
+
+export async function resolveRipgrep(): Promise<RipgrepCommand> {
+  if (cachedRipgrepCommand !== undefined) return cachedRipgrepCommand;
+
+  let ripgrepModule: unknown;
+  try {
+    ripgrepModule = await import("@vscode/ripgrep");
+  } catch (error) {
+    throw ripgrepUnavailable(error);
+  }
+
+  cachedRipgrepCommand = createRipgrepCommandFromVscodeModule(ripgrepModule);
   return cachedRipgrepCommand;
 }
