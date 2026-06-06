@@ -1,6 +1,15 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { z } from "zod";
 import { KeelError } from "../core/error.ts";
@@ -42,6 +51,8 @@ interface RipgrepProcessOptions<T> {
   readonly onClose: (code: number | null, stderr: string) => T;
 }
 
+type GitIgnoreStatus = "ignored" | "not_ignored" | "not_git" | "unknown";
+
 const ripgrepMatchSchema = z.object({
   type: z.literal("match"),
   data: z.object({
@@ -53,6 +64,10 @@ const ripgrepMatchSchema = z.object({
     }),
     line_number: z.number().int().positive(),
   }),
+});
+
+const processExitErrorSchema = z.object({
+  status: z.number().optional(),
 });
 
 function isInsideWorkspace(workspace: string, target: string): boolean {
@@ -282,20 +297,73 @@ async function runRipgrepProcess<T>(
   });
 }
 
+function gitCheckIgnoreStatus(
+  args: readonly string[],
+  cwd: string,
+): GitIgnoreStatus {
+  try {
+    execFileSync("git", args, { cwd, stdio: "ignore" });
+    return "ignored";
+  } catch (error) {
+    const parsedError = processExitErrorSchema.safeParse(error);
+    const status = parsedError.success ? parsedError.data.status : undefined;
+    if (status === 1) return "not_ignored";
+    if (status === 128) return "not_git";
+    return "unknown";
+  }
+}
+
+function createSyntheticGitDir(): string {
+  const gitDir = mkdtempSync(join(tmpdir(), "keel-gitignore-"));
+  mkdirSync(join(gitDir, "objects"), { recursive: true });
+  mkdirSync(join(gitDir, "refs", "heads"), { recursive: true });
+  writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main\n", "utf8");
+  return gitDir;
+}
+
+function isIgnoredWithSyntheticGit(
+  workspacePath: string,
+  targetDisplayPath: string,
+): boolean {
+  const gitDir = createSyntheticGitDir();
+  try {
+    return (
+      gitCheckIgnoreStatus(
+        [
+          "--git-dir",
+          gitDir,
+          "--work-tree",
+          workspacePath,
+          "-C",
+          workspacePath,
+          "check-ignore",
+          "--no-index",
+          "-q",
+          "--",
+          targetDisplayPath,
+        ],
+        workspacePath,
+      ) === "ignored"
+    );
+  } finally {
+    rmSync(gitDir, { recursive: true, force: true });
+  }
+}
+
 function isIgnoredByGit(workspacePath: string, targetPath: string): boolean {
   const targetDisplayPath = displayPath(workspacePath, targetPath);
   if (targetDisplayPath === ".") return false;
 
-  try {
-    execFileSync(
-      "git",
-      ["check-ignore", "--no-index", "-q", "--", targetDisplayPath],
-      { cwd: workspacePath, stdio: "ignore" },
-    );
-    return true;
-  } catch {
-    return false;
+  const directStatus = gitCheckIgnoreStatus(
+    ["check-ignore", "--no-index", "-q", "--", targetDisplayPath],
+    workspacePath,
+  );
+  if (directStatus === "ignored") return true;
+  if (directStatus === "not_ignored") return false;
+  if (directStatus === "not_git") {
+    return isIgnoredWithSyntheticGit(workspacePath, targetDisplayPath);
   }
+  return false;
 }
 
 async function runRipgrep(

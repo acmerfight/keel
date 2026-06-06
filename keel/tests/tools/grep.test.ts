@@ -530,6 +530,47 @@ describe("Grep Tool", () => {
     }
   });
 
+  test(`Given a non-git workspace gitignore rule excludes an explicitly requested file,
+    When the grep tool validates the requested path,
+    Then it rejects that ignored file before searching`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(join(workspace, "secret.txt"), "needle\n", "utf8");
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle", { path: "secret.txt" }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a non-git workspace nested gitignore rule excludes an explicitly requested file,
+    When the grep tool validates the requested path,
+    Then it rejects that ignored nested file before searching`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await mkdir(join(workspace, "src"), { recursive: true });
+    await writeFile(join(workspace, "src", ".gitignore"), "secret.txt\n");
+    await writeFile(join(workspace, "src", "secret.txt"), "needle\n");
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle", { path: "src/secret.txt" }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a gitignored explicit file is already in the git index,
     When the grep tool validates the requested path,
     Then it still rejects the file by ignore pattern`, async () => {
@@ -558,6 +599,30 @@ describe("Grep Tool", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
     await initGitRepo(workspace);
+    await mkdir(join(workspace, "secret-dir", "nested"), { recursive: true });
+    await writeFile(join(workspace, ".gitignore"), "secret-dir/\n", "utf8");
+    await writeFile(
+      join(workspace, "secret-dir", "nested", "secret.txt"),
+      "needle\n",
+    );
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle", { path: "secret-dir" }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a non-git workspace gitignore rule excludes an explicitly requested directory,
+    When the grep tool validates the requested path,
+    Then it rejects that ignored directory before searching`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
     await mkdir(join(workspace, "secret-dir", "nested"), { recursive: true });
     await writeFile(join(workspace, ".gitignore"), "secret-dir/\n", "utf8");
     await writeFile(
