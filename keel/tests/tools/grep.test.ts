@@ -337,6 +337,54 @@ describe("Grep Tool", () => {
     }
   });
 
+  test.sequential(`Given ripgrep does not finish before the grep timeout,
+    When the grep tool starts a search,
+    Then it stops ripgrep and reports a timeout`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
+
+    class HangingRipgrepProcess extends EventEmitter {
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+      killed = false;
+
+      kill(): boolean {
+        this.killed = true;
+        return true;
+      }
+    }
+
+    let child: HangingRipgrepProcess | undefined;
+
+    vi.resetModules();
+    vi.doMock("node:child_process", () => ({
+      spawn() {
+        child = new HangingRipgrepProcess();
+        return child;
+      },
+    }));
+
+    try {
+      const grepModule = await import("../../src/tools/grep.ts");
+
+      // When / Then
+      await expectGrepError(
+        () =>
+          grepModule.executeGrep(workspace, "needle", {
+            timeoutMs: 1,
+          }),
+        "tool_unavailable",
+        "timed out",
+      );
+      expect(child?.killed).toBe(true);
+    } finally {
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given ignored generated directories contain matching text,
     When the grep tool searches the workspace,
     Then it skips those generated matches`, async () => {

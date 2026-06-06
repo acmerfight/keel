@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 
 async function expectRipgrepError(
@@ -71,6 +72,26 @@ describe("Ripgrep Provider", () => {
 
       // When / Then
       await expectRipgrepError(() => resolveRipgrep(), "valid rgPath");
+    } finally {
+      vi.doUnmock("@vscode/ripgrep");
+      vi.resetModules();
+    }
+  });
+
+  test.sequential(`Given the bundled ripgrep provider points to a missing binary,
+    When the ripgrep resolver validates the binary,
+    Then it reports that bundled ripgrep is not executable`, async () => {
+    // Given
+    vi.resetModules();
+    vi.doMock("@vscode/ripgrep", () => ({
+      rgPath: join(process.cwd(), "missing-rg"),
+    }));
+
+    try {
+      const { resolveRipgrep } = await import("../../src/tools/ripgrep.ts");
+
+      // When / Then
+      await expectRipgrepError(() => resolveRipgrep(), "not executable");
     } finally {
       vi.doUnmock("@vscode/ripgrep");
       vi.resetModules();

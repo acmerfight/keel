@@ -9,6 +9,7 @@ import type { ToolResult } from "./types.ts";
 
 export const MAX_GREP_MATCHES = 50;
 
+const DEFAULT_RIPGREP_TIMEOUT_MS = 20_000;
 const MAX_SNIPPET_CHARS = 240;
 const RIPGREP_INACCESSIBLE_WARNING =
   "[grep warning: some paths were inaccessible and skipped]";
@@ -22,6 +23,7 @@ const IGNORED_DIRECTORIES = new Set([
 export interface GrepOptions {
   readonly path?: string;
   readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
 }
 
 interface RipgrepMatch {
@@ -159,6 +161,7 @@ async function runRipgrep(
   targetPath: string,
   pattern: string,
   signal?: AbortSignal,
+  timeoutMs: number = DEFAULT_RIPGREP_TIMEOUT_MS,
 ): Promise<ToolResult> {
   const ripgrep = await resolveRipgrep();
 
@@ -194,9 +197,23 @@ async function runRipgrep(
     }
 
     const stdout = createInterface({ input: child.stdout });
+    let timeout: NodeJS.Timeout | undefined;
     const cleanup = () => {
+      if (timeout !== undefined) clearTimeout(timeout);
       stdout.close();
     };
+    timeout = setTimeout(() => {
+      child.kill();
+      cleanup();
+      settle(() => {
+        rejectResult(
+          new KeelError(
+            "tool_unavailable",
+            `grep failed: ripgrep timed out after ${timeoutMs}ms`,
+          ),
+        );
+      });
+    }, timeoutMs);
 
     stdout.on("line", (line) => {
       if (matches.length >= MAX_GREP_MATCHES) return;
@@ -328,5 +345,6 @@ export async function executeGrep(
     displayPath(workspacePath, targetPath),
     pattern,
     options.signal,
+    options.timeoutMs,
   );
 }

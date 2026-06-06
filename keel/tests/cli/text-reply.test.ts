@@ -136,6 +136,26 @@ describe("CLI Text Reply", () => {
     expect(result.stderr).toBe("Usage: keel <message>\n");
   });
 
+  test(`Given user asks for diagnostics,
+    When user runs the CLI doctor command,
+    Then the CLI reports bundled ripgrep status without requiring a provider`, async () => {
+    // Given
+    const args: readonly string[] = ["--doctor"];
+
+    // When
+    const result = await runCli(args, {
+      KEEL_PROVIDER: "deepseek",
+      DEEPSEEK_API_KEY: "",
+    });
+
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Keel doctor");
+    expect(result.stdout).toContain("ripgrep: ok (vscode-ripgrep)");
+    expect(result.stdout).toContain("ripgrep path:");
+    expect(result.stderr).toBe("");
+  });
+
   test(`Given a user message and a configured provider,
     When user runs the CLI with the message,
     Then the agent's text reply is printed to stdout`, async () => {

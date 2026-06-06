@@ -1,3 +1,4 @@
+import { accessSync, constants, statSync } from "node:fs";
 import { z } from "zod";
 import { KeelError } from "../core/error.ts";
 
@@ -22,6 +23,21 @@ function ripgrepUnavailable(error: unknown): KeelError {
   );
 }
 
+function validateRipgrepBinary(path: string): void {
+  try {
+    if (!statSync(path).isFile()) {
+      throw new Error("not a file");
+    }
+    accessSync(path, constants.X_OK);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new KeelError(
+      "tool_unavailable",
+      `grep failed: bundled ripgrep is not executable: ${message}`,
+    );
+  }
+}
+
 export async function resolveRipgrep(): Promise<RipgrepCommand> {
   if (cachedRipgrepCommand !== undefined) return cachedRipgrepCommand;
 
@@ -39,6 +55,8 @@ export async function resolveRipgrep(): Promise<RipgrepCommand> {
       "grep failed: bundled ripgrep did not expose a valid rgPath",
     );
   }
+
+  validateRipgrepBinary(result.data.rgPath);
 
   cachedRipgrepCommand = {
     path: result.data.rgPath,
