@@ -119,3 +119,4 @@ See [TESTING.md](TESTING.md). Summary:
 3. Final verification uses `pnpm test:coverage`, not `pnpm test`.
 4. No vi.mock, no mocking internals, no testing private functions.
 5. Tool behavior that changes agent control flow needs at least one `tests/agent/` case.
+6. Agent tests cover control-flow classes, not every tool sequence. Keep tool/provider/state risks at their owning boundary.
