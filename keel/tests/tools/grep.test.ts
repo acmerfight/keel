@@ -662,6 +662,53 @@ describe("Grep Tool", () => {
     }
   });
 
+  test(`Given only git info excludes an explicitly requested file,
+    When the grep tool validates the requested path,
+    Then it does not treat local git excludes as project gitignore rules`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await initGitRepo(workspace);
+    await writeFile(
+      join(workspace, ".git", "info", "exclude"),
+      "secret.txt\n",
+      "utf8",
+    );
+    await writeFile(join(workspace, "secret.txt"), "needle\n", "utf8");
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "needle", {
+        path: "secret.txt",
+      });
+
+      // Then
+      expect(result.content).toBe("secret.txt:1:needle");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a gitignore rule re-includes an explicitly requested file,
+    When the grep tool validates the requested path,
+    Then it searches the unignored file`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, ".gitignore"), "*.txt\n!keep.txt\n");
+    await writeFile(join(workspace, "keep.txt"), "needle\n");
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "needle", {
+        path: "keep.txt",
+      });
+
+      // Then
+      expect(result.content).toBe("keep.txt:1:needle");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a gitignored explicit file is already in the git index,
     When the grep tool validates the requested path,
     Then it still rejects the file by ignore pattern`, async () => {

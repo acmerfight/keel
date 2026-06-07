@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
@@ -43,8 +43,6 @@ interface RipgrepProcessOptions<T> {
   readonly onClose: (code: number | null, stderr: string) => T;
 }
 
-type GitIgnoreStatus = "ignored" | "not_ignored" | "not_git" | "unknown";
-
 const ripgrepMatchSchema = z.object({
   type: z.literal("match"),
   data: z.object({
@@ -56,10 +54,6 @@ const ripgrepMatchSchema = z.object({
     }),
     line_number: z.number().int().positive(),
   }),
-});
-
-const processExitErrorSchema = z.object({
-  status: z.number().optional(),
 });
 
 function isInsideWorkspace(workspace: string, target: string): boolean {
@@ -367,39 +361,6 @@ function isIgnoredByIgnoreFiles(
   return ignored;
 }
 
-function gitCheckIgnoreStatus(
-  args: readonly string[],
-  cwd: string,
-): GitIgnoreStatus {
-  try {
-    execFileSync("git", args, { cwd, stdio: "ignore" });
-    return "ignored";
-  } catch (error) {
-    const parsedError = processExitErrorSchema.safeParse(error);
-    const status = parsedError.success ? parsedError.data.status : undefined;
-    if (status === 1) return "not_ignored";
-    if (status === 128) return "not_git";
-    return "unknown";
-  }
-}
-
-function isIgnoredByGitignore(
-  workspacePath: string,
-  targetPath: string,
-  targetIsDirectory: boolean,
-): boolean {
-  const targetDisplayPath = displayPath(workspacePath, targetPath);
-  if (targetDisplayPath === ".") return false;
-
-  const directStatus = gitCheckIgnoreStatus(
-    ["check-ignore", "--no-index", "-q", "--", targetDisplayPath],
-    workspacePath,
-  );
-  if (directStatus === "ignored") return true;
-  if (directStatus === "not_ignored") return false;
-  return isIgnoredByIgnoreFiles(workspacePath, targetPath, targetIsDirectory);
-}
-
 async function runRipgrep(
   workspacePath: string,
   targetPath: string,
@@ -506,7 +467,7 @@ export async function executeGrep(
   }
   if (
     options.path !== undefined &&
-    isIgnoredByGitignore(workspacePath, targetPath, targetStat.isDirectory())
+    isIgnoredByIgnoreFiles(workspacePath, targetPath, targetStat.isDirectory())
   ) {
     throw new KeelError(
       "tool_path_ignored",
