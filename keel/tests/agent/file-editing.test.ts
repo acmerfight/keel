@@ -883,6 +883,97 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given the LLM first greps an ignored file,
+    When the grep tool reports the ignored path and the LLM retries a visible file,
+    Then the agent sends the corrected grep matches back to the LLM`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(
+      join(workspace, "secret.txt"),
+      "SECRET_VALUE=do-not-print\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "app.ts"),
+      "const target = true;\n",
+      "utf8",
+    );
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    let thirdTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "recover-ignored-grep",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "ignored_grep",
+            tool: "grep",
+            pattern: "SECRET_VALUE",
+            path: "secret.txt",
+          };
+          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "correct_grep",
+            tool: "grep",
+            pattern: "target",
+            path: "app.ts",
+          };
+          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          return;
+        }
+
+        thirdTurnMessages = options.messages;
+        yield { type: "text", text: "Search recovered." };
+        yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "find target",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const ignoredPathMessage = secondTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "ignored_grep",
+      );
+      expect(ignoredPathMessage?.content).toContain("ignored path");
+      expect(ignoredPathMessage?.content).toContain("secret.txt");
+      expect(ignoredPathMessage?.content).not.toContain("do-not-print");
+      const correctedGrepMessage = thirdTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "correct_grep",
+      );
+      expect(correctedGrepMessage?.content).toContain(
+        "app.ts:1:const target = true;",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Search recovered.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a text-named workspace file contains binary bytes,
     When the LLM asks the agent to read it,
     Then the read is rejected by content sniffing before reaching the LLM`, async () => {
