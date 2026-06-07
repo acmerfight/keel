@@ -34,13 +34,17 @@ interface RipgrepMatch {
   readonly line: string;
 }
 
-interface RipgrepProcessOptions<T> {
+interface RipgrepProcessOptions {
   readonly workspacePath: string;
   readonly args: readonly string[];
   readonly signal?: AbortSignal;
   readonly timeoutMs: number;
-  readonly onLine: (line: string, stopRipgrep: () => void) => void;
-  readonly onClose: (code: number | null, stderr: string) => T;
+  readonly onStdoutLine: (line: string, stopRipgrep: () => void) => void;
+}
+
+interface RipgrepProcessResult {
+  readonly code: number | null;
+  readonly stderr: string;
 }
 
 const ripgrepMatchSchema = z.object({
@@ -191,12 +195,12 @@ function ripgrepArgs(
   ];
 }
 
-async function runRipgrepProcess<T>(
-  options: RipgrepProcessOptions<T>,
-): Promise<T> {
+async function runRipgrepProcess(
+  options: RipgrepProcessOptions,
+): Promise<RipgrepProcessResult> {
   const ripgrep = await resolveRipgrep();
 
-  return new Promise<T>((resolveResult, rejectResult) => {
+  return new Promise<RipgrepProcessResult>((resolveResult, rejectResult) => {
     let settled = false;
     let stderr = "";
 
@@ -269,7 +273,7 @@ async function runRipgrepProcess<T>(
     }, options.timeoutMs);
 
     stdout.on("line", (line) => {
-      options.onLine(line, stopRipgrep);
+      options.onStdoutLine(line, stopRipgrep);
     });
 
     child.stderr.on("data", (chunk: Buffer) => {
@@ -295,11 +299,7 @@ async function runRipgrepProcess<T>(
     child.on("close", (code) => {
       cleanup();
       settle(() => {
-        try {
-          resolveResult(options.onClose(code, stderr));
-        } catch (error) {
-          rejectResult(error);
-        }
+        resolveResult({ code, stderr });
       });
     });
   });
@@ -426,12 +426,12 @@ async function runRipgrep(
   const matches: string[] = [];
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
 
-  return await runRipgrepProcess({
+  const result = await runRipgrepProcess({
     workspacePath,
     args: ripgrepArgs(workspacePath, pattern, targetPath),
     ...(signal !== undefined ? { signal } : {}),
     timeoutMs,
-    onLine: (line, stopRipgrep) => {
+    onStdoutLine: (line, stopRipgrep) => {
       if (matches.length >= MAX_GREP_MATCHES) return;
 
       const match = parseRipgrepMatch(line);
@@ -450,36 +450,35 @@ async function runRipgrep(
         stopRipgrep();
       }
     },
-    onClose: (code, stderr) => {
-      if (killedForLimit) {
-        return formatGrepResult(pattern, matches, {
-          truncated: true,
-          partial: false,
-        });
-      }
-
-      if (code === 0 || code === 1) {
-        return formatGrepResult(pattern, matches, {
-          truncated: false,
-          partial: false,
-        });
-      }
-
-      if (code === 2 && stderr.trim() === "") {
-        return formatGrepResult(pattern, matches, {
-          truncated: false,
-          partial: true,
-        });
-      }
-
-      throw new KeelError(
-        "tool_unavailable",
-        `grep failed: ripgrep exited with code ${code ?? "unknown"}${
-          stderr.trim() ? `: ${stderr.trim()}` : ""
-        }`,
-      );
-    },
   });
+
+  if (killedForLimit) {
+    return formatGrepResult(pattern, matches, {
+      truncated: true,
+      partial: false,
+    });
+  }
+
+  if (result.code === 0 || result.code === 1) {
+    return formatGrepResult(pattern, matches, {
+      truncated: false,
+      partial: false,
+    });
+  }
+
+  if (result.code === 2 && result.stderr.trim() === "") {
+    return formatGrepResult(pattern, matches, {
+      truncated: false,
+      partial: true,
+    });
+  }
+
+  throw new KeelError(
+    "tool_unavailable",
+    `grep failed: ripgrep exited with code ${result.code ?? "unknown"}${
+      result.stderr.trim() ? `: ${result.stderr.trim()}` : ""
+    }`,
+  );
 }
 
 export async function executeGrep(
