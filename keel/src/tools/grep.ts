@@ -111,6 +111,19 @@ function ignoredGlobArgs(): string[] {
   ]);
 }
 
+type IgnoreMatcher = ReturnType<typeof ignore>;
+
+function projectRootIgnoreFileArgs(
+  workspacePath: string,
+  targetPath: string,
+): string[] {
+  if (targetPath === ".") return [];
+
+  const ignorePath = join(workspacePath, ".gitignore");
+  if (!existsSync(ignorePath)) return [];
+  return ["--ignore-file", ignorePath];
+}
+
 function normalizeRipgrepPath(
   workspacePath: string,
   ripgrepPath: string,
@@ -152,7 +165,11 @@ function formatGrepResult(
   return { content: output.join("\n") };
 }
 
-function ripgrepArgs(pattern: string, targetPath: string): string[] {
+function ripgrepArgs(
+  workspacePath: string,
+  pattern: string,
+  targetPath: string,
+): string[] {
   return [
     "--no-config",
     "--json",
@@ -160,6 +177,11 @@ function ripgrepArgs(pattern: string, targetPath: string): string[] {
     "--hidden",
     "--no-messages",
     "--no-require-git",
+    "--no-ignore-dot",
+    "--no-ignore-exclude",
+    "--no-ignore-global",
+    "--no-ignore-parent",
+    ...projectRootIgnoreFileArgs(workspacePath, targetPath),
     "--sort",
     "path",
     ...ignoredGlobArgs(),
@@ -296,7 +318,8 @@ function ignoreFileDirectories(
   workspacePath: string,
   targetPath: string,
 ): readonly string[] {
-  const deepestDirectory = dirname(targetPath);
+  const deepestDirectory =
+    targetPath === workspacePath ? workspacePath : dirname(targetPath);
   const relativeDirectory = relative(workspacePath, deepestDirectory);
   const directories = [workspacePath];
   if (relativeDirectory === "") return directories;
@@ -327,38 +350,69 @@ function ancestorDirectoryIgnorePaths(
   return paths;
 }
 
+function createProjectIgnorePolicy(workspacePath: string): {
+  isIgnored: (targetPath: string, targetIsDirectory: boolean) => boolean;
+} {
+  const matchers = new Map<string, IgnoreMatcher | null>();
+
+  const matcherForDirectory = (directory: string): IgnoreMatcher | null => {
+    const cached = matchers.get(directory);
+    if (cached !== undefined) return cached;
+
+    const ignorePath = join(directory, ".gitignore");
+    if (!existsSync(ignorePath)) {
+      matchers.set(directory, null);
+      return null;
+    }
+
+    const matcher = ignore().add(readFileSync(ignorePath, "utf8"));
+    matchers.set(directory, matcher);
+    return matcher;
+  };
+
+  return {
+    isIgnored: (targetPath: string, targetIsDirectory: boolean): boolean => {
+      let ignored = false;
+
+      for (const directory of ignoreFileDirectories(
+        workspacePath,
+        targetPath,
+      )) {
+        const matcher = matcherForDirectory(directory);
+        if (matcher === null) continue;
+
+        for (const ancestorPath of ancestorDirectoryIgnorePaths(
+          directory,
+          targetPath,
+          targetIsDirectory,
+        )) {
+          if (matcher.test(ancestorPath).ignored) return true;
+        }
+
+        const targetIgnorePath = pathForIgnoreFile(directory, targetPath);
+        if (targetIgnorePath === null) continue;
+
+        const targetResult = matcher.test(
+          targetIsDirectory ? `${targetIgnorePath}/` : targetIgnorePath,
+        );
+        if (targetResult.ignored) ignored = true;
+        if (targetResult.unignored) ignored = false;
+      }
+
+      return ignored;
+    },
+  };
+}
+
 function isIgnoredByIgnoreFiles(
   workspacePath: string,
   targetPath: string,
   targetIsDirectory: boolean,
 ): boolean {
-  let ignored = false;
-
-  for (const directory of ignoreFileDirectories(workspacePath, targetPath)) {
-    const ignorePath = join(directory, ".gitignore");
-    if (!existsSync(ignorePath)) continue;
-
-    const matcher = ignore().add(readFileSync(ignorePath, "utf8"));
-
-    for (const ancestorPath of ancestorDirectoryIgnorePaths(
-      directory,
-      targetPath,
-      targetIsDirectory,
-    )) {
-      if (matcher.test(ancestorPath).ignored) return true;
-    }
-
-    const targetIgnorePath = pathForIgnoreFile(directory, targetPath);
-    if (targetIgnorePath === null) continue;
-
-    const targetResult = matcher.test(
-      targetIsDirectory ? `${targetIgnorePath}/` : targetIgnorePath,
-    );
-    if (targetResult.ignored) ignored = true;
-    if (targetResult.unignored) ignored = false;
-  }
-
-  return ignored;
+  return createProjectIgnorePolicy(workspacePath).isIgnored(
+    targetPath,
+    targetIsDirectory,
+  );
 }
 
 async function runRipgrep(
@@ -370,10 +424,11 @@ async function runRipgrep(
 ): Promise<ToolResult> {
   let killedForLimit = false;
   const matches: string[] = [];
+  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
 
   return await runRipgrepProcess({
     workspacePath,
-    args: ripgrepArgs(pattern, targetPath),
+    args: ripgrepArgs(workspacePath, pattern, targetPath),
     ...(signal !== undefined ? { signal } : {}),
     timeoutMs,
     onLine: (line, stopRipgrep) => {
@@ -381,6 +436,11 @@ async function runRipgrep(
 
       const match = parseRipgrepMatch(line);
       if (match === null) return;
+
+      const absoluteMatchPath = isAbsolute(match.path)
+        ? resolve(match.path)
+        : resolve(workspacePath, match.path);
+      if (projectIgnorePolicy.isIgnored(absoluteMatchPath, false)) return;
 
       const matchPath = normalizeRipgrepPath(workspacePath, match.path);
       matches.push(`${matchPath}:${match.lineNumber}:${snippet(match.line)}`);
