@@ -26,6 +26,8 @@
     "pre-commit": "pnpm tsc --noEmit && pnpm biome check --write --staged --files-ignore-unknown=true --no-errors-on-unmatched && git update-index --again"
   },
   "dependencies": {
+    "@vscode/ripgrep": "1.18.0",
+    "ignore": "7.0.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
