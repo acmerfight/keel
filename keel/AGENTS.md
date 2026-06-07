@@ -44,6 +44,16 @@ Layer rules (enforced by `tests/invariants/boundaries.test.ts`):
 - In review, any `JSON.parse`, process output parsing, HTTP response parsing, or LLM argument parsing must show the schema boundary in the same module.
 - Pre-commit hook auto-formats staged files.
 
+### Abstraction Discipline
+
+Prefer concrete, linear code. Add abstraction only when it makes current code simpler, not future code imaginable.
+
+- Start with the direct implementation for the slice in front of you.
+- Abstract after the second real use case, proven duplication, or a clear external boundary.
+- Keep control flow local and sequential when possible.
+- Use indirection only when it names a real domain concept or protects a real boundary.
+- Remove extension points that are not exercised by current behavior.
+
 ## Type Precision
 
 Default to required. Only use `?` or `| undefined` when you can name the semantic reason.

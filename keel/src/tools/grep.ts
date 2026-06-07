@@ -117,12 +117,14 @@ function ignoredGlobArgs(): string[] {
 
 type IgnoreMatcher = ReturnType<typeof ignore>;
 
-function projectRootIgnoreFileArgs(
+function workspaceRootIgnoreArgsForTarget(
   workspacePath: string,
   targetPath: string,
 ): string[] {
   if (targetPath === ".") return [];
 
+  // Subdirectory targets do not automatically inherit the workspace root
+  // .gitignore when --no-ignore-parent is set, so pass it explicitly.
   const ignorePath = join(workspacePath, ".gitignore");
   if (!existsSync(ignorePath)) return [];
   return ["--ignore-file", ignorePath];
@@ -185,7 +187,7 @@ function ripgrepArgs(
     "--no-ignore-exclude",
     "--no-ignore-global",
     "--no-ignore-parent",
-    ...projectRootIgnoreFileArgs(workspacePath, targetPath),
+    ...workspaceRootIgnoreArgsForTarget(workspacePath, targetPath),
     "--sort",
     "path",
     ...ignoredGlobArgs(),
@@ -404,17 +406,6 @@ function createProjectIgnorePolicy(workspacePath: string): {
   };
 }
 
-function isIgnoredByIgnoreFiles(
-  workspacePath: string,
-  targetPath: string,
-  targetIsDirectory: boolean,
-): boolean {
-  return createProjectIgnorePolicy(workspacePath).isIgnored(
-    targetPath,
-    targetIsDirectory,
-  );
-}
-
 async function runRipgrep(
   workspacePath: string,
   targetPath: string,
@@ -524,14 +515,14 @@ export async function executeGrep(
       `grep failed: not a file or directory: ${requestedPath}`,
     );
   }
-  if (
-    options.path !== undefined &&
-    isIgnoredByIgnoreFiles(workspacePath, targetPath, targetStat.isDirectory())
-  ) {
-    throw new KeelError(
-      "tool_path_ignored",
-      `grep failed: ignored path: ${requestedPath}`,
-    );
+  if (options.path !== undefined) {
+    const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+    if (projectIgnorePolicy.isIgnored(targetPath, targetStat.isDirectory())) {
+      throw new KeelError(
+        "tool_path_ignored",
+        `grep failed: ignored path: ${requestedPath}`,
+      );
+    }
   }
 
   return await runRipgrep(
