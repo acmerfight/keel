@@ -1,6 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
 import type { Server } from "node:net";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { z } from "zod";
 import { createDeepseekProvider } from "../../src/llm/providers/deepseek.ts";
 import type { LLMEvent } from "../../src/llm/types.ts";
 
@@ -182,6 +183,40 @@ function expectJsonString(
     throw new Error("Expected JSON string");
   }
   expect(JSON.parse(value)).toEqual(expected);
+}
+
+const deepseekRequestBodySchema = z
+  .object({
+    stream_options: z
+      .object({
+        include_usage: z.boolean(),
+      })
+      .optional(),
+    tools: z
+      .array(
+        z
+          .object({
+            function: z
+              .object({
+                name: z.string(),
+                parameters: z
+                  .object({
+                    properties: z.record(z.string(), z.unknown()),
+                  })
+                  .passthrough(),
+              })
+              .passthrough(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
+function parseDeepseekRequestBody(
+  body: string,
+): z.infer<typeof deepseekRequestBodySchema> {
+  return deepseekRequestBodySchema.parse(JSON.parse(body));
 }
 
 async function unusedLocalPort(): Promise<number> {
@@ -2118,7 +2153,7 @@ describe("DeepSeek Provider", () => {
       );
 
       // Then
-      const parsed = JSON.parse(capturedBody);
+      const parsed = parseDeepseekRequestBody(capturedBody);
       expect(parsed.stream_options).toEqual({ include_usage: true });
     } finally {
       await closeServer(captureServer);
@@ -2163,22 +2198,18 @@ describe("DeepSeek Provider", () => {
       );
 
       // Then
-      const parsed = JSON.parse(capturedBody);
-      const tools = objectProperty(parsed, "tools");
-      if (!Array.isArray(tools)) {
+      const parsed = parseDeepseekRequestBody(capturedBody);
+      if (parsed.tools === undefined) {
         throw new Error("Expected tools array");
       }
-      const grepToolDefinition = tools.find(
-        (tool) =>
-          objectProperty(objectProperty(tool, "function"), "name") === "grep",
+      const grepToolDefinition = parsed.tools.find(
+        (tool) => tool.function.name === "grep",
       );
       if (grepToolDefinition === undefined) {
         throw new Error("Expected grep tool definition");
       }
-      const grepFunction = objectProperty(grepToolDefinition, "function");
-      const parameters = objectProperty(grepFunction, "parameters");
-      const properties = objectProperty(parameters, "properties");
-      const patternSchema = objectProperty(properties, "pattern");
+      const patternSchema =
+        grepToolDefinition.function.parameters.properties.pattern;
       expect(patternSchema).toMatchObject({ type: "string" });
       expect(patternSchema).not.toHaveProperty("minLength");
     } finally {

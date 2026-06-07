@@ -56,7 +56,7 @@ async function expectGrepError(
   }
 }
 
-describe("Grep Tool", () => {
+describe("Grep Tool Search Semantics", () => {
   test(`Given workspace files contain a searched symbol,
     When the grep tool searches the workspace,
     Then it returns matching file paths, line numbers, and snippets`, async () => {
@@ -150,32 +150,33 @@ describe("Grep Tool", () => {
     }
   });
 
-  test(`Given another workspace directory cannot be traversed,
+  test.skipIf(process.platform === "win32")(
+    `Given another workspace directory cannot be traversed,
     When the grep tool searches an explicit file path,
-    Then ignore validation does not scan unrelated workspace paths`, async () => {
-    if (process.platform === "win32") return;
+    Then ignore validation does not scan unrelated workspace paths`,
+    async () => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+      const lockedPath = join(workspace, "locked");
+      await initGitRepo(workspace);
+      await mkdir(lockedPath);
+      await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
+      await chmod(lockedPath, 0);
 
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
-    const lockedPath = join(workspace, "locked");
-    await initGitRepo(workspace);
-    await mkdir(lockedPath);
-    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
-    await chmod(lockedPath, 0);
+      try {
+        // When
+        const result = await executeGrep(workspace, "needle", {
+          path: "app.ts",
+        });
 
-    try {
-      // When
-      const result = await executeGrep(workspace, "needle", {
-        path: "app.ts",
-      });
-
-      // Then
-      expect(result.content).toBe("app.ts:1:needle");
-    } finally {
-      await chmod(lockedPath, 0o700);
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+        // Then
+        expect(result.content).toBe("app.ts:1:needle");
+      } finally {
+        await chmod(lockedPath, 0o700);
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given an empty directory is requested explicitly,
     When the grep tool searches that directory,
@@ -186,7 +187,9 @@ describe("Grep Tool", () => {
 
     try {
       // When
-      const result = await executeGrep(workspace, "needle", { path: "empty" });
+      const result = await executeGrep(workspace, "needle", {
+        path: "empty",
+      });
 
       // Then
       expect(result.content).toBe('No matches found for "needle"');
@@ -250,7 +253,9 @@ describe("Grep Tool", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+});
 
+describe("Grep Tool Path Validation", () => {
   test(`Given the requested search path does not exist,
     When the grep tool validates the requested path,
     Then it reports that the file was not found`, async () => {
@@ -270,26 +275,27 @@ describe("Grep Tool", () => {
     }
   });
 
-  test(`Given the requested search path is not a regular file or directory,
+  test.skipIf(process.platform === "win32")(
+    `Given the requested search path is not a regular file or directory,
     When the grep tool validates the requested path,
-    Then it rejects that special path before searching`, async () => {
-    if (process.platform === "win32") return;
+    Then it rejects that special path before searching`,
+    async () => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+      await execFileAsync("mkfifo", [join(workspace, "pipe")]);
 
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
-    await execFileAsync("mkfifo", [join(workspace, "pipe")]);
-
-    try {
-      // When / Then
-      await expectGrepError(
-        () => executeGrep(workspace, "needle", { path: "pipe" }),
-        "tool_not_file",
-        "not a file or directory",
-      );
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+      try {
+        // When / Then
+        await expectGrepError(
+          () => executeGrep(workspace, "needle", { path: "pipe" }),
+          "tool_not_file",
+          "not a file or directory",
+        );
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given recursive search sees duplicate and escaped symlinks,
     When the grep tool searches the workspace,
@@ -371,7 +377,9 @@ describe("Grep Tool", () => {
       await rm(outside, { recursive: true, force: true });
     }
   });
+});
 
+describe("Grep Tool Process Lifecycle", () => {
   test.sequential(`Given ripgrep is unavailable on PATH but bundled with Keel,
     When the grep tool starts a search,
     Then it still searches with the bundled ripgrep binary`, async () => {
@@ -445,7 +453,9 @@ describe("Grep Tool", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+});
 
+describe("Grep Tool Ignore Policy", () => {
   test(`Given ignored generated directories contain matching text,
     When the grep tool searches the workspace,
     Then it skips those generated matches`, async () => {
@@ -827,7 +837,9 @@ describe("Grep Tool", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+});
 
+describe("Grep Tool Output Boundaries", () => {
   test(`Given binary files contain matching bytes,
     When the grep tool searches the workspace,
     Then it skips binary file contents`, async () => {
@@ -905,29 +917,30 @@ describe("Grep Tool", () => {
     }
   });
 
-  test(`Given a matching file cannot be read,
+  test.skipIf(process.platform === "win32")(
+    `Given a matching file cannot be read,
     When the grep tool searches that file,
-    Then it reports an inaccessible-path warning instead of leaking a raw fs error`, async () => {
-    if (process.platform === "win32") return;
+    Then it reports an inaccessible-path warning instead of leaking a raw fs error`,
+    async () => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+      const unreadablePath = join(workspace, "locked.txt");
+      await writeFile(unreadablePath, "needle\n", "utf8");
+      await chmod(unreadablePath, 0);
 
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
-    const unreadablePath = join(workspace, "locked.txt");
-    await writeFile(unreadablePath, "needle\n", "utf8");
-    await chmod(unreadablePath, 0);
+      try {
+        // When
+        const result = await executeGrep(workspace, "needle", {
+          path: "locked.txt",
+        });
 
-    try {
-      // When
-      const result = await executeGrep(workspace, "needle", {
-        path: "locked.txt",
-      });
-
-      // Then
-      expect(result.content).toContain('No matches found for "needle"');
-      expect(result.content).toContain("inaccessible");
-    } finally {
-      await chmod(unreadablePath, 0o600);
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+        // Then
+        expect(result.content).toContain('No matches found for "needle"');
+        expect(result.content).toContain("inaccessible");
+      } finally {
+        await chmod(unreadablePath, 0o600);
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 });
