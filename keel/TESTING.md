@@ -65,7 +65,9 @@ Prefer the highest product boundary that still gives a clear, stable failure:
 4. **Tool safety and resource boundaries stay in `tests/tools/`.** Use tool tests for path safety, binary rejection, exact edit semantics, output caps, and memory-sensitive file behavior.
 5. **Architecture rules stay in `tests/invariants/`.** Use invariants when the behavior is a module boundary, not a user workflow.
 
-This means new user-facing behavior should usually add agent coverage, and CLI-visible behavior should add a CLI smoke test. It does not mean provider or tool boundary tests should be promoted into agent or CLI tests when the risk lives at that narrower boundary.
+Any tool behavior that changes agent control flow also needs at least one `tests/agent/` case. Tool tests prove the tool boundary; agent tests prove the loop reacts correctly. This applies to recoverable tool failures, retry paths, stop conditions, tool-call limits, and any tool result that should change the next LLM turn.
+
+This means new user-facing behavior should usually add agent coverage, CLI-visible behavior should add a CLI smoke test, and control-flow-sensitive tool behavior should add agent coverage. It does not mean provider or tool boundary tests should be promoted into agent or CLI tests when the risk lives at that narrower boundary.
 
 ## Do NOT
 

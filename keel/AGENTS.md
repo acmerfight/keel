@@ -118,3 +118,4 @@ See [TESTING.md](TESTING.md). Summary:
 2. BDD with GWTE format. Business language. Tests = product spec.
 3. Final verification uses `pnpm test:coverage`, not `pnpm test`.
 4. No vi.mock, no mocking internals, no testing private functions.
+5. Tool behavior that changes agent control flow needs at least one `tests/agent/` case.
