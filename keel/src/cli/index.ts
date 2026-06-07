@@ -8,6 +8,7 @@ import {
   fakeEditResponse,
   fakeResponse,
 } from "../testing/fake-provider.ts";
+import { runDoctor } from "./doctor.ts";
 
 interface CliEditRequest {
   readonly path: string;
@@ -82,6 +83,14 @@ function resolveProvider(userMessage: string): LLMProvider {
 
 async function main(): Promise<void> {
   const userMessage = process.argv[2];
+  if (userMessage === "--doctor") {
+    const result = await runDoctor();
+    process.stdout.write(result.stdout);
+    process.stderr.write(result.stderr);
+    process.exitCode = result.exitCode;
+    return;
+  }
+
   if (!userMessage) {
     process.stderr.write("Usage: keel <message>\n");
     process.exit(1);

@@ -40,7 +40,19 @@ Layer rules (enforced by `tests/invariants/boundaries.test.ts`):
 - All interface properties `readonly`.
 - Use function property syntax for interface methods (`readonly fn: (x: T) => R`), not method syntax (`fn(x: T): R`). Method syntax bypasses `strictFunctionTypes`.
 - No `as` type assertions. Use type guards, `satisfies`, or schema validation (Zod) to prove types. `as const` is allowed.
+- External data boundaries must parse `unknown` through an explicit schema before business logic. Use Zod for JSON from HTTP/SSE, LLM/tool arguments, child process stdout, config files, disk JSON, and environment-derived structured data. Do not use `Record<string, unknown>` property-access helpers for known external protocols; model the protocol shape with a schema and access typed data only after `safeParse` or `parse`.
+- In review, any `JSON.parse`, process output parsing, HTTP response parsing, or LLM argument parsing must show the schema boundary in the same module.
 - Pre-commit hook auto-formats staged files.
+
+### Abstraction Discipline
+
+Prefer concrete, linear code. Add abstraction only when it makes current code simpler, not future code imaginable.
+
+- Start with the direct implementation for the slice in front of you.
+- Abstract after the second real use case, proven duplication, or a clear external boundary.
+- Keep control flow local and sequential when possible.
+- Use indirection only when it names a real domain concept or protects a real boundary.
+- Remove extension points that are not exercised by current behavior.
 
 ## Type Precision
 
@@ -116,3 +128,5 @@ See [TESTING.md](TESTING.md). Summary:
 2. BDD with GWTE format. Business language. Tests = product spec.
 3. Final verification uses `pnpm test:coverage`, not `pnpm test`.
 4. No vi.mock, no mocking internals, no testing private functions.
+5. Tool behavior that changes agent control flow needs at least one `tests/agent/` case.
+6. Agent tests cover control-flow classes, not every tool sequence. Keep tool/provider/state risks at their owning boundary.

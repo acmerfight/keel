@@ -1,6 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
 import type { Server } from "node:net";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { z } from "zod";
 import { createDeepseekProvider } from "../../src/llm/providers/deepseek.ts";
 import type { LLMEvent } from "../../src/llm/types.ts";
 
@@ -182,6 +183,40 @@ function expectJsonString(
     throw new Error("Expected JSON string");
   }
   expect(JSON.parse(value)).toEqual(expected);
+}
+
+const deepseekRequestBodySchema = z
+  .object({
+    stream_options: z
+      .object({
+        include_usage: z.boolean(),
+      })
+      .optional(),
+    tools: z
+      .array(
+        z
+          .object({
+            function: z
+              .object({
+                name: z.string(),
+                parameters: z
+                  .object({
+                    properties: z.record(z.string(), z.unknown()),
+                  })
+                  .passthrough(),
+              })
+              .passthrough(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
+function parseDeepseekRequestBody(
+  body: string,
+): z.infer<typeof deepseekRequestBodySchema> {
+  return deepseekRequestBodySchema.parse(JSON.parse(body));
 }
 
 async function unusedLocalPort(): Promise<number> {
@@ -503,6 +538,34 @@ describe("DeepSeek Provider", () => {
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
                 usage: { prompt_tokens: 26, completion_tokens: 7 },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "empty-grep-pattern") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        grepToolCallDelta(
+                          JSON.stringify({
+                            pattern: "",
+                          }),
+                        ),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: { prompt_tokens: 25, completion_tokens: 6 },
               }),
               "data: [DONE]\n\n",
             ]);
@@ -1642,6 +1705,37 @@ describe("DeepSeek Provider", () => {
     ]);
   });
 
+  test(`Given a grep tool call sends an empty pattern,
+    When provider validates the completed tool call,
+    Then it yields the tool call so grep can return a recoverable error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "empty-grep-pattern" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_grep_0",
+        tool: "grep",
+        pattern: "",
+      },
+      { type: "stop", usage: { inputTokens: 25, outputTokens: 6 } },
+    ]);
+  });
+
   test(`Given a stream chunk contains multiple tool calls,
     When provider reads the chunk,
     Then it throws a protocol error instead of ignoring extra tool calls`, async () => {
@@ -2059,8 +2153,65 @@ describe("DeepSeek Provider", () => {
       );
 
       // Then
-      const parsed = JSON.parse(capturedBody);
+      const parsed = parseDeepseekRequestBody(capturedBody);
       expect(parsed.stream_options).toEqual({ include_usage: true });
+    } finally {
+      await closeServer(captureServer);
+    }
+  });
+
+  test(`Given provider advertises the grep tool,
+    When it sends the request body,
+    Then empty-pattern validation remains owned by the grep tool`, async () => {
+    // Given
+    let capturedBody = "";
+    const captureServer = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBody = body;
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(sseChunk("ok"));
+        res.write(sseFinish(1, 1));
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => {
+      captureServer.listen(0, "127.0.0.1", resolve);
+    });
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl: `http://127.0.0.1:${getPort(captureServer)}`,
+      model: "deepseek-v4-flash",
+    });
+
+    try {
+      // When
+      await collect(
+        provider.stream({
+          systemPrompt: "sys",
+          messages: [{ role: "user", content: "hi" }],
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const parsed = parseDeepseekRequestBody(capturedBody);
+      if (parsed.tools === undefined) {
+        throw new Error("Expected tools array");
+      }
+      const grepToolDefinition = parsed.tools.find(
+        (tool) => tool.function.name === "grep",
+      );
+      if (grepToolDefinition === undefined) {
+        throw new Error("Expected grep tool definition");
+      }
+      const patternSchema =
+        grepToolDefinition.function.parameters.properties.pattern;
+      expect(patternSchema).toMatchObject({ type: "string" });
+      expect(patternSchema).not.toHaveProperty("minLength");
     } finally {
       await closeServer(captureServer);
     }
