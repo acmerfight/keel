@@ -95,7 +95,12 @@ describe("Text Reply", () => {
     Then agent reports token usage`, async () => {
     // Given
     const provider = createFakeProvider([
-      fakeResponse("Done.", false, { inputTokens: 100, outputTokens: 10 }),
+      fakeResponse("Done.", false, {
+        inputTokens: 100,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 100,
+        outputTokens: 10,
+      }),
     ]);
 
     // When
@@ -111,7 +116,12 @@ describe("Text Reply", () => {
 
     // Then
     const endEvent = events.find(isEnd);
-    expect(endEvent?.usage).toEqual({ inputTokens: 100, outputTokens: 10 });
+    expect(endEvent?.usage).toEqual({
+      inputTokens: 100,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 100,
+      outputTokens: 10,
+    });
   });
 
   test(`Given a request has an abort signal,
@@ -124,7 +134,15 @@ describe("Text Reply", () => {
       id: "observed",
       async *stream(options) {
         providerSignal = options.signal;
-        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
       },
     };
 
@@ -181,7 +199,15 @@ describe("Text Reply", () => {
           tool: "read",
           path: "package.json",
         };
-        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
       },
     };
 

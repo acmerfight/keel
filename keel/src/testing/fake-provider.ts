@@ -36,10 +36,17 @@ export type FakeResponse =
   | FakeReadResponse
   | FakeGrepResponse;
 
+const ZERO_USAGE: Usage = {
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  uncachedInputTokens: 0,
+  outputTokens: 0,
+};
+
 export function fakeResponse(
   text: string,
   tokenize = false,
-  usage: Usage = { inputTokens: 0, outputTokens: 0 },
+  usage: Usage = ZERO_USAGE,
 ): FakeResponse {
   return { type: "text", text, tokenize, usage };
 }
@@ -48,14 +55,14 @@ export function fakeEditResponse(
   path: string,
   oldString: string,
   newString: string,
-  usage: Usage = { inputTokens: 0, outputTokens: 0 },
+  usage: Usage = ZERO_USAGE,
 ): FakeResponse {
   return { type: "edit", path, oldString, newString, usage };
 }
 
 export function fakeReadResponse(
   path: string,
-  usage: Usage = { inputTokens: 0, outputTokens: 0 },
+  usage: Usage = ZERO_USAGE,
   options: { readonly offset?: number; readonly limit?: number } = {},
 ): FakeResponse {
   return {
@@ -69,7 +76,7 @@ export function fakeReadResponse(
 
 export function fakeGrepResponse(
   pattern: string,
-  usage: Usage = { inputTokens: 0, outputTokens: 0 },
+  usage: Usage = ZERO_USAGE,
   options: { readonly path?: string } = {},
 ): FakeResponse {
   return {
