@@ -5,6 +5,7 @@ import {
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -330,6 +331,41 @@ describe("Git Checkpoints", () => {
       expect(await readFile(filePath, "utf8")).toBe("user change\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the checkpoint target becomes a symlink to a file outside the git root,
+    When restoring the checkpoint,
+    Then restore fails without modifying the outside file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const outsideDirectory = await mkdtemp(join(tmpdir(), "keel-git-outside-"));
+    const filePath = join(workspace, "note.txt");
+    const outsideFile = join(outsideDirectory, "outside.txt");
+    await writeFile(filePath, "new\n", "utf8");
+    await writeFile(outsideFile, "new\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "old\n",
+      afterContent: "new\n",
+    });
+    await rm(filePath);
+    await symlink(outsideFile, filePath);
+
+    try {
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "blocked",
+        filePath: "note.txt",
+      });
+      expect(await readFile(outsideFile, "utf8")).toBe("new\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outsideDirectory, { recursive: true, force: true });
     }
   });
 

@@ -85,7 +85,8 @@ function isInside(parent: string, child: string): boolean {
 }
 
 function normalizeRelativePath(root: string, filePath: string): string | null {
-  const absolutePath = realpathSync(filePath);
+  const absolutePath = realpathIfPossible(filePath);
+  if (absolutePath === null) return null;
   if (!isInside(root, absolutePath)) return null;
   const relativePath = relative(root, absolutePath);
   if (relativePath === "") return null;
@@ -149,18 +150,43 @@ function readFileIfPossible(filePath: string): string | null {
   }
 }
 
+function realpathIfPossible(filePath: string): string | null {
+  try {
+    return realpathSync(filePath);
+  } catch {
+    return null;
+  }
+}
+
+function skippedCheckpointRecord(
+  options: RecordLastEditCheckpointOptions,
+  error: string,
+): RecordLastEditCheckpointResult {
+  debugLog(
+    `undo checkpoint write skipped: workspace=${options.workspace} filePath=${options.filePath} error=${error}`,
+  );
+  return { written: false };
+}
+
 export function recordLastEditCheckpoint(
   options: RecordLastEditCheckpointOptions,
 ): RecordLastEditCheckpointResult {
   try {
     const gitWorkspace = findGitWorkspace(options.workspace);
-    if (gitWorkspace === null) return { written: false };
+    if (gitWorkspace === null) {
+      return skippedCheckpointRecord(options, "git workspace unavailable");
+    }
 
     const relativePath = normalizeRelativePath(
       gitWorkspace.root,
       options.filePath,
     );
-    if (relativePath === null) return { written: false };
+    if (relativePath === null) {
+      return skippedCheckpointRecord(
+        options,
+        "file path unavailable or outside git root",
+      );
+    }
 
     writeCheckpoint(gitWorkspace.checkpointPath, {
       version: 1,
@@ -173,10 +199,7 @@ export function recordLastEditCheckpoint(
 
     return { written: true };
   } catch (error) {
-    debugLog(
-      `undo checkpoint write skipped: workspace=${options.workspace} filePath=${options.filePath} error=${String(error)}`,
-    );
-    return { written: false };
+    return skippedCheckpointRecord(options, String(error));
   }
 }
 
@@ -201,7 +224,16 @@ export function restoreLastEditCheckpoint(
     );
   }
 
-  const currentContent = readFileIfPossible(filePath);
+  const restorePath = realpathIfPossible(filePath);
+  if (restorePath === null || !isInside(gitWorkspace.root, restorePath)) {
+    return {
+      status: "blocked",
+      filePath: checkpoint.relativePath,
+      message: `Cannot undo ${checkpoint.relativePath}: Refusing to overwrite user changes.`,
+    };
+  }
+
+  const currentContent = readFileIfPossible(restorePath);
   if (currentContent !== checkpoint.afterContent) {
     return {
       status: "blocked",
@@ -210,7 +242,7 @@ export function restoreLastEditCheckpoint(
     };
   }
 
-  writeFileSync(filePath, checkpoint.beforeContent, "utf8");
+  writeFileSync(restorePath, checkpoint.beforeContent, "utf8");
   rmSync(gitWorkspace.checkpointPath, { force: true });
   return {
     status: "restored",
