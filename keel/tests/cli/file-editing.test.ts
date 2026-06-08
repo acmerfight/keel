@@ -385,6 +385,64 @@ describe("CLI File Editing", () => {
     }
   });
 
+  test(`Given user allows shell commands,
+    When the CLI sends the provider request,
+    Then bash is advertised for that session only`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-bash-"));
+    let capturedBody = "";
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBody = body;
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.write(sseTextReply("ok"));
+        res.write(sseStopFinish({ prompt_tokens: 10, completion_tokens: 2 }));
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["--allow-bash", "inspect workspace"], {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("ok\n");
+      const request = requestWithToolsSchema.parse(JSON.parse(capturedBody));
+      expect(request.tools?.map((tool) => tool.function?.name)).toEqual([
+        "read",
+        "grep",
+        "edit",
+        "bash",
+      ]);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the configured provider inspects a workspace file before editing,
     When user asks the CLI to fix that file,
     Then the agent sends the file content back and edits the file`, async () => {

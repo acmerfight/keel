@@ -2,6 +2,7 @@ import { type CostModel, calculateCostUsd } from "../core/cost.ts";
 import type { KeelErrorCode } from "../core/error.ts";
 import { KeelError } from "../core/error.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
+import { executeBash } from "../tools/bash.ts";
 import { executeEdit } from "../tools/edit.ts";
 import { executeGrep } from "../tools/grep.ts";
 import { executeRead } from "../tools/read.ts";
@@ -9,6 +10,7 @@ import { executeRead } from "../tools/read.ts";
 const MAX_AGENT_TURNS = 8;
 const RECOVERABLE_TOOL_ERRORS = new Set<KeelErrorCode>([
   "tool_file_not_found",
+  "tool_empty_command",
   "tool_empty_pattern",
   "tool_not_file",
   "tool_old_string_not_found",
@@ -42,6 +44,7 @@ export interface RunAgentOptions {
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
   readonly costTracking?: CostTrackingOptions;
+  readonly allowBash?: boolean;
 }
 
 interface AgentTurn {
@@ -111,6 +114,7 @@ export async function* runAgent(
     systemPrompt,
     signal,
     costTracking,
+    allowBash = false,
   } = options;
   const messages: Message[] = [{ role: "user", content: userMessage }];
   let totalUsage: Usage = {
@@ -125,6 +129,7 @@ export async function* runAgent(
       systemPrompt,
       messages,
       signal,
+      ...(allowBash ? { allowBash: true } : {}),
     });
 
     let usage: Usage | null = null;
@@ -219,6 +224,44 @@ export async function* runAgent(
           result = executeRead(workspace, toolCall.path, {
             offset: toolCall.offset,
             limit: toolCall.limit,
+          });
+        } catch (error) {
+          if (!isRecoverableToolError(error)) {
+            throw error;
+          }
+          messages.push({
+            role: "tool",
+            toolCallId: toolCall.id,
+            content: toolFailureMessage(error),
+          });
+          break;
+        }
+
+        messages.push({
+          role: "tool",
+          toolCallId: toolCall.id,
+          content: result.content,
+        });
+        break;
+      }
+      case "bash": {
+        if (!allowBash) {
+          messages.push({
+            role: "tool",
+            toolCallId: toolCall.id,
+            content:
+              "Tool failed: bash failed: shell commands are disabled. Re-run with --allow-bash to enable them.",
+          });
+          break;
+        }
+
+        let result: { readonly content: string };
+        try {
+          result = await executeBash(workspace, toolCall.command, {
+            signal,
+            ...(toolCall.timeoutMs !== undefined
+              ? { timeoutMs: toolCall.timeoutMs }
+              : {}),
           });
         } catch (error) {
           if (!isRecoverableToolError(error)) {

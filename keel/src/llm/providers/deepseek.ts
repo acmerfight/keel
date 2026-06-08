@@ -99,6 +99,33 @@ const grepTool = {
   },
 };
 
+const bashTool = {
+  type: "function",
+  function: {
+    name: "bash",
+    description:
+      "Run a shell command in the workspace. Use dedicated read, grep, and edit tools for file inspection and edits when possible.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: {
+          type: "string",
+          description: "Shell command to execute.",
+        },
+        timeoutMs: {
+          type: "integer",
+          minimum: 1,
+          maximum: 60_000,
+          description:
+            "Optional command timeout in milliseconds. Defaults to 10000ms.",
+        },
+      },
+      required: ["command"],
+      additionalProperties: false,
+    },
+  },
+};
+
 const readToolArgumentsSchema = z
   .object({
     path: z.string(),
@@ -119,6 +146,13 @@ const editToolArgumentsSchema = z
     path: z.string(),
     oldString: z.string(),
     newString: z.string(),
+  })
+  .strict();
+
+const bashToolArgumentsSchema = z
+  .object({
+    command: z.string(),
+    timeoutMs: z.number().int().positive().max(60_000).optional(),
   })
   .strict();
 
@@ -226,11 +260,15 @@ function createChatCompletionsBody(
   model: string,
   options: StreamOptions,
 ): string {
+  const tools = options.allowBash
+    ? [readTool, grepTool, editTool, bashTool]
+    : [readTool, grepTool, editTool];
+
   return JSON.stringify({
     model,
     stream: true,
     stream_options: { include_usage: true },
-    tools: [readTool, grepTool, editTool],
+    tools,
     tool_choice: "auto",
     messages: [
       { role: "system", content: options.systemPrompt },
@@ -257,6 +295,13 @@ function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
         path: toolCall.path,
         oldString: toolCall.oldString,
         newString: toolCall.newString,
+      };
+    case "bash":
+      return {
+        command: toolCall.command,
+        ...(toolCall.timeoutMs !== undefined
+          ? { timeoutMs: toolCall.timeoutMs }
+          : {}),
       };
   }
 }
@@ -360,7 +405,8 @@ function parseToolCall(toolCall: DeepseekPendingToolCall): ToolCallEvent {
   if (
     toolCallName !== "read" &&
     toolCallName !== "grep" &&
-    toolCallName !== "edit"
+    toolCallName !== "edit" &&
+    toolCallName !== "bash"
   ) {
     throw new KeelError(
       "provider_protocol_error",
@@ -421,6 +467,26 @@ function parseToolCall(toolCall: DeepseekPendingToolCall): ToolCallEvent {
       tool: "grep",
       pattern: result.data.pattern,
       ...(result.data.path !== undefined ? { path: result.data.path } : {}),
+    };
+  }
+
+  if (toolCallName === "bash") {
+    const result = bashToolArgumentsSchema.safeParse(parsedArguments);
+    if (!result.success) {
+      throw new KeelError(
+        "provider_protocol_error",
+        "DeepSeek bash tool call has invalid arguments",
+      );
+    }
+
+    return {
+      type: "tool_call",
+      id: toolCallId,
+      tool: "bash",
+      command: result.data.command,
+      ...(result.data.timeoutMs !== undefined
+        ? { timeoutMs: result.data.timeoutMs }
+        : {}),
     };
   }
 

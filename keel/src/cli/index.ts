@@ -23,6 +23,7 @@ interface CliEditRequest {
 
 interface CliArgs {
   readonly doctor: boolean;
+  readonly allowBash: boolean;
   readonly userMessage?: string;
   readonly maxCostUsd?: number;
 }
@@ -44,29 +45,43 @@ function parseMaxCost(raw: string | undefined): number {
 
 function parseCliArgs(args: readonly string[]): CliArgs {
   if (args[0] === "--doctor") {
-    return { doctor: true };
+    return { doctor: true, allowBash: false };
   }
 
-  if (args[0] === "--max-cost") {
-    return {
-      doctor: false,
-      maxCostUsd: parseMaxCost(args[1]),
-      ...(args[2] !== undefined ? { userMessage: args[2] } : {}),
-    };
-  }
-
+  let allowBash = false;
+  let maxCostUsd: number | undefined;
+  let userMessage: string | undefined;
   const maxCostPrefix = "--max-cost=";
-  if (args[0]?.startsWith(maxCostPrefix) === true) {
-    return {
-      doctor: false,
-      maxCostUsd: parseMaxCost(args[0].slice(maxCostPrefix.length)),
-      ...(args[1] !== undefined ? { userMessage: args[1] } : {}),
-    };
+
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === undefined) continue;
+
+    if (arg === "--allow-bash") {
+      allowBash = true;
+      continue;
+    }
+
+    if (arg === "--max-cost") {
+      maxCostUsd = parseMaxCost(args[index + 1]);
+      index++;
+      continue;
+    }
+
+    if (arg.startsWith(maxCostPrefix)) {
+      maxCostUsd = parseMaxCost(arg.slice(maxCostPrefix.length));
+      continue;
+    }
+
+    userMessage = arg;
+    break;
   }
 
   return {
     doctor: false,
-    ...(args[0] !== undefined ? { userMessage: args[0] } : {}),
+    allowBash,
+    ...(userMessage !== undefined ? { userMessage } : {}),
+    ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
   };
 }
 
@@ -157,7 +172,9 @@ async function main(): Promise<void> {
 
   const userMessage = cliArgs.userMessage;
   if (!userMessage) {
-    process.stderr.write("Usage: keel [--max-cost <usd>] <message>\n");
+    process.stderr.write(
+      "Usage: keel [--allow-bash] [--max-cost <usd>] <message>\n",
+    );
     process.exit(1);
   }
 
@@ -175,6 +192,7 @@ async function main(): Promise<void> {
       userMessage,
       systemPrompt: "You are a helpful assistant.",
       signal: abortController.signal,
+      ...(cliArgs.allowBash ? { allowBash: true } : {}),
       ...(cliArgs.maxCostUsd !== undefined
         ? {
             costTracking: {

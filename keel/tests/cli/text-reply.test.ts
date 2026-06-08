@@ -159,7 +159,9 @@ describe("CLI Text Reply", () => {
 
     // Then
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toBe("Usage: keel [--max-cost <usd>] <message>\n");
+    expect(result.stderr).toBe(
+      "Usage: keel [--allow-bash] [--max-cost <usd>] <message>\n",
+    );
   });
 
   test(`Given user asks for diagnostics,
