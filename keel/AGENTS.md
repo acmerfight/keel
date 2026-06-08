@@ -50,6 +50,10 @@ When code normalizes, resolves, parses, or transforms untrusted input before enf
 
 Validate both the requested representation and the resolved representation before acting. A helper must not collapse policy-relevant context into one "clean" value before access checks.
 
+### Shell Safety Semantics
+
+Keel's project ignore policy is enforced by the built-in file tools: `read`, `edit`, and `grep`. `bash` is disabled by default. When enabled with `--allow-bash`, it is trusted shell mode: commands run with the current OS user's permissions and may read or modify gitignored files. Do not describe `--allow-bash` as preserving the file-tool ignore boundary unless a real permission or sandbox layer exists.
+
 ### Abstraction Discipline
 
 Prefer concrete, linear code. Add abstraction only when it makes current code simpler, not future code imaginable.

@@ -149,6 +149,26 @@ function grepToolCallDelta(argumentsJson: string): {
   };
 }
 
+function bashToolCallDelta(argumentsJson: string): {
+  readonly index: number;
+  readonly id: string;
+  readonly type: "function";
+  readonly function: {
+    readonly name: "bash";
+    readonly arguments: string;
+  };
+} {
+  return {
+    index: 0,
+    id: "call_bash_0",
+    type: "function",
+    function: {
+      name: "bash",
+      arguments: argumentsJson,
+    },
+  };
+}
+
 async function collect(stream: AsyncIterable<LLMEvent>): Promise<LLMEvent[]> {
   const events: LLMEvent[] = [];
   for await (const event of stream) {
@@ -649,6 +669,40 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "bash-tool-call") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        bashToolCallDelta(
+                          JSON.stringify({
+                            command: "pnpm test",
+                            timeoutMs: 1000,
+                          }),
+                        ),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: {
+                  prompt_tokens: 27,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 27,
+                  completion_tokens: 7,
+                },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "nonzero-tool-call-index") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -924,6 +978,35 @@ describe("DeepSeek Provider", () => {
                     delta: {
                       tool_calls: [
                         grepToolCallDelta(JSON.stringify({ path: "src" })),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "invalid-bash-arguments") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        bashToolCallDelta(JSON.stringify({ timeoutMs: 1000 })),
                       ],
                     },
                     finish_reason: null,
@@ -1251,8 +1334,26 @@ describe("DeepSeek Provider", () => {
             toolCallId: "edit_1",
             content: "edited\n",
           },
+          {
+            role: "assistant",
+            content: "I need to run the test command.",
+            toolCalls: [
+              {
+                id: "bash_1",
+                tool: "bash",
+                command: "pnpm test",
+                timeoutMs: 1000,
+              },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "bash_1",
+            content: "Exit code: 0\n\nstdout:\nok\n",
+          },
         ],
         signal: freshSignal(),
+        allowBash: true,
       }),
     );
 
@@ -1337,6 +1438,25 @@ describe("DeepSeek Provider", () => {
         tool_call_id: "edit_1",
         content: "edited\n",
       },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "bash_1",
+            type: "function",
+            function: {
+              name: "bash",
+              arguments: expect.any(String),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "bash_1",
+        content: "Exit code: 0\n\nstdout:\nok\n",
+      },
     ]);
     const toolCalls = objectProperty(
       arrayElement(capturedMessages, 3),
@@ -1393,6 +1513,20 @@ describe("DeepSeek Provider", () => {
         path: "src/index.ts",
         oldString: "old",
         newString: "new",
+      },
+    );
+    const bashToolCalls = objectProperty(
+      arrayElement(capturedMessages, 11),
+      "tool_calls",
+    );
+    expectJsonString(
+      objectProperty(
+        objectProperty(arrayElement(bashToolCalls, 0), "function"),
+        "arguments",
+      ),
+      {
+        command: "pnpm test",
+        timeoutMs: 1000,
       },
     );
   });
@@ -2016,6 +2150,47 @@ describe("DeepSeek Provider", () => {
     ]);
   });
 
+  test(`Given a bash tool call includes a command and timeout,
+    When provider finishes the tool call,
+    Then it yields the bash tool call with that execution request`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "bash-tool-call" }],
+        signal: freshSignal(),
+        allowBash: true,
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_bash_0",
+        tool: "bash",
+        command: "pnpm test",
+        timeoutMs: 1000,
+      },
+      {
+        type: "stop",
+        usage: {
+          inputTokens: 27,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 27,
+          outputTokens: 7,
+        },
+      },
+    ]);
+  });
+
   test(`Given a stream chunk contains multiple tool calls,
     When provider reads the chunk,
     Then it emits each tool call before the stop event`, async () => {
@@ -2314,6 +2489,33 @@ describe("DeepSeek Provider", () => {
     });
   });
 
+  test(`Given a bash tool call is missing its command,
+    When provider validates the completed tool call,
+    Then it throws a bash argument protocol error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "invalid-bash-arguments" }],
+          signal: freshSignal(),
+          allowBash: true,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek bash tool call has invalid arguments",
+    });
+  });
+
   test(`Given an edit tool call is missing replacement text,
     When provider validates the completed tool call,
     Then it throws an edit argument protocol error`, async () => {
@@ -2530,6 +2732,116 @@ describe("DeepSeek Provider", () => {
       // Then
       const parsed = parseDeepseekRequestBody(capturedBody);
       expect(parsed.stream_options).toEqual({ include_usage: true });
+    } finally {
+      await closeServer(captureServer);
+    }
+  });
+
+  test(`Given shell commands are not allowed,
+    When provider sends the request body,
+    Then it does not advertise the bash tool`, async () => {
+    // Given
+    let capturedBody = "";
+    const captureServer = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBody = body;
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(sseChunk("ok"));
+        res.write(sseFinish(1, 1));
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => {
+      captureServer.listen(0, "127.0.0.1", resolve);
+    });
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl: `http://127.0.0.1:${getPort(captureServer)}`,
+      model: "deepseek-v4-flash",
+    });
+
+    try {
+      // When
+      await collect(
+        provider.stream({
+          systemPrompt: "sys",
+          messages: [{ role: "user", content: "hi" }],
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const parsed = parseDeepseekRequestBody(capturedBody);
+      expect(parsed.tools?.map((tool) => tool.function.name)).toEqual([
+        "read",
+        "grep",
+        "edit",
+      ]);
+    } finally {
+      await closeServer(captureServer);
+    }
+  });
+
+  test(`Given shell commands are allowed,
+    When provider sends the request body,
+    Then it advertises the bash tool with command validation owned by the tool`, async () => {
+    // Given
+    let capturedBody = "";
+    const captureServer = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBody = body;
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(sseChunk("ok"));
+        res.write(sseFinish(1, 1));
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => {
+      captureServer.listen(0, "127.0.0.1", resolve);
+    });
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl: `http://127.0.0.1:${getPort(captureServer)}`,
+      model: "deepseek-v4-flash",
+    });
+
+    try {
+      // When
+      await collect(
+        provider.stream({
+          systemPrompt: "sys",
+          messages: [{ role: "user", content: "hi" }],
+          signal: freshSignal(),
+          allowBash: true,
+        }),
+      );
+
+      // Then
+      const parsed = parseDeepseekRequestBody(capturedBody);
+      expect(parsed.tools?.map((tool) => tool.function.name)).toEqual([
+        "read",
+        "grep",
+        "edit",
+        "bash",
+      ]);
+      const bashToolDefinition = parsed.tools?.find(
+        (tool) => tool.function.name === "bash",
+      );
+      if (bashToolDefinition === undefined) {
+        throw new Error("Expected bash tool definition");
+      }
+      const commandSchema =
+        bashToolDefinition.function.parameters.properties.command;
+      expect(commandSchema).toMatchObject({ type: "string" });
+      expect(commandSchema).not.toHaveProperty("minLength");
     } finally {
       await closeServer(captureServer);
     }
