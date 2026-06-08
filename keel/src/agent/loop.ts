@@ -12,6 +12,7 @@ const RECOVERABLE_TOOL_ERRORS = new Set<KeelErrorCode>([
   "tool_not_file",
   "tool_old_string_not_found",
   "tool_path_ignored",
+  "tool_path_outside_workspace",
 ]);
 
 export type AgentEvent =

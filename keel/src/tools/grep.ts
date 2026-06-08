@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
-import ignore from "ignore";
 import { z } from "zod";
 import { KeelError } from "../core/error.ts";
+import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import { resolveRipgrep } from "./ripgrep.ts";
 import type { ToolResult } from "./types.ts";
+import { resolveWorkspaceTarget } from "./workspace-path.ts";
 
 export const MAX_GREP_MATCHES = 50;
 
@@ -60,14 +61,6 @@ const ripgrepMatchSchema = z.object({
   }),
 });
 
-function isInsideWorkspace(workspace: string, target: string): boolean {
-  const targetFromWorkspace = relative(workspace, target);
-  return (
-    targetFromWorkspace === "" ||
-    (!targetFromWorkspace.startsWith("..") && !isAbsolute(targetFromWorkspace))
-  );
-}
-
 function displayPath(workspacePath: string, targetPath: string): string {
   const workspaceRelativePath = relative(workspacePath, targetPath);
   if (workspaceRelativePath === "") return ".";
@@ -114,8 +107,6 @@ function ignoredGlobArgs(): string[] {
     `!**/${directory}/**`,
   ]);
 }
-
-type IgnoreMatcher = ReturnType<typeof ignore>;
 
 function workspaceRootIgnoreArgsForTarget(
   workspacePath: string,
@@ -307,105 +298,6 @@ async function runRipgrepProcess(
   });
 }
 
-function pathForIgnoreFile(
-  basePath: string,
-  targetPath: string,
-): string | null {
-  const relativePath = relative(basePath, targetPath);
-  if (relativePath === "") return null;
-  return relativePath.split(sep).join("/");
-}
-
-function ignoreFileDirectories(
-  workspacePath: string,
-  targetPath: string,
-): readonly string[] {
-  const deepestDirectory =
-    targetPath === workspacePath ? workspacePath : dirname(targetPath);
-  const relativeDirectory = relative(workspacePath, deepestDirectory);
-  const directories = [workspacePath];
-  if (relativeDirectory === "") return directories;
-
-  let currentDirectory = workspacePath;
-  for (const segment of relativeDirectory.split(sep)) {
-    currentDirectory = join(currentDirectory, segment);
-    directories.push(currentDirectory);
-  }
-  return directories;
-}
-
-function ancestorDirectoryIgnorePaths(
-  basePath: string,
-  targetPath: string,
-  targetIsDirectory: boolean,
-): readonly string[] {
-  const deepestDirectory = targetIsDirectory ? targetPath : dirname(targetPath);
-  const relativeDirectory = relative(basePath, deepestDirectory);
-  if (relativeDirectory === "") return [];
-
-  const paths: string[] = [];
-  let currentPath = "";
-  for (const segment of relativeDirectory.split(sep)) {
-    currentPath = currentPath === "" ? segment : `${currentPath}/${segment}`;
-    paths.push(`${currentPath}/`);
-  }
-  return paths;
-}
-
-function createProjectIgnorePolicy(workspacePath: string): {
-  isIgnored: (targetPath: string, targetIsDirectory: boolean) => boolean;
-} {
-  const matchers = new Map<string, IgnoreMatcher | null>();
-
-  const matcherForDirectory = (directory: string): IgnoreMatcher | null => {
-    const cached = matchers.get(directory);
-    if (cached !== undefined) return cached;
-
-    const ignorePath = join(directory, ".gitignore");
-    if (!existsSync(ignorePath)) {
-      matchers.set(directory, null);
-      return null;
-    }
-
-    const matcher = ignore().add(readFileSync(ignorePath, "utf8"));
-    matchers.set(directory, matcher);
-    return matcher;
-  };
-
-  return {
-    isIgnored: (targetPath: string, targetIsDirectory: boolean): boolean => {
-      let ignored = false;
-
-      for (const directory of ignoreFileDirectories(
-        workspacePath,
-        targetPath,
-      )) {
-        const matcher = matcherForDirectory(directory);
-        if (matcher === null) continue;
-
-        for (const ancestorPath of ancestorDirectoryIgnorePaths(
-          directory,
-          targetPath,
-          targetIsDirectory,
-        )) {
-          if (matcher.test(ancestorPath).ignored) return true;
-        }
-
-        const targetIgnorePath = pathForIgnoreFile(directory, targetPath);
-        if (targetIgnorePath === null) continue;
-
-        const targetResult = matcher.test(
-          targetIsDirectory ? `${targetIgnorePath}/` : targetIgnorePath,
-        );
-        if (targetResult.ignored) ignored = true;
-        if (targetResult.unignored) ignored = false;
-      }
-
-      return ignored;
-    },
-  };
-}
-
 async function runRipgrep(
   workspacePath: string,
   targetPath: string,
@@ -481,34 +373,24 @@ export async function executeGrep(
     throw new KeelError("tool_empty_pattern", "grep failed: pattern is empty");
   }
 
-  const workspacePath = realpathSync(workspace);
-  const requestedPath = options.path ?? ".";
-  const absoluteRequestedPath = isAbsolute(requestedPath)
-    ? resolve(requestedPath)
-    : resolve(workspacePath, requestedPath);
-
-  if (!existsSync(absoluteRequestedPath)) {
-    throw new KeelError(
-      "tool_file_not_found",
-      `grep failed: file not found: ${requestedPath}`,
-    );
-  }
-
-  const targetPath = realpathSync(absoluteRequestedPath);
-  if (!isInsideWorkspace(workspacePath, targetPath)) {
-    throw new KeelError(
-      "tool_path_outside_workspace",
-      `grep failed: path is outside the workspace: ${requestedPath}`,
-    );
-  }
-  if (hasIgnoredPathSegment(workspacePath, targetPath)) {
+  const requestedDisplayPath = options.path ?? ".";
+  const { workspacePath, requestedPath, targetPath } = resolveWorkspaceTarget(
+    workspace,
+    requestedDisplayPath,
+    "grep",
+  );
+  if (
+    hasIgnoredPathSegment(workspacePath, requestedPath) ||
+    hasIgnoredPathSegment(workspacePath, targetPath)
+  ) {
     throw new KeelError(
       "tool_path_ignored",
-      `grep failed: ignored path: ${requestedPath}`,
+      `grep failed: ignored path: ${requestedDisplayPath}`,
     );
   }
 
   const targetStat = statSync(targetPath);
+  const targetIsDirectory = targetStat.isDirectory();
   if (!targetStat.isDirectory() && !targetStat.isFile()) {
     throw new KeelError(
       "tool_not_file",
@@ -517,10 +399,13 @@ export async function executeGrep(
   }
   if (options.path !== undefined) {
     const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
-    if (projectIgnorePolicy.isIgnored(targetPath, targetStat.isDirectory())) {
+    if (
+      projectIgnorePolicy.isIgnored(requestedPath, targetIsDirectory) ||
+      projectIgnorePolicy.isIgnored(targetPath, targetIsDirectory)
+    ) {
       throw new KeelError(
         "tool_path_ignored",
-        `grep failed: ignored path: ${requestedPath}`,
+        `grep failed: ignored path: ${requestedDisplayPath}`,
       );
     }
   }
