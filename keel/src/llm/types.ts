@@ -30,6 +30,12 @@ export type ToolCall =
       readonly path: string;
       readonly oldString: string;
       readonly newString: string;
+    }
+  | {
+      readonly id: string;
+      readonly tool: "bash";
+      readonly command: string;
+      readonly timeoutMs?: number;
     };
 
 export interface AssistantMessage {
@@ -55,6 +61,7 @@ export interface StreamOptions {
   readonly systemPrompt: string;
   readonly messages: readonly Message[];
   readonly signal: AbortSignal;
+  readonly allowBash?: boolean;
 }
 
 export interface LLMProvider {

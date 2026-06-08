@@ -30,11 +30,19 @@ interface FakeGrepResponse {
   readonly usage: Usage;
 }
 
+interface FakeBashResponse {
+  readonly type: "bash";
+  readonly command: string;
+  readonly timeoutMs?: number;
+  readonly usage: Usage;
+}
+
 export type FakeResponse =
   | FakeTextResponse
   | FakeEditResponse
   | FakeReadResponse
-  | FakeGrepResponse;
+  | FakeGrepResponse
+  | FakeBashResponse;
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -83,6 +91,21 @@ export function fakeGrepResponse(
     type: "grep",
     pattern,
     ...(options.path !== undefined ? { path: options.path } : {}),
+    usage,
+  };
+}
+
+export function fakeBashResponse(
+  command: string,
+  usage: Usage = ZERO_USAGE,
+  options: { readonly timeoutMs?: number } = {},
+): FakeResponse {
+  return {
+    type: "bash",
+    command,
+    ...(options.timeoutMs !== undefined
+      ? { timeoutMs: options.timeoutMs }
+      : {}),
     usage,
   };
 }
@@ -141,6 +164,17 @@ export function createFakeProvider(
             tool: "grep",
             pattern: response.pattern,
             ...(response.path !== undefined ? { path: response.path } : {}),
+          };
+          break;
+        case "bash":
+          yield {
+            type: "tool_call",
+            id: `fake_tool_call_${turn}`,
+            tool: "bash",
+            command: response.command,
+            ...(response.timeoutMs !== undefined
+              ? { timeoutMs: response.timeoutMs }
+              : {}),
           };
           break;
       }

@@ -1,0 +1,244 @@
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, test } from "vitest";
+import type { AgentEvent } from "../../src/agent/loop.ts";
+import { runAgent } from "../../src/agent/loop.ts";
+import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import {
+  createFakeProvider,
+  fakeBashResponse,
+  fakeResponse,
+} from "../../src/testing/fake-provider.ts";
+
+async function collect(
+  source: AsyncIterable<AgentEvent>,
+): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+  for await (const event of source) {
+    events.push(event);
+  }
+  return events;
+}
+
+function freshSignal(): AbortSignal {
+  return new AbortController().signal;
+}
+
+const ZERO_USAGE: Usage = {
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  uncachedInputTokens: 0,
+  outputTokens: 0,
+};
+
+describe("Bash Commands", () => {
+  test(`Given shell commands are not allowed,
+    When the assistant tries to run a command,
+    Then the command is rejected without changing the workspace`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "disabled-bash",
+      async *stream(options) {
+        if (secondTurnMessages.length === 0 && options.messages.length > 1) {
+          secondTurnMessages = options.messages;
+        }
+        if (options.messages.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "write_file",
+            tool: "bash",
+            command:
+              "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"",
+          };
+        } else {
+          yield { type: "text", text: "I cannot run shell commands." };
+        }
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "create a file",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(existsSync(join(workspace, "created.txt"))).toBe(false);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "I cannot run shell commands.",
+      });
+      expect(secondTurnMessages).toContainEqual({
+        role: "tool",
+        toolCallId: "write_file",
+        content:
+          "Tool failed: bash failed: shell commands are disabled. Re-run with --allow-bash to enable them.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given shell commands are allowed,
+    When the assistant runs a workspace command before replying,
+    Then the command result is sent back and the workspace is updated`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "enabled-bash",
+      async *stream(options) {
+        if (options.messages.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "write_file",
+            tool: "bash",
+            command:
+              "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"",
+          };
+        } else {
+          secondTurnMessages = options.messages;
+          yield { type: "text", text: "Created the file." };
+        }
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "create a file",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "created.txt"), "utf8")).toBe(
+        "changed",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Created the file.",
+      });
+      expect(secondTurnMessages).toContainEqual({
+        role: "tool",
+        toolCallId: "write_file",
+        content: expect.stringContaining("Exit code: 0"),
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an allowed shell command exits with failure,
+    When the assistant runs it before replying,
+    Then the failure output is sent back for recovery`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "failed-bash",
+      async *stream(options) {
+        if (options.messages.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "failed_command",
+            tool: "bash",
+            command: `node -e "console.error('missing dependency'); process.exit(3)"`,
+          };
+        } else {
+          secondTurnMessages = options.messages;
+          yield { type: "text", text: "The command failed." };
+        }
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "run the check",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "text",
+        text: "The command failed.",
+      });
+      expect(secondTurnMessages).toContainEqual({
+        role: "tool",
+        toolCallId: "failed_command",
+        content: expect.stringContaining("Exit code: 3"),
+      });
+      expect(secondTurnMessages).toContainEqual({
+        role: "tool",
+        toolCallId: "failed_command",
+        content: expect.stringContaining("missing dependency"),
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the first shell command is empty,
+    When the agent reports the failure and receives a valid command,
+    Then it runs the corrected command`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const provider = createFakeProvider([
+      fakeBashResponse(""),
+      fakeBashResponse(
+        "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"",
+      ),
+      fakeResponse("Created the file."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "create a file",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "created.txt"), "utf8")).toBe(
+        "changed",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Created the file.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+});
