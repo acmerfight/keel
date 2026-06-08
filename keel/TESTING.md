@@ -69,6 +69,8 @@ Any tool behavior that changes agent control flow also needs at least one `tests
 
 This means new user-facing behavior should usually add agent coverage, CLI-visible behavior should add a CLI smoke test, and control-flow-sensitive tool behavior should add agent coverage. It does not mean provider or tool boundary tests should be promoted into agent or CLI tests when the risk lives at that narrower boundary.
 
+For safety boundaries, derive tests from invariants instead of implementation shape. Include cases where the requested input and resolved target differ, and assert the policy holds for every security-relevant representation.
+
 ## Avoiding Combinatorial Explosion
 
 BDD describes product behavior, but agent tests must not enumerate every possible tool sequence. As Keel gains more tools, providers, state, and retry paths, exhaustive end-to-end combinations become unmaintainable.

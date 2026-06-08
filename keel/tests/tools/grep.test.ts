@@ -371,6 +371,27 @@ describe("Grep Tool Path Validation", () => {
     }
   });
 
+  test(`Given a grep request uses a missing absolute path outside the workspace,
+    When the grep tool validates the path,
+    Then it rejects the workspace escape without revealing path existence`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-grep-outside-"));
+    const outsidePath = join(outside, "missing.txt");
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "secret", { path: outsidePath }),
+        "tool_path_outside_workspace",
+        "outside the workspace",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a symlink inside the workspace points outside,
     When the grep tool resolves the requested symlink,
     Then it rejects the escaped path before searching`, async () => {
@@ -391,6 +412,52 @@ describe("Grep Tool Path Validation", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project gitignore excludes a symlink to a visible file,
+    When the grep tool is called through that ignored symlink,
+    Then it rejects the request path before searching target content`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(
+      join(workspace, ".gitignore"),
+      "ignored-link.txt\n",
+      "utf8",
+    );
+    await writeFile(join(workspace, "visible.txt"), "needle\n", "utf8");
+    await symlink("visible.txt", join(workspace, "ignored-link.txt"));
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle", { path: "ignored-link.txt" }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project gitignore excludes a visible symlink target,
+    When the grep tool is called through the symlink,
+    Then it rejects the resolved target before searching content`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(join(workspace, "secret.txt"), "needle\n", "utf8");
+    await symlink("secret.txt", join(workspace, "visible-link.txt"));
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle", { path: "visible-link.txt" }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
     }
   });
 });
@@ -575,6 +642,25 @@ describe("Grep Tool Ignore Policy", () => {
     }
   });
 
+  test(`Given a gitignore rule excludes an explicitly requested missing file,
+    When the grep tool validates the requested path,
+    Then it rejects that ignored path without revealing path existence`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle", { path: "secret.txt" }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a non-git workspace gitignore rule excludes an explicitly requested file,
     When the grep tool validates the requested path,
     Then it rejects that ignored file before searching`, async () => {
@@ -587,6 +673,26 @@ describe("Grep Tool Ignore Policy", () => {
       // When / Then
       await expectGrepError(
         () => executeGrep(workspace, "needle", { path: "secret.txt" }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a gitignore rule excludes a missing directory namespace,
+    When the grep tool validates a missing file inside that namespace,
+    Then it rejects that ignored path without revealing path existence`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, ".gitignore"), "secret-dir/\n", "utf8");
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () =>
+          executeGrep(workspace, "needle", { path: "secret-dir/missing.txt" }),
         "tool_path_ignored",
         "ignored path",
       );

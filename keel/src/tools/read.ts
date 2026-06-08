@@ -1,14 +1,9 @@
-import {
-  closeSync,
-  existsSync,
-  openSync,
-  readSync,
-  realpathSync,
-  statSync,
-} from "node:fs";
-import { extname, isAbsolute, relative, resolve } from "node:path";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { extname } from "node:path";
 import { KeelError } from "../core/error.ts";
+import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
+import { resolveWorkspaceTarget } from "./workspace-path.ts";
 
 export const MAX_READ_LINES = 2000;
 export const MAX_READ_BYTES = 50 * 1024;
@@ -99,14 +94,6 @@ export interface ReadOptions {
 interface NormalizedReadOptions {
   readonly offset: number;
   readonly limit: number;
-}
-
-function isInsideWorkspace(workspace: string, target: string): boolean {
-  const targetFromWorkspace = relative(workspace, target);
-  return (
-    targetFromWorkspace === "" ||
-    (!targetFromWorkspace.startsWith("..") && !isAbsolute(targetFromWorkspace))
-  );
 }
 
 function formatSize(bytes: number): string {
@@ -383,27 +370,24 @@ export function executeRead(
   filePath: string,
   options: ReadOptions = {},
 ): ToolResult {
-  const workspacePath = realpathSync(workspace);
-  const requestedPath = isAbsolute(filePath)
-    ? resolve(filePath)
-    : resolve(workspacePath, filePath);
-  if (!existsSync(requestedPath)) {
-    throw new KeelError(
-      "tool_file_not_found",
-      `read failed: file not found: ${filePath}`,
-    );
-  }
-
-  const targetPath = realpathSync(requestedPath);
-
-  if (!isInsideWorkspace(workspacePath, targetPath)) {
-    throw new KeelError(
-      "tool_path_outside_workspace",
-      `read failed: path is outside the workspace: ${filePath}`,
-    );
-  }
+  const { workspacePath, requestedPath, targetPath } = resolveWorkspaceTarget(
+    workspace,
+    filePath,
+    "read",
+  );
 
   const stat = statSync(targetPath);
+  const targetIsDirectory = stat.isDirectory();
+  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  if (
+    projectIgnorePolicy.isIgnored(requestedPath, targetIsDirectory) ||
+    projectIgnorePolicy.isIgnored(targetPath, targetIsDirectory)
+  ) {
+    throw new KeelError(
+      "tool_path_ignored",
+      `read failed: ignored path: ${filePath}`,
+    );
+  }
   if (!stat.isFile()) {
     throw new KeelError(
       "tool_not_file",
