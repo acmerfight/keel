@@ -198,6 +198,26 @@ describe("CLI Text Reply", () => {
     expect(result.stdout.trim()).not.toBe("keel v0.0.1");
   });
 
+  test.each(["0", "abc"])(`Given an invalid max cost value %s,
+    When user runs the CLI,
+    Then the CLI exits with a validation error before requiring a provider`, async (maxCost) => {
+    // Given
+    const args: readonly string[] = ["--max-cost", maxCost, "hello"];
+
+    // When
+    const result = await runCli(args, {
+      KEEL_PROVIDER: "deepseek",
+      DEEPSEEK_API_KEY: "",
+    });
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Error: --max-cost must be a positive number.\n",
+    );
+  });
+
   test(`Given a max cost and a DeepSeek-compatible API reports costly usage,
     When user runs the CLI,
     Then the CLI prints the spent cost and exits successfully`, async () => {
