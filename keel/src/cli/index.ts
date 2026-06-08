@@ -3,8 +3,10 @@
 import { z } from "zod";
 import type { CostReport } from "../agent/loop.ts";
 import { runAgent } from "../agent/loop.ts";
-import { DEEPSEEK_V4_FLASH_USD } from "../core/cost.ts";
-import { createDeepseekProvider } from "../llm/providers/deepseek.ts";
+import {
+  createDeepseekProvider,
+  DEEPSEEK_V4_FLASH_COST_MODEL,
+} from "../llm/providers/deepseek.ts";
 import type { LLMProvider } from "../llm/types.ts";
 import {
   createFakeProvider,
@@ -176,7 +178,7 @@ async function main(): Promise<void> {
       ...(cliArgs.maxCostUsd !== undefined
         ? {
             costTracking: {
-              model: DEEPSEEK_V4_FLASH_USD,
+              model: DEEPSEEK_V4_FLASH_COST_MODEL,
               maxCostUsd: cliArgs.maxCostUsd,
             },
           }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { CostModel } from "../../core/cost.ts";
 import { KeelError, type KeelErrorCode } from "../../core/error.ts";
 import type {
   LLMEvent,
@@ -8,6 +9,13 @@ import type {
   ToolCall,
   Usage,
 } from "../types.ts";
+
+// DeepSeek V4 Flash prices are per 1M tokens.
+export const DEEPSEEK_V4_FLASH_COST_MODEL: CostModel = {
+  uncachedInputPerMillionTokens: 0.14,
+  cachedInputPerMillionTokens: 0.028,
+  outputPerMillionTokens: 0.28,
+};
 
 const editTool = {
   type: "function",
