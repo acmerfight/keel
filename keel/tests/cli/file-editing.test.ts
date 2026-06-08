@@ -293,8 +293,8 @@ function sseStopFinish(usage: DeepseekUsageFixture): string {
 }
 
 describe("CLI File Editing", () => {
-  test(`Given a workspace file contains an old word,
-    When user runs the CLI fake edit demo,
+  test(`Given a workspace file contains text to replace,
+    When user runs the CLI with the demo provider,
     Then the file is updated on disk`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-edit-"));
@@ -319,7 +319,7 @@ describe("CLI File Editing", () => {
     }
   });
 
-  test(`Given a DeepSeek-compatible API streams an edit tool call,
+  test(`Given the configured provider requests a file edit,
     When user asks the CLI to replace text in a workspace file,
     Then the file is updated on disk`, async () => {
     // Given
@@ -385,9 +385,9 @@ describe("CLI File Editing", () => {
     }
   });
 
-  test(`Given a DeepSeek-compatible API first asks to read a workspace file,
+  test(`Given the configured provider inspects a workspace file before editing,
     When user asks the CLI to fix that file,
-    Then the agent sends the read result back and edits the file`, async () => {
+    Then the agent sends the file content back and edits the file`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-read-edit-"));
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
@@ -469,9 +469,9 @@ describe("CLI File Editing", () => {
     }
   });
 
-  test(`Given a DeepSeek-compatible API asks to grep the workspace,
+  test(`Given the configured provider searches the workspace,
     When user asks the CLI to find a symbol,
-    Then the agent sends grep matches back before the final answer`, async () => {
+    Then the agent sends search matches back before the final answer`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-grep-"));
     await writeFile(
@@ -545,9 +545,9 @@ describe("CLI File Editing", () => {
     }
   });
 
-  test(`Given a DeepSeek-compatible API asks to grep an ignored file,
+  test(`Given the configured provider searches an ignored file,
     When user runs the CLI,
-    Then the agent sends the ignored-path error back without exposing the ignored file contents`, async () => {
+    Then the agent sends the ignored path error back without exposing the ignored file contents`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-grep-"));
     await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
@@ -629,7 +629,7 @@ describe("CLI File Editing", () => {
     }
   });
 
-  test(`Given a DeepSeek-compatible API streams an edit tool call without [DONE],
+  test(`Given the provider response ends before completion,
     When user asks the CLI to replace text in a workspace file,
     Then the CLI fails and the file is unchanged`, async () => {
     // Given
@@ -680,7 +680,7 @@ describe("CLI File Editing", () => {
     }
   });
 
-  test(`Given a DeepSeek-compatible API streams multiple edit tool calls in one chunk,
+  test(`Given the configured provider proposes multiple file edits in one response,
     When user asks the CLI to replace text in a workspace file,
     Then the CLI fails and the file is unchanged`, async () => {
     // Given
@@ -734,7 +734,7 @@ describe("CLI File Editing", () => {
     }
   });
 
-  test(`Given a DeepSeek-compatible API streams an edit tool call without usage,
+  test(`Given the provider completes a file edit response without token usage,
     When user asks the CLI to replace text in a workspace file,
     Then the CLI fails and the file is unchanged`, async () => {
     // Given

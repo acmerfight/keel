@@ -218,7 +218,7 @@ describe("CLI Text Reply", () => {
     );
   });
 
-  test(`Given a max cost and a DeepSeek-compatible API reports costly usage,
+  test(`Given a max cost and the configured provider reports costly usage,
     When user runs the CLI,
     Then the CLI prints the spent cost and exits successfully`, async () => {
     // Given
@@ -269,7 +269,7 @@ describe("CLI Text Reply", () => {
     }
   });
 
-  test(`Given a tiny max cost and a DeepSeek-compatible API reports a tiny overage,
+  test(`Given a tiny max cost and the configured provider reports a small overage,
     When user runs the CLI,
     Then the CLI prints non-zero spent cost and budget values`, async () => {
     // Given
@@ -316,7 +316,7 @@ describe("CLI Text Reply", () => {
     }
   });
 
-  test(`Given no provider API key and no fake provider,
+  test(`Given no provider API key and no demo provider,
     When user runs the CLI,
     Then the CLI exits with an error message`, async () => {
     // Given — no DEEPSEEK_API_KEY, no KEEL_PROVIDER=fake
@@ -347,7 +347,7 @@ describe("CLI Text Reply", () => {
     expect(result.stderr).toBe('Error: unknown provider "unknown"\n');
   });
 
-  test(`Given a DeepSeek request is still streaming,
+  test(`Given a provider response is still in progress,
     When user interrupts the CLI,
     Then the CLI aborts the request and exits as interrupted`, async () => {
     // Given

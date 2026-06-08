@@ -36,9 +36,9 @@ function workspace(): string {
 }
 
 describe("Text Reply", () => {
-  test(`Given user sends a message,
+  test(`Given user asks for help,
     When agent responds,
-    Then agent replies with text`, async () => {
+    Then the user receives the reply text`, async () => {
     // Given
     const provider = createFakeProvider([
       fakeResponse("Hello! How can I help?"),
@@ -66,9 +66,9 @@ describe("Text Reply", () => {
     expect(endEvents).toHaveLength(1);
   });
 
-  test(`Given user sends a message,
+  test(`Given a short assistant reply,
     When agent responds,
-    Then the reply streams token by token`, async () => {
+    Then the reply is emitted incrementally`, async () => {
     // Given
     const provider = createFakeProvider([fakeResponse("Hi", true)]);
 
@@ -90,9 +90,9 @@ describe("Text Reply", () => {
     expect(textEvents[1]?.text).toBe("i");
   });
 
-  test(`Given user sends a message,
+  test(`Given user asks a question,
     When agent finishes replying,
-    Then agent reports token usage`, async () => {
+    Then the session reports token usage`, async () => {
     // Given
     const provider = createFakeProvider([
       fakeResponse("Done.", false, {
@@ -124,9 +124,9 @@ describe("Text Reply", () => {
     });
   });
 
-  test(`Given a request has an abort signal,
-    When agent calls the LLM provider,
-    Then the same signal is passed through`, async () => {
+  test(`Given a request can be cancelled,
+    When agent starts the request,
+    Then cancellation is preserved`, async () => {
     // Given
     const controller = new AbortController();
     let providerSignal: AbortSignal | null = null;
@@ -161,9 +161,9 @@ describe("Text Reply", () => {
     expect(providerSignal).toBe(controller.signal);
   });
 
-  test(`Given the LLM stream ends unexpectedly,
-    When agent detects missing stop signal,
-    Then agent throws an error`, async () => {
+  test(`Given an assistant response ends before completion,
+    When agent detects the incomplete response,
+    Then agent reports an incomplete response error`, async () => {
     // Given
     const brokenProvider: LLMProvider = {
       id: "broken",
@@ -186,9 +186,9 @@ describe("Text Reply", () => {
     ).rejects.toThrow("LLM stream ended without stop event");
   });
 
-  test(`Given the LLM keeps asking to read files,
-    When the agent exceeds its tool turn limit,
-    Then agent throws a tool call limit error`, async () => {
+  test(`Given the assistant repeatedly asks to inspect files,
+    When the agent exceeds its action limit,
+    Then agent reports an action limit error`, async () => {
     // Given
     const loopingProvider: LLMProvider = {
       id: "looping-tools",

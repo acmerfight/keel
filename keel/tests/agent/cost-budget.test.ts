@@ -29,8 +29,8 @@ const budgetModel: CostModel = {
 
 describe("Cost Budget", () => {
   test(`Given a session cost limit,
-    When the agent's accumulated usage exceeds that limit before a tool call,
-    Then the agent stops and reports the spent cost without running the tool`, async () => {
+    When the projected session spend exceeds that limit before a file change,
+    Then the agent stops and reports the spent cost without changing the file`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cost-budget-"));
     await writeFile(join(workspace, "note.txt"), "old value\n", "utf8");
@@ -96,9 +96,9 @@ describe("Cost Budget", () => {
     }
   });
 
-  test(`Given no session cost limit is set,
-    When the agent receives expensive usage before a tool call,
-    Then it behaves as before and runs the tool`, async () => {
+  test(`Given no session cost limit is configured,
+    When an expensive response requests a file change,
+    Then the agent still applies the change`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cost-budget-"));
     await writeFile(join(workspace, "note.txt"), "old value\n", "utf8");
@@ -147,9 +147,9 @@ describe("Cost Budget", () => {
     }
   });
 
-  test(`Given a session cost limit and one LLM turn contains multiple tool calls,
-    When that turn already exceeds the budget,
-    Then the agent stops for budget without running or validating those tools`, async () => {
+  test(`Given a session cost limit and an expensive response proposes multiple file changes,
+    When the response already exceeds the budget,
+    Then the agent stops before validating or applying the changes`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cost-budget-"));
     await writeFile(join(workspace, "note.txt"), "old value\n", "utf8");
