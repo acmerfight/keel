@@ -8,7 +8,7 @@ describe("Cost Tracking", () => {
     // Given
     const model: CostModel = {
       uncachedInputPerMillionTokens: 0.14,
-      cachedInputPerMillionTokens: 0.028,
+      cachedInputPerMillionTokens: 0.0028,
       outputPerMillionTokens: 0.28,
     };
 
@@ -24,6 +24,6 @@ describe("Cost Tracking", () => {
     );
 
     // Then
-    expect(cost).toBeCloseTo(1.316);
+    expect(cost).toBeCloseTo(1.2656);
   });
 });

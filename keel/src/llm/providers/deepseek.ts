@@ -13,7 +13,7 @@ import type {
 // DeepSeek V4 Flash prices are per 1M tokens.
 export const DEEPSEEK_V4_FLASH_COST_MODEL: CostModel = {
   uncachedInputPerMillionTokens: 0.14,
-  cachedInputPerMillionTokens: 0.028,
+  cachedInputPerMillionTokens: 0.0028,
   outputPerMillionTokens: 0.28,
 };
 
