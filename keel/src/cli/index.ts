@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
+import { z } from "zod";
+import type { CostReport } from "../agent/loop.ts";
 import { runAgent } from "../agent/loop.ts";
+import { DEEPSEEK_V4_FLASH_USD } from "../core/cost.ts";
 import { createDeepseekProvider } from "../llm/providers/deepseek.ts";
 import type { LLMProvider } from "../llm/types.ts";
 import {
@@ -16,8 +19,67 @@ interface CliEditRequest {
   readonly newString: string;
 }
 
+interface CliArgs {
+  readonly doctor: boolean;
+  readonly userMessage?: string;
+  readonly maxCostUsd?: number;
+}
+
+const maxCostSchema = z.coerce.number().finite().positive();
+
 function env(key: string): string | undefined {
   return process.env[key];
+}
+
+function parseMaxCost(raw: string | undefined): number {
+  const result = maxCostSchema.safeParse(raw);
+  if (!result.success) {
+    process.stderr.write("Error: --max-cost must be a positive number.\n");
+    process.exit(1);
+  }
+  return result.data;
+}
+
+function parseCliArgs(args: readonly string[]): CliArgs {
+  if (args[0] === "--doctor") {
+    return { doctor: true };
+  }
+
+  if (args[0] === "--max-cost") {
+    return {
+      doctor: false,
+      maxCostUsd: parseMaxCost(args[1]),
+      ...(args[2] !== undefined ? { userMessage: args[2] } : {}),
+    };
+  }
+
+  const maxCostPrefix = "--max-cost=";
+  if (args[0]?.startsWith(maxCostPrefix) === true) {
+    return {
+      doctor: false,
+      maxCostUsd: parseMaxCost(args[0].slice(maxCostPrefix.length)),
+      ...(args[1] !== undefined ? { userMessage: args[1] } : {}),
+    };
+  }
+
+  return {
+    doctor: false,
+    ...(args[0] !== undefined ? { userMessage: args[0] } : {}),
+  };
+}
+
+function formatUsd(value: number): string {
+  return value < 0.0001 ? value.toFixed(6) : value.toFixed(4);
+}
+
+function formatCostReport(cost: CostReport): string {
+  const spent = `$${formatUsd(cost.spentUsd)}`;
+  if (cost.maxUsd === undefined) return `Cost: ${spent}\n`;
+
+  const budget = `$${formatUsd(cost.maxUsd)}`;
+  return cost.budgetExceeded
+    ? `Cost: ${spent} (budget ${budget} exceeded)\n`
+    : `Cost: ${spent} (budget ${budget})\n`;
 }
 
 function parseCliEditDemo(message: string): CliEditRequest | null {
@@ -82,8 +144,8 @@ function resolveProvider(userMessage: string): LLMProvider {
 }
 
 async function main(): Promise<void> {
-  const userMessage = process.argv[2];
-  if (userMessage === "--doctor") {
+  const cliArgs = parseCliArgs(process.argv.slice(2));
+  if (cliArgs.doctor) {
     const result = await runDoctor();
     process.stdout.write(result.stdout);
     process.stderr.write(result.stderr);
@@ -91,8 +153,9 @@ async function main(): Promise<void> {
     return;
   }
 
+  const userMessage = cliArgs.userMessage;
   if (!userMessage) {
-    process.stderr.write("Usage: keel <message>\n");
+    process.stderr.write("Usage: keel [--max-cost <usd>] <message>\n");
     process.exit(1);
   }
 
@@ -110,14 +173,28 @@ async function main(): Promise<void> {
       userMessage,
       systemPrompt: "You are a helpful assistant.",
       signal: abortController.signal,
+      ...(cliArgs.maxCostUsd !== undefined
+        ? {
+            costTracking: {
+              model: DEEPSEEK_V4_FLASH_USD,
+              maxCostUsd: cliArgs.maxCostUsd,
+            },
+          }
+        : {}),
     });
 
+    let finalCost: CostReport | undefined;
     for await (const event of stream) {
       if (event.type === "text") {
         process.stdout.write(event.text);
+      } else if (event.type === "end") {
+        finalCost = event.cost;
       }
     }
     process.stdout.write("\n");
+    if (finalCost !== undefined) {
+      process.stderr.write(formatCostReport(finalCost));
+    }
   } catch (error) {
     if (!abortController.signal.aborted) {
       throw error;

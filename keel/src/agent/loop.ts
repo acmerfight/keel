@@ -1,3 +1,4 @@
+import { type CostModel, calculateCostUsd } from "../core/cost.ts";
 import type { KeelErrorCode } from "../core/error.ts";
 import { KeelError } from "../core/error.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
@@ -15,9 +16,24 @@ const RECOVERABLE_TOOL_ERRORS = new Set<KeelErrorCode>([
   "tool_path_outside_workspace",
 ]);
 
+export interface CostReport {
+  readonly spentUsd: number;
+  readonly maxUsd?: number;
+  readonly budgetExceeded: boolean;
+}
+
+export interface CostTrackingOptions {
+  readonly model: CostModel;
+  readonly maxCostUsd?: number;
+}
+
 export type AgentEvent =
   | { readonly type: "text"; readonly text: string }
-  | { readonly type: "end"; readonly usage: Usage };
+  | {
+      readonly type: "end";
+      readonly usage: Usage;
+      readonly cost?: CostReport;
+    };
 
 export interface RunAgentOptions {
   readonly workspace: string;
@@ -25,17 +41,20 @@ export interface RunAgentOptions {
   readonly userMessage: string;
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
+  readonly costTracking?: CostTrackingOptions;
 }
 
 interface AgentTurn {
   readonly text: string;
-  readonly toolCall: ToolCall | null;
+  readonly toolCalls: readonly ToolCall[];
   readonly usage: Usage;
 }
 
 function addUsage(left: Usage, right: Usage): Usage {
   return {
     inputTokens: left.inputTokens + right.inputTokens,
+    cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
+    uncachedInputTokens: left.uncachedInputTokens + right.uncachedInputTokens,
     outputTokens: left.outputTokens + right.outputTokens,
   };
 }
@@ -64,27 +83,42 @@ function finishAgentTurn(
     );
   }
 
-  const [toolCall, extraToolCall] = pendingToolCalls;
+  return {
+    text: assistantText.join(""),
+    toolCalls: pendingToolCalls,
+    usage,
+  };
+}
+
+function singleToolCall(toolCalls: readonly ToolCall[]): ToolCall | null {
+  const [toolCall, extraToolCall] = toolCalls;
   if (extraToolCall !== undefined) {
     throw new KeelError(
       "agent_unsupported_tool_calls",
       "Keel does not support multiple tool calls in one turn",
     );
   }
-
-  return {
-    text: assistantText.join(""),
-    toolCall: toolCall ?? null,
-    usage,
-  };
+  return toolCall ?? null;
 }
 
 export async function* runAgent(
   options: RunAgentOptions,
 ): AsyncGenerator<AgentEvent> {
-  const { workspace, provider, userMessage, systemPrompt, signal } = options;
+  const {
+    workspace,
+    provider,
+    userMessage,
+    systemPrompt,
+    signal,
+    costTracking,
+  } = options;
   const messages: Message[] = [{ role: "user", content: userMessage }];
-  let totalUsage: Usage = { inputTokens: 0, outputTokens: 0 };
+  let totalUsage: Usage = {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    uncachedInputTokens: 0,
+    outputTokens: 0,
+  };
 
   for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
     const stream = provider.stream({
@@ -114,10 +148,35 @@ export async function* runAgent(
 
     const turnResult = finishAgentTurn(assistantText, pendingToolCalls, usage);
     totalUsage = addUsage(totalUsage, turnResult.usage);
+    const cost =
+      costTracking === undefined
+        ? undefined
+        : (() => {
+            const spentUsd = calculateCostUsd(totalUsage, costTracking.model);
+            const budgetExceeded =
+              costTracking.maxCostUsd !== undefined &&
+              spentUsd > costTracking.maxCostUsd;
+            return {
+              spentUsd,
+              ...(costTracking.maxCostUsd !== undefined
+                ? { maxUsd: costTracking.maxCostUsd }
+                : {}),
+              budgetExceeded,
+            };
+          })();
 
-    const toolCall = turnResult.toolCall;
+    if (cost?.budgetExceeded === true) {
+      yield { type: "end", usage: totalUsage, cost };
+      return;
+    }
+
+    const toolCall = singleToolCall(turnResult.toolCalls);
     if (toolCall === null) {
-      yield { type: "end", usage: totalUsage };
+      yield {
+        type: "end",
+        usage: totalUsage,
+        ...(cost !== undefined ? { cost } : {}),
+      };
       return;
     }
 
@@ -207,7 +266,11 @@ export async function* runAgent(
           content: result.content,
         });
         yield { type: "text", text: result.content };
-        yield { type: "end", usage: totalUsage };
+        yield {
+          type: "end",
+          usage: totalUsage,
+          ...(cost !== undefined ? { cost } : {}),
+        };
         return;
       }
     }

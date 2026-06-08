@@ -252,13 +252,29 @@ function sseMultipleEditToolCalls(): string {
   });
 }
 
-function sseEditToolFinish(usage?: {
+interface DeepseekUsageFixture {
   readonly prompt_tokens: number;
   readonly completion_tokens: number;
-}): string {
+}
+
+function usageFixture(usage: DeepseekUsageFixture): {
+  readonly prompt_tokens: number;
+  readonly prompt_cache_hit_tokens: number;
+  readonly prompt_cache_miss_tokens: number;
+  readonly completion_tokens: number;
+} {
+  return {
+    prompt_tokens: usage.prompt_tokens,
+    prompt_cache_hit_tokens: 0,
+    prompt_cache_miss_tokens: usage.prompt_tokens,
+    completion_tokens: usage.completion_tokens,
+  };
+}
+
+function sseEditToolFinish(usage?: DeepseekUsageFixture): string {
   return sseData({
     choices: [{ delta: {}, finish_reason: "tool_calls" }],
-    ...(usage ? { usage } : {}),
+    ...(usage ? { usage: usageFixture(usage) } : {}),
   });
 }
 
@@ -269,13 +285,10 @@ function sseTextReply(text: string): string {
   });
 }
 
-function sseStopFinish(usage: {
-  readonly prompt_tokens: number;
-  readonly completion_tokens: number;
-}): string {
+function sseStopFinish(usage: DeepseekUsageFixture): string {
   return sseData({
     choices: [{ delta: {}, finish_reason: "stop" }],
-    usage,
+    usage: usageFixture(usage),
   });
 }
 
@@ -713,7 +726,7 @@ describe("CLI File Editing", () => {
         "hello old world\n",
       );
       expect(result.stderr).toContain(
-        "DeepSeek returned more than one tool call",
+        "Keel does not support multiple tool calls in one turn",
       );
     } finally {
       await close(server);

@@ -92,7 +92,15 @@ describe("File Editing", () => {
           oldString: "new",
           newString: "second",
         };
-        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
       },
     };
 
@@ -190,7 +198,15 @@ describe("File Editing", () => {
             oldString: "missing",
             newString: "new",
           };
-          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
           return;
         }
 
@@ -203,7 +219,15 @@ describe("File Editing", () => {
           oldString: "world",
           newString: "there",
         };
-        yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 2,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 2,
+            outputTokens: 2,
+          },
+        };
       },
     };
 
@@ -237,7 +261,12 @@ describe("File Editing", () => {
       });
       expect(events).toContainEqual({
         type: "end",
-        usage: { inputTokens: 3, outputTokens: 3 },
+        usage: {
+          inputTokens: 3,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 3,
+          outputTokens: 3,
+        },
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -296,7 +325,15 @@ describe("File Editing", () => {
             oldString: "world",
             newString: "there",
           };
-          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
           return;
         }
 
@@ -309,7 +346,15 @@ describe("File Editing", () => {
           oldString: "world",
           newString: "there",
         };
-        yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 2,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 2,
+            outputTokens: 2,
+          },
+        };
       },
     };
 
@@ -422,13 +467,29 @@ describe("File Editing", () => {
             tool: "read",
             path: "large.txt",
           };
-          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
           return;
         }
 
         secondTurnMessages = options.messages;
         yield { type: "text", text: "done" };
-        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
       },
     };
 
@@ -485,13 +546,29 @@ describe("File Editing", () => {
             offset: 3,
             limit: 2,
           };
-          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
           return;
         }
 
         secondTurnMessages = options.messages;
         yield { type: "text", text: "done" };
-        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
       },
     };
 
@@ -542,7 +619,15 @@ describe("File Editing", () => {
             tool: "read",
             path: "missing.txt",
           };
-          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
           return;
         }
 
@@ -555,13 +640,29 @@ describe("File Editing", () => {
             tool: "read",
             path: "note.txt",
           };
-          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 2,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 2,
+              outputTokens: 2,
+            },
+          };
           return;
         }
 
         thirdTurnMessages = options.messages;
         yield { type: "text", text: "done" };
-        yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 3,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 3,
+            outputTokens: 3,
+          },
+        };
       },
     };
 
@@ -617,7 +718,15 @@ describe("File Editing", () => {
             tool: "read",
             path: ".",
           };
-          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
           return;
         }
 
@@ -630,13 +739,29 @@ describe("File Editing", () => {
             tool: "read",
             path: "note.txt",
           };
-          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 2,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 2,
+              outputTokens: 2,
+            },
+          };
           return;
         }
 
         thirdTurnMessages = options.messages;
         yield { type: "text", text: "done" };
-        yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 3,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 3,
+            outputTokens: 3,
+          },
+        };
       },
     };
 
@@ -696,7 +821,15 @@ describe("File Editing", () => {
           tool: "read",
           path: "blob.bin",
         };
-        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
       },
     };
 
@@ -743,7 +876,15 @@ describe("File Editing", () => {
             tool: "grep",
             pattern: "handleSubmit",
           };
-          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
           return;
         }
 
@@ -756,13 +897,29 @@ describe("File Editing", () => {
             tool: "read",
             path: "app.ts",
           };
-          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 2,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 2,
+              outputTokens: 2,
+            },
+          };
           return;
         }
 
         thirdTurnMessages = options.messages;
         yield { type: "text", text: "Found it." };
-        yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 3,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 3,
+            outputTokens: 3,
+          },
+        };
       },
     };
 
@@ -797,7 +954,12 @@ describe("File Editing", () => {
       expect(events).toContainEqual({ type: "text", text: "Found it." });
       expect(events).toContainEqual({
         type: "end",
-        usage: { inputTokens: 6, outputTokens: 6 },
+        usage: {
+          inputTokens: 6,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 6,
+          outputTokens: 6,
+        },
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -866,7 +1028,15 @@ describe("File Editing", () => {
             tool: "grep",
             pattern: "",
           };
-          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
           return;
         }
 
@@ -879,13 +1049,29 @@ describe("File Editing", () => {
             tool: "grep",
             pattern: "target",
           };
-          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 2,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 2,
+              outputTokens: 2,
+            },
+          };
           return;
         }
 
         thirdTurnMessages = options.messages;
         yield { type: "text", text: "Search recovered." };
-        yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 3,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 3,
+            outputTokens: 3,
+          },
+        };
       },
     };
 
@@ -954,7 +1140,15 @@ describe("File Editing", () => {
             pattern: "SECRET_VALUE",
             path: "secret.txt",
           };
-          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
           return;
         }
 
@@ -968,13 +1162,29 @@ describe("File Editing", () => {
             pattern: "target",
             path: "app.ts",
           };
-          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 2,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 2,
+              outputTokens: 2,
+            },
+          };
           return;
         }
 
         thirdTurnMessages = options.messages;
         yield { type: "text", text: "Search recovered." };
-        yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 3,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 3,
+            outputTokens: 3,
+          },
+        };
       },
     };
 
@@ -1046,7 +1256,15 @@ describe("File Editing", () => {
             pattern: "SECRET_VALUE",
             path: "secret.txt",
           };
-          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
           return;
         }
 
@@ -1059,7 +1277,15 @@ describe("File Editing", () => {
             tool: "read",
             path: "secret.txt",
           };
-          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 2,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 2,
+              outputTokens: 2,
+            },
+          };
           return;
         }
 
@@ -1072,13 +1298,29 @@ describe("File Editing", () => {
             tool: "read",
             path: "app.ts",
           };
-          yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 3,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 3,
+              outputTokens: 3,
+            },
+          };
           return;
         }
 
         fourthTurnMessages = options.messages;
         yield { type: "text", text: "File boundary held." };
-        yield { type: "stop", usage: { inputTokens: 4, outputTokens: 4 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 4,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 4,
+            outputTokens: 4,
+          },
+        };
       },
     };
 
@@ -1162,7 +1404,15 @@ describe("File Editing", () => {
             oldString: "sk-leaked-123",
             newString: "new-key",
           };
-          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
           return;
         }
 
@@ -1175,7 +1425,15 @@ describe("File Editing", () => {
             tool: "read",
             path: "/",
           };
-          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 2,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 2,
+              outputTokens: 2,
+            },
+          };
           return;
         }
 
@@ -1188,13 +1446,29 @@ describe("File Editing", () => {
             tool: "read",
             path: "app.ts",
           };
-          yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 3,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 3,
+              outputTokens: 3,
+            },
+          };
           return;
         }
 
         fourthTurnMessages = options.messages;
         yield { type: "text", text: "Recovered after outside path." };
-        yield { type: "stop", usage: { inputTokens: 4, outputTokens: 4 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 4,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 4,
+            outputTokens: 4,
+          },
+        };
       },
     };
 
@@ -1273,7 +1547,15 @@ describe("File Editing", () => {
           tool: "read",
           path: "blob.txt",
         };
-        yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
       },
     };
 

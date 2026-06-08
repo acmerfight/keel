@@ -150,8 +150,15 @@ const deepseekStreamChunkSchema = z
     usage: z
       .object({
         prompt_tokens: z.number(),
+        prompt_cache_hit_tokens: z.number(),
+        prompt_cache_miss_tokens: z.number(),
         completion_tokens: z.number(),
       })
+      .refine(
+        (usage) =>
+          usage.prompt_tokens ===
+          usage.prompt_cache_hit_tokens + usage.prompt_cache_miss_tokens,
+      )
       .passthrough()
       .nullable()
       .optional(),
@@ -193,14 +200,18 @@ type ToolCallEvent = Extract<LLMEvent, { readonly type: "tool_call" }>;
 type DeepseekStreamChunk = z.infer<typeof deepseekStreamChunkSchema>;
 type DeepseekToolCall = z.infer<typeof deepseekToolCallSchema>;
 
+interface DeepseekPendingToolCall {
+  readonly id: string | null;
+  readonly name: string | null;
+  readonly argumentsJson: string | null;
+}
+
 interface DeepseekStreamState {
   usage: Usage | null;
   receivedDone: boolean;
   finishReason: string | undefined;
-  toolCallId: string | null;
-  toolCallName: string | null;
-  toolCallArguments: string | null;
-  pendingToolCall: ToolCallEvent | null;
+  toolCalls: Map<number, DeepseekPendingToolCall>;
+  pendingToolCalls: readonly ToolCallEvent[];
 }
 
 function createChatCompletionsBody(
@@ -323,15 +334,13 @@ function createStreamState(): DeepseekStreamState {
     usage: null,
     receivedDone: false,
     finishReason: undefined,
-    toolCallId: null,
-    toolCallName: null,
-    toolCallArguments: null,
-    pendingToolCall: null,
+    toolCalls: new Map(),
+    pendingToolCalls: [],
   };
 }
 
-function parseToolCall(state: DeepseekStreamState): ToolCallEvent {
-  const toolCallId = state.toolCallId;
+function parseToolCall(toolCall: DeepseekPendingToolCall): ToolCallEvent {
+  const toolCallId = toolCall.id;
   if (toolCallId === null || toolCallId === "") {
     throw new KeelError(
       "provider_protocol_error",
@@ -339,7 +348,7 @@ function parseToolCall(state: DeepseekStreamState): ToolCallEvent {
     );
   }
 
-  const toolCallName = state.toolCallName;
+  const toolCallName = toolCall.name;
   if (
     toolCallName !== "read" &&
     toolCallName !== "grep" &&
@@ -351,7 +360,7 @@ function parseToolCall(state: DeepseekStreamState): ToolCallEvent {
     );
   }
 
-  if (state.toolCallArguments === null || state.toolCallArguments === "") {
+  if (toolCall.argumentsJson === null || toolCall.argumentsJson === "") {
     throw new KeelError(
       "provider_protocol_error",
       `DeepSeek ${toolCallName} tool call has empty arguments`,
@@ -360,7 +369,7 @@ function parseToolCall(state: DeepseekStreamState): ToolCallEvent {
 
   let parsedArguments: unknown;
   try {
-    parsedArguments = JSON.parse(state.toolCallArguments);
+    parsedArguments = JSON.parse(toolCall.argumentsJson);
   } catch {
     throw new KeelError(
       "provider_protocol_error",
@@ -449,43 +458,46 @@ function appendToolCallDelta(
   state: DeepseekStreamState,
   toolCall: DeepseekToolCall,
 ): void {
-  if (toolCall.index !== 0) {
+  const index = toolCall.index;
+  if (index === undefined) {
     throw new KeelError(
       "provider_protocol_error",
-      `DeepSeek returned unsupported tool call index: ${toolCall.index ?? "none"}`,
+      "DeepSeek tool call is missing index",
     );
   }
 
   const toolFunction = toolCall.function;
+  const current = state.toolCalls.get(index) ?? {
+    id: null,
+    name: null,
+    argumentsJson: null,
+  };
   if (toolCall.id) {
-    state.toolCallId = toolCall.id;
+    state.toolCalls.set(index, { ...current, id: toolCall.id });
   }
   if (toolFunction?.name) {
-    state.toolCallName = toolFunction.name;
+    const updated = state.toolCalls.get(index) ?? current;
+    state.toolCalls.set(index, { ...updated, name: toolFunction.name });
   }
   if (toolFunction?.arguments !== undefined) {
-    state.toolCallArguments = `${state.toolCallArguments ?? ""}${toolFunction.arguments}`;
+    const updated = state.toolCalls.get(index) ?? current;
+    state.toolCalls.set(index, {
+      ...updated,
+      argumentsJson: `${updated.argumentsJson ?? ""}${toolFunction.arguments}`,
+    });
   }
 }
 
 function completePendingToolCall(state: DeepseekStreamState): void {
-  if (state.pendingToolCall !== null) {
-    throw new KeelError(
-      "provider_protocol_error",
-      "DeepSeek returned more than one tool call",
-    );
-  }
-  if (
-    state.toolCallId === null &&
-    state.toolCallName === null &&
-    state.toolCallArguments === null
-  ) {
+  if (state.toolCalls.size === 0) {
     throw new KeelError(
       "provider_protocol_error",
       "DeepSeek stream finished with tool_calls but no tool call",
     );
   }
-  state.pendingToolCall = parseToolCall(state);
+  state.pendingToolCalls = [...state.toolCalls.entries()]
+    .sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex)
+    .map(([, toolCall]) => parseToolCall(toolCall));
 }
 
 function* parseSseLine(
@@ -510,16 +522,7 @@ function* parseSseLine(
       yield { type: "text", text: content };
     }
 
-    const toolCalls = choice.delta?.tool_calls ?? [];
-    if (toolCalls.length > 1) {
-      throw new KeelError(
-        "provider_protocol_error",
-        "DeepSeek returned more than one tool call",
-      );
-    }
-
-    const toolCall = toolCalls[0];
-    if (toolCall !== undefined) {
+    for (const toolCall of choice.delta?.tool_calls ?? []) {
       appendToolCallDelta(state, toolCall);
     }
 
@@ -534,6 +537,8 @@ function* parseSseLine(
   if (chunk.usage !== undefined && chunk.usage !== null) {
     state.usage = {
       inputTokens: chunk.usage.prompt_tokens,
+      cachedInputTokens: chunk.usage.prompt_cache_hit_tokens,
+      uncachedInputTokens: chunk.usage.prompt_cache_miss_tokens,
       outputTokens: chunk.usage.completion_tokens,
     };
   }
@@ -585,7 +590,7 @@ function finalStreamEvents(state: DeepseekStreamState): readonly LLMEvent[] {
   }
 
   if (state.finishReason === "tool_calls") {
-    if (state.pendingToolCall === null) {
+    if (state.pendingToolCalls.length === 0) {
       throw new KeelError(
         "provider_protocol_error",
         "DeepSeek stream finished with tool_calls but no tool call",
@@ -606,9 +611,7 @@ function finalStreamEvents(state: DeepseekStreamState): readonly LLMEvent[] {
     );
   }
 
-  return state.pendingToolCall === null
-    ? [{ type: "stop", usage }]
-    : [state.pendingToolCall, { type: "stop", usage }];
+  return [...state.pendingToolCalls, { type: "stop", usage }];
 }
 
 export function createDeepseekProvider(config: DeepseekConfig): LLMProvider {
