@@ -222,6 +222,25 @@ describe("Read Tool", () => {
     }
   });
 
+  test(`Given a project gitignore excludes a missing file,
+    When the read tool is called for that file,
+    Then it rejects the ignored path without revealing path existence`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+
+    try {
+      // When / Then
+      expectReadError(
+        () => executeRead(workspace, "secret.txt"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a project gitignore excludes a symlink to a visible file,
     When the read tool is called through that ignored symlink,
     Then it rejects the request path before returning target content`, async () => {
@@ -239,6 +258,25 @@ describe("Read Tool", () => {
       // When / Then
       expectReadError(
         () => executeRead(workspace, "ignored-link.txt"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project gitignore excludes a missing directory namespace,
+    When the read tool is called for a missing file inside that namespace,
+    Then it rejects the ignored path without revealing path existence`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await writeFile(join(workspace, ".gitignore"), "secret-dir/\n", "utf8");
+
+    try {
+      // When / Then
+      expectReadError(
+        () => executeRead(workspace, "secret-dir/missing.txt"),
         "tool_path_ignored",
         "ignored path",
       );

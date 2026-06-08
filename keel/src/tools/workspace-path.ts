@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { KeelError } from "../core/error.ts";
+import { createProjectIgnorePolicy } from "./project-ignore.ts";
 
 type FileToolName = "edit" | "grep" | "read";
 
@@ -28,6 +29,16 @@ function outsideWorkspaceError(
   );
 }
 
+function ignoredPathError(
+  toolName: FileToolName,
+  requestedPath: string,
+): KeelError {
+  return new KeelError(
+    "tool_path_ignored",
+    `${toolName} failed: ignored path: ${requestedPath}`,
+  );
+}
+
 export function resolveWorkspaceTarget(
   workspace: string,
   requestedPath: string,
@@ -46,7 +57,22 @@ export function resolveWorkspaceTarget(
     throw outsideWorkspaceError(toolName, requestedPath);
   }
 
+  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  const requestIsWorkspaceRoot = absoluteRequestedPath === workspacePath;
+  if (
+    !requestIsWorkspaceRoot &&
+    projectIgnorePolicy.isIgnored(absoluteRequestedPath, false)
+  ) {
+    throw ignoredPathError(toolName, requestedPath);
+  }
+
   if (!existsSync(absoluteRequestedPath)) {
+    if (
+      !requestIsWorkspaceRoot &&
+      projectIgnorePolicy.isIgnored(absoluteRequestedPath, true)
+    ) {
+      throw ignoredPathError(toolName, requestedPath);
+    }
     throw new KeelError(
       "tool_file_not_found",
       `${toolName} failed: file not found: ${requestedPath}`,

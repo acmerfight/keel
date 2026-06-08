@@ -121,6 +121,25 @@ describe("Edit Tool", () => {
     }
   });
 
+  test(`Given a project gitignore excludes a missing file,
+    When the edit tool is called for that file,
+    Then it rejects the ignored path without revealing path existence`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "secret.txt", "old", "new"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a project gitignore excludes a symlink to a visible file,
     When the edit tool is called through that ignored symlink,
     Then it rejects the request path and leaves the target file unchanged`, async () => {
@@ -143,6 +162,25 @@ describe("Edit Tool", () => {
       );
       expect(await readFile(join(workspace, "visible.txt"), "utf8")).toBe(
         "old visible\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project gitignore excludes a missing directory namespace,
+    When the edit tool is called for a missing file inside that namespace,
+    Then it rejects the ignored path without revealing path existence`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, ".gitignore"), "secret-dir/\n", "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "secret-dir/missing.txt", "old", "new"),
+        "tool_path_ignored",
+        "ignored path",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
