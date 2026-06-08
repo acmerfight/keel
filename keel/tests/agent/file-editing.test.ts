@@ -974,6 +974,125 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given the LLM tries to bypass an ignored grep with read,
+    When both secret tool attempts are rejected and the LLM retries a visible file,
+    Then the secret content never reaches the LLM`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(
+      join(workspace, "secret.txt"),
+      "SECRET_VALUE=do-not-print\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "app.ts"),
+      "const target = true;\n",
+      "utf8",
+    );
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    let thirdTurnMessages: readonly Message[] = [];
+    let fourthTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "ignored-file-tool-boundary",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "ignored_grep",
+            tool: "grep",
+            pattern: "SECRET_VALUE",
+            path: "secret.txt",
+          };
+          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "ignored_read",
+            tool: "read",
+            path: "secret.txt",
+          };
+          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          return;
+        }
+
+        if (turn === 2) {
+          turn++;
+          thirdTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "visible_read",
+            tool: "read",
+            path: "app.ts",
+          };
+          yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+          return;
+        }
+
+        fourthTurnMessages = options.messages;
+        yield { type: "text", text: "File boundary held." };
+        yield { type: "stop", usage: { inputTokens: 4, outputTokens: 4 } };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "find target",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const ignoredGrepMessage = secondTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "ignored_grep",
+      );
+      expect(ignoredGrepMessage?.content).toContain("ignored path");
+      expect(ignoredGrepMessage?.content).not.toContain("do-not-print");
+
+      const ignoredReadMessage = thirdTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "ignored_read",
+      );
+      expect(ignoredReadMessage?.content).toContain("ignored path");
+      expect(ignoredReadMessage?.content).not.toContain("do-not-print");
+
+      const visibleReadMessage = fourthTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "visible_read",
+      );
+      expect(visibleReadMessage?.content).toContain("const target = true;");
+      expect(
+        [
+          ...secondTurnMessages,
+          ...thirdTurnMessages,
+          ...fourthTurnMessages,
+        ].some(
+          (message) =>
+            message.role === "tool" && message.content.includes("do-not-print"),
+        ),
+      ).toBe(false);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "File boundary held.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a text-named workspace file contains binary bytes,
     When the LLM asks the agent to read it,
     Then the read is rejected by content sniffing before reaching the LLM`, async () => {

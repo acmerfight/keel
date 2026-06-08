@@ -1,6 +1,13 @@
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { KeelError } from "../core/error.ts";
+import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
 
 function isInsideWorkspace(workspace: string, target: string): boolean {
@@ -41,6 +48,15 @@ export function executeEdit(
     throw new KeelError(
       "tool_path_outside_workspace",
       `edit failed: path is outside the workspace: ${filePath}`,
+    );
+  }
+
+  const targetStat = statSync(targetPath);
+  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  if (projectIgnorePolicy.isIgnored(targetPath, targetStat.isDirectory())) {
+    throw new KeelError(
+      "tool_path_ignored",
+      `edit failed: ignored path: ${filePath}`,
     );
   }
 

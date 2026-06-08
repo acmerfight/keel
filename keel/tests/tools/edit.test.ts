@@ -1,0 +1,122 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, test } from "vitest";
+import type { KeelErrorCode } from "../../src/core/error.ts";
+import { executeEdit } from "../../src/tools/edit.ts";
+
+function expectEditError(
+  action: () => unknown,
+  code: KeelErrorCode,
+  message: string,
+): void {
+  try {
+    action();
+    throw new Error("Expected edit tool to throw");
+  } catch (error) {
+    expect(error).toMatchObject({
+      name: "KeelError",
+      code,
+      message: expect.stringContaining(message),
+    });
+  }
+}
+
+describe("Edit Tool", () => {
+  test(`Given a project gitignore excludes a file,
+    When the edit tool is called for that file,
+    Then it rejects the request and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(join(workspace, "secret.txt"), "old secret\n", "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "secret.txt", "old", "new"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+      expect(await readFile(join(workspace, "secret.txt"), "utf8")).toBe(
+        "old secret\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a nested gitignore excludes a file,
+    When the edit tool is called for that nested file,
+    Then it rejects the request and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await mkdir(join(workspace, "src"));
+    await writeFile(join(workspace, "src", ".gitignore"), "secret.txt\n");
+    await writeFile(join(workspace, "src", "secret.txt"), "old secret\n");
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "src/secret.txt", "old", "new"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+      expect(await readFile(join(workspace, "src", "secret.txt"), "utf8")).toBe(
+        "old secret\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project gitignore excludes a directory,
+    When the edit tool is called for a file inside that directory,
+    Then it rejects the request and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await mkdir(join(workspace, "secret-dir"));
+    await writeFile(join(workspace, ".gitignore"), "secret-dir/\n", "utf8");
+    await writeFile(
+      join(workspace, "secret-dir", "secret.txt"),
+      "old secret\n",
+      "utf8",
+    );
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "secret-dir/secret.txt", "old", "new"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+      expect(
+        await readFile(join(workspace, "secret-dir", "secret.txt"), "utf8"),
+      ).toBe("old secret\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a gitignore rule re-includes a file,
+    When the edit tool is called for that re-included file,
+    Then it edits the file`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, ".gitignore"), "*.txt\n!keep.txt\n");
+    await writeFile(join(workspace, "keep.txt"), "old visible\n");
+
+    try {
+      // When
+      const result = executeEdit(workspace, "keep.txt", "old", "new");
+
+      // Then
+      expect(result.content).toBe("Edited keep.txt");
+      expect(await readFile(join(workspace, "keep.txt"), "utf8")).toBe(
+        "new visible\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+});

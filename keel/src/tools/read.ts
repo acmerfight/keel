@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import { KeelError } from "../core/error.ts";
+import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
 
 export const MAX_READ_LINES = 2000;
@@ -408,6 +409,14 @@ export function executeRead(
     throw new KeelError(
       "tool_not_file",
       `read failed: not a file: ${filePath}`,
+    );
+  }
+
+  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  if (projectIgnorePolicy.isIgnored(targetPath, false)) {
+    throw new KeelError(
+      "tool_path_ignored",
+      `read failed: ignored path: ${filePath}`,
     );
   }
 

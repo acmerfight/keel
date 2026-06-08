@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, open, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -178,6 +178,91 @@ describe("Read Tool", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project gitignore excludes a file,
+    When the read tool is called for that file,
+    Then it rejects the request before returning content`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(join(workspace, "secret.txt"), "do-not-print\n", "utf8");
+
+    try {
+      // When / Then
+      expectReadError(
+        () => executeRead(workspace, "secret.txt"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a nested gitignore excludes a file,
+    When the read tool is called for that nested file,
+    Then it rejects the request before returning content`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await mkdir(join(workspace, "src"));
+    await writeFile(join(workspace, "src", ".gitignore"), "secret.txt\n");
+    await writeFile(join(workspace, "src", "secret.txt"), "do-not-print\n");
+
+    try {
+      // When / Then
+      expectReadError(
+        () => executeRead(workspace, "src/secret.txt"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project gitignore excludes a directory,
+    When the read tool is called for a file inside that directory,
+    Then it rejects the request before returning content`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await mkdir(join(workspace, "secret-dir"));
+    await writeFile(join(workspace, ".gitignore"), "secret-dir/\n", "utf8");
+    await writeFile(
+      join(workspace, "secret-dir", "secret.txt"),
+      "do-not-print\n",
+      "utf8",
+    );
+
+    try {
+      // When / Then
+      expectReadError(
+        () => executeRead(workspace, "secret-dir/secret.txt"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a gitignore rule re-includes a file,
+    When the read tool is called for that re-included file,
+    Then it reads the file content`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await writeFile(join(workspace, ".gitignore"), "*.txt\n!keep.txt\n");
+    await writeFile(join(workspace, "keep.txt"), "visible\n");
+
+    try {
+      // When
+      const result = executeRead(workspace, "keep.txt");
+
+      // Then
+      expect(result.content).toBe("visible\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
     }
   });
 
