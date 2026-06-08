@@ -10,6 +10,7 @@ import {
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { KeelError } from "./error.ts";
+import { debugLog } from "./logger.ts";
 
 export interface RecordLastEditCheckpointOptions {
   readonly workspace: string;
@@ -148,6 +149,13 @@ function readFileIfPossible(filePath: string): string | null {
   }
 }
 
+function formatError(error: unknown): string {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}`;
+  }
+  return String(error);
+}
+
 export function recordLastEditCheckpoint(
   options: RecordLastEditCheckpointOptions,
 ): RecordLastEditCheckpointResult {
@@ -171,7 +179,10 @@ export function recordLastEditCheckpoint(
     });
 
     return { written: true };
-  } catch {
+  } catch (error) {
+    debugLog(
+      `undo checkpoint write skipped: workspace=${options.workspace} filePath=${options.filePath} error=${formatError(error)}`,
+    );
     return { written: false };
   }
 }

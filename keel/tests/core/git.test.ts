@@ -9,11 +9,13 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   recordLastEditCheckpoint,
   restoreLastEditCheckpoint,
 } from "../../src/core/git.ts";
+
+const DEBUG_ENV_KEY = "KEEL_DEBUG";
 
 interface CommandResult {
   readonly stdout: string;
@@ -166,6 +168,7 @@ describe("Git Checkpoints", () => {
     Then Keel skips it without failing`, async () => {
     // Given
     const workspace = await createGitWorkspace();
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
       // When
@@ -180,7 +183,52 @@ describe("Git Checkpoints", () => {
       // Then
       expect(record).toEqual({ written: false });
       expect(restore).toEqual({ status: "none", message: "Nothing to undo." });
+      expect(stderr).not.toHaveBeenCalled();
     } finally {
+      stderr.mockRestore();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given debug logging is enabled and checkpoint recording fails,
+    When the checkpoint is recorded,
+    Then Keel logs failure metadata without file contents`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const filePath = join(workspace, "missing.txt");
+    const previousDebug = process.env[DEBUG_ENV_KEY];
+    process.env[DEBUG_ENV_KEY] = "1";
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      // When
+      const record = recordLastEditCheckpoint({
+        workspace,
+        filePath,
+        beforeContent: "secret old content\n",
+        afterContent: "secret new content\n",
+      });
+
+      // Then
+      expect(record).toEqual({ written: false });
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining("undo checkpoint write skipped"),
+      );
+      const debugOutput = stderr.mock.calls
+        .map((call) => call.map(String).join(" "))
+        .join("\n");
+      expect(debugOutput).toContain(`workspace=${workspace}`);
+      expect(debugOutput).toContain(`filePath=${filePath}`);
+      expect(debugOutput).toContain("error=");
+      expect(debugOutput).not.toContain("secret old content");
+      expect(debugOutput).not.toContain("secret new content");
+    } finally {
+      stderr.mockRestore();
+      if (previousDebug === undefined) {
+        delete process.env[DEBUG_ENV_KEY];
+      } else {
+        process.env[DEBUG_ENV_KEY] = previousDebug;
+      }
       await rm(workspace, { recursive: true, force: true });
     }
   });
