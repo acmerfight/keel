@@ -32,8 +32,8 @@ async function createWorkspace(): Promise<string> {
 }
 
 describe("File Editing", () => {
-  test(`Given a file in the workspace contains an old word,
-    When the LLM asks the agent to edit the file,
+  test(`Given a workspace file contains text to replace,
+    When user asks for the replacement,
     Then the file is updated on disk`, async () => {
     // Given
     const workspace = await createWorkspace();
@@ -67,9 +67,9 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given one LLM turn contains multiple tool calls,
-    When the agent runs tool calls,
-    Then it rejects the turn and leaves the file unchanged`, async () => {
+  test(`Given the assistant proposes multiple file changes in one response,
+    When the agent validates the response,
+    Then it rejects the response and leaves the file unchanged`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
@@ -125,9 +125,9 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the LLM asks to edit a file outside the workspace,
-    When the agent runs the edit tool,
-    Then the tool failure is reported and the outside file is unchanged`, async () => {
+  test(`Given the assistant requests an edit outside the workspace,
+    When the agent handles the edit,
+    Then the failure is reported and the outside file is unchanged`, async () => {
     // Given
     const workspace = await createWorkspace();
     const outside = await mkdtemp(join(tmpdir(), "keel-outside-"));
@@ -177,8 +177,8 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the LLM first edits text that is not in the file,
-    When the tool reports the failure and the LLM retries with the right text,
+  test(`Given the first edit cannot find the requested text,
+    When the agent reports the failure and receives a corrected edit,
     Then the file is updated on disk`, async () => {
     // Given
     const workspace = await createWorkspace();
@@ -273,8 +273,8 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the LLM sends an empty old string,
-    When the agent runs the edit tool,
+  test(`Given the assistant proposes an empty text match,
+    When the agent validates the edit,
     Then the edit is rejected and the file is unchanged`, async () => {
     // Given
     const workspace = await createWorkspace();
@@ -304,8 +304,8 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the LLM first edits a nonexistent file,
-    When the tool reports the failure and the LLM retries with an existing file,
+  test(`Given the first edit targets a missing file,
+    When the agent reports the failure and receives an existing file edit,
     Then the file is updated on disk`, async () => {
     // Given
     const workspace = await createWorkspace();
@@ -391,9 +391,9 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given a symlink inside the workspace points outside,
-    When the LLM edits via the symlink,
-    Then the tool failure is reported and the outside file is unchanged`, async () => {
+  test(`Given a workspace symlink points outside the workspace,
+    When the agent handles an edit through the symlink,
+    Then the failure is reported and the outside file is unchanged`, async () => {
     // Given
     const workspace = await createWorkspace();
     const outside = await mkdtemp(join(tmpdir(), "keel-outside-"));
@@ -444,9 +444,9 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given a workspace file exceeds the read output budget,
-    When the LLM asks the agent to read it,
-    Then the next LLM request receives capped content with a continuation hint`, async () => {
+  test(`Given a workspace file is too large to return fully,
+    When the agent reads it,
+    Then the next response receives capped content with a continuation hint`, async () => {
     // Given
     const workspace = await createWorkspace();
     const largeContent = `${Array.from(
@@ -521,9 +521,9 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the LLM asks to read a later file window,
-    When the agent runs the read tool,
-    Then the next LLM request receives only that requested window`, async () => {
+  test(`Given a later portion of a file is requested,
+    When the agent reads the file,
+    Then the next response receives only that requested portion`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(
@@ -599,9 +599,9 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the LLM first reads a nonexistent file,
-    When the tool reports the failure and the LLM retries with an existing file,
-    Then the next LLM request receives the existing file content`, async () => {
+  test(`Given the first read targets a missing file,
+    When the agent reports the failure and receives an existing file read,
+    Then the next response receives the existing file content`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
@@ -698,9 +698,9 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the LLM first reads a directory as a file,
-    When the tool reports the failure and the LLM retries with a file,
-    Then the next LLM request receives the file content`, async () => {
+  test(`Given the first read targets a directory,
+    When the agent reports the failure and receives a file read,
+    Then the next response receives the file content`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
@@ -798,8 +798,8 @@ describe("File Editing", () => {
   });
 
   test(`Given a workspace file contains binary bytes,
-    When the LLM asks the agent to read it,
-    Then the read is rejected before content is sent back to the LLM`, async () => {
+    When the agent reads it,
+    Then the read is rejected before content is sent back`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(
@@ -853,8 +853,8 @@ describe("File Editing", () => {
   });
 
   test(`Given the user asks about an unknown symbol,
-    When the LLM searches the workspace and then reads a matching file,
-    Then the agent sends grep matches and file content back to the LLM`, async () => {
+    When the agent searches the workspace and reads a matching file,
+    Then the assistant can answer from both search matches and file content`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(
@@ -966,8 +966,8 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given a fake provider searches then reads a file,
-    When the agent runs the scripted tool calls,
+  test(`Given the agent searches and then reads a file,
+    When both inspections succeed,
     Then the user receives the final answer`, async () => {
     // Given
     const workspace = await createWorkspace();
@@ -1004,9 +1004,9 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the LLM first sends an empty grep pattern,
-    When the grep tool reports the failure and the LLM retries with a real pattern,
-    Then the agent sends the corrected grep matches back to the LLM`, async () => {
+  test(`Given the first search request has an empty query,
+    When the agent reports the failure and receives a corrected query,
+    Then corrected matches are available before the final answer`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(
@@ -1109,9 +1109,9 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the LLM first greps an ignored file,
-    When the grep tool reports the ignored path and the LLM retries a visible file,
-    Then the agent sends the corrected grep matches back to the LLM`, async () => {
+  test(`Given the first search targets an ignored file,
+    When the agent reports the ignored path and receives a visible file search,
+    Then corrected matches are available without leaking secret content`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
@@ -1224,9 +1224,9 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the LLM tries to bypass an ignored grep with read,
-    When both secret tool attempts are rejected and the LLM retries a visible file,
-    Then the secret content never reaches the LLM`, async () => {
+  test(`Given ignored content is requested through search and then read,
+    When both secret access attempts are rejected and a visible file is retried,
+    Then the secret content never enters assistant context`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
@@ -1375,8 +1375,8 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given an ignored edit fails and the LLM next asks for the filesystem root,
-    When the outside-workspace read is rejected and the LLM retries a visible file,
+  test(`Given an ignored edit fails and the assistant next requests the filesystem root,
+    When the outside-workspace read is rejected and a visible file is retried,
     Then the agent recovers without exposing the ignored secret`, async () => {
     // Given
     const workspace = await createWorkspace();
@@ -1527,8 +1527,8 @@ describe("File Editing", () => {
   });
 
   test(`Given a text-named workspace file contains binary bytes,
-    When the LLM asks the agent to read it,
-    Then the read is rejected by content sniffing before reaching the LLM`, async () => {
+    When the agent reads it,
+    Then content sniffing rejects the read before content is sent back`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "blob.txt"), Buffer.from([65, 0, 66]));
@@ -1578,8 +1578,8 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the old text appears more than once,
-    When the LLM asks the agent to edit that text,
+  test(`Given replacement text appears more than once,
+    When the agent validates the edit,
     Then the edit is rejected and the file is unchanged`, async () => {
     // Given
     const workspace = await createWorkspace();
@@ -1609,8 +1609,8 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the LLM stream yields a tool_call but never yields stop,
-    When the agent finishes reading the stream,
+  test(`Given a file-change response ends before completion,
+    When the agent detects the incomplete response,
     Then it throws and the file is unchanged`, async () => {
     // Given
     const workspace = await createWorkspace();

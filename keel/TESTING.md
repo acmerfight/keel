@@ -3,8 +3,14 @@
 ## Principles
 
 1. **Only mock LLM in agent-facing tests.** `fake` provider is the agent seam. Everything else — filesystem, processes, git — is real. Provider contract tests may use a local protocol server instead of the real upstream API. Isolation means tmpdir, not mock.
-2. **BDD.** Tests are written in business language using GWTE (Given-When-Then-Expect). PM can read `vitest --reporter=verbose` output as product spec — no code knowledge required.
-3. **Tests = product documentation.** If a behavior isn't in the test suite, it doesn't exist. If a test passes, the feature works.
+2. **BDD.** Tests are written in GWTE (Given-When-Then-Expect) language for the audience that owns that boundary. `agent/` and `cli/` titles should read as product behavior. `tools/`, `providers/`, and `invariants/` titles should read as tool, protocol, or architecture contracts.
+3. **Tests = executable specification.** If a behavior isn't in the test suite, it doesn't exist. If a test passes, the feature works.
+
+## Test Titles
+
+Every title is documentation: write `Given/When/Then` with observable setup, trigger, and result.
+
+Use the directory audience: `agent/` and `cli/` titles describe product behavior; `tools/`, `providers/`, and `invariants/` titles describe contracts. Keep fixture/protocol words out of `agent/` and `cli/` titles; put them in the test body.
 
 ## Shape
 
@@ -89,4 +95,4 @@ Do not add an agent test for every tool if the loop behavior is already covered 
 
 - Mock anything except LLM
 - Test private functions
-- Put implementation language in test names
+- Put fixture or protocol language in `agent/` and `cli/` test names

@@ -728,6 +728,33 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "missing-tool-call-index") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          id: "call_read_0",
+                          type: "function",
+                          function: {
+                            name: "read",
+                            arguments: JSON.stringify({ path: "note.txt" }),
+                          },
+                        },
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseFinish(1, 1, "tool_calls"),
+            ]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "empty-tool-arguments") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -760,6 +787,24 @@ describe("DeepSeek Provider", () => {
             );
             res.write("data: [DONE]\n\n");
             res.end();
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "invalid-json-arguments") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [readToolCallDelta('{"path": "note.txt"')],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseFinish(1, 1, "tool_calls"),
+            ]);
             return;
           }
 
@@ -2087,6 +2132,32 @@ describe("DeepSeek Provider", () => {
     });
   });
 
+  test(`Given a tool call delta is missing its index,
+    When provider reads the stream chunk,
+    Then it throws a protocol error before accumulating the tool call`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "missing-tool-call-index" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek tool call is missing index",
+    });
+  });
+
   test(`Given an edit tool call sends empty arguments,
     When provider finishes the tool call,
     Then it throws a protocol error with an empty arguments message`, async () => {
@@ -2110,6 +2181,32 @@ describe("DeepSeek Provider", () => {
       name: "KeelError",
       code: "provider_protocol_error",
       message: "DeepSeek edit tool call has empty arguments",
+    });
+  });
+
+  test(`Given a read tool call sends invalid JSON arguments,
+    When provider validates the completed tool call,
+    Then it throws a read argument protocol error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "invalid-json-arguments" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek read tool call has invalid JSON arguments",
     });
   });
 
