@@ -373,20 +373,24 @@ export async function executeGrep(
     throw new KeelError("tool_empty_pattern", "grep failed: pattern is empty");
   }
 
-  const requestedPath = options.path ?? ".";
-  const { workspacePath, targetPath } = resolveWorkspaceTarget(
+  const requestedDisplayPath = options.path ?? ".";
+  const { workspacePath, requestedPath, targetPath } = resolveWorkspaceTarget(
     workspace,
-    requestedPath,
+    requestedDisplayPath,
     "grep",
   );
-  if (hasIgnoredPathSegment(workspacePath, targetPath)) {
+  if (
+    hasIgnoredPathSegment(workspacePath, requestedPath) ||
+    hasIgnoredPathSegment(workspacePath, targetPath)
+  ) {
     throw new KeelError(
       "tool_path_ignored",
-      `grep failed: ignored path: ${requestedPath}`,
+      `grep failed: ignored path: ${requestedDisplayPath}`,
     );
   }
 
   const targetStat = statSync(targetPath);
+  const targetIsDirectory = targetStat.isDirectory();
   if (!targetStat.isDirectory() && !targetStat.isFile()) {
     throw new KeelError(
       "tool_not_file",
@@ -395,10 +399,13 @@ export async function executeGrep(
   }
   if (options.path !== undefined) {
     const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
-    if (projectIgnorePolicy.isIgnored(targetPath, targetStat.isDirectory())) {
+    if (
+      projectIgnorePolicy.isIgnored(requestedPath, targetIsDirectory) ||
+      projectIgnorePolicy.isIgnored(targetPath, targetIsDirectory)
+    ) {
       throw new KeelError(
         "tool_path_ignored",
-        `grep failed: ignored path: ${requestedPath}`,
+        `grep failed: ignored path: ${requestedDisplayPath}`,
       );
     }
   }

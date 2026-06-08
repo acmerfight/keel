@@ -6,6 +6,7 @@ type FileToolName = "edit" | "grep" | "read";
 
 export interface WorkspaceTarget {
   readonly workspacePath: string;
+  readonly requestedPath: string;
   readonly targetPath: string;
 }
 
@@ -57,5 +58,5 @@ export function resolveWorkspaceTarget(
     throw outsideWorkspaceError(toolName, requestedPath);
   }
 
-  return { workspacePath, targetPath };
+  return { workspacePath, requestedPath: absoluteRequestedPath, targetPath };
 }

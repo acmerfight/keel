@@ -17,15 +17,19 @@ export function executeEdit(
     );
   }
 
-  const { workspacePath, targetPath } = resolveWorkspaceTarget(
+  const { workspacePath, requestedPath, targetPath } = resolveWorkspaceTarget(
     workspace,
     filePath,
     "edit",
   );
 
   const targetStat = statSync(targetPath);
+  const targetIsDirectory = targetStat.isDirectory();
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
-  if (projectIgnorePolicy.isIgnored(targetPath, targetStat.isDirectory())) {
+  if (
+    projectIgnorePolicy.isIgnored(requestedPath, targetIsDirectory) ||
+    projectIgnorePolicy.isIgnored(targetPath, targetIsDirectory)
+  ) {
     throw new KeelError(
       "tool_path_ignored",
       `edit failed: ignored path: ${filePath}`,

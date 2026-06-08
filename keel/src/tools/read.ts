@@ -370,25 +370,28 @@ export function executeRead(
   filePath: string,
   options: ReadOptions = {},
 ): ToolResult {
-  const { workspacePath, targetPath } = resolveWorkspaceTarget(
+  const { workspacePath, requestedPath, targetPath } = resolveWorkspaceTarget(
     workspace,
     filePath,
     "read",
   );
 
   const stat = statSync(targetPath);
+  const targetIsDirectory = stat.isDirectory();
+  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  if (
+    projectIgnorePolicy.isIgnored(requestedPath, targetIsDirectory) ||
+    projectIgnorePolicy.isIgnored(targetPath, targetIsDirectory)
+  ) {
+    throw new KeelError(
+      "tool_path_ignored",
+      `read failed: ignored path: ${filePath}`,
+    );
+  }
   if (!stat.isFile()) {
     throw new KeelError(
       "tool_not_file",
       `read failed: not a file: ${filePath}`,
-    );
-  }
-
-  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
-  if (projectIgnorePolicy.isIgnored(targetPath, false)) {
-    throw new KeelError(
-      "tool_path_ignored",
-      `read failed: ignored path: ${filePath}`,
     );
   }
 

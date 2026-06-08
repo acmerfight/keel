@@ -222,6 +222,31 @@ describe("Read Tool", () => {
     }
   });
 
+  test(`Given a project gitignore excludes a symlink to a visible file,
+    When the read tool is called through that ignored symlink,
+    Then it rejects the request path before returning target content`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await writeFile(
+      join(workspace, ".gitignore"),
+      "ignored-link.txt\n",
+      "utf8",
+    );
+    await writeFile(join(workspace, "visible.txt"), "do-not-print\n", "utf8");
+    await symlink("visible.txt", join(workspace, "ignored-link.txt"));
+
+    try {
+      // When / Then
+      expectReadError(
+        () => executeRead(workspace, "ignored-link.txt"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a nested gitignore excludes a file,
     When the read tool is called for that nested file,
     Then it rejects the request before returning content`, async () => {
