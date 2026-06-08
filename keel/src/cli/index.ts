@@ -28,6 +28,12 @@ interface CliArgs {
   readonly maxCostUsd?: number;
 }
 
+const USAGE = [
+  "Usage: keel [--allow-bash] [--max-cost <usd>] <message>",
+  "",
+  "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
+].join("\n");
+
 const maxCostSchema = z.coerce.number().finite().positive();
 
 function env(key: string): string | undefined {
@@ -172,9 +178,7 @@ async function main(): Promise<void> {
 
   const userMessage = cliArgs.userMessage;
   if (!userMessage) {
-    process.stderr.write(
-      "Usage: keel [--allow-bash] [--max-cost <usd>] <message>\n",
-    );
+    process.stderr.write(`${USAGE}\n`);
     process.exit(1);
   }
 

@@ -104,7 +104,7 @@ const bashTool = {
   function: {
     name: "bash",
     description:
-      "Run a shell command in the workspace. Use dedicated read, grep, and edit tools for file inspection and edits when possible.",
+      "Run a trusted shell command in the workspace. Shell commands use the current OS user's permissions and are not constrained by Keel's gitignore file-tool policy. Use dedicated read, grep, and edit tools for file inspection and edits when possible.",
     parameters: {
       type: "object",
       properties: {

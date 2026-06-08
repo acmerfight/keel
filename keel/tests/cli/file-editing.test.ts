@@ -211,6 +211,33 @@ function sseGrepSecretToolCall(): string {
   });
 }
 
+function sseBashSecretToolCall(): string {
+  return sseData({
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_bash",
+              type: "function",
+              function: {
+                name: "bash",
+                arguments: JSON.stringify({
+                  command:
+                    "node -e \"process.stdout.write(require('node:fs').readFileSync('secret.txt', 'utf8'))\"",
+                }),
+              },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+    usage: null,
+  });
+}
+
 function sseMultipleEditToolCalls(): string {
   return sseData({
     choices: [
@@ -437,6 +464,97 @@ describe("CLI File Editing", () => {
         "edit",
         "bash",
       ]);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given user allows trusted shell commands,
+    When the shell reads a gitignored file,
+    Then the CLI returns the shell output as trusted access`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-bash-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(
+      join(workspace, "secret.txt"),
+      "SECRET_VALUE=trusted-shell-visible\n",
+      "utf8",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+
+        if (capturedBodies.length === 1) {
+          res.write(sseBashSecretToolCall());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 20, completion_tokens: 5 }),
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        const request = requestWithMessagesSchema.parse(
+          capturedBodies[capturedBodies.length - 1],
+        );
+        const toolMessage = request.messages?.find(
+          (message) =>
+            message.role === "tool" && message.tool_call_id === "call_bash",
+        );
+        const reply =
+          toolMessage?.content?.includes("trusted-shell-visible") === true
+            ? "SECRET_VALUE=trusted-shell-visible"
+            : "missing shell output";
+        res.write(sseTextReply(reply));
+        res.write(sseStopFinish({ prompt_tokens: 25, completion_tokens: 4 }));
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(
+        ["--allow-bash", "read the ignored file with shell"],
+        {
+          cwd: workspace,
+          env: {
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("SECRET_VALUE=trusted-shell-visible\n");
+      expect(result.stderr).toBe("");
+      expect(capturedBodies).toHaveLength(2);
+
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_bash",
+        content: expect.stringContaining("trusted-shell-visible"),
+      });
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });

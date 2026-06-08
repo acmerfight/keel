@@ -160,7 +160,12 @@ describe("CLI Text Reply", () => {
     // Then
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toBe(
-      "Usage: keel [--allow-bash] [--max-cost <usd>] <message>\n",
+      [
+        "Usage: keel [--allow-bash] [--max-cost <usd>] <message>",
+        "",
+        "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
+        "",
+      ].join("\n"),
     );
   });
 
