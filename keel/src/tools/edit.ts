@@ -1,22 +1,8 @@
-import {
-  existsSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { KeelError } from "../core/error.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
-
-function isInsideWorkspace(workspace: string, target: string): boolean {
-  const targetFromWorkspace = relative(workspace, target);
-  return (
-    targetFromWorkspace === "" ||
-    (!targetFromWorkspace.startsWith("..") && !isAbsolute(targetFromWorkspace))
-  );
-}
+import { resolveWorkspaceTarget } from "./workspace-path.ts";
 
 export function executeEdit(
   workspace: string,
@@ -31,25 +17,11 @@ export function executeEdit(
     );
   }
 
-  const workspacePath = realpathSync(workspace);
-  const requestedPath = isAbsolute(filePath)
-    ? resolve(filePath)
-    : resolve(workspacePath, filePath);
-  if (!existsSync(requestedPath)) {
-    throw new KeelError(
-      "tool_file_not_found",
-      `edit failed: file not found: ${filePath}`,
-    );
-  }
-
-  const targetPath = realpathSync(requestedPath);
-
-  if (!isInsideWorkspace(workspacePath, targetPath)) {
-    throw new KeelError(
-      "tool_path_outside_workspace",
-      `edit failed: path is outside the workspace: ${filePath}`,
-    );
-  }
+  const { workspacePath, targetPath } = resolveWorkspaceTarget(
+    workspace,
+    filePath,
+    "edit",
+  );
 
   const targetStat = statSync(targetPath);
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);

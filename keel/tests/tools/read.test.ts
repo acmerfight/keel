@@ -158,6 +158,27 @@ describe("Read Tool", () => {
     }
   });
 
+  test(`Given a read request uses a missing absolute path outside the workspace,
+    When the read tool validates the path,
+    Then it rejects the workspace escape without revealing path existence`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-read-outside-"));
+    const outsidePath = join(outside, "missing.txt");
+
+    try {
+      // When / Then
+      expectReadError(
+        () => executeRead(workspace, outsidePath),
+        "tool_path_outside_workspace",
+        "outside the workspace",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a symlink inside the workspace points outside,
     When the read tool resolves the target,
     Then it rejects the escaped path before reading the file`, async () => {

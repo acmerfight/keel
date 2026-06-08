@@ -371,6 +371,27 @@ describe("Grep Tool Path Validation", () => {
     }
   });
 
+  test(`Given a grep request uses a missing absolute path outside the workspace,
+    When the grep tool validates the path,
+    Then it rejects the workspace escape without revealing path existence`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-grep-outside-"));
+    const outsidePath = join(outside, "missing.txt");
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "secret", { path: outsidePath }),
+        "tool_path_outside_workspace",
+        "outside the workspace",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a symlink inside the workspace points outside,
     When the grep tool resolves the requested symlink,
     Then it rejects the escaped path before searching`, async () => {

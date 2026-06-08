@@ -119,29 +119,49 @@ describe("File Editing", () => {
 
   test(`Given the LLM asks to edit a file outside the workspace,
     When the agent runs the edit tool,
-    Then the edit is rejected and the outside file is unchanged`, async () => {
+    Then the tool failure is reported and the outside file is unchanged`, async () => {
     // Given
     const workspace = await createWorkspace();
     const outside = await mkdtemp(join(tmpdir(), "keel-outside-"));
     const outsidePath = join(outside, "secret.txt");
     await writeFile(outsidePath, "do not change old\n", "utf8");
+    let secondTurnMessages: readonly Message[] = [];
     const provider = createFakeProvider([
       fakeEditResponse(outsidePath, "old", "new"),
+      fakeResponse("Outside path rejected."),
     ]);
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "edit outside",
-            systemPrompt: "You are a helpful assistant.",
-            signal: freshSignal(),
-          }),
-        ),
-      ).rejects.toThrow("outside the workspace");
+      const recordingProvider: LLMProvider = {
+        id: "record-outside-edit",
+        async *stream(options) {
+          if (options.messages.some((message) => message.role === "tool")) {
+            secondTurnMessages = options.messages;
+          }
+          yield* provider.stream(options);
+        },
+      };
+
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider: recordingProvider,
+          userMessage: "edit outside",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const toolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessage?.content).toContain("outside the workspace");
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Outside path rejected.",
+      });
       expect(await readFile(outsidePath, "utf8")).toBe("do not change old\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -328,30 +348,50 @@ describe("File Editing", () => {
 
   test(`Given a symlink inside the workspace points outside,
     When the LLM edits via the symlink,
-    Then the edit is rejected and the outside file is unchanged`, async () => {
+    Then the tool failure is reported and the outside file is unchanged`, async () => {
     // Given
     const workspace = await createWorkspace();
     const outside = await mkdtemp(join(tmpdir(), "keel-outside-"));
     const outsidePath = join(outside, "secret.txt");
     await writeFile(outsidePath, "do not change old\n", "utf8");
     await symlink(outsidePath, join(workspace, "link.txt"));
+    let secondTurnMessages: readonly Message[] = [];
     const provider = createFakeProvider([
       fakeEditResponse("link.txt", "old", "new"),
+      fakeResponse("Symlink path rejected."),
     ]);
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "edit through symlink",
-            systemPrompt: "You are a helpful assistant.",
-            signal: freshSignal(),
-          }),
-        ),
-      ).rejects.toThrow("outside the workspace");
+      const recordingProvider: LLMProvider = {
+        id: "record-symlink-edit",
+        async *stream(options) {
+          if (options.messages.some((message) => message.role === "tool")) {
+            secondTurnMessages = options.messages;
+          }
+          yield* provider.stream(options);
+        },
+      };
+
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider: recordingProvider,
+          userMessage: "edit through symlink",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const toolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessage?.content).toContain("outside the workspace");
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Symlink path rejected.",
+      });
       expect(await readFile(outsidePath, "utf8")).toBe("do not change old\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1087,6 +1127,125 @@ describe("File Editing", () => {
       expect(events).toContainEqual({
         type: "text",
         text: "File boundary held.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an ignored edit fails and the LLM next asks for the filesystem root,
+    When the outside-workspace read is rejected and the LLM retries a visible file,
+    Then the agent recovers without exposing the ignored secret`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, ".gitignore"), "secret.env\n", "utf8");
+    await writeFile(join(workspace, "secret.env"), "sk-leaked-123\n", "utf8");
+    await writeFile(
+      join(workspace, "app.ts"),
+      "const target = true;\n",
+      "utf8",
+    );
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    let thirdTurnMessages: readonly Message[] = [];
+    let fourthTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "recover-outside-after-ignored-edit",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "ignored_edit",
+            tool: "edit",
+            path: "secret.env",
+            oldString: "sk-leaked-123",
+            newString: "new-key",
+          };
+          yield { type: "stop", usage: { inputTokens: 1, outputTokens: 1 } };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "root_read",
+            tool: "read",
+            path: "/",
+          };
+          yield { type: "stop", usage: { inputTokens: 2, outputTokens: 2 } };
+          return;
+        }
+
+        if (turn === 2) {
+          turn++;
+          thirdTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "visible_read",
+            tool: "read",
+            path: "app.ts",
+          };
+          yield { type: "stop", usage: { inputTokens: 3, outputTokens: 3 } };
+          return;
+        }
+
+        fourthTurnMessages = options.messages;
+        yield { type: "text", text: "Recovered after outside path." };
+        yield { type: "stop", usage: { inputTokens: 4, outputTokens: 4 } };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "change the leaked key",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const ignoredEditMessage = secondTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "ignored_edit",
+      );
+      expect(ignoredEditMessage?.content).toContain("ignored path");
+      expect(ignoredEditMessage?.content).not.toContain("sk-leaked-123");
+
+      const outsideReadMessage = thirdTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "root_read",
+      );
+      expect(outsideReadMessage?.content).toContain("outside the workspace");
+
+      const visibleReadMessage = fourthTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "visible_read",
+      );
+      expect(visibleReadMessage?.content).toContain("const target = true;");
+      expect(
+        [
+          ...secondTurnMessages,
+          ...thirdTurnMessages,
+          ...fourthTurnMessages,
+        ].some(
+          (message) =>
+            message.role === "tool" &&
+            message.content.includes("sk-leaked-123"),
+        ),
+      ).toBe(false);
+      expect(await readFile(join(workspace, "secret.env"), "utf8")).toBe(
+        "sk-leaked-123\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Recovered after outside path.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

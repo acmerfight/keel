@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -23,6 +30,74 @@ function expectEditError(
 }
 
 describe("Edit Tool", () => {
+  test(`Given an edit request uses an absolute path outside the workspace,
+    When the edit tool validates the path,
+    Then it rejects the path and leaves the outside file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-edit-outside-"));
+    const outsidePath = join(outside, "secret.txt");
+    await writeFile(outsidePath, "old secret\n", "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, outsidePath, "old", "new"),
+        "tool_path_outside_workspace",
+        "outside the workspace",
+      );
+      expect(await readFile(outsidePath, "utf8")).toBe("old secret\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit request uses a missing absolute path outside the workspace,
+    When the edit tool validates the path,
+    Then it rejects the workspace escape without revealing path existence`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-edit-outside-"));
+    const outsidePath = join(outside, "missing.txt");
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, outsidePath, "old", "new"),
+        "tool_path_outside_workspace",
+        "outside the workspace",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a symlink inside the workspace points outside,
+    When the edit tool resolves the target,
+    Then it rejects the escaped path and leaves the outside file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-edit-outside-"));
+    const outsidePath = join(outside, "secret.txt");
+    await writeFile(outsidePath, "old secret\n", "utf8");
+    await symlink(outsidePath, join(workspace, "link.txt"));
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "link.txt", "old", "new"),
+        "tool_path_outside_workspace",
+        "outside the workspace",
+      );
+      expect(await readFile(outsidePath, "utf8")).toBe("old secret\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a project gitignore excludes a file,
     When the edit tool is called for that file,
     Then it rejects the request and leaves the file unchanged`, async () => {

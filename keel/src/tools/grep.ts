@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { z } from "zod";
@@ -7,6 +7,7 @@ import { KeelError } from "../core/error.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import { resolveRipgrep } from "./ripgrep.ts";
 import type { ToolResult } from "./types.ts";
+import { resolveWorkspaceTarget } from "./workspace-path.ts";
 
 export const MAX_GREP_MATCHES = 50;
 
@@ -59,14 +60,6 @@ const ripgrepMatchSchema = z.object({
     line_number: z.number().int().positive(),
   }),
 });
-
-function isInsideWorkspace(workspace: string, target: string): boolean {
-  const targetFromWorkspace = relative(workspace, target);
-  return (
-    targetFromWorkspace === "" ||
-    (!targetFromWorkspace.startsWith("..") && !isAbsolute(targetFromWorkspace))
-  );
-}
 
 function displayPath(workspacePath: string, targetPath: string): string {
   const workspaceRelativePath = relative(workspacePath, targetPath);
@@ -380,26 +373,12 @@ export async function executeGrep(
     throw new KeelError("tool_empty_pattern", "grep failed: pattern is empty");
   }
 
-  const workspacePath = realpathSync(workspace);
   const requestedPath = options.path ?? ".";
-  const absoluteRequestedPath = isAbsolute(requestedPath)
-    ? resolve(requestedPath)
-    : resolve(workspacePath, requestedPath);
-
-  if (!existsSync(absoluteRequestedPath)) {
-    throw new KeelError(
-      "tool_file_not_found",
-      `grep failed: file not found: ${requestedPath}`,
-    );
-  }
-
-  const targetPath = realpathSync(absoluteRequestedPath);
-  if (!isInsideWorkspace(workspacePath, targetPath)) {
-    throw new KeelError(
-      "tool_path_outside_workspace",
-      `grep failed: path is outside the workspace: ${requestedPath}`,
-    );
-  }
+  const { workspacePath, targetPath } = resolveWorkspaceTarget(
+    workspace,
+    requestedPath,
+    "grep",
+  );
   if (hasIgnoredPathSegment(workspacePath, targetPath)) {
     throw new KeelError(
       "tool_path_ignored",
