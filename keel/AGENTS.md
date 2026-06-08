@@ -131,8 +131,9 @@ PR summary format (English, diff against latest main before writing):
 See [TESTING.md](TESTING.md). Summary:
 
 1. Only mock LLM (`fake` provider). Everything else is real.
-2. BDD with GWTE format. Business language. Tests = product spec.
+2. BDD with GWTE format. Tests are executable specs for the boundary they cover.
 3. Final verification uses `pnpm test:coverage`, not `pnpm test`.
 4. No vi.mock, no mocking internals, no testing private functions.
 5. Tool behavior that changes agent control flow needs at least one `tests/agent/` case.
 6. Agent tests cover control-flow classes, not every tool sequence. Keep tool/provider/state risks at their owning boundary.
+7. `agent/` and `cli/` titles must read as product behavior; `tools/`, `providers/`, and `invariants/` titles should read as tool, protocol, or architecture contracts. Keep fixture/protocol words out of `agent/` and `cli/` test titles.
