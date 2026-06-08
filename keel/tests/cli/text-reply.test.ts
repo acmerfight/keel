@@ -98,6 +98,32 @@ function close(server: Server): Promise<void> {
   });
 }
 
+function sseTextReplyWithUsage(
+  text: string,
+  usage: {
+    readonly promptTokens: number;
+    readonly promptCacheHitTokens: number;
+    readonly promptCacheMissTokens: number;
+    readonly completionTokens: number;
+  },
+): string {
+  return [
+    `data: ${JSON.stringify({
+      choices: [{ delta: { content: text } }],
+    })}\n\n`,
+    `data: ${JSON.stringify({
+      choices: [{ delta: {}, finish_reason: "stop" }],
+      usage: {
+        prompt_tokens: usage.promptTokens,
+        prompt_cache_hit_tokens: usage.promptCacheHitTokens,
+        prompt_cache_miss_tokens: usage.promptCacheMissTokens,
+        completion_tokens: usage.completionTokens,
+      },
+    })}\n\n`,
+    "data: [DONE]\n\n",
+  ].join("");
+}
+
 function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -133,7 +159,7 @@ describe("CLI Text Reply", () => {
 
     // Then
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toBe("Usage: keel <message>\n");
+    expect(result.stderr).toBe("Usage: keel [--max-cost <usd>] <message>\n");
   });
 
   test(`Given user asks for diagnostics,
@@ -170,6 +196,124 @@ describe("CLI Text Reply", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).not.toBe("");
     expect(result.stdout.trim()).not.toBe("keel v0.0.1");
+  });
+
+  test.each(["0", "abc"])(`Given an invalid max cost value %s,
+    When user runs the CLI,
+    Then the CLI exits with a validation error before requiring a provider`, async (maxCost) => {
+    // Given
+    const args: readonly string[] = ["--max-cost", maxCost, "hello"];
+
+    // When
+    const result = await runCli(args, {
+      KEEL_PROVIDER: "deepseek",
+      DEEPSEEK_API_KEY: "",
+    });
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Error: --max-cost must be a positive number.\n",
+    );
+  });
+
+  test(`Given a max cost and a DeepSeek-compatible API reports costly usage,
+    When user runs the CLI,
+    Then the CLI prints the spent cost and exits successfully`, async () => {
+    // Given
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.write(
+          sseTextReplyWithUsage("Done.", {
+            promptTokens: 1_000_000,
+            promptCacheHitTokens: 0,
+            promptCacheMissTokens: 1_000_000,
+            completionTokens: 0,
+          }),
+        );
+        res.end();
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(
+        ["--max-cost", "0.001", "summarize expensive context"],
+        {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      );
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Done.\n");
+      expect(result.stderr).toContain("Cost: $");
+      expect(result.stderr).toContain("budget $0.0010 exceeded");
+    } finally {
+      await close(server);
+    }
+  });
+
+  test(`Given a tiny max cost and a DeepSeek-compatible API reports a tiny overage,
+    When user runs the CLI,
+    Then the CLI prints non-zero spent cost and budget values`, async () => {
+    // Given
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.write(
+          sseTextReplyWithUsage("Done.", {
+            promptTokens: 10,
+            promptCacheHitTokens: 0,
+            promptCacheMissTokens: 10,
+            completionTokens: 0,
+          }),
+        );
+        res.end();
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["--max-cost", "0.000001", "summarize"], {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("Cost: $0.000001");
+      expect(result.stderr).toContain("budget $0.000001 exceeded");
+    } finally {
+      await close(server);
+    }
   });
 
   test(`Given no provider API key and no fake provider,

@@ -28,10 +28,17 @@ function sseFinish(
   inputTokens: number,
   outputTokens: number,
   finishReason = "stop",
+  cachedInputTokens = 0,
 ): string {
+  const uncachedInputTokens = inputTokens - cachedInputTokens;
   const chunk = JSON.stringify({
     choices: [{ delta: {}, finish_reason: finishReason }],
-    usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens },
+    usage: {
+      prompt_tokens: inputTokens,
+      prompt_cache_hit_tokens: cachedInputTokens,
+      prompt_cache_miss_tokens: uncachedInputTokens,
+      completion_tokens: outputTokens,
+    },
   });
   return `data: ${chunk}\n\ndata: [DONE]\n\n`;
 }
@@ -42,7 +49,12 @@ function sseFinishWithoutTrailingNewline(
 ): string {
   const chunk = JSON.stringify({
     choices: [{ delta: {}, finish_reason: "stop" }],
-    usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens },
+    usage: {
+      prompt_tokens: inputTokens,
+      prompt_cache_hit_tokens: 0,
+      prompt_cache_miss_tokens: inputTokens,
+      completion_tokens: outputTokens,
+    },
   });
   return `data: ${chunk}\n\ndata: [DONE]`;
 }
@@ -355,6 +367,29 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "inconsistent-cache-usage") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(sseChunk("metered output"));
+            res.write(
+              sseData({
+                choices: [{ delta: {}, finish_reason: "stop" }],
+                usage: {
+                  prompt_tokens: 10,
+                  prompt_cache_hit_tokens: 4,
+                  prompt_cache_miss_tokens: 5,
+                  completion_tokens: 3,
+                },
+              }),
+            );
+            res.write("data: [DONE]\n\n");
+            res.end();
+            return;
+          }
+
           if (
             parsed.messages?.[1]?.content === "usage-null-before-final-usage"
           ) {
@@ -370,6 +405,18 @@ describe("DeepSeek Provider", () => {
               }),
             );
             res.write(sseFinish(8, 4));
+            res.end();
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "cached-usage") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(sseChunk("cached"));
+            res.write(sseFinish(10, 5, "stop", 4));
             res.end();
             return;
           }
@@ -391,7 +438,12 @@ describe("DeepSeek Provider", () => {
               sseChunk("partial output"),
               sseData({
                 choices: [{ delta: {} }],
-                usage: { prompt_tokens: 10, completion_tokens: 4 },
+                usage: {
+                  prompt_tokens: 10,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 10,
+                  completion_tokens: 4,
+                },
               }),
               "data: [DONE]\n\n",
             ]);
@@ -449,7 +501,12 @@ describe("DeepSeek Provider", () => {
             res.write(
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 30, completion_tokens: 8 },
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
               }),
             );
             res.write("data: [DONE]\n\n");
@@ -480,7 +537,12 @@ describe("DeepSeek Provider", () => {
               }),
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 30, completion_tokens: 8 },
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
               }),
               "data: [DONE]\n\n",
             ]);
@@ -508,7 +570,12 @@ describe("DeepSeek Provider", () => {
               }),
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 24, completion_tokens: 6 },
+                usage: {
+                  prompt_tokens: 24,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 24,
+                  completion_tokens: 6,
+                },
               }),
               "data: [DONE]\n\n",
             ]);
@@ -537,7 +604,12 @@ describe("DeepSeek Provider", () => {
               }),
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 26, completion_tokens: 7 },
+                usage: {
+                  prompt_tokens: 26,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 26,
+                  completion_tokens: 7,
+                },
               }),
               "data: [DONE]\n\n",
             ]);
@@ -565,7 +637,12 @@ describe("DeepSeek Provider", () => {
               }),
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 25, completion_tokens: 6 },
+                usage: {
+                  prompt_tokens: 25,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 25,
+                  completion_tokens: 6,
+                },
               }),
               "data: [DONE]\n\n",
             ]);
@@ -603,7 +680,12 @@ describe("DeepSeek Provider", () => {
             res.write(
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 30, completion_tokens: 8 },
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
               }),
             );
             res.write("data: [DONE]\n\n");
@@ -633,7 +715,12 @@ describe("DeepSeek Provider", () => {
             res.write(
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 30, completion_tokens: 8 },
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
               }),
             );
             res.write("data: [DONE]\n\n");
@@ -663,7 +750,12 @@ describe("DeepSeek Provider", () => {
             res.write(
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 30, completion_tokens: 8 },
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
               }),
             );
             res.write("data: [DONE]\n\n");
@@ -699,7 +791,12 @@ describe("DeepSeek Provider", () => {
               }),
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 30, completion_tokens: 8 },
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
               }),
               "data: [DONE]\n\n",
             ]);
@@ -731,7 +828,12 @@ describe("DeepSeek Provider", () => {
               }),
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 30, completion_tokens: 8 },
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
               }),
               "data: [DONE]\n\n",
             ]);
@@ -757,7 +859,12 @@ describe("DeepSeek Provider", () => {
               }),
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 30, completion_tokens: 8 },
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
               }),
               "data: [DONE]\n\n",
             ]);
@@ -781,7 +888,12 @@ describe("DeepSeek Provider", () => {
               }),
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 30, completion_tokens: 8 },
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
               }),
               "data: [DONE]\n\n",
             ]);
@@ -811,7 +923,12 @@ describe("DeepSeek Provider", () => {
               }),
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 30, completion_tokens: 8 },
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
               }),
               "data: [DONE]\n\n",
             ]);
@@ -822,7 +939,12 @@ describe("DeepSeek Provider", () => {
             writeSseResponse(res, [
               sseData({
                 choices: [{ delta: {}, finish_reason: "tool_calls" }],
-                usage: { prompt_tokens: 30, completion_tokens: 8 },
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
               }),
               "data: [DONE]\n\n",
             ]);
@@ -878,7 +1000,12 @@ describe("DeepSeek Provider", () => {
             res.write(
               sseData({
                 choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-                usage: { prompt_tokens: 12, completion_tokens: 6 },
+                usage: {
+                  prompt_tokens: 12,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 12,
+                  completion_tokens: 6,
+                },
               }),
             );
             res.write("data: [DONE]\n\n");
@@ -948,7 +1075,47 @@ describe("DeepSeek Provider", () => {
     const stopEvent = events.find((e) => e.type === "stop");
     expect(stopEvent).toEqual({
       type: "stop",
-      usage: { inputTokens: 10, outputTokens: 5 },
+      usage: {
+        inputTokens: 10,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 10,
+        outputTokens: 5,
+      },
+    });
+  });
+
+  test(`Given a DeepSeek-compatible API reports cached and uncached prompt usage,
+    When provider streams a response,
+    Then usage preserves the exact cache split`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "cached-usage" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    const textEvents = events.filter((e) => e.type === "text");
+    expect(textEvents.map((e) => e.text).join("")).toBe("cached");
+
+    const stopEvent = events.find((e) => e.type === "stop");
+    expect(stopEvent).toEqual({
+      type: "stop",
+      usage: {
+        inputTokens: 10,
+        cachedInputTokens: 4,
+        uncachedInputTokens: 6,
+        outputTokens: 5,
+      },
     });
   });
 
@@ -1523,6 +1690,32 @@ describe("DeepSeek Provider", () => {
     });
   });
 
+  test(`Given a stream chunk has inconsistent cache usage totals,
+    When provider reads the chunk,
+    Then it throws a protocol error before reporting usage`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "inconsistent-cache-usage" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream chunk has invalid schema",
+    });
+  });
+
   test(`Given a stream chunk contains null usage before final usage,
     When provider reads the stream,
     Then it ignores null usage and reports the final usage`, async () => {
@@ -1549,7 +1742,12 @@ describe("DeepSeek Provider", () => {
     const stopEvent = events.find((e) => e.type === "stop");
     expect(stopEvent).toEqual({
       type: "stop",
-      usage: { inputTokens: 8, outputTokens: 4 },
+      usage: {
+        inputTokens: 8,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 8,
+        outputTokens: 4,
+      },
     });
   });
 
@@ -1579,7 +1777,12 @@ describe("DeepSeek Provider", () => {
     const stopEvent = events.find((e) => e.type === "stop");
     expect(stopEvent).toEqual({
       type: "stop",
-      usage: { inputTokens: 7, outputTokens: 3 },
+      usage: {
+        inputTokens: 7,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 7,
+        outputTokens: 3,
+      },
     });
   });
 
@@ -1638,7 +1841,15 @@ describe("DeepSeek Provider", () => {
         offset: 607,
         limit: 20,
       },
-      { type: "stop", usage: { inputTokens: 30, outputTokens: 8 } },
+      {
+        type: "stop",
+        usage: {
+          inputTokens: 30,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 30,
+          outputTokens: 8,
+        },
+      },
     ]);
   });
 
@@ -1669,7 +1880,15 @@ describe("DeepSeek Provider", () => {
         tool: "read",
         path: "note.txt",
       },
-      { type: "stop", usage: { inputTokens: 24, outputTokens: 6 } },
+      {
+        type: "stop",
+        usage: {
+          inputTokens: 24,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 24,
+          outputTokens: 6,
+        },
+      },
     ]);
   });
 
@@ -1701,7 +1920,15 @@ describe("DeepSeek Provider", () => {
         pattern: "handleSubmit",
         path: "src",
       },
-      { type: "stop", usage: { inputTokens: 26, outputTokens: 7 } },
+      {
+        type: "stop",
+        usage: {
+          inputTokens: 26,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 26,
+          outputTokens: 7,
+        },
+      },
     ]);
   });
 
@@ -1732,13 +1959,21 @@ describe("DeepSeek Provider", () => {
         tool: "grep",
         pattern: "",
       },
-      { type: "stop", usage: { inputTokens: 25, outputTokens: 6 } },
+      {
+        type: "stop",
+        usage: {
+          inputTokens: 25,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 25,
+          outputTokens: 6,
+        },
+      },
     ]);
   });
 
   test(`Given a stream chunk contains multiple tool calls,
     When provider reads the chunk,
-    Then it throws a protocol error instead of ignoring extra tool calls`, async () => {
+    Then it emits each tool call before the stop event`, async () => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "test-key",
@@ -1746,25 +1981,48 @@ describe("DeepSeek Provider", () => {
       model: "deepseek-v4-flash",
     });
 
-    // When / Then
-    await expect(
-      collect(
-        provider.stream({
-          systemPrompt: "You are helpful.",
-          messages: [{ role: "user", content: "multiple-tool-calls" }],
-          signal: freshSignal(),
-        }),
-      ),
-    ).rejects.toMatchObject({
-      name: "KeelError",
-      code: "provider_protocol_error",
-      message: "DeepSeek returned more than one tool call",
-    });
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "multiple-tool-calls" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_edit_0",
+        tool: "edit",
+        path: "one.txt",
+        oldString: "old",
+        newString: "new",
+      },
+      {
+        type: "tool_call",
+        id: "call_edit_1",
+        tool: "edit",
+        path: "two.txt",
+        oldString: "old",
+        newString: "new",
+      },
+      {
+        type: "stop",
+        usage: {
+          inputTokens: 30,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 30,
+          outputTokens: 8,
+        },
+      },
+    ]);
   });
 
   test(`Given a stream chunk contains a nonzero tool call index,
     When provider reads the chunk,
-    Then it throws a protocol error`, async () => {
+    Then it parses that indexed tool call`, async () => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "test-key",
@@ -1772,20 +2030,35 @@ describe("DeepSeek Provider", () => {
       model: "deepseek-v4-flash",
     });
 
-    // When / Then
-    await expect(
-      collect(
-        provider.stream({
-          systemPrompt: "You are helpful.",
-          messages: [{ role: "user", content: "nonzero-tool-call-index" }],
-          signal: freshSignal(),
-        }),
-      ),
-    ).rejects.toMatchObject({
-      name: "KeelError",
-      code: "provider_protocol_error",
-      message: "DeepSeek returned unsupported tool call index: 1",
-    });
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "nonzero-tool-call-index" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_edit_1",
+        tool: "edit",
+        path: "note.txt",
+        oldString: "old",
+        newString: "new",
+      },
+      {
+        type: "stop",
+        usage: {
+          inputTokens: 30,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 30,
+          outputTokens: 8,
+        },
+      },
+    ]);
   });
 
   test(`Given an edit tool call never sends arguments,
@@ -2111,7 +2384,12 @@ describe("DeepSeek Provider", () => {
     const stopEvent = events.find((e) => e.type === "stop");
     expect(stopEvent).toEqual({
       type: "stop",
-      usage: { inputTokens: 12, outputTokens: 6 },
+      usage: {
+        inputTokens: 12,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 12,
+        outputTokens: 6,
+      },
     });
   });
 

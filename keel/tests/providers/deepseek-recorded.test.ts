@@ -102,7 +102,12 @@ describe("DeepSeek Recorded Fixtures", () => {
       );
       expect(events.at(-1)).toEqual({
         type: "stop",
-        usage: { inputTokens: 19, outputTokens: 34 },
+        usage: {
+          inputTokens: 19,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 19,
+          outputTokens: 34,
+        },
       });
     });
   });
@@ -139,7 +144,12 @@ describe("DeepSeek Recorded Fixtures", () => {
         },
         {
           type: "stop",
-          usage: { inputTokens: 355, outputTokens: 100 },
+          usage: {
+            inputTokens: 355,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 355,
+            outputTokens: 100,
+          },
         },
       ]);
     });

@@ -1,5 +1,7 @@
 export interface Usage {
   readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly uncachedInputTokens: number;
   readonly outputTokens: number;
 }
 
