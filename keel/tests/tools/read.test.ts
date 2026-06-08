@@ -266,6 +266,27 @@ describe("Read Tool", () => {
     }
   });
 
+  test(`Given a project gitignore excludes a visible symlink target,
+    When the read tool is called through the symlink,
+    Then it rejects the resolved target before returning content`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(join(workspace, "secret.txt"), "do-not-print\n", "utf8");
+    await symlink("secret.txt", join(workspace, "visible-link.txt"));
+
+    try {
+      // When / Then
+      expectReadError(
+        () => executeRead(workspace, "visible-link.txt"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a project gitignore excludes a missing directory namespace,
     When the read tool is called for a missing file inside that namespace,
     Then it rejects the ignored path without revealing path existence`, async () => {

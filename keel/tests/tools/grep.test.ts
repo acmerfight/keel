@@ -439,6 +439,27 @@ describe("Grep Tool Path Validation", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test(`Given a project gitignore excludes a visible symlink target,
+    When the grep tool is called through the symlink,
+    Then it rejects the resolved target before searching content`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(join(workspace, "secret.txt"), "needle\n", "utf8");
+    await symlink("secret.txt", join(workspace, "visible-link.txt"));
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "needle", { path: "visible-link.txt" }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Grep Tool Process Lifecycle", () => {

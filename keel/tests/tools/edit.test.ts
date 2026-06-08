@@ -168,6 +168,30 @@ describe("Edit Tool", () => {
     }
   });
 
+  test(`Given a project gitignore excludes a visible symlink target,
+    When the edit tool is called through the symlink,
+    Then it rejects the resolved target and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(join(workspace, "secret.txt"), "old secret\n", "utf8");
+    await symlink("secret.txt", join(workspace, "visible-link.txt"));
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "visible-link.txt", "old", "new"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+      expect(await readFile(join(workspace, "secret.txt"), "utf8")).toBe(
+        "old secret\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a project gitignore excludes a missing directory namespace,
     When the edit tool is called for a missing file inside that namespace,
     Then it rejects the ignored path without revealing path existence`, async () => {
