@@ -8,7 +8,9 @@
 
 ## Test Titles
 
-Every test title must include the observable setup, trigger, and result. Keep implementation fixtures out of `agent/` and `cli/` titles: avoid terms such as fake provider, stream chunk, tool_call, provider fixture, and raw protocol sentinels. Put those details in the test body when they are needed to create the scenario.
+Every title is documentation: write `Given/When/Then` with observable setup, trigger, and result.
+
+Use the directory audience: `agent/` and `cli/` titles describe product behavior; `tools/`, `providers/`, and `invariants/` titles describe contracts. Keep fixture/protocol words out of `agent/` and `cli/` titles; put them in the test body.
 
 ## Shape
 
@@ -93,4 +95,4 @@ Do not add an agent test for every tool if the loop behavior is already covered 
 
 - Mock anything except LLM
 - Test private functions
-- Put implementation language in test names
+- Put fixture or protocol language in `agent/` and `cli/` test names
