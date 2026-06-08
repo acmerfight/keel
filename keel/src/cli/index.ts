@@ -3,6 +3,7 @@
 import { z } from "zod";
 import type { CostReport } from "../agent/loop.ts";
 import { runAgent } from "../agent/loop.ts";
+import { restoreLastEditCheckpoint } from "../core/git.ts";
 import {
   createDeepseekProvider,
   DEEPSEEK_V4_FLASH_COST_MODEL,
@@ -21,15 +22,19 @@ interface CliEditRequest {
   readonly newString: string;
 }
 
-interface CliArgs {
-  readonly doctor: boolean;
-  readonly allowBash: boolean;
-  readonly userMessage?: string;
-  readonly maxCostUsd?: number;
-}
+type CliArgs =
+  | { readonly command: "doctor" }
+  | { readonly command: "undo" }
+  | {
+      readonly command: "run";
+      readonly allowBash: boolean;
+      readonly userMessage?: string;
+      readonly maxCostUsd?: number;
+    };
 
 const USAGE = [
   "Usage: keel [--allow-bash] [--max-cost <usd>] <message>",
+  "       keel /undo",
   "",
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
 ].join("\n");
@@ -51,7 +56,11 @@ function parseMaxCost(raw: string | undefined): number {
 
 function parseCliArgs(args: readonly string[]): CliArgs {
   if (args[0] === "--doctor") {
-    return { doctor: true, allowBash: false };
+    return { command: "doctor" };
+  }
+
+  if (args[0] === "/undo") {
+    return { command: "undo" };
   }
 
   let allowBash = false;
@@ -84,7 +93,7 @@ function parseCliArgs(args: readonly string[]): CliArgs {
   }
 
   return {
-    doctor: false,
+    command: "run",
     allowBash,
     ...(userMessage !== undefined ? { userMessage } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
@@ -168,12 +177,29 @@ function resolveProvider(userMessage: string): LLMProvider {
 
 async function main(): Promise<void> {
   const cliArgs = parseCliArgs(process.argv.slice(2));
-  if (cliArgs.doctor) {
+  if (cliArgs.command === "doctor") {
     const result = await runDoctor();
     process.stdout.write(result.stdout);
     process.stderr.write(result.stderr);
     process.exitCode = result.exitCode;
     return;
+  }
+
+  if (cliArgs.command === "undo") {
+    const result = restoreLastEditCheckpoint(process.cwd());
+    switch (result.status) {
+      case "restored":
+        process.stdout.write(`Restored ${result.filePath}\n`);
+        return;
+      case "none":
+        process.stderr.write(`${result.message}\n`);
+        process.exitCode = 1;
+        return;
+      case "blocked":
+        process.stderr.write(`${result.message}\n`);
+        process.exitCode = 1;
+        return;
+    }
   }
 
   const userMessage = cliArgs.userMessage;

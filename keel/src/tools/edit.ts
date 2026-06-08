@@ -1,5 +1,6 @@
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { KeelError } from "../core/error.ts";
+import { recordLastEditCheckpoint } from "../core/git.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
 import { resolveWorkspaceTarget } from "./workspace-path.ts";
@@ -58,6 +59,12 @@ export function executeEdit(
     newString +
     content.slice(firstMatch + oldString.length);
   writeFileSync(targetPath, updated, "utf8");
+  recordLastEditCheckpoint({
+    workspace: workspacePath,
+    filePath: targetPath,
+    beforeContent: content,
+    afterContent: updated,
+  });
 
   return { content: `Edited ${filePath}` };
 }
