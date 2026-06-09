@@ -975,4 +975,135 @@ describe("CLI File Editing", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test(`Given two workspace files each contain a typo,
+    When user runs the CLI with a provider that edits both,
+    Then both files are edited and stdout contains only the final reply`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-multi-edit-"));
+    await writeFile(join(workspace, "a.txt"), "hello wrold\n", "utf8");
+    await writeFile(join(workspace, "b.txt"), "goodby world\n", "utf8");
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      req.resume();
+      req.on("end", () => {
+        requestCount++;
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+
+        if (requestCount === 1) {
+          res.write(
+            sseData({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "call_edit_a",
+                        type: "function",
+                        function: {
+                          name: "edit",
+                          arguments: JSON.stringify({
+                            path: "a.txt",
+                            oldString: "wrold",
+                            newString: "world",
+                          }),
+                        },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+              usage: null,
+            }),
+          );
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 20, completion_tokens: 5 }),
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        if (requestCount === 2) {
+          res.write(
+            sseData({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "call_edit_b",
+                        type: "function",
+                        function: {
+                          name: "edit",
+                          arguments: JSON.stringify({
+                            path: "b.txt",
+                            oldString: "goodby",
+                            newString: "goodbye",
+                          }),
+                        },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+              usage: null,
+            }),
+          );
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 5 }),
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.write(sseTextReply("Fixed both files."));
+        res.write(sseStopFinish({ prompt_tokens: 40, completion_tokens: 4 }));
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["fix typos in both files"], {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(await readFile(join(workspace, "a.txt"), "utf8")).toBe(
+        "hello world\n",
+      );
+      expect(await readFile(join(workspace, "b.txt"), "utf8")).toBe(
+        "goodbye world\n",
+      );
+      expect(result.stdout).toBe("Fixed both files.\n");
+      expect(result.stderr).toBe("");
+      expect(requestCount).toBe(3);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 });
