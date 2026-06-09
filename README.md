@@ -17,7 +17,6 @@ Included for study during development. Will be removed once keel is self-suffici
 | [OpenCode](https://github.com/anomalyco/opencode) | TypeScript | Wire protocol, VCR testing, provider/protocol layering |
 | [Codex CLI](https://github.com/openai/codex) | Rust | Sandbox execution, apply-patch edit strategy |
 | [Claude Code](https://github.com/anthropics/claude-code) | Shell/TS | Tool naming, system prompt design |
-| [Aider](https://github.com/Aider-AI/aider) | Python | Repo-map (tree-sitter + PageRank), multi-layer edit fallback |
 
 ## Setup
 
