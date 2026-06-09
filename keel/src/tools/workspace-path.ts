@@ -117,9 +117,7 @@ function deepestExistingAncestor(
 ): string {
   let currentPath = targetPath;
   while (!pathExistsForCreate(currentPath, toolName, requestedPath)) {
-    const parentPath = dirname(currentPath);
-    if (parentPath === currentPath) return currentPath;
-    currentPath = parentPath;
+    currentPath = dirname(currentPath);
   }
   return currentPath;
 }
