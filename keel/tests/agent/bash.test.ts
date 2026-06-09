@@ -203,6 +203,91 @@ describe("Bash Commands", () => {
     }
   });
 
+  test(`Given an allowed shell command has a custom timeout,
+    When the assistant runs it before replying,
+    Then the timeout is applied and the timed-out result is sent back`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "timed-bash",
+      async *stream(options) {
+        if (options.messages.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "slow_command",
+            tool: "bash",
+            command: `node -e "setTimeout(() => {}, 1000)"`,
+            timeoutMs: 25,
+          };
+        } else {
+          secondTurnMessages = options.messages;
+          yield { type: "text", text: "The command timed out." };
+        }
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "run the slow check",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "text",
+        text: "The command timed out.",
+      });
+      expect(secondTurnMessages).toContainEqual({
+        role: "tool",
+        toolCallId: "slow_command",
+        content: expect.stringContaining("Command timed out after 25ms"),
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an allowed shell command has an invalid timeout,
+    When the assistant tries to run it,
+    Then the agent rejects the terminal tool error`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const provider = createFakeProvider([
+      fakeBashResponse('node -e ""', ZERO_USAGE, { timeoutMs: 0 }),
+    ]);
+
+    try {
+      // When / Then
+      await expect(
+        collect(
+          runAgent({
+            workspace,
+            provider,
+            userMessage: "run with an invalid timeout",
+            systemPrompt: "You are helpful.",
+            signal: freshSignal(),
+            allowBash: true,
+          }),
+        ),
+      ).rejects.toMatchObject({
+        code: "tool_invalid_bash_timeout",
+        message:
+          "bash failed: timeout must be an integer between 1 and 60000ms",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the first shell command is empty,
     When the agent reports the failure and receives a valid command,
     Then it runs the corrected command`, async () => {

@@ -7,10 +7,12 @@ import { executeEdit } from "../tools/edit.ts";
 import { executeGrep } from "../tools/grep.ts";
 import { executeRead } from "../tools/read.ts";
 
-const MAX_AGENT_TURNS = 8;
+const MAX_AGENT_TURNS = 16;
 const RECOVERABLE_TOOL_ERRORS = new Set<KeelErrorCode>([
+  "tool_binary_file",
   "tool_file_not_found",
   "tool_empty_command",
+  "tool_empty_old_string",
   "tool_empty_pattern",
   "tool_not_file",
   "tool_old_string_not_found",
@@ -53,6 +55,13 @@ interface AgentTurn {
   readonly usage: Usage;
 }
 
+interface ExecuteToolCallOptions {
+  readonly workspace: string;
+  readonly toolCall: ToolCall;
+  readonly signal: AbortSignal;
+  readonly allowBash: boolean;
+}
+
 function addUsage(left: Usage, right: Usage): Usage {
   return {
     inputTokens: left.inputTokens + right.inputTokens,
@@ -93,15 +102,76 @@ function finishAgentTurn(
   };
 }
 
-function singleToolCall(toolCalls: readonly ToolCall[]): ToolCall | null {
-  const [toolCall, extraToolCall] = toolCalls;
-  if (extraToolCall !== undefined) {
-    throw new KeelError(
-      "agent_unsupported_tool_calls",
-      "Keel does not support multiple tool calls in one turn",
-    );
+async function executeToolCall(
+  options: ExecuteToolCallOptions,
+): Promise<string> {
+  const { workspace, toolCall, signal, allowBash } = options;
+  switch (toolCall.tool) {
+    case "grep": {
+      try {
+        const result = await executeGrep(workspace, toolCall.pattern, {
+          ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
+          signal,
+        });
+        return result.content;
+      } catch (error) {
+        if (!isRecoverableToolError(error)) {
+          throw error;
+        }
+        return toolFailureMessage(error);
+      }
+    }
+    case "read": {
+      try {
+        const result = executeRead(workspace, toolCall.path, {
+          offset: toolCall.offset,
+          limit: toolCall.limit,
+        });
+        return result.content;
+      } catch (error) {
+        if (!isRecoverableToolError(error)) {
+          throw error;
+        }
+        return toolFailureMessage(error);
+      }
+    }
+    case "bash": {
+      if (!allowBash) {
+        return "Tool failed: bash failed: shell commands are disabled. Re-run with --allow-bash to enable them.";
+      }
+
+      try {
+        const result = await executeBash(workspace, toolCall.command, {
+          signal,
+          ...(toolCall.timeoutMs !== undefined
+            ? { timeoutMs: toolCall.timeoutMs }
+            : {}),
+        });
+        return result.content;
+      } catch (error) {
+        if (!isRecoverableToolError(error)) {
+          throw error;
+        }
+        return toolFailureMessage(error);
+      }
+    }
+    case "edit": {
+      try {
+        const result = executeEdit(
+          workspace,
+          toolCall.path,
+          toolCall.oldString,
+          toolCall.newString,
+        );
+        return result.content;
+      } catch (error) {
+        if (!isRecoverableToolError(error)) {
+          throw error;
+        }
+        return toolFailureMessage(error);
+      }
+    }
   }
-  return toolCall ?? null;
 }
 
 export async function* runAgent(
@@ -175,8 +245,7 @@ export async function* runAgent(
       return;
     }
 
-    const toolCall = singleToolCall(turnResult.toolCalls);
-    if (toolCall === null) {
+    if (turnResult.toolCalls.length === 0) {
       yield {
         type: "end",
         usage: totalUsage,
@@ -188,134 +257,21 @@ export async function* runAgent(
     messages.push({
       role: "assistant",
       content: turnResult.text,
-      toolCalls: [toolCall],
+      toolCalls: turnResult.toolCalls,
     });
 
-    switch (toolCall.tool) {
-      case "grep": {
-        let result: { readonly content: string };
-        try {
-          result = await executeGrep(workspace, toolCall.pattern, {
-            ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
-            signal,
-          });
-        } catch (error) {
-          if (!isRecoverableToolError(error)) {
-            throw error;
-          }
-          messages.push({
-            role: "tool",
-            toolCallId: toolCall.id,
-            content: toolFailureMessage(error),
-          });
-          break;
-        }
-
-        messages.push({
-          role: "tool",
-          toolCallId: toolCall.id,
-          content: result.content,
-        });
-        break;
-      }
-      case "read": {
-        let result: { readonly content: string };
-        try {
-          result = executeRead(workspace, toolCall.path, {
-            offset: toolCall.offset,
-            limit: toolCall.limit,
-          });
-        } catch (error) {
-          if (!isRecoverableToolError(error)) {
-            throw error;
-          }
-          messages.push({
-            role: "tool",
-            toolCallId: toolCall.id,
-            content: toolFailureMessage(error),
-          });
-          break;
-        }
-
-        messages.push({
-          role: "tool",
-          toolCallId: toolCall.id,
-          content: result.content,
-        });
-        break;
-      }
-      case "bash": {
-        if (!allowBash) {
-          messages.push({
-            role: "tool",
-            toolCallId: toolCall.id,
-            content:
-              "Tool failed: bash failed: shell commands are disabled. Re-run with --allow-bash to enable them.",
-          });
-          break;
-        }
-
-        let result: { readonly content: string };
-        try {
-          result = await executeBash(workspace, toolCall.command, {
-            signal,
-            ...(toolCall.timeoutMs !== undefined
-              ? { timeoutMs: toolCall.timeoutMs }
-              : {}),
-          });
-        } catch (error) {
-          if (!isRecoverableToolError(error)) {
-            throw error;
-          }
-          messages.push({
-            role: "tool",
-            toolCallId: toolCall.id,
-            content: toolFailureMessage(error),
-          });
-          break;
-        }
-
-        messages.push({
-          role: "tool",
-          toolCallId: toolCall.id,
-          content: result.content,
-        });
-        break;
-      }
-      case "edit": {
-        let result: { readonly content: string };
-        try {
-          result = executeEdit(
-            workspace,
-            toolCall.path,
-            toolCall.oldString,
-            toolCall.newString,
-          );
-        } catch (error) {
-          if (!isRecoverableToolError(error)) {
-            throw error;
-          }
-          messages.push({
-            role: "tool",
-            toolCallId: toolCall.id,
-            content: toolFailureMessage(error),
-          });
-          break;
-        }
-
-        messages.push({
-          role: "tool",
-          toolCallId: toolCall.id,
-          content: result.content,
-        });
-        yield { type: "text", text: result.content };
-        yield {
-          type: "end",
-          usage: totalUsage,
-          ...(cost !== undefined ? { cost } : {}),
-        };
-        return;
-      }
+    for (const toolCall of turnResult.toolCalls) {
+      const content = await executeToolCall({
+        workspace,
+        toolCall,
+        signal,
+        allowBash,
+      });
+      messages.push({
+        role: "tool",
+        toolCallId: toolCall.id,
+        content,
+      });
     }
   }
 

@@ -353,6 +353,7 @@ describe("CLI File Editing", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-edit-"));
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
     let capturedBody = "";
+    let requestCount = 0;
     const server = createServer((req, res) => {
       if (req.url !== "/chat/completions") {
         res.writeHead(404);
@@ -365,16 +366,23 @@ describe("CLI File Editing", () => {
         body += chunk;
       });
       req.on("end", () => {
-        capturedBody = body;
+        requestCount++;
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
           Connection: "keep-alive",
         });
-        res.write(sseEditToolCall());
-        res.write(
-          sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 8 }),
-        );
+
+        if (requestCount === 1) {
+          capturedBody = body;
+          res.write(sseEditToolCall());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 8 }),
+          );
+        } else {
+          res.write(sseTextReply("Done."));
+          res.write(sseStopFinish({ prompt_tokens: 40, completion_tokens: 2 }));
+        }
         res.write("data: [DONE]\n\n");
         res.end();
       });
@@ -396,7 +404,7 @@ describe("CLI File Editing", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello new world\n",
       );
-      expect(result.stdout).toBe("Edited note.txt\n");
+      expect(result.stdout).toBe("Done.\n");
       expect(result.stderr).toBe("");
 
       const request = JSON.parse(capturedBody);
@@ -597,10 +605,18 @@ describe("CLI File Editing", () => {
           return;
         }
 
-        res.write(sseEditToolCall());
-        res.write(
-          sseEditToolFinish({ prompt_tokens: 25, completion_tokens: 8 }),
-        );
+        if (capturedBodies.length === 2) {
+          res.write(sseEditToolCall());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 25, completion_tokens: 8 }),
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.write(sseTextReply("Done."));
+        res.write(sseStopFinish({ prompt_tokens: 30, completion_tokens: 2 }));
         res.write("data: [DONE]\n\n");
         res.end();
       });
@@ -622,9 +638,9 @@ describe("CLI File Editing", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello new world\n",
       );
-      expect(result.stdout).toBe("Edited note.txt\n");
+      expect(result.stdout).toBe("Done.\n");
       expect(result.stderr).toBe("");
-      expect(capturedBodies).toHaveLength(2);
+      expect(capturedBodies).toHaveLength(3);
 
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
       expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([
@@ -858,10 +874,12 @@ describe("CLI File Editing", () => {
 
   test(`Given the configured provider proposes multiple file edits in one response,
     When user asks the CLI to replace text in a workspace file,
-    Then the CLI fails and the file is unchanged`, async () => {
+    Then each edit is applied and stdout contains only the final reply`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-edit-"));
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    let requestCount = 0;
+    let secondRequestBody = "";
     const server = createServer((req, res) => {
       if (req.url !== "/chat/completions") {
         res.writeHead(404);
@@ -869,17 +887,28 @@ describe("CLI File Editing", () => {
         return;
       }
 
-      req.resume();
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
       req.on("end", () => {
+        requestCount++;
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
           Connection: "keep-alive",
         });
-        res.write(sseMultipleEditToolCalls());
-        res.write(
-          sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 8 }),
-        );
+
+        if (requestCount === 1) {
+          res.write(sseMultipleEditToolCalls());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 8 }),
+          );
+        } else {
+          secondRequestBody = body;
+          res.write(sseTextReply("Done."));
+          res.write(sseStopFinish({ prompt_tokens: 40, completion_tokens: 2 }));
+        }
         res.write("data: [DONE]\n\n");
         res.end();
       });
@@ -897,13 +926,30 @@ describe("CLI File Editing", () => {
       });
 
       // Then
-      expect(result.exitCode).not.toBe(0);
+      expect(result.exitCode).toBe(0);
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
-        "hello old world\n",
+        "hello new there\n",
       );
-      expect(result.stderr).toContain(
-        "Keel does not support multiple tool calls in one turn",
+      expect(result.stdout).toBe("Done.\n");
+      expect(result.stderr).toBe("");
+      expect(requestCount).toBe(2);
+      const secondRequest = requestWithMessagesSchema.parse(
+        JSON.parse(secondRequestBody),
       );
+      expect(
+        secondRequest.messages?.filter((message) => message.role === "tool"),
+      ).toEqual([
+        {
+          role: "tool",
+          tool_call_id: "call_edit_0",
+          content: "Edited note.txt",
+        },
+        {
+          role: "tool",
+          tool_call_id: "call_edit_1",
+          content: "Edited note.txt",
+        },
+      ]);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -954,6 +1000,137 @@ describe("CLI File Editing", () => {
         "hello old world\n",
       );
       expect(result.stderr).toContain("DeepSeek stream ended without usage");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two workspace files each contain a typo,
+    When user runs the CLI with a provider that edits both,
+    Then both files are edited and stdout contains only the final reply`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-multi-edit-"));
+    await writeFile(join(workspace, "a.txt"), "hello wrold\n", "utf8");
+    await writeFile(join(workspace, "b.txt"), "goodby world\n", "utf8");
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      req.resume();
+      req.on("end", () => {
+        requestCount++;
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+
+        if (requestCount === 1) {
+          res.write(
+            sseData({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "call_edit_a",
+                        type: "function",
+                        function: {
+                          name: "edit",
+                          arguments: JSON.stringify({
+                            path: "a.txt",
+                            oldString: "wrold",
+                            newString: "world",
+                          }),
+                        },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+              usage: null,
+            }),
+          );
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 20, completion_tokens: 5 }),
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        if (requestCount === 2) {
+          res.write(
+            sseData({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "call_edit_b",
+                        type: "function",
+                        function: {
+                          name: "edit",
+                          arguments: JSON.stringify({
+                            path: "b.txt",
+                            oldString: "goodby",
+                            newString: "goodbye",
+                          }),
+                        },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+              usage: null,
+            }),
+          );
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 5 }),
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.write(sseTextReply("Fixed both files."));
+        res.write(sseStopFinish({ prompt_tokens: 40, completion_tokens: 4 }));
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["fix typos in both files"], {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(await readFile(join(workspace, "a.txt"), "utf8")).toBe(
+        "hello world\n",
+      );
+      expect(await readFile(join(workspace, "b.txt"), "utf8")).toBe(
+        "goodbye world\n",
+      );
+      expect(result.stdout).toBe("Fixed both files.\n");
+      expect(result.stderr).toBe("");
+      expect(requestCount).toBe(3);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
