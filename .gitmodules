@@ -7,9 +7,6 @@
 [submodule "pi"]
 	path = pi
 	url = https://github.com/earendil-works/pi.git
-[submodule "aider"]
-	path = aider
-	url = https://github.com/Aider-AI/aider.git
 [submodule "claude-code"]
 	path = claude-code
 	url = https://github.com/codeaashu/claude-code.git
