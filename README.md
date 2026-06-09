@@ -17,6 +17,7 @@ Included for study during development. Will be removed once keel is self-suffici
 | [OpenCode](https://github.com/anomalyco/opencode) | TypeScript | Wire protocol, VCR testing, provider/protocol layering |
 | [Codex CLI](https://github.com/openai/codex) | Rust | Sandbox execution, apply-patch edit strategy |
 | [Claude Code](https://github.com/anthropics/claude-code) | Shell/TS | Tool naming, system prompt design |
+| [Kimi Code](https://github.com/MoonshotAI/kimi-code) | TypeScript | Tool scheduler (resource-based concurrency), compaction strategy, sub-agent swarm |
 
 ## Setup
 

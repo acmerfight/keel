@@ -10,3 +10,6 @@
 [submodule "claude-code"]
 	path = claude-code
 	url = https://github.com/codeaashu/claude-code.git
+[submodule "kimi-code"]
+	path = kimi-code
+	url = https://github.com/MoonshotAI/kimi-code.git
