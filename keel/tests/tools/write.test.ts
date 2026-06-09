@@ -195,6 +195,32 @@ describe("Write Tool", () => {
     }
   });
 
+  test(`Given an existing parent path is a symlink to a gitignored workspace directory,
+    When the write tool creates a child file through that parent,
+    Then it rejects the ignored real target without creating the file`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-write-tool-"));
+    await mkdir(join(workspace, "private"));
+    await writeFile(join(workspace, ".gitignore"), "private/\n", "utf8");
+    await symlink("private", join(workspace, "link"));
+
+    try {
+      // When / Then
+      expectWriteError(
+        () => executeWrite(workspace, "link/secret.txt", "secret\n"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+      await expect(
+        readFile(join(workspace, "private", "secret.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an absolute path outside the workspace,
     When the write tool validates the path,
     Then it rejects the workspace escape without creating the outside file`, async () => {

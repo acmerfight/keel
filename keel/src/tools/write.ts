@@ -1,5 +1,8 @@
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { KeelError } from "../core/error.ts";
+import { recordLastCreateCheckpoint } from "../core/git.ts";
+import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
 import {
   isInsideWorkspace,
@@ -8,6 +11,13 @@ import {
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+function ignoredPathError(filePath: string): KeelError {
+  return new KeelError(
+    "tool_path_ignored",
+    `write failed: ignored path: ${filePath}`,
+  );
 }
 
 export function executeWrite(
@@ -41,6 +51,12 @@ export function executeWrite(
     );
   }
 
+  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  const realTargetPath = resolve(parentRealPath, basename(targetPath));
+  if (projectIgnorePolicy.isIgnored(realTargetPath, false)) {
+    throw ignoredPathError(filePath);
+  }
+
   try {
     writeFileSync(targetPath, content, { encoding: "utf8", flag: "wx" });
   } catch (error) {
@@ -58,6 +74,12 @@ export function executeWrite(
     }
     throw error;
   }
+
+  recordLastCreateCheckpoint({
+    workspace: workspacePath,
+    filePath: targetPath,
+    afterContent: content,
+  });
 
   return { content: `Wrote ${filePath}` };
 }

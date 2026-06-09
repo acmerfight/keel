@@ -5,6 +5,7 @@ import {
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -12,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
+  recordLastCreateCheckpoint,
   recordLastEditCheckpoint,
   restoreLastEditCheckpoint,
 } from "../../src/core/git.ts";
@@ -277,6 +279,163 @@ describe("Git Checkpoints", () => {
       expect(await readFile(filePath, "utf8")).toBe("old\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint was written by Keel,
+    When current file content still matches Keel's created content,
+    Then restoring the checkpoint deletes the created file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const filePath = join(workspace, "created.txt");
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+
+    try {
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "restored",
+        filePath: "created.txt",
+      });
+      await expect(stat(filePath)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint was written by Keel and the user changed that file afterwards,
+    When restoring the checkpoint,
+    Then restore fails without deleting the user's file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const filePath = join(workspace, "created.txt");
+    await writeFile(filePath, "user change\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+
+    try {
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "blocked",
+        filePath: "created.txt",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("user change\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint target was already deleted,
+    When restoring the checkpoint,
+    Then restore succeeds and consumes the checkpoint`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const filePath = join(workspace, "created.txt");
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await rm(filePath);
+
+    try {
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+      const secondResult = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "restored",
+        filePath: "created.txt",
+      });
+      expect(secondResult).toEqual({
+        status: "none",
+        message: "Nothing to undo.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint target becomes a symlink to another file in the git root,
+    When restoring the checkpoint,
+    Then restore fails without deleting the symlink target`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const filePath = join(workspace, "created.txt");
+    const targetPath = join(workspace, "target.txt");
+    await writeFile(filePath, "created\n", "utf8");
+    await writeFile(targetPath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await rm(filePath);
+    await symlink("target.txt", filePath);
+
+    try {
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "blocked",
+        filePath: "created.txt",
+      });
+      expect(await readFile(targetPath, "utf8")).toBe("created\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint target becomes a symlink to a file outside the git root,
+    When restoring the checkpoint,
+    Then restore fails without deleting the outside file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const outsideDirectory = await mkdtemp(join(tmpdir(), "keel-git-outside-"));
+    const filePath = join(workspace, "created.txt");
+    const outsideFile = join(outsideDirectory, "outside.txt");
+    await writeFile(filePath, "created\n", "utf8");
+    await writeFile(outsideFile, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await rm(filePath);
+    await symlink(outsideFile, filePath);
+
+    try {
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "blocked",
+        filePath: "created.txt",
+      });
+      expect(await readFile(outsideFile, "utf8")).toBe("created\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outsideDirectory, { recursive: true, force: true });
     }
   });
 

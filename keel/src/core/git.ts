@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
+import type { Stats } from "node:fs";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -16,6 +18,12 @@ export interface RecordLastEditCheckpointOptions {
   readonly workspace: string;
   readonly filePath: string;
   readonly beforeContent: string;
+  readonly afterContent: string;
+}
+
+export interface RecordLastCreateCheckpointOptions {
+  readonly workspace: string;
+  readonly filePath: string;
   readonly afterContent: string;
 }
 
@@ -50,7 +58,7 @@ const gitOutputSchema = z
   .transform((value) => value.trim())
   .pipe(z.string().min(1));
 
-const checkpointSchema = z
+const editCheckpointSchema = z
   .object({
     version: z.literal(1),
     gitRoot: z.string().min(1),
@@ -59,9 +67,30 @@ const checkpointSchema = z
     afterContent: z.string(),
     createdAt: z.string().min(1),
   })
+  .strict()
+  .transform((checkpoint) => ({
+    ...checkpoint,
+    operation: "edit" as const,
+  }));
+
+const createCheckpointSchema = z
+  .object({
+    version: z.literal(2),
+    operation: z.literal("create"),
+    gitRoot: z.string().min(1),
+    relativePath: z.string().min(1),
+    afterContent: z.string(),
+    createdAt: z.string().min(1),
+  })
   .strict();
 
+const checkpointSchema = z.union([
+  editCheckpointSchema,
+  createCheckpointSchema,
+]);
+
 type LastEditCheckpoint = z.infer<typeof checkpointSchema>;
+type PersistedCheckpoint = z.input<typeof checkpointSchema>;
 
 function gitOutput(workspace: string, args: readonly string[]): string | null {
   try {
@@ -115,7 +144,7 @@ function findGitWorkspace(workspace: string): GitWorkspace | null {
 
 function writeCheckpoint(
   checkpointPath: string,
-  checkpoint: LastEditCheckpoint,
+  checkpoint: PersistedCheckpoint,
 ): void {
   mkdirSync(dirname(checkpointPath), { recursive: true });
   writeFileSync(checkpointPath, `${JSON.stringify(checkpoint)}\n`, "utf8");
@@ -158,8 +187,16 @@ function realpathIfPossible(filePath: string): string | null {
   }
 }
 
+function lstatIfPossible(filePath: string): Stats | null {
+  try {
+    return lstatSync(filePath);
+  } catch {
+    return null;
+  }
+}
+
 function skippedCheckpointRecord(
-  options: RecordLastEditCheckpointOptions,
+  options: { readonly workspace: string; readonly filePath: string },
   error: string,
 ): RecordLastEditCheckpointResult {
   debugLog(
@@ -203,6 +240,51 @@ export function recordLastEditCheckpoint(
   }
 }
 
+export function recordLastCreateCheckpoint(
+  options: RecordLastCreateCheckpointOptions,
+): RecordLastEditCheckpointResult {
+  try {
+    const gitWorkspace = findGitWorkspace(options.workspace);
+    if (gitWorkspace === null) {
+      return skippedCheckpointRecord(options, "git workspace unavailable");
+    }
+
+    const relativePath = normalizeRelativePath(
+      gitWorkspace.root,
+      options.filePath,
+    );
+    if (relativePath === null) {
+      return skippedCheckpointRecord(
+        options,
+        "file path unavailable or outside git root",
+      );
+    }
+
+    writeCheckpoint(gitWorkspace.checkpointPath, {
+      version: 2,
+      operation: "create",
+      gitRoot: gitWorkspace.root,
+      relativePath,
+      afterContent: options.afterContent,
+      createdAt: new Date().toISOString(),
+    });
+
+    return { written: true };
+  } catch (error) {
+    return skippedCheckpointRecord(options, String(error));
+  }
+}
+
+function blockedRestore(
+  checkpoint: LastEditCheckpoint,
+): RestoreLastEditCheckpointResult {
+  return {
+    status: "blocked",
+    filePath: checkpoint.relativePath,
+    message: `Cannot undo ${checkpoint.relativePath}: Refusing to overwrite user changes.`,
+  };
+}
+
 export function restoreLastEditCheckpoint(
   workspace: string,
 ): RestoreLastEditCheckpointResult {
@@ -224,22 +306,45 @@ export function restoreLastEditCheckpoint(
     );
   }
 
+  if (checkpoint.operation === "create") {
+    const restorePath = realpathIfPossible(filePath);
+    if (restorePath === null) {
+      rmSync(gitWorkspace.checkpointPath, { force: true });
+      return {
+        status: "restored",
+        filePath: checkpoint.relativePath,
+      };
+    }
+    if (!isInside(gitWorkspace.root, restorePath)) {
+      return blockedRestore(checkpoint);
+    }
+
+    const targetStat = lstatIfPossible(filePath);
+    if (targetStat === null || targetStat.isSymbolicLink()) {
+      return blockedRestore(checkpoint);
+    }
+
+    const currentContent = readFileIfPossible(filePath);
+    if (currentContent !== checkpoint.afterContent) {
+      return blockedRestore(checkpoint);
+    }
+
+    rmSync(filePath);
+    rmSync(gitWorkspace.checkpointPath, { force: true });
+    return {
+      status: "restored",
+      filePath: checkpoint.relativePath,
+    };
+  }
+
   const restorePath = realpathIfPossible(filePath);
   if (restorePath === null || !isInside(gitWorkspace.root, restorePath)) {
-    return {
-      status: "blocked",
-      filePath: checkpoint.relativePath,
-      message: `Cannot undo ${checkpoint.relativePath}: Refusing to overwrite user changes.`,
-    };
+    return blockedRestore(checkpoint);
   }
 
   const currentContent = readFileIfPossible(restorePath);
   if (currentContent !== checkpoint.afterContent) {
-    return {
-      status: "blocked",
-      filePath: checkpoint.relativePath,
-      message: `Cannot undo ${checkpoint.relativePath}: Refusing to overwrite user changes.`,
-    };
+    return blockedRestore(checkpoint);
   }
 
   writeFileSync(restorePath, checkpoint.beforeContent, "utf8");

@@ -18,6 +18,11 @@ interface CliEditRequest {
   readonly newString: string;
 }
 
+interface CliWriteRequest {
+  readonly path: string;
+  readonly content: string;
+}
+
 type CliArgs =
   | { readonly command: "doctor" }
   | { readonly command: "undo" }
@@ -134,10 +139,58 @@ function parseCliEditDemo(message: string): CliEditRequest | null {
   return { path, oldString, newString };
 }
 
+function parseCliWriteDemo(message: string): CliWriteRequest | null {
+  const prefix = "create ";
+  if (!message.startsWith(prefix)) return null;
+
+  const path = message.slice(prefix.length);
+  if (path === "") return null;
+
+  return { path, content: '{"created":true}\n' };
+}
+
+const ZERO_USAGE = {
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  uncachedInputTokens: 0,
+  outputTokens: 0,
+};
+
 function createCliFakeProvider(userMessage: string): LLMProvider {
   const edit = parseCliEditDemo(userMessage);
+  const write = parseCliWriteDemo(userMessage);
   if (edit === null) {
-    return createFakeProvider([fakeResponse("Hello from fake provider.")]);
+    if (write === null) {
+      return createFakeProvider([fakeResponse("Hello from fake provider.")]);
+    }
+
+    let turn = 0;
+    return {
+      id: "fake",
+      async *stream(options) {
+        turn++;
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "fake_write",
+            tool: "write",
+            path: write.path,
+            content: write.content,
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        const toolContent = options.messages.findLast(
+          (m) => m.role === "tool",
+        )?.content;
+        const reply = toolContent?.startsWith("Tool failed:")
+          ? toolContent
+          : `Created ${write.path}`;
+        yield { type: "text", text: reply };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
   }
 
   let turn = 0;
@@ -154,15 +207,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
           oldString: edit.oldString,
           newString: edit.newString,
         };
-        yield {
-          type: "stop",
-          usage: {
-            inputTokens: 0,
-            cachedInputTokens: 0,
-            uncachedInputTokens: 0,
-            outputTokens: 0,
-          },
-        };
+        yield { type: "stop", usage: ZERO_USAGE };
         return;
       }
 
@@ -173,15 +218,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
         ? toolContent
         : `Edited ${edit.path}`;
       yield { type: "text", text: reply };
-      yield {
-        type: "stop",
-        usage: {
-          inputTokens: 0,
-          cachedInputTokens: 0,
-          uncachedInputTokens: 0,
-          outputTokens: 0,
-        },
-      };
+      yield { type: "stop", usage: ZERO_USAGE };
     },
   };
 }
