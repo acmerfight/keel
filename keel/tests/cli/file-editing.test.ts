@@ -339,7 +339,7 @@ describe("CLI File Editing", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello new world\n",
       );
-      expect(result.stdout).toBe("Edited note.txt\n");
+      expect(result.stdout).toContain("Edited note.txt");
       expect(result.stderr).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -353,6 +353,7 @@ describe("CLI File Editing", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-edit-"));
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
     let capturedBody = "";
+    let requestCount = 0;
     const server = createServer((req, res) => {
       if (req.url !== "/chat/completions") {
         res.writeHead(404);
@@ -365,16 +366,23 @@ describe("CLI File Editing", () => {
         body += chunk;
       });
       req.on("end", () => {
-        capturedBody = body;
+        requestCount++;
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
           Connection: "keep-alive",
         });
-        res.write(sseEditToolCall());
-        res.write(
-          sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 8 }),
-        );
+
+        if (requestCount === 1) {
+          capturedBody = body;
+          res.write(sseEditToolCall());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 8 }),
+          );
+        } else {
+          res.write(sseTextReply("Done."));
+          res.write(sseStopFinish({ prompt_tokens: 40, completion_tokens: 2 }));
+        }
         res.write("data: [DONE]\n\n");
         res.end();
       });
@@ -396,7 +404,7 @@ describe("CLI File Editing", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello new world\n",
       );
-      expect(result.stdout).toBe("Edited note.txt\n");
+      expect(result.stdout).toContain("Edited note.txt");
       expect(result.stderr).toBe("");
 
       const request = JSON.parse(capturedBody);
@@ -597,10 +605,18 @@ describe("CLI File Editing", () => {
           return;
         }
 
-        res.write(sseEditToolCall());
-        res.write(
-          sseEditToolFinish({ prompt_tokens: 25, completion_tokens: 8 }),
-        );
+        if (capturedBodies.length === 2) {
+          res.write(sseEditToolCall());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 25, completion_tokens: 8 }),
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.write(sseTextReply("Done."));
+        res.write(sseStopFinish({ prompt_tokens: 30, completion_tokens: 2 }));
         res.write("data: [DONE]\n\n");
         res.end();
       });
@@ -622,9 +638,9 @@ describe("CLI File Editing", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello new world\n",
       );
-      expect(result.stdout).toBe("Edited note.txt\n");
+      expect(result.stdout).toContain("Edited note.txt");
       expect(result.stderr).toBe("");
-      expect(capturedBodies).toHaveLength(2);
+      expect(capturedBodies).toHaveLength(3);
 
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
       expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([

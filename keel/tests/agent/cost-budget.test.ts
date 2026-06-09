@@ -102,23 +102,38 @@ describe("Cost Budget", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cost-budget-"));
     await writeFile(join(workspace, "note.txt"), "old value\n", "utf8");
+    let turn = 0;
     const provider: LLMProvider = {
       id: "unlimited-tool-call",
       async *stream() {
-        yield {
-          type: "tool_call",
-          id: "edit_note",
-          tool: "edit",
-          path: "note.txt",
-          oldString: "old",
-          newString: "new",
-        };
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "edit_note",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "old",
+            newString: "new",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1_000_000,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1_000_000,
+              outputTokens: 0,
+            },
+          };
+          return;
+        }
+        yield { type: "text", text: "Done." };
         yield {
           type: "stop",
           usage: {
-            inputTokens: 1_000_000,
+            inputTokens: 0,
             cachedInputTokens: 0,
-            uncachedInputTokens: 1_000_000,
+            uncachedInputTokens: 0,
             outputTokens: 0,
           },
         };

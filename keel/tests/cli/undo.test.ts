@@ -246,7 +246,7 @@ describe("CLI Undo", () => {
         cwd: workspace,
         env: { KEEL_PROVIDER: "fake" },
       });
-      expect(edit.exitCode).not.toBe(0);
+      expect(edit.exitCode).toBe(0);
 
       // When
       const undo = await runCli(["/undo"], { cwd: workspace });

@@ -309,12 +309,7 @@ export async function* runAgent(
           content: result.content,
         });
         yield { type: "text", text: result.content };
-        yield {
-          type: "end",
-          usage: totalUsage,
-          ...(cost !== undefined ? { cost } : {}),
-        };
-        return;
+        break;
       }
     }
   }

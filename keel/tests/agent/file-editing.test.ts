@@ -40,6 +40,7 @@ describe("File Editing", () => {
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
     const provider = createFakeProvider([
       fakeEditResponse("note.txt", "old", "new"),
+      fakeResponse("Done."),
     ]);
 
     try {
@@ -210,22 +211,37 @@ describe("File Editing", () => {
           return;
         }
 
-        secondTurnMessages = options.messages;
-        yield {
-          type: "tool_call",
-          id: "correct_edit",
-          tool: "edit",
-          path: "note.txt",
-          oldString: "world",
-          newString: "there",
-        };
+        if (turn === 1) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "correct_edit",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "world",
+            newString: "there",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 2,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 2,
+              outputTokens: 2,
+            },
+          };
+          return;
+        }
+
+        yield { type: "text", text: "Done." };
         yield {
           type: "stop",
           usage: {
-            inputTokens: 2,
+            inputTokens: 3,
             cachedInputTokens: 0,
-            uncachedInputTokens: 2,
-            outputTokens: 2,
+            uncachedInputTokens: 3,
+            outputTokens: 3,
           },
         };
       },
@@ -262,10 +278,10 @@ describe("File Editing", () => {
       expect(events).toContainEqual({
         type: "end",
         usage: {
-          inputTokens: 3,
+          inputTokens: 6,
           cachedInputTokens: 0,
-          uncachedInputTokens: 3,
-          outputTokens: 3,
+          uncachedInputTokens: 6,
+          outputTokens: 6,
         },
       });
     } finally {
@@ -337,22 +353,37 @@ describe("File Editing", () => {
           return;
         }
 
-        secondTurnMessages = options.messages;
-        yield {
-          type: "tool_call",
-          id: "correct_edit",
-          tool: "edit",
-          path: "note.txt",
-          oldString: "world",
-          newString: "there",
-        };
+        if (turn === 1) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "correct_edit",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "world",
+            newString: "there",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 2,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 2,
+              outputTokens: 2,
+            },
+          };
+          return;
+        }
+
+        yield { type: "text", text: "Done." };
         yield {
           type: "stop",
           usage: {
-            inputTokens: 2,
+            inputTokens: 3,
             cachedInputTokens: 0,
-            uncachedInputTokens: 2,
-            outputTokens: 2,
+            uncachedInputTokens: 3,
+            outputTokens: 3,
           },
         };
       },
@@ -1645,6 +1676,86 @@ describe("File Editing", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello old world\n",
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two workspace files each contain a typo,
+    When user asks to fix both,
+    Then both files are edited in one session`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "a.txt"), "hello wrold\n", "utf8");
+    await writeFile(join(workspace, "b.txt"), "goodby world\n", "utf8");
+    const provider = createFakeProvider([
+      fakeEditResponse("a.txt", "wrold", "world"),
+      fakeEditResponse("b.txt", "goodby", "goodbye"),
+      fakeResponse("Fixed both files."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "fix the typos in both files",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "a.txt"), "utf8")).toBe(
+        "hello world\n",
+      );
+      expect(await readFile(join(workspace, "b.txt"), "utf8")).toBe(
+        "goodbye world\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Fixed both files.",
+      });
+      expect(events.filter((e) => e.type === "end")).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a workspace file with a bug,
+    When the agent reads it then edits it,
+    Then the agent replies with a summary after the edit`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "app.ts"), "const x = nul;\n", "utf8");
+    const provider = createFakeProvider([
+      fakeReadResponse("app.ts"),
+      fakeEditResponse("app.ts", "nul", "null"),
+      fakeResponse("Fixed the null typo."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "fix the bug in app.ts",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "app.ts"), "utf8")).toBe(
+        "const x = null;\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Fixed the null typo.",
+      });
+      expect(events.filter((e) => e.type === "end")).toHaveLength(1);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
