@@ -6,15 +6,18 @@ import { executeBash } from "../tools/bash.ts";
 import { executeEdit } from "../tools/edit.ts";
 import { executeGrep } from "../tools/grep.ts";
 import { executeRead } from "../tools/read.ts";
+import { executeWrite } from "../tools/write.ts";
 
 const MAX_AGENT_TURNS = 16;
 const RECOVERABLE_TOOL_ERRORS = new Set<KeelErrorCode>([
   "tool_binary_file",
+  "tool_file_exists",
   "tool_file_not_found",
   "tool_empty_command",
   "tool_empty_old_string",
   "tool_empty_pattern",
   "tool_not_file",
+  "tool_not_directory",
   "tool_old_string_not_found",
   "tool_path_ignored",
   "tool_path_outside_workspace",
@@ -163,6 +166,17 @@ async function executeToolCall(
           toolCall.oldString,
           toolCall.newString,
         );
+        return result.content;
+      } catch (error) {
+        if (!isRecoverableToolError(error)) {
+          throw error;
+        }
+        return toolFailureMessage(error);
+      }
+    }
+    case "write": {
+      try {
+        const result = executeWrite(workspace, toolCall.path, toolCall.content);
         return result.content;
       } catch (error) {
         if (!isRecoverableToolError(error)) {

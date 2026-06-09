@@ -158,6 +158,33 @@ function sseReadToolCall(): string {
   });
 }
 
+function sseWriteToolCall(): string {
+  return sseData({
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_write",
+              type: "function",
+              function: {
+                name: "write",
+                arguments: JSON.stringify({
+                  path: "config.json",
+                  content: '{"created":true}\n',
+                }),
+              },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+    usage: null,
+  });
+}
+
 function sseGrepToolCall(): string {
   return sseData({
     choices: [
@@ -413,7 +440,89 @@ describe("CLI File Editing", () => {
           (tool: { readonly function?: { readonly name?: string } }) =>
             tool.function?.name,
         ),
-      ).toEqual(["read", "grep", "edit"]);
+      ).toEqual(["read", "grep", "edit", "write"]);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the configured provider requests a new file write,
+    When user asks the CLI to create a workspace file,
+    Then the file is created on disk and stdout contains only the final reply`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-write-"));
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+
+        if (capturedBodies.length === 1) {
+          res.write(sseWriteToolCall());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 8 }),
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.write(sseTextReply("Created config.json."));
+        res.write(sseStopFinish({ prompt_tokens: 40, completion_tokens: 2 }));
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["create config.json"], {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(await readFile(join(workspace, "config.json"), "utf8")).toBe(
+        '{"created":true}\n',
+      );
+      expect(result.stdout).toBe("Created config.json.\n");
+      expect(result.stderr).toBe("");
+      expect(capturedBodies).toHaveLength(2);
+
+      const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
+      expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([
+        "read",
+        "grep",
+        "edit",
+        "write",
+      ]);
+
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_write",
+        content: "Wrote config.json",
+      });
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -470,6 +579,7 @@ describe("CLI File Editing", () => {
         "read",
         "grep",
         "edit",
+        "write",
         "bash",
       ]);
     } finally {
@@ -647,6 +757,7 @@ describe("CLI File Editing", () => {
         "read",
         "grep",
         "edit",
+        "write",
       ]);
 
       const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
