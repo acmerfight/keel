@@ -106,6 +106,7 @@ function binaryFileError(filePath: string): KeelError {
   return new KeelError(
     "tool_binary_file",
     `read failed: binary file is not supported: ${filePath}`,
+    "This is a binary file and cannot be read as text. Use grep to search for text in nearby source files instead.",
   );
 }
 
@@ -386,12 +387,14 @@ export function executeRead(
     throw new KeelError(
       "tool_path_ignored",
       `read failed: ignored path: ${filePath}`,
+      "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
     );
   }
   if (!stat.isFile()) {
     throw new KeelError(
       "tool_not_file",
       `read failed: not a file: ${filePath}`,
+      "The path is a directory, not a file. Use grep to search within it, or specify a file path inside it.",
     );
   }
 

@@ -257,7 +257,11 @@ export async function executeBash(
   options: BashOptions = {},
 ): Promise<ToolResult> {
   if (command.trim() === "") {
-    throw new KeelError("tool_empty_command", "bash failed: command is empty");
+    throw new KeelError(
+      "tool_empty_command",
+      "bash failed: command is empty",
+      "Provide a non-empty shell command to execute.",
+    );
   }
 
   const timeoutMs = normalizeTimeout(options.timeoutMs);

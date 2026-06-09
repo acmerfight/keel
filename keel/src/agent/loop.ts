@@ -83,7 +83,11 @@ function isRecoverableToolError(error: unknown): boolean {
 }
 
 function toolFailureMessage(error: unknown): string {
-  return `Tool failed: ${errorMessage(error)}`;
+  const base = `Tool failed: ${errorMessage(error)}`;
+  if (error instanceof KeelError && error.recovery !== undefined) {
+    return `${base}\nRecovery: ${error.recovery}`;
+  }
+  return base;
 }
 
 function finishAgentTurn(

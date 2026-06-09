@@ -29,10 +29,14 @@ export type KeelErrorCode =
 
 export class KeelError extends Error {
   readonly code: KeelErrorCode;
+  readonly recovery?: string;
 
-  constructor(code: KeelErrorCode, message: string) {
+  constructor(code: KeelErrorCode, message: string, recovery?: string) {
     super(message);
     this.name = "KeelError";
     this.code = code;
+    if (recovery !== undefined) {
+      this.recovery = recovery;
+    }
   }
 }

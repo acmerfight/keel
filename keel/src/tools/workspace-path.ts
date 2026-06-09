@@ -52,10 +52,12 @@ function requestedAbsolutePath(
 function outsideWorkspaceError(
   toolName: FileToolName,
   requestedPath: string,
+  workspacePath: string,
 ): KeelError {
   return new KeelError(
     "tool_path_outside_workspace",
     `${toolName} failed: path is outside the workspace: ${requestedPath}`,
+    `Use a workspace-relative path. The current workspace root is: ${workspacePath}`,
   );
 }
 
@@ -66,6 +68,7 @@ function ignoredPathError(
   return new KeelError(
     "tool_path_ignored",
     `${toolName} failed: ignored path: ${requestedPath}`,
+    "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
   );
 }
 
@@ -76,6 +79,7 @@ function fileExistsError(
   return new KeelError(
     "tool_file_exists",
     `${toolName} failed: file already exists: ${requestedPath}`,
+    "Use edit to modify the existing file instead of write, or choose a different file name.",
   );
 }
 
@@ -86,6 +90,7 @@ function notDirectoryError(
   return new KeelError(
     "tool_not_directory",
     `${toolName} failed: parent path is not a directory: ${requestedPath}`,
+    "The parent path is a file, not a directory. Choose a different path.",
   );
 }
 
@@ -137,7 +142,7 @@ export function resolveWorkspaceTarget(
     !isInsideWorkspace(workspacePath, absoluteRequestedPath) &&
     !isInsideWorkspace(workspaceInputPath, absoluteRequestedPath)
   ) {
-    throw outsideWorkspaceError(toolName, requestedPath);
+    throw outsideWorkspaceError(toolName, requestedPath, workspacePath);
   }
 
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
@@ -159,12 +164,13 @@ export function resolveWorkspaceTarget(
     throw new KeelError(
       "tool_file_not_found",
       `${toolName} failed: file not found: ${requestedPath}`,
+      "Use grep to search for the content, or check the directory structure to find the correct path.",
     );
   }
 
   const targetPath = realpathSync(absoluteRequestedPath);
   if (!isInsideWorkspace(workspacePath, targetPath)) {
-    throw outsideWorkspaceError(toolName, requestedPath);
+    throw outsideWorkspaceError(toolName, requestedPath, workspacePath);
   }
 
   return { workspacePath, requestedPath: absoluteRequestedPath, targetPath };
@@ -187,7 +193,7 @@ export function resolveWorkspaceCreateTarget(
     !isInsideWorkspace(workspacePath, absoluteRequestedPath) &&
     !isInsideWorkspace(workspaceInputPath, absoluteRequestedPath)
   ) {
-    throw outsideWorkspaceError(toolName, requestedPath);
+    throw outsideWorkspaceError(toolName, requestedPath, workspacePath);
   }
 
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
@@ -212,7 +218,7 @@ export function resolveWorkspaceCreateTarget(
   );
   const existingAncestorRealPath = realpathSync(existingAncestorPath);
   if (!isInsideWorkspace(workspacePath, existingAncestorRealPath)) {
-    throw outsideWorkspaceError(toolName, requestedPath);
+    throw outsideWorkspaceError(toolName, requestedPath, workspacePath);
   }
   const existingAncestorStat = lstatSync(existingAncestorRealPath);
   if (!existingAncestorStat.isDirectory()) {

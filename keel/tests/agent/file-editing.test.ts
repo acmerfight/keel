@@ -151,6 +151,7 @@ describe("File Editing", () => {
         toolCallId: "existing_write",
         content: expect.stringContaining("file already exists"),
       });
+      expect(toolMessages[0]?.content).toContain("Recovery:");
       expect(toolMessages[1]).toEqual({
         role: "tool",
         toolCallId: "new_write",
@@ -253,6 +254,7 @@ describe("File Editing", () => {
         toolCallId: "existing_write",
         content: expect.stringContaining("file already exists"),
       });
+      expect(failedToolMessage?.content).toContain("Recovery:");
       expect(await readFile(join(workspace, "config.json"), "utf8")).toBe(
         '{"old":true}\n',
       );
@@ -615,6 +617,7 @@ describe("File Editing", () => {
         toolCallId: "empty_file_edit",
         content: expect.stringContaining("old string is empty"),
       });
+      expect(toolMessages[0]?.content).toContain("Recovery:");
       expect(toolMessages[1]).toEqual({
         role: "tool",
         toolCallId: "second_edit",
@@ -670,6 +673,7 @@ describe("File Editing", () => {
         (message) => message.role === "tool",
       );
       expect(toolMessage?.content).toContain("outside the workspace");
+      expect(toolMessage?.content).toContain("Recovery:");
       expect(events).toContainEqual({
         type: "text",
         text: "Outside path rejected.",
@@ -771,6 +775,7 @@ describe("File Editing", () => {
         toolCallId: "wrong_edit",
         content: expect.stringContaining("old string not found"),
       });
+      expect(toolMessage?.content).toContain("Recovery:");
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello there\n",
       );
@@ -2266,7 +2271,7 @@ describe("File Editing", () => {
             signal: freshSignal(),
           }),
         ),
-      ).rejects.toThrow("old string is not unique");
+      ).rejects.toThrow("old string appears");
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "old then old\n",
       );

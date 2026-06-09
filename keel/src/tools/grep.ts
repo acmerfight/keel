@@ -370,7 +370,11 @@ export async function executeGrep(
   options: GrepOptions = {},
 ): Promise<ToolResult> {
   if (pattern === "") {
-    throw new KeelError("tool_empty_pattern", "grep failed: pattern is empty");
+    throw new KeelError(
+      "tool_empty_pattern",
+      "grep failed: pattern is empty",
+      "Provide a non-empty search pattern.",
+    );
   }
 
   const requestedDisplayPath = options.path ?? ".";
@@ -386,6 +390,7 @@ export async function executeGrep(
     throw new KeelError(
       "tool_path_ignored",
       `grep failed: ignored path: ${requestedDisplayPath}`,
+      "This path is excluded by project policy. Search in a different directory or omit the path to search the whole workspace.",
     );
   }
 
@@ -395,6 +400,7 @@ export async function executeGrep(
     throw new KeelError(
       "tool_not_file",
       `grep failed: not a file or directory: ${requestedPath}`,
+      "The path is neither a file nor a directory. Verify the path exists.",
     );
   }
   if (options.path !== undefined) {
@@ -406,6 +412,7 @@ export async function executeGrep(
       throw new KeelError(
         "tool_path_ignored",
         `grep failed: ignored path: ${requestedDisplayPath}`,
+        "This file is excluded by project .gitignore. Search in a different path or omit the path parameter.",
       );
     }
   }
