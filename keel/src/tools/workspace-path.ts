@@ -1,9 +1,9 @@
-import { existsSync, realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { KeelError } from "../core/error.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 
-type FileToolName = "edit" | "grep" | "read";
+type FileToolName = "edit" | "grep" | "read" | "write";
 
 export interface WorkspaceTarget {
   readonly workspacePath: string;
@@ -11,12 +11,42 @@ export interface WorkspaceTarget {
   readonly targetPath: string;
 }
 
-function isInsideWorkspace(workspace: string, target: string): boolean {
+export interface WorkspaceCreateTarget {
+  readonly workspacePath: string;
+  readonly requestedPath: string;
+  readonly targetPath: string;
+  readonly parentPath: string;
+}
+
+export function isInsideWorkspace(workspace: string, target: string): boolean {
   const targetFromWorkspace = relative(workspace, target);
   return (
     targetFromWorkspace === "" ||
     (!targetFromWorkspace.startsWith("..") && !isAbsolute(targetFromWorkspace))
   );
+}
+
+function requestedAbsolutePath(
+  workspacePath: string,
+  workspaceInputPath: string,
+  requestedPath: string,
+): string {
+  const rawAbsolutePath = isAbsolute(requestedPath)
+    ? resolve(requestedPath)
+    : resolve(workspacePath, requestedPath);
+
+  if (
+    isAbsolute(requestedPath) &&
+    !isInsideWorkspace(workspacePath, rawAbsolutePath) &&
+    isInsideWorkspace(workspaceInputPath, rawAbsolutePath)
+  ) {
+    return resolve(
+      workspacePath,
+      relative(workspaceInputPath, rawAbsolutePath),
+    );
+  }
+
+  return rawAbsolutePath;
 }
 
 function outsideWorkspaceError(
@@ -37,6 +67,59 @@ function ignoredPathError(
     "tool_path_ignored",
     `${toolName} failed: ignored path: ${requestedPath}`,
   );
+}
+
+function fileExistsError(
+  toolName: FileToolName,
+  requestedPath: string,
+): KeelError {
+  return new KeelError(
+    "tool_file_exists",
+    `${toolName} failed: file already exists: ${requestedPath}`,
+  );
+}
+
+function notDirectoryError(
+  toolName: FileToolName,
+  requestedPath: string,
+): KeelError {
+  return new KeelError(
+    "tool_not_directory",
+    `${toolName} failed: parent path is not a directory: ${requestedPath}`,
+  );
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}
+
+function pathExistsForCreate(
+  targetPath: string,
+  toolName: FileToolName,
+  requestedPath: string,
+): boolean {
+  try {
+    lstatSync(targetPath);
+    return true;
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") return false;
+    if (isErrnoException(error) && error.code === "ENOTDIR") {
+      throw notDirectoryError(toolName, requestedPath);
+    }
+    throw error;
+  }
+}
+
+function deepestExistingAncestor(
+  targetPath: string,
+  toolName: FileToolName,
+  requestedPath: string,
+): string {
+  let currentPath = targetPath;
+  while (!pathExistsForCreate(currentPath, toolName, requestedPath)) {
+    currentPath = dirname(currentPath);
+  }
+  return currentPath;
 }
 
 export function resolveWorkspaceTarget(
@@ -85,4 +168,61 @@ export function resolveWorkspaceTarget(
   }
 
   return { workspacePath, requestedPath: absoluteRequestedPath, targetPath };
+}
+
+export function resolveWorkspaceCreateTarget(
+  workspace: string,
+  requestedPath: string,
+  toolName: FileToolName,
+): WorkspaceCreateTarget {
+  const workspacePath = realpathSync(workspace);
+  const workspaceInputPath = resolve(workspace);
+  const absoluteRequestedPath = requestedAbsolutePath(
+    workspacePath,
+    workspaceInputPath,
+    requestedPath,
+  );
+
+  if (
+    !isInsideWorkspace(workspacePath, absoluteRequestedPath) &&
+    !isInsideWorkspace(workspaceInputPath, absoluteRequestedPath)
+  ) {
+    throw outsideWorkspaceError(toolName, requestedPath);
+  }
+
+  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  const requestIsWorkspaceRoot = absoluteRequestedPath === workspacePath;
+  if (
+    !requestIsWorkspaceRoot &&
+    (projectIgnorePolicy.isIgnored(absoluteRequestedPath, false) ||
+      projectIgnorePolicy.isIgnored(absoluteRequestedPath, true))
+  ) {
+    throw ignoredPathError(toolName, requestedPath);
+  }
+
+  if (pathExistsForCreate(absoluteRequestedPath, toolName, requestedPath)) {
+    throw fileExistsError(toolName, requestedPath);
+  }
+
+  const parentPath = dirname(absoluteRequestedPath);
+  const existingAncestorPath = deepestExistingAncestor(
+    parentPath,
+    toolName,
+    requestedPath,
+  );
+  const existingAncestorRealPath = realpathSync(existingAncestorPath);
+  if (!isInsideWorkspace(workspacePath, existingAncestorRealPath)) {
+    throw outsideWorkspaceError(toolName, requestedPath);
+  }
+  const existingAncestorStat = lstatSync(existingAncestorRealPath);
+  if (!existingAncestorStat.isDirectory()) {
+    throw notDirectoryError(toolName, requestedPath);
+  }
+
+  return {
+    workspacePath,
+    requestedPath: absoluteRequestedPath,
+    targetPath: absoluteRequestedPath,
+    parentPath,
+  };
 }

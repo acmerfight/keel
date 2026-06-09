@@ -15,6 +15,13 @@ interface FakeEditResponse {
   readonly usage: Usage;
 }
 
+interface FakeWriteResponse {
+  readonly type: "write";
+  readonly path: string;
+  readonly content: string;
+  readonly usage: Usage;
+}
+
 interface FakeReadResponse {
   readonly type: "read";
   readonly path: string;
@@ -40,6 +47,7 @@ interface FakeBashResponse {
 export type FakeResponse =
   | FakeTextResponse
   | FakeEditResponse
+  | FakeWriteResponse
   | FakeReadResponse
   | FakeGrepResponse
   | FakeBashResponse;
@@ -66,6 +74,14 @@ export function fakeEditResponse(
   usage: Usage = ZERO_USAGE,
 ): FakeResponse {
   return { type: "edit", path, oldString, newString, usage };
+}
+
+export function fakeWriteResponse(
+  path: string,
+  content: string,
+  usage: Usage = ZERO_USAGE,
+): FakeResponse {
+  return { type: "write", path, content, usage };
 }
 
 export function fakeReadResponse(
@@ -143,6 +159,15 @@ export function createFakeProvider(
             path: response.path,
             oldString: response.oldString,
             newString: response.newString,
+          };
+          break;
+        case "write":
+          yield {
+            type: "tool_call",
+            id: `fake_tool_call_${turn}`,
+            tool: "write",
+            path: response.path,
+            content: response.content,
           };
           break;
         case "read":

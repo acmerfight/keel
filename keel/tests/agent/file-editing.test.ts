@@ -11,6 +11,7 @@ import {
   fakeGrepResponse,
   fakeReadResponse,
   fakeResponse,
+  fakeWriteResponse,
 } from "../../src/testing/fake-provider.ts";
 
 async function collect(
@@ -32,6 +33,267 @@ async function createWorkspace(): Promise<string> {
 }
 
 describe("File Editing", () => {
+  test(`Given the assistant requests a new workspace file,
+    When the agent handles the write tool call,
+    Then the file is created before the assistant replies`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const provider = createFakeProvider([
+      fakeWriteResponse("config.json", '{"created":true}\n'),
+      fakeResponse("Created config.json."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "create config.json",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "config.json"), "utf8")).toBe(
+        '{"created":true}\n',
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Created config.json.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one of multiple requested file writes targets an existing file,
+    When the agent handles the tool calls,
+    Then it reports that failure and still creates the remaining new file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "existing.txt"), "keep me\n", "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "mixed-multiple-writes",
+      async *stream(options) {
+        if (turn === 1) {
+          secondTurnMessages = options.messages;
+          yield {
+            type: "text",
+            text: "One write failed and one write succeeded.",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
+        yield {
+          type: "tool_call",
+          id: "existing_write",
+          tool: "write",
+          path: "existing.txt",
+          content: "replace me\n",
+        };
+        yield {
+          type: "tool_call",
+          id: "new_write",
+          tool: "write",
+          path: "nested/new.txt",
+          content: "created\n",
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "write both files",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "existing.txt"), "utf8")).toBe(
+        "keep me\n",
+      );
+      expect(await readFile(join(workspace, "nested", "new.txt"), "utf8")).toBe(
+        "created\n",
+      );
+      const toolMessages = secondTurnMessages.filter(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessages[0]).toMatchObject({
+        role: "tool",
+        toolCallId: "existing_write",
+        content: expect.stringContaining("file already exists"),
+      });
+      expect(toolMessages[1]).toEqual({
+        role: "tool",
+        toolCallId: "new_write",
+        content: "Wrote nested/new.txt",
+      });
+      expect(events).toContainEqual({
+        type: "text",
+        text: "One write failed and one write succeeded.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the first write targets an existing file,
+    When the agent reports the failure and receives a corrected write path,
+    Then the new file is created on disk`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "config.json"), '{"old":true}\n', "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "recover-existing-write",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "existing_write",
+            tool: "write",
+            path: "config.json",
+            content: '{"new":true}\n',
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "correct_write",
+            tool: "write",
+            path: "config.generated.json",
+            content: '{"new":true}\n',
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 2,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 2,
+              outputTokens: 2,
+            },
+          };
+          return;
+        }
+
+        yield { type: "text", text: "Created the generated config." };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 3,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 3,
+            outputTokens: 3,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "write a generated config",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const failedToolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(failedToolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "existing_write",
+        content: expect.stringContaining("file already exists"),
+      });
+      expect(await readFile(join(workspace, "config.json"), "utf8")).toBe(
+        '{"old":true}\n',
+      );
+      expect(
+        await readFile(join(workspace, "config.generated.json"), "utf8"),
+      ).toBe('{"new":true}\n');
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Created the generated config.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the workspace disappears before a write tool call runs,
+    When the agent handles the write request,
+    Then it rejects the terminal filesystem error`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const provider = createFakeProvider([
+      fakeWriteResponse("created.txt", "content\n"),
+    ]);
+    await rm(workspace, { recursive: true, force: true });
+
+    // When / Then
+    await expect(
+      collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "create a file",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   test(`Given a workspace file contains text to replace,
     When user asks for the replacement,
     Then the file is updated on disk`, async () => {

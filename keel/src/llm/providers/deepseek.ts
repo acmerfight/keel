@@ -44,6 +44,30 @@ const editTool = {
   },
 };
 
+const writeTool = {
+  type: "function",
+  function: {
+    name: "write",
+    description:
+      "Create a new workspace file. Fails if the file already exists. Automatically creates parent directories.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Workspace-relative file path to create.",
+        },
+        content: {
+          type: "string",
+          description: "Complete file content to write.",
+        },
+      },
+      required: ["path", "content"],
+      additionalProperties: false,
+    },
+  },
+};
+
 const readTool = {
   type: "function",
   function: {
@@ -146,6 +170,13 @@ const editToolArgumentsSchema = z
     path: z.string(),
     oldString: z.string(),
     newString: z.string(),
+  })
+  .strict();
+
+const writeToolArgumentsSchema = z
+  .object({
+    path: z.string(),
+    content: z.string(),
   })
   .strict();
 
@@ -261,8 +292,8 @@ function createChatCompletionsBody(
   options: StreamOptions,
 ): string {
   const tools = options.allowBash
-    ? [readTool, grepTool, editTool, bashTool]
-    : [readTool, grepTool, editTool];
+    ? [readTool, grepTool, editTool, writeTool, bashTool]
+    : [readTool, grepTool, editTool, writeTool];
 
   return JSON.stringify({
     model,
@@ -295,6 +326,11 @@ function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
         path: toolCall.path,
         oldString: toolCall.oldString,
         newString: toolCall.newString,
+      };
+    case "write":
+      return {
+        path: toolCall.path,
+        content: toolCall.content,
       };
     case "bash":
       return {
@@ -406,6 +442,7 @@ function parseToolCall(toolCall: DeepseekPendingToolCall): ToolCallEvent {
     toolCallName !== "read" &&
     toolCallName !== "grep" &&
     toolCallName !== "edit" &&
+    toolCallName !== "write" &&
     toolCallName !== "bash"
   ) {
     throw new KeelError(
@@ -487,6 +524,24 @@ function parseToolCall(toolCall: DeepseekPendingToolCall): ToolCallEvent {
       ...(result.data.timeoutMs !== undefined
         ? { timeoutMs: result.data.timeoutMs }
         : {}),
+    };
+  }
+
+  if (toolCallName === "write") {
+    const result = writeToolArgumentsSchema.safeParse(parsedArguments);
+    if (!result.success) {
+      throw new KeelError(
+        "provider_protocol_error",
+        "DeepSeek write tool call has invalid arguments",
+      );
+    }
+
+    return {
+      type: "tool_call",
+      id: toolCallId,
+      tool: "write",
+      path: result.data.path,
+      content: result.data.content,
     };
   }
 

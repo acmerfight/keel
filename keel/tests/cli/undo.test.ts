@@ -171,6 +171,38 @@ describe("CLI Undo", () => {
     }
   });
 
+  test(`Given Keel created a new file in a git workspace,
+    When user runs the undo command,
+    Then the created file is removed`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+
+    try {
+      const write = await runCli(["create config.json"], {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "fake" },
+      });
+      expect(write.exitCode).toBe(0);
+      expect(await readFile(join(workspace, "config.json"), "utf8")).toBe(
+        '{"created":true}\n',
+      );
+
+      // When
+      const undo = await runCli(["/undo"], { cwd: workspace });
+
+      // Then
+      expect(undo.exitCode).toBe(0);
+      expect(undo.stdout).toBe("Restored config.json\n");
+      await expect(
+        readFile(join(workspace, "config.json"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the user's git index has staged changes,
     When Keel edits and undoes a different file,
     Then the staged changes are preserved`, async () => {
