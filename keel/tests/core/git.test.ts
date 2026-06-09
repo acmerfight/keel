@@ -166,6 +166,52 @@ describe("Git Checkpoints", () => {
     }
   });
 
+  test(`Given a create checkpoint is recorded for a path outside the git root,
+    When the checkpoint is written,
+    Then Keel ignores it`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const outsideDirectory = await mkdtemp(join(tmpdir(), "keel-git-outside-"));
+    const outsideFile = join(outsideDirectory, "created.txt");
+    await writeFile(outsideFile, "created\n", "utf8");
+
+    try {
+      // When
+      const result = recordLastCreateCheckpoint({
+        workspace,
+        filePath: outsideFile,
+        afterContent: "created\n",
+      });
+
+      // Then
+      expect(result).toEqual({ written: false });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outsideDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint is recorded for the git root itself,
+    When the checkpoint is written,
+    Then Keel ignores it`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+
+    try {
+      // When
+      const result = recordLastCreateCheckpoint({
+        workspace,
+        filePath: workspace,
+        afterContent: "created\n",
+      });
+
+      // Then
+      expect(result).toEqual({ written: false });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a checkpoint target no longer exists,
     When the checkpoint is recorded,
     Then Keel skips it without failing`, async () => {
@@ -225,6 +271,49 @@ describe("Git Checkpoints", () => {
       expect(debugOutput).toContain("error=");
       expect(debugOutput).not.toContain("secret old content");
       expect(debugOutput).not.toContain("secret new content");
+    } finally {
+      stderr.mockRestore();
+      if (previousDebug === undefined) {
+        delete process.env[DEBUG_ENV_KEY];
+      } else {
+        process.env[DEBUG_ENV_KEY] = previousDebug;
+      }
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given debug logging is enabled and create checkpoint recording fails,
+    When the checkpoint is recorded,
+    Then Keel logs failure metadata without file contents`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const filePath = join(workspace, "created.txt");
+    await writeFile(filePath, "created\n", "utf8");
+    await writeFile(join(workspace, ".git", "keel"), "not a directory\n");
+    const previousDebug = process.env[DEBUG_ENV_KEY];
+    process.env[DEBUG_ENV_KEY] = "1";
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      // When
+      const record = recordLastCreateCheckpoint({
+        workspace,
+        filePath,
+        afterContent: "secret created content\n",
+      });
+
+      // Then
+      expect(record).toEqual({ written: false });
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining("undo checkpoint write skipped"),
+      );
+      const debugOutput = stderr.mock.calls
+        .map((call) => call.map(String).join(" "))
+        .join("\n");
+      expect(debugOutput).toContain(`workspace=${workspace}`);
+      expect(debugOutput).toContain(`filePath=${filePath}`);
+      expect(debugOutput).toContain("error=");
+      expect(debugOutput).not.toContain("secret created content");
     } finally {
       stderr.mockRestore();
       if (previousDebug === undefined) {
@@ -400,6 +489,36 @@ describe("Git Checkpoints", () => {
         filePath: "created.txt",
       });
       expect(await readFile(targetPath, "utf8")).toBe("created\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint target becomes a directory,
+    When restoring the checkpoint,
+    Then restore fails without deleting the user's directory`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const filePath = join(workspace, "created.txt");
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await rm(filePath);
+    await mkdir(filePath);
+
+    try {
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "blocked",
+        filePath: "created.txt",
+      });
+      expect((await stat(filePath)).isDirectory()).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
