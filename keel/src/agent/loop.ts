@@ -308,7 +308,6 @@ export async function* runAgent(
           toolCallId: toolCall.id,
           content: result.content,
         });
-        yield { type: "text", text: result.content };
         break;
       }
     }

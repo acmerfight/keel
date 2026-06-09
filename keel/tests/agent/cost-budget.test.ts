@@ -156,7 +156,7 @@ describe("Cost Budget", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "new value\n",
       );
-      expect(events).toContainEqual({ type: "text", text: "Edited note.txt" });
+      expect(events).toContainEqual({ type: "text", text: "Done." });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

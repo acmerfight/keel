@@ -146,7 +146,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
 
   return createFakeProvider([
     fakeEditResponse(edit.path, edit.oldString, edit.newString),
-    fakeResponse(`Edited ${edit.path}`),
+    fakeResponse("Done."),
   ]);
 }
 

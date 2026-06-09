@@ -61,7 +61,7 @@ describe("File Editing", () => {
       );
       expect(events).toContainEqual({
         type: "text",
-        text: "Edited note.txt",
+        text: "Done.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -273,7 +273,7 @@ describe("File Editing", () => {
       );
       expect(events).toContainEqual({
         type: "text",
-        text: "Edited note.txt",
+        text: "Done.",
       });
       expect(events).toContainEqual({
         type: "end",
@@ -415,7 +415,7 @@ describe("File Editing", () => {
       );
       expect(events).toContainEqual({
         type: "text",
-        text: "Edited note.txt",
+        text: "Done.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

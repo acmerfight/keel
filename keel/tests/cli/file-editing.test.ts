@@ -339,7 +339,7 @@ describe("CLI File Editing", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello new world\n",
       );
-      expect(result.stdout).toContain("Edited note.txt");
+      expect(result.stdout).toBe("Done.\n");
       expect(result.stderr).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -404,7 +404,7 @@ describe("CLI File Editing", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello new world\n",
       );
-      expect(result.stdout).toContain("Edited note.txt");
+      expect(result.stdout).toBe("Done.\n");
       expect(result.stderr).toBe("");
 
       const request = JSON.parse(capturedBody);
@@ -638,7 +638,7 @@ describe("CLI File Editing", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello new world\n",
       );
-      expect(result.stdout).toContain("Edited note.txt");
+      expect(result.stdout).toBe("Done.\n");
       expect(result.stderr).toBe("");
       expect(capturedBodies).toHaveLength(3);
 
