@@ -40,6 +40,7 @@ describe("File Editing", () => {
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
     const provider = createFakeProvider([
       fakeEditResponse("note.txt", "old", "new"),
+      fakeResponse("Done."),
     ]);
 
     try {
@@ -60,7 +61,7 @@ describe("File Editing", () => {
       );
       expect(events).toContainEqual({
         type: "text",
-        text: "Edited note.txt",
+        text: "Done.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -68,19 +69,41 @@ describe("File Editing", () => {
   });
 
   test(`Given the assistant proposes multiple file changes in one response,
-    When the agent validates the response,
-    Then it rejects the response and leaves the file unchanged`, async () => {
+    When the agent handles the tool calls,
+    Then each file is updated before the assistant replies`, async () => {
     // Given
     const workspace = await createWorkspace();
-    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    await writeFile(join(workspace, "first.txt"), "first old\n", "utf8");
+    await writeFile(join(workspace, "second.txt"), "second old\n", "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
     const provider: LLMProvider = {
       id: "multiple-edits",
-      async *stream() {
+      async *stream(options) {
+        if (turn === 1) {
+          secondTurnMessages = options.messages;
+          yield {
+            type: "text",
+            text: "Both files updated.",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
         yield {
           type: "tool_call",
           id: "first_edit",
           tool: "edit",
-          path: "note.txt",
+          path: "first.txt",
           oldString: "old",
           newString: "new",
         };
@@ -88,9 +111,9 @@ describe("File Editing", () => {
           type: "tool_call",
           id: "second_edit",
           tool: "edit",
-          path: "note.txt",
-          oldString: "new",
-          newString: "second",
+          path: "second.txt",
+          oldString: "old",
+          newString: "new",
         };
         yield {
           type: "stop",
@@ -105,21 +128,240 @@ describe("File Editing", () => {
     };
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "edit once",
-            systemPrompt: "You are a helpful assistant.",
-            signal: freshSignal(),
-          }),
-        ),
-      ).rejects.toThrow("multiple tool calls");
-      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
-        "hello old world\n",
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "edit both files",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
       );
+
+      // Then
+      expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
+        "first new\n",
+      );
+      expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
+        "second new\n",
+      );
+      expect(
+        secondTurnMessages.filter((message) => message.role === "tool"),
+      ).toEqual([
+        {
+          role: "tool",
+          toolCallId: "first_edit",
+          content: "Edited first.txt",
+        },
+        {
+          role: "tool",
+          toolCallId: "second_edit",
+          content: "Edited second.txt",
+        },
+      ]);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Both files updated.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one of multiple requested file changes cannot be applied,
+    When the agent handles the tool calls,
+    Then it reports that failure and still returns the successful tool result`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "first.txt"), "first old\n", "utf8");
+    await writeFile(join(workspace, "second.txt"), "second old\n", "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "mixed-multiple-edits",
+      async *stream(options) {
+        if (turn === 1) {
+          secondTurnMessages = options.messages;
+          yield {
+            type: "text",
+            text: "One edit failed and one edit succeeded.",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
+        yield {
+          type: "tool_call",
+          id: "missing_edit",
+          tool: "edit",
+          path: "first.txt",
+          oldString: "missing",
+          newString: "new",
+        };
+        yield {
+          type: "tool_call",
+          id: "second_edit",
+          tool: "edit",
+          path: "second.txt",
+          oldString: "old",
+          newString: "new",
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "edit both files",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
+        "first old\n",
+      );
+      expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
+        "second new\n",
+      );
+      const toolMessages = secondTurnMessages.filter(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessages[0]).toMatchObject({
+        role: "tool",
+        toolCallId: "missing_edit",
+        content: expect.stringContaining("Tool failed:"),
+      });
+      expect(toolMessages[1]).toEqual({
+        role: "tool",
+        toolCallId: "second_edit",
+        content: "Edited second.txt",
+      });
+      expect(events).toContainEqual({
+        type: "text",
+        text: "One edit failed and one edit succeeded.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one of multiple requested file changes uses an empty old string,
+    When the agent handles the tool calls,
+    Then it reports that failure and still applies the remaining file change`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "empty.txt"), "", "utf8");
+    await writeFile(join(workspace, "second.txt"), "second old\n", "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "empty-old-string-with-success",
+      async *stream(options) {
+        if (turn === 1) {
+          secondTurnMessages = options.messages;
+          yield {
+            type: "text",
+            text: "One edit was not valid and one edit succeeded.",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
+        yield {
+          type: "tool_call",
+          id: "empty_file_edit",
+          tool: "edit",
+          path: "empty.txt",
+          oldString: "",
+          newString: "created\n",
+        };
+        yield {
+          type: "tool_call",
+          id: "second_edit",
+          tool: "edit",
+          path: "second.txt",
+          oldString: "old",
+          newString: "new",
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "edit both files",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "empty.txt"), "utf8")).toBe("");
+      expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
+        "second new\n",
+      );
+      const toolMessages = secondTurnMessages.filter(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessages[0]).toMatchObject({
+        role: "tool",
+        toolCallId: "empty_file_edit",
+        content: expect.stringContaining("old string is empty"),
+      });
+      expect(toolMessages[1]).toEqual({
+        role: "tool",
+        toolCallId: "second_edit",
+        content: "Edited second.txt",
+      });
+      expect(events).toContainEqual({
+        type: "text",
+        text: "One edit was not valid and one edit succeeded.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -210,22 +452,37 @@ describe("File Editing", () => {
           return;
         }
 
-        secondTurnMessages = options.messages;
-        yield {
-          type: "tool_call",
-          id: "correct_edit",
-          tool: "edit",
-          path: "note.txt",
-          oldString: "world",
-          newString: "there",
-        };
+        if (turn === 1) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "correct_edit",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "world",
+            newString: "there",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 2,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 2,
+              outputTokens: 2,
+            },
+          };
+          return;
+        }
+
+        yield { type: "text", text: "Done." };
         yield {
           type: "stop",
           usage: {
-            inputTokens: 2,
+            inputTokens: 3,
             cachedInputTokens: 0,
-            uncachedInputTokens: 2,
-            outputTokens: 2,
+            uncachedInputTokens: 3,
+            outputTokens: 3,
           },
         };
       },
@@ -257,15 +514,15 @@ describe("File Editing", () => {
       );
       expect(events).toContainEqual({
         type: "text",
-        text: "Edited note.txt",
+        text: "Done.",
       });
       expect(events).toContainEqual({
         type: "end",
         usage: {
-          inputTokens: 3,
+          inputTokens: 6,
           cachedInputTokens: 0,
-          uncachedInputTokens: 3,
-          outputTokens: 3,
+          uncachedInputTokens: 6,
+          outputTokens: 6,
         },
       });
     } finally {
@@ -275,30 +532,50 @@ describe("File Editing", () => {
 
   test(`Given the assistant proposes an empty text match,
     When the agent validates the edit,
-    Then the edit is rejected and the file is unchanged`, async () => {
+    Then the failure is reported and the file is unchanged`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
+    let secondTurnMessages: readonly Message[] = [];
     const provider = createFakeProvider([
       fakeEditResponse("note.txt", "", "x"),
+      fakeResponse("Cannot replace empty text."),
     ]);
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "replace empty text",
-            systemPrompt: "You are a helpful assistant.",
-            signal: freshSignal(),
-          }),
-        ),
-      ).rejects.toThrow("old string is empty");
+      const recordingProvider: LLMProvider = {
+        id: "record-empty-old-string",
+        async *stream(options) {
+          if (options.messages.some((message) => message.role === "tool")) {
+            secondTurnMessages = options.messages;
+          }
+          yield* provider.stream(options);
+        },
+      };
+
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider: recordingProvider,
+          userMessage: "replace empty text",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const toolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessage?.content).toContain("old string is empty");
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello world\n",
       );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Cannot replace empty text.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -337,22 +614,37 @@ describe("File Editing", () => {
           return;
         }
 
-        secondTurnMessages = options.messages;
-        yield {
-          type: "tool_call",
-          id: "correct_edit",
-          tool: "edit",
-          path: "note.txt",
-          oldString: "world",
-          newString: "there",
-        };
+        if (turn === 1) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "correct_edit",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "world",
+            newString: "there",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 2,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 2,
+              outputTokens: 2,
+            },
+          };
+          return;
+        }
+
+        yield { type: "text", text: "Done." };
         yield {
           type: "stop",
           usage: {
-            inputTokens: 2,
+            inputTokens: 3,
             cachedInputTokens: 0,
-            uncachedInputTokens: 2,
-            outputTokens: 2,
+            uncachedInputTokens: 3,
+            outputTokens: 3,
           },
         };
       },
@@ -384,7 +676,7 @@ describe("File Editing", () => {
       );
       expect(events).toContainEqual({
         type: "text",
-        text: "Edited note.txt",
+        text: "Done.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -799,7 +1091,7 @@ describe("File Editing", () => {
 
   test(`Given a workspace file contains binary bytes,
     When the agent reads it,
-    Then the read is rejected before content is sent back`, async () => {
+    Then the failure is reported and the assistant can recover`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(
@@ -809,10 +1101,26 @@ describe("File Editing", () => {
     let streamCalls = 0;
     const provider: LLMProvider = {
       id: "binary-read",
-      async *stream() {
+      async *stream(options) {
         streamCalls++;
         if (streamCalls > 1) {
-          throw new Error("binary read content reached the second LLM request");
+          const toolMessage = options.messages.find(
+            (message) =>
+              message.role === "tool" && message.toolCallId === "read_binary",
+          );
+          expect(toolMessage?.content).toContain("Tool failed:");
+          expect(toolMessage?.content).toContain("binary file");
+          yield { type: "text", text: "Cannot read that binary file." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
         }
 
         yield {
@@ -834,19 +1142,63 @@ describe("File Editing", () => {
     };
 
     try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "read the binary file",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(streamCalls).toBe(2);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Cannot read that binary file.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the assistant requests an invalid read window,
+    When the agent validates the read,
+    Then the agent rejects the terminal read error`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
+    const provider = createFakeProvider([
+      fakeReadResponse(
+        "note.txt",
+        {
+          inputTokens: 1,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 1,
+          outputTokens: 1,
+        },
+        { offset: 0 },
+      ),
+    ]);
+
+    try {
       // When / Then
       await expect(
         collect(
           runAgent({
             workspace,
             provider,
-            userMessage: "read the binary file",
+            userMessage: "read from line zero",
             systemPrompt: "You are a helpful assistant.",
             signal: freshSignal(),
           }),
         ),
-      ).rejects.toThrow("binary file");
-      expect(streamCalls).toBe(1);
+      ).rejects.toMatchObject({
+        code: "tool_invalid_read_options",
+        message: "read failed: offset must be a positive integer in note.txt",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1103,6 +1455,37 @@ describe("File Editing", () => {
       expect(events).toContainEqual({
         type: "text",
         text: "Search recovered.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user cancels while a search is requested,
+    When the assistant tries to search the workspace,
+    Then the agent rejects the terminal search error`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "app.ts"), "const target = true;\n");
+    const abortController = new AbortController();
+    abortController.abort();
+    const provider = createFakeProvider([fakeGrepResponse("target")]);
+
+    try {
+      // When / Then
+      await expect(
+        collect(
+          runAgent({
+            workspace,
+            provider,
+            userMessage: "find target",
+            systemPrompt: "You are a helpful assistant.",
+            signal: abortController.signal,
+          }),
+        ),
+      ).rejects.toMatchObject({
+        name: "AbortError",
+        code: "ABORT_ERR",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1528,17 +1911,34 @@ describe("File Editing", () => {
 
   test(`Given a text-named workspace file contains binary bytes,
     When the agent reads it,
-    Then content sniffing rejects the read before content is sent back`, async () => {
+    Then content sniffing reports the failure and the assistant can recover`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "blob.txt"), Buffer.from([65, 0, 66]));
     let streamCalls = 0;
     const provider: LLMProvider = {
       id: "binary-sniff-read",
-      async *stream() {
+      async *stream(options) {
         streamCalls++;
         if (streamCalls > 1) {
-          throw new Error("binary read content reached the second LLM request");
+          const toolMessage = options.messages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.toolCallId === "read_binary_text",
+          );
+          expect(toolMessage?.content).toContain("Tool failed:");
+          expect(toolMessage?.content).toContain("binary file");
+          yield { type: "text", text: "Cannot read that text file." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
         }
 
         yield {
@@ -1560,19 +1960,23 @@ describe("File Editing", () => {
     };
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "read the text-named binary file",
-            systemPrompt: "You are a helpful assistant.",
-            signal: freshSignal(),
-          }),
-        ),
-      ).rejects.toThrow("binary file");
-      expect(streamCalls).toBe(1);
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "read the text-named binary file",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(streamCalls).toBe(2);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Cannot read that text file.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1645,6 +2049,86 @@ describe("File Editing", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello old world\n",
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two workspace files each contain a typo,
+    When user asks to fix both,
+    Then both files are edited in one session`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "a.txt"), "hello wrold\n", "utf8");
+    await writeFile(join(workspace, "b.txt"), "goodby world\n", "utf8");
+    const provider = createFakeProvider([
+      fakeEditResponse("a.txt", "wrold", "world"),
+      fakeEditResponse("b.txt", "goodby", "goodbye"),
+      fakeResponse("Fixed both files."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "fix the typos in both files",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "a.txt"), "utf8")).toBe(
+        "hello world\n",
+      );
+      expect(await readFile(join(workspace, "b.txt"), "utf8")).toBe(
+        "goodbye world\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Fixed both files.",
+      });
+      expect(events.filter((e) => e.type === "end")).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a workspace file with a bug,
+    When the agent reads it then edits it,
+    Then the agent replies with a summary after the edit`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "app.ts"), "const x = nul;\n", "utf8");
+    const provider = createFakeProvider([
+      fakeReadResponse("app.ts"),
+      fakeEditResponse("app.ts", "nul", "null"),
+      fakeResponse("Fixed the null typo."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "fix the bug in app.ts",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "app.ts"), "utf8")).toBe(
+        "const x = null;\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Fixed the null typo.",
+      });
+      expect(events.filter((e) => e.type === "end")).toHaveLength(1);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

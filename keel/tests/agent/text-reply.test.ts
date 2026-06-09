@@ -186,6 +186,65 @@ describe("Text Reply", () => {
     ).rejects.toThrow("LLM stream ended without stop event");
   });
 
+  test(`Given a task needs more than eight tool rounds,
+    When the assistant eventually reaches a final reply,
+    Then the agent allows the task to complete`, async () => {
+    // Given
+    let turn = 0;
+    const provider: LLMProvider = {
+      id: "long-tool-chain",
+      async *stream() {
+        if (turn < 9) {
+          yield {
+            type: "tool_call",
+            id: `read_package_${turn}`,
+            tool: "read",
+            path: "package.json",
+          };
+          turn++;
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        yield { type: "text", text: "Completed the long task." };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgent({
+        workspace: workspace(),
+        provider,
+        userMessage: "inspect several files and verify the result",
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Completed the long task.",
+    });
+  });
+
   test(`Given the assistant repeatedly asks to inspect files,
     When the agent exceeds its action limit,
     Then agent reports an action limit error`, async () => {
