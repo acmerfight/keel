@@ -6,6 +6,10 @@ import {
   resolveWorkspaceCreateTarget,
 } from "./workspace-path.ts";
 
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}
+
 export function executeWrite(
   workspace: string,
   filePath: string,
@@ -17,8 +21,10 @@ export function executeWrite(
   try {
     mkdirSync(parentPath, { recursive: true });
   } catch (error) {
-    const code = error instanceof Error && "code" in error ? error.code : "";
-    if (code === "EEXIST" || code === "ENOTDIR") {
+    if (
+      isErrnoException(error) &&
+      (error.code === "EEXIST" || error.code === "ENOTDIR")
+    ) {
       throw new KeelError(
         "tool_not_directory",
         `write failed: parent path is not a directory: ${filePath}`,
@@ -38,14 +44,13 @@ export function executeWrite(
   try {
     writeFileSync(targetPath, content, { encoding: "utf8", flag: "wx" });
   } catch (error) {
-    const code = error instanceof Error && "code" in error ? error.code : "";
-    if (code === "EEXIST") {
+    if (isErrnoException(error) && error.code === "EEXIST") {
       throw new KeelError(
         "tool_file_exists",
         `write failed: file already exists: ${filePath}`,
       );
     }
-    if (code === "ENOTDIR") {
+    if (isErrnoException(error) && error.code === "ENOTDIR") {
       throw new KeelError(
         "tool_not_directory",
         `write failed: parent path is not a directory: ${filePath}`,
