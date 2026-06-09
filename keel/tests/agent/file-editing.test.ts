@@ -1283,6 +1283,37 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given the user cancels while a search is requested,
+    When the assistant tries to search the workspace,
+    Then the agent rejects the terminal search error`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "app.ts"), "const target = true;\n");
+    const abortController = new AbortController();
+    abortController.abort();
+    const provider = createFakeProvider([fakeGrepResponse("target")]);
+
+    try {
+      // When / Then
+      await expect(
+        collect(
+          runAgent({
+            workspace,
+            provider,
+            userMessage: "find target",
+            systemPrompt: "You are a helpful assistant.",
+            signal: abortController.signal,
+          }),
+        ),
+      ).rejects.toMatchObject({
+        name: "AbortError",
+        code: "ABORT_ERR",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the first search targets an ignored file,
     When the agent reports the ignored path and receives a visible file search,
     Then corrected matches are available without leaking secret content`, async () => {
