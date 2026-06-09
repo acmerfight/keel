@@ -149,6 +149,26 @@ function grepToolCallDelta(argumentsJson: string): {
   };
 }
 
+function writeToolCallDelta(argumentsJson: string): {
+  readonly index: number;
+  readonly id: string;
+  readonly type: "function";
+  readonly function: {
+    readonly name: "write";
+    readonly arguments: string;
+  };
+} {
+  return {
+    index: 0,
+    id: "call_write_0",
+    type: "function",
+    function: {
+      name: "write",
+      arguments: argumentsJson,
+    },
+  };
+}
+
 function bashToolCallDelta(argumentsJson: string): {
   readonly index: number;
   readonly id: string;
@@ -636,6 +656,40 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "write-tool-call") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        writeToolCallDelta(
+                          JSON.stringify({
+                            path: "config.json",
+                            content: '{"created":true}\n',
+                          }),
+                        ),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: {
+                  prompt_tokens: 28,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 28,
+                  completion_tokens: 7,
+                },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "empty-grep-pattern") {
             writeSseResponse(res, [
               sseData({
@@ -1028,6 +1082,37 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "invalid-write-arguments") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        writeToolCallDelta(
+                          JSON.stringify({ path: "config.json" }),
+                        ),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "invalid-edit-arguments") {
             writeSseResponse(res, [
               sseData({
@@ -1336,6 +1421,23 @@ describe("DeepSeek Provider", () => {
           },
           {
             role: "assistant",
+            content: "I can now create a file.",
+            toolCalls: [
+              {
+                id: "write_1",
+                tool: "write",
+                path: "src/generated.ts",
+                content: "export const generated = true;\n",
+              },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "write_1",
+            content: "Wrote src/generated.ts",
+          },
+          {
+            role: "assistant",
             content: "I need to run the test command.",
             toolCalls: [
               {
@@ -1443,6 +1545,25 @@ describe("DeepSeek Provider", () => {
         content: null,
         tool_calls: [
           {
+            id: "write_1",
+            type: "function",
+            function: {
+              name: "write",
+              arguments: expect.any(String),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "write_1",
+        content: "Wrote src/generated.ts",
+      },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
             id: "bash_1",
             type: "function",
             function: {
@@ -1515,8 +1636,22 @@ describe("DeepSeek Provider", () => {
         newString: "new",
       },
     );
-    const bashToolCalls = objectProperty(
+    const writeToolCalls = objectProperty(
       arrayElement(capturedMessages, 11),
+      "tool_calls",
+    );
+    expectJsonString(
+      objectProperty(
+        objectProperty(arrayElement(writeToolCalls, 0), "function"),
+        "arguments",
+      ),
+      {
+        path: "src/generated.ts",
+        content: "export const generated = true;\n",
+      },
+    );
+    const bashToolCalls = objectProperty(
+      arrayElement(capturedMessages, 13),
       "tool_calls",
     );
     expectJsonString(
@@ -2111,6 +2246,46 @@ describe("DeepSeek Provider", () => {
     ]);
   });
 
+  test(`Given a write tool call includes a path and content,
+    When provider finishes the tool call,
+    Then it yields the write tool call with that create-file request`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "write-tool-call" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_write_0",
+        tool: "write",
+        path: "config.json",
+        content: '{"created":true}\n',
+      },
+      {
+        type: "stop",
+        usage: {
+          inputTokens: 28,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 28,
+          outputTokens: 7,
+        },
+      },
+    ]);
+  });
+
   test(`Given a grep tool call sends an empty pattern,
     When provider validates the completed tool call,
     Then it yields the tool call so grep can return a recoverable error`, async () => {
@@ -2489,6 +2664,32 @@ describe("DeepSeek Provider", () => {
     });
   });
 
+  test(`Given a write tool call is missing its content,
+    When provider validates the completed tool call,
+    Then it throws a write argument protocol error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "invalid-write-arguments" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek write tool call has invalid arguments",
+    });
+  });
+
   test(`Given a bash tool call is missing its command,
     When provider validates the completed tool call,
     Then it throws a bash argument protocol error`, async () => {
@@ -2780,6 +2981,7 @@ describe("DeepSeek Provider", () => {
         "read",
         "grep",
         "edit",
+        "write",
       ]);
     } finally {
       await closeServer(captureServer);
@@ -2830,6 +3032,7 @@ describe("DeepSeek Provider", () => {
         "read",
         "grep",
         "edit",
+        "write",
         "bash",
       ]);
       const bashToolDefinition = parsed.tools?.find(
@@ -2899,6 +3102,69 @@ describe("DeepSeek Provider", () => {
         grepToolDefinition.function.parameters.properties.pattern;
       expect(patternSchema).toMatchObject({ type: "string" });
       expect(patternSchema).not.toHaveProperty("minLength");
+    } finally {
+      await closeServer(captureServer);
+    }
+  });
+
+  test(`Given provider advertises the write tool,
+    When it sends the request body,
+    Then the schema describes create-only file writes with path and content`, async () => {
+    // Given
+    let capturedBody = "";
+    const captureServer = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBody = body;
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(sseChunk("ok"));
+        res.write(sseFinish(1, 1));
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => {
+      captureServer.listen(0, "127.0.0.1", resolve);
+    });
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl: `http://127.0.0.1:${getPort(captureServer)}`,
+      model: "deepseek-v4-flash",
+    });
+
+    try {
+      // When
+      await collect(
+        provider.stream({
+          systemPrompt: "sys",
+          messages: [{ role: "user", content: "hi" }],
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const parsed = parseDeepseekRequestBody(capturedBody);
+      if (parsed.tools === undefined) {
+        throw new Error("Expected tools array");
+      }
+      const writeToolDefinition = parsed.tools.find(
+        (tool) => tool.function.name === "write",
+      );
+      if (writeToolDefinition === undefined) {
+        throw new Error("Expected write tool definition");
+      }
+      const parameters = writeToolDefinition.function.parameters;
+      expect(parameters).toMatchObject({
+        required: ["path", "content"],
+        additionalProperties: false,
+      });
+      expect(parameters.properties.path).toMatchObject({ type: "string" });
+      expect(parameters.properties.content).toMatchObject({ type: "string" });
+      expect(writeToolDefinition.function.description).toContain(
+        "Fails if the file already exists",
+      );
     } finally {
       await closeServer(captureServer);
     }

@@ -33,6 +33,12 @@ export type ToolCall =
     }
   | {
       readonly id: string;
+      readonly tool: "write";
+      readonly path: string;
+      readonly content: string;
+    }
+  | {
+      readonly id: string;
       readonly tool: "bash";
       readonly command: string;
       readonly timeoutMs?: number;
