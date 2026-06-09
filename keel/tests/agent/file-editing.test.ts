@@ -69,19 +69,41 @@ describe("File Editing", () => {
   });
 
   test(`Given the assistant proposes multiple file changes in one response,
-    When the agent validates the response,
-    Then it rejects the response and leaves the file unchanged`, async () => {
+    When the agent handles the tool calls,
+    Then each file is updated before the assistant replies`, async () => {
     // Given
     const workspace = await createWorkspace();
-    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    await writeFile(join(workspace, "first.txt"), "first old\n", "utf8");
+    await writeFile(join(workspace, "second.txt"), "second old\n", "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
     const provider: LLMProvider = {
       id: "multiple-edits",
-      async *stream() {
+      async *stream(options) {
+        if (turn === 1) {
+          secondTurnMessages = options.messages;
+          yield {
+            type: "text",
+            text: "Both files updated.",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
         yield {
           type: "tool_call",
           id: "first_edit",
           tool: "edit",
-          path: "note.txt",
+          path: "first.txt",
           oldString: "old",
           newString: "new",
         };
@@ -89,9 +111,9 @@ describe("File Editing", () => {
           type: "tool_call",
           id: "second_edit",
           tool: "edit",
-          path: "note.txt",
-          oldString: "new",
-          newString: "second",
+          path: "second.txt",
+          oldString: "old",
+          newString: "new",
         };
         yield {
           type: "stop",
@@ -106,21 +128,142 @@ describe("File Editing", () => {
     };
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "edit once",
-            systemPrompt: "You are a helpful assistant.",
-            signal: freshSignal(),
-          }),
-        ),
-      ).rejects.toThrow("multiple tool calls");
-      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
-        "hello old world\n",
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "edit both files",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
       );
+
+      // Then
+      expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
+        "first new\n",
+      );
+      expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
+        "second new\n",
+      );
+      expect(
+        secondTurnMessages.filter((message) => message.role === "tool"),
+      ).toEqual([
+        {
+          role: "tool",
+          toolCallId: "first_edit",
+          content: "Edited first.txt",
+        },
+        {
+          role: "tool",
+          toolCallId: "second_edit",
+          content: "Edited second.txt",
+        },
+      ]);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Both files updated.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one of multiple requested file changes cannot be applied,
+    When the agent handles the tool calls,
+    Then it reports that failure and still returns the successful tool result`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "first.txt"), "first old\n", "utf8");
+    await writeFile(join(workspace, "second.txt"), "second old\n", "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "mixed-multiple-edits",
+      async *stream(options) {
+        if (turn === 1) {
+          secondTurnMessages = options.messages;
+          yield {
+            type: "text",
+            text: "One edit failed and one edit succeeded.",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
+        yield {
+          type: "tool_call",
+          id: "missing_edit",
+          tool: "edit",
+          path: "first.txt",
+          oldString: "missing",
+          newString: "new",
+        };
+        yield {
+          type: "tool_call",
+          id: "second_edit",
+          tool: "edit",
+          path: "second.txt",
+          oldString: "old",
+          newString: "new",
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "edit both files",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
+        "first old\n",
+      );
+      expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
+        "second new\n",
+      );
+      const toolMessages = secondTurnMessages.filter(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessages[0]).toMatchObject({
+        role: "tool",
+        toolCallId: "missing_edit",
+        content: expect.stringContaining("Tool failed:"),
+      });
+      expect(toolMessages[1]).toEqual({
+        role: "tool",
+        toolCallId: "second_edit",
+        content: "Edited second.txt",
+      });
+      expect(events).toContainEqual({
+        type: "text",
+        text: "One edit failed and one edit succeeded.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

@@ -874,10 +874,12 @@ describe("CLI File Editing", () => {
 
   test(`Given the configured provider proposes multiple file edits in one response,
     When user asks the CLI to replace text in a workspace file,
-    Then the CLI fails and the file is unchanged`, async () => {
+    Then each edit is applied and stdout contains only the final reply`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-edit-"));
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    let requestCount = 0;
+    let secondRequestBody = "";
     const server = createServer((req, res) => {
       if (req.url !== "/chat/completions") {
         res.writeHead(404);
@@ -885,17 +887,28 @@ describe("CLI File Editing", () => {
         return;
       }
 
-      req.resume();
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
       req.on("end", () => {
+        requestCount++;
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
           Connection: "keep-alive",
         });
-        res.write(sseMultipleEditToolCalls());
-        res.write(
-          sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 8 }),
-        );
+
+        if (requestCount === 1) {
+          res.write(sseMultipleEditToolCalls());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 8 }),
+          );
+        } else {
+          secondRequestBody = body;
+          res.write(sseTextReply("Done."));
+          res.write(sseStopFinish({ prompt_tokens: 40, completion_tokens: 2 }));
+        }
         res.write("data: [DONE]\n\n");
         res.end();
       });
@@ -913,13 +926,30 @@ describe("CLI File Editing", () => {
       });
 
       // Then
-      expect(result.exitCode).not.toBe(0);
+      expect(result.exitCode).toBe(0);
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
-        "hello old world\n",
+        "hello new there\n",
       );
-      expect(result.stderr).toContain(
-        "Keel does not support multiple tool calls in one turn",
+      expect(result.stdout).toBe("Done.\n");
+      expect(result.stderr).toBe("");
+      expect(requestCount).toBe(2);
+      const secondRequest = requestWithMessagesSchema.parse(
+        JSON.parse(secondRequestBody),
       );
+      expect(
+        secondRequest.messages?.filter((message) => message.role === "tool"),
+      ).toEqual([
+        {
+          role: "tool",
+          tool_call_id: "call_edit_0",
+          content: "Edited note.txt",
+        },
+        {
+          role: "tool",
+          tool_call_id: "call_edit_1",
+          content: "Edited note.txt",
+        },
+      ]);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
