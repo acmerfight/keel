@@ -339,7 +339,7 @@ describe("CLI File Editing", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello new world\n",
       );
-      expect(result.stdout).toBe("Done.\n");
+      expect(result.stdout).toBe("Edited note.txt\n");
       expect(result.stderr).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });

@@ -9,11 +9,7 @@ import {
   DEEPSEEK_V4_FLASH_COST_MODEL,
 } from "../llm/providers/deepseek.ts";
 import type { LLMProvider } from "../llm/types.ts";
-import {
-  createFakeProvider,
-  fakeEditResponse,
-  fakeResponse,
-} from "../testing/fake-provider.ts";
+import { createFakeProvider, fakeResponse } from "../testing/fake-provider.ts";
 import { runDoctor } from "./doctor.ts";
 
 interface CliEditRequest {
@@ -144,10 +140,50 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
     return createFakeProvider([fakeResponse("Hello from fake provider.")]);
   }
 
-  return createFakeProvider([
-    fakeEditResponse(edit.path, edit.oldString, edit.newString),
-    fakeResponse("Done."),
-  ]);
+  let turn = 0;
+  return {
+    id: "fake",
+    async *stream(options) {
+      turn++;
+      if (turn === 1) {
+        yield {
+          type: "tool_call",
+          id: "fake_edit",
+          tool: "edit",
+          path: edit.path,
+          oldString: edit.oldString,
+          newString: edit.newString,
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 0,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 0,
+            outputTokens: 0,
+          },
+        };
+        return;
+      }
+
+      const toolContent = options.messages.findLast(
+        (m) => m.role === "tool",
+      )?.content;
+      const reply = toolContent?.startsWith("Tool failed:")
+        ? toolContent
+        : `Edited ${edit.path}`;
+      yield { type: "text", text: reply };
+      yield {
+        type: "stop",
+        usage: {
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 0,
+          outputTokens: 0,
+        },
+      };
+    },
+  };
 }
 
 function resolveProvider(userMessage: string): LLMProvider {
