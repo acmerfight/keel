@@ -46,6 +46,17 @@ async function createGitWorkspace(): Promise<string> {
   return workspace;
 }
 
+async function withGitWorkspace(
+  action: (workspace: string) => Promise<void>,
+): Promise<void> {
+  const workspace = await createGitWorkspace();
+  try {
+    await action(workspace);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
 async function importGitWithFs(
   overrides: Partial<typeof import("node:fs")>,
 ): Promise<typeof import("../../src/core/git.ts")> {
@@ -64,27 +75,27 @@ describe("Git Checkpoint Race Handling", () => {
   test(`Given a created file disappears after restore resolves its real path,
     When restoring the create checkpoint,
     Then restore blocks without consuming the checkpoint`, async () => {
-    // Given
-    const workspace = await createGitWorkspace();
-    const filePath = join(workspace, "created.txt");
-    await writeFile(filePath, "created\n", "utf8");
-    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const { recordLastCreateCheckpoint, restoreLastEditCheckpoint } =
-      await importGitWithFs({
-        lstatSync: (path) => {
-          if (String(path).endsWith("created.txt")) {
-            throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-          }
-          return actualFs.lstatSync(path);
-        },
+    await withGitWorkspace(async (workspace) => {
+      // Given
+      const filePath = join(workspace, "created.txt");
+      await writeFile(filePath, "created\n", "utf8");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const { recordLastCreateCheckpoint, restoreLastEditCheckpoint } =
+        await importGitWithFs({
+          lstatSync: (path) => {
+            if (String(path).endsWith("created.txt")) {
+              throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+            }
+            return actualFs.lstatSync(path);
+          },
+        });
+      recordLastCreateCheckpoint({
+        workspace,
+        filePath,
+        afterContent: "created\n",
       });
-    recordLastCreateCheckpoint({
-      workspace,
-      filePath,
-      afterContent: "created\n",
-    });
 
-    try {
       // When
       const result = restoreLastEditCheckpoint(workspace);
 
@@ -97,73 +108,68 @@ describe("Git Checkpoint Race Handling", () => {
         status: "blocked",
         filePath: "created.txt",
       });
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
+    });
   });
 
-  test(`Given checkpoint metadata cannot be written for an edit,
-    When recording the edit checkpoint,
-    Then Keel skips the checkpoint without failing`, async () => {
-    // Given
-    const workspace = await createGitWorkspace();
-    const filePath = join(workspace, "note.txt");
-    await writeFile(filePath, "new\n", "utf8");
-    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const { recordLastEditCheckpoint } = await importGitWithFs({
-      writeFileSync: (path, data, options) => {
-        if (String(path).endsWith("last-edit-checkpoint.json")) {
-          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
-        }
-        return actualFs.writeFileSync(path, data, options);
-      },
-    });
-
-    try {
-      // When
-      const result = recordLastEditCheckpoint({
-        workspace,
-        filePath,
-        beforeContent: "old\n",
-        afterContent: "new\n",
+  test.each([
+    {
+      operation: "an edit",
+      fileName: "note.txt",
+      content: "new\n",
+      record: (
+        gitModule: typeof import("../../src/core/git.ts"),
+        workspace: string,
+        filePath: string,
+      ) =>
+        gitModule.recordLastEditCheckpoint({
+          workspace,
+          filePath,
+          beforeContent: "old\n",
+          afterContent: "new\n",
+        }),
+    },
+    {
+      operation: "a created file",
+      fileName: "created.txt",
+      content: "created\n",
+      record: (
+        gitModule: typeof import("../../src/core/git.ts"),
+        workspace: string,
+        filePath: string,
+      ) =>
+        gitModule.recordLastCreateCheckpoint({
+          workspace,
+          filePath,
+          afterContent: "created\n",
+        }),
+    },
+  ])(`Given checkpoint metadata cannot be written for $operation,
+    When recording the checkpoint,
+    Then Keel skips the checkpoint without failing`, async ({
+    fileName,
+    content,
+    record,
+  }) => {
+    await withGitWorkspace(async (workspace) => {
+      // Given
+      const filePath = join(workspace, fileName);
+      await writeFile(filePath, content, "utf8");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const gitModule = await importGitWithFs({
+        writeFileSync: (path, data, options) => {
+          if (String(path).endsWith("last-edit-checkpoint.json")) {
+            throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+          }
+          return actualFs.writeFileSync(path, data, options);
+        },
       });
+
+      // When
+      const result = record(gitModule, workspace, filePath);
 
       // Then
       expect(result).toEqual({ written: false });
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given checkpoint metadata cannot be written for a created file,
-    When recording the create checkpoint,
-    Then Keel skips the checkpoint without failing`, async () => {
-    // Given
-    const workspace = await createGitWorkspace();
-    const filePath = join(workspace, "created.txt");
-    await writeFile(filePath, "created\n", "utf8");
-    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const { recordLastCreateCheckpoint } = await importGitWithFs({
-      writeFileSync: (path, data, options) => {
-        if (String(path).endsWith("last-edit-checkpoint.json")) {
-          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
-        }
-        return actualFs.writeFileSync(path, data, options);
-      },
     });
-
-    try {
-      // When
-      const result = recordLastCreateCheckpoint({
-        workspace,
-        filePath,
-        afterContent: "created\n",
-      });
-
-      // Then
-      expect(result).toEqual({ written: false });
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
   });
 });
