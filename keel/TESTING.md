@@ -61,6 +61,15 @@ This directory is excluded from coverage reports.
 
 Use `pnpm test:coverage` for final verification before pushing or merging. `pnpm test` is acceptable for fast local iteration, but PR-ready verification must run the coverage command so regressions in covered branches are visible.
 
+## Coverage Triage
+
+Coverage gaps require triage, not automatic tests.
+
+If a branch is reachable through a supported boundary, cover its observable behavior with BDD.
+If it is unreachable under current invariants, remove or refactor it.
+If it is a necessary guard, document the invariant it protects.
+Never mock impossible states just to satisfy coverage.
+
 ## Choosing A Test Boundary
 
 Prefer the highest product boundary that still gives a clear, stable failure:
