@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import {
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -489,6 +490,41 @@ describe("Git Checkpoints", () => {
         filePath: "created.txt",
       });
       expect(await readFile(targetPath, "utf8")).toBe("created\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint target becomes a dangling symlink,
+    When restoring the checkpoint,
+    Then restore fails without consuming the checkpoint or removing the symlink`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const filePath = join(workspace, "created.txt");
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await rm(filePath);
+    await symlink("missing-target.txt", filePath);
+
+    try {
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+      const secondResult = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "blocked",
+        filePath: "created.txt",
+      });
+      expect(secondResult).toMatchObject({
+        status: "blocked",
+        filePath: "created.txt",
+      });
+      expect((await lstat(filePath)).isSymbolicLink()).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

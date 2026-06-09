@@ -307,24 +307,25 @@ export function restoreLastEditCheckpoint(
   }
 
   if (checkpoint.operation === "create") {
-    const restorePath = realpathIfPossible(filePath);
-    if (restorePath === null) {
+    const targetStat = lstatIfPossible(filePath);
+    if (targetStat === null) {
       rmSync(gitWorkspace.checkpointPath, { force: true });
       return {
         status: "restored",
         filePath: checkpoint.relativePath,
       };
     }
-    if (!isInside(gitWorkspace.root, restorePath)) {
+
+    if (targetStat.isSymbolicLink()) {
       return blockedRestore(checkpoint);
     }
 
-    const targetStat = lstatIfPossible(filePath);
-    if (targetStat === null || targetStat.isSymbolicLink()) {
+    const restorePath = realpathIfPossible(filePath);
+    if (restorePath === null || !isInside(gitWorkspace.root, restorePath)) {
       return blockedRestore(checkpoint);
     }
 
-    const currentContent = readFileIfPossible(filePath);
+    const currentContent = readFileIfPossible(restorePath);
     if (currentContent !== checkpoint.afterContent) {
       return blockedRestore(checkpoint);
     }

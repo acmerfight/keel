@@ -72,7 +72,7 @@ describe("Git Checkpoint Race Handling", () => {
     vi.resetModules();
   });
 
-  test(`Given a created file disappears after restore resolves its real path,
+  test(`Given a created file disappears after restore stats it,
     When restoring the create checkpoint,
     Then restore blocks without consuming the checkpoint`, async () => {
     await withGitWorkspace(async (workspace) => {
@@ -81,13 +81,14 @@ describe("Git Checkpoint Race Handling", () => {
       await writeFile(filePath, "created\n", "utf8");
       const actualFs =
         await vi.importActual<typeof import("node:fs")>("node:fs");
+      let targetRealpathFails = false;
       const { recordLastCreateCheckpoint, restoreLastEditCheckpoint } =
         await importGitWithFs({
-          lstatSync: (path) => {
-            if (String(path).endsWith("created.txt")) {
+          realpathSync: (path) => {
+            if (targetRealpathFails && String(path).endsWith("created.txt")) {
               throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
             }
-            return actualFs.lstatSync(path);
+            return actualFs.realpathSync(path);
           },
         });
       recordLastCreateCheckpoint({
@@ -95,6 +96,7 @@ describe("Git Checkpoint Race Handling", () => {
         filePath,
         afterContent: "created\n",
       });
+      targetRealpathFails = true;
 
       // When
       const result = restoreLastEditCheckpoint(workspace);
