@@ -1,15 +1,12 @@
 name: CI
 
+# No path filter: this workflow is a required status check, so it must report
+# on every PR. A path-filtered workflow that never runs leaves the required
+# check pending forever and blocks unrelated PRs.
 on:
   push:
     branches: [main]
-    paths:
-      - keel/**
-      - "!keel/**/*.md"
   pull_request:
-    paths:
-      - keel/**
-      - "!keel/**/*.md"
 
 permissions:
   contents: read
