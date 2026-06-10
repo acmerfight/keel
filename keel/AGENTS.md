@@ -120,7 +120,7 @@ Never push directly to main. Always use a PR and wait for CI to pass. Workflow:
 
 1. Create a feature branch
 2. Push and open a PR
-3. Wait for CI (typecheck → lint → test:coverage → knip) to pass
+3. Wait for CI (typecheck → build → lint → test:coverage → knip) to pass
 4. Squash merge to main (only merge strategy allowed)
 
 PR summary format (English, diff against latest main before writing):
