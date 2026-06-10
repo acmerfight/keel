@@ -1,5 +1,5 @@
 import { type CostModel, calculateCostUsd } from "../core/cost.ts";
-import type { KeelErrorCode } from "../core/error.ts";
+import type { KeelErrorCode, RecoverableToolErrorCode } from "../core/error.ts";
 import { KeelError } from "../core/error.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
 import { executeBash } from "../tools/bash.ts";
@@ -9,19 +9,6 @@ import { executeRead } from "../tools/read.ts";
 import { executeWrite } from "../tools/write.ts";
 
 const MAX_AGENT_TURNS = 16;
-const RECOVERABLE_TOOL_ERRORS = new Set<KeelErrorCode>([
-  "tool_binary_file",
-  "tool_file_exists",
-  "tool_file_not_found",
-  "tool_empty_command",
-  "tool_empty_old_string",
-  "tool_empty_pattern",
-  "tool_not_file",
-  "tool_not_directory",
-  "tool_old_string_not_found",
-  "tool_path_ignored",
-  "tool_path_outside_workspace",
-]);
 
 export interface CostReport {
   readonly spentUsd: number;
@@ -65,6 +52,11 @@ interface ExecuteToolCallOptions {
   readonly allowBash: boolean;
 }
 
+interface RecoverableToolError extends KeelError {
+  readonly code: RecoverableToolErrorCode;
+  readonly recovery: string;
+}
+
 function addUsage(left: Usage, right: Usage): Usage {
   return {
     inputTokens: left.inputTokens + right.inputTokens,
@@ -74,20 +66,33 @@ function addUsage(left: Usage, right: Usage): Usage {
   };
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function isRecoverableToolError(error: unknown): boolean {
-  return error instanceof KeelError && RECOVERABLE_TOOL_ERRORS.has(error.code);
-}
-
-function toolFailureMessage(error: unknown): string {
-  const base = `Tool failed: ${errorMessage(error)}`;
-  if (error instanceof KeelError && error.recovery !== undefined) {
-    return `${base}\nRecovery: ${error.recovery}`;
+function isRecoverableToolErrorCode(
+  code: KeelErrorCode,
+): code is RecoverableToolErrorCode {
+  switch (code) {
+    case "tool_binary_file":
+    case "tool_file_exists":
+    case "tool_file_not_found":
+    case "tool_empty_command":
+    case "tool_empty_old_string":
+    case "tool_empty_pattern":
+    case "tool_not_file":
+    case "tool_not_directory":
+    case "tool_old_string_not_found":
+    case "tool_path_ignored":
+    case "tool_path_outside_workspace":
+      return true;
+    default:
+      return false;
   }
-  return base;
+}
+
+function isRecoverableToolError(error: unknown): error is RecoverableToolError {
+  return error instanceof KeelError && isRecoverableToolErrorCode(error.code);
+}
+
+function toolFailureMessage(error: RecoverableToolError): string {
+  return `Tool failed: ${error.message}\nRecovery: ${error.recovery}`;
 }
 
 function finishAgentTurn(
