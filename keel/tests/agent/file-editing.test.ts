@@ -1166,6 +1166,71 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given the first read starts beyond the end of the file,
+    When the agent reports the failure and receives a smaller offset,
+    Then the next response receives the recovered file content`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "one\ntwo\n", "utf8");
+    let toolTurn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    let thirdTurnMessages: readonly Message[] = [];
+    const provider = createFakeProvider([
+      fakeReadResponse("note.txt", undefined, { offset: 3 }),
+      fakeReadResponse("note.txt", undefined, { offset: 1, limit: 1 }),
+      fakeResponse("done"),
+    ]);
+    const recordingProvider: LLMProvider = {
+      id: "recover-read-offset-out-of-range",
+      async *stream(options) {
+        if (options.messages.some((message) => message.role === "tool")) {
+          if (toolTurn === 0) {
+            secondTurnMessages = options.messages;
+          } else {
+            thirdTurnMessages = options.messages;
+          }
+          toolTurn++;
+        }
+        yield* provider.stream(options);
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider: recordingProvider,
+          userMessage: "read from line 3",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const failedToolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(failedToolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "fake_tool_call_1",
+        content: expect.stringContaining("offset 3 is beyond end of file"),
+      });
+      expect(failedToolMessage?.content).toContain("Recovery:");
+      expect(failedToolMessage?.content).toContain("smaller offset");
+      expect(failedToolMessage?.content).toContain("Available lines: 2.");
+      const successfulToolMessage = thirdTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "fake_tool_call_2",
+      );
+      expect(successfulToolMessage?.content).toContain("one\n");
+      expect(successfulToolMessage?.content).not.toContain("two\n");
+      expect(events).toContainEqual({ type: "text", text: "done" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the first read targets a missing file,
     When the agent reports the failure and receives an existing file read,
     Then the next response receives the existing file content`, async () => {

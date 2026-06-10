@@ -352,6 +352,7 @@ function readTextWindow(
     throw new KeelError(
       "tool_read_offset_out_of_range",
       `read failed: offset ${options.offset} is beyond end of file (${countedLines} lines)`,
+      `Retry read with a smaller offset, or omit offset to read from the start. Available lines: ${countedLines}.`,
     );
   }
 

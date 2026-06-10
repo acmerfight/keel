@@ -82,6 +82,7 @@ function isRecoverableToolErrorCode(
     case "tool_old_string_not_unique":
     case "tool_path_ignored":
     case "tool_path_outside_workspace":
+    case "tool_read_offset_out_of_range":
       return true;
     default:
       return false;

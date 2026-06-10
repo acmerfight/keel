@@ -10,7 +10,8 @@ export type RecoverableToolErrorCode =
   | "tool_old_string_not_found"
   | "tool_old_string_not_unique"
   | "tool_path_ignored"
-  | "tool_path_outside_workspace";
+  | "tool_path_outside_workspace"
+  | "tool_read_offset_out_of_range";
 
 export type KeelErrorCode =
   | "agent_missing_stop"
@@ -20,7 +21,6 @@ export type KeelErrorCode =
   | "tool_aborted"
   | "tool_invalid_bash_timeout"
   | "tool_invalid_read_options"
-  | "tool_read_offset_out_of_range"
   | "tool_unavailable"
   | "provider_auth_failed"
   | "provider_rate_limited"
