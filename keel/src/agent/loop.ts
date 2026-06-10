@@ -79,6 +79,7 @@ function isRecoverableToolErrorCode(
     case "tool_not_file":
     case "tool_not_directory":
     case "tool_old_string_not_found":
+    case "tool_old_string_not_unique":
     case "tool_path_ignored":
     case "tool_path_outside_workspace":
       return true;

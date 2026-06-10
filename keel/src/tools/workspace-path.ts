@@ -52,12 +52,11 @@ function requestedAbsolutePath(
 function outsideWorkspaceError(
   toolName: FileToolName,
   requestedPath: string,
-  workspacePath: string,
 ): KeelError {
   return new KeelError(
     "tool_path_outside_workspace",
     `${toolName} failed: path is outside the workspace: ${requestedPath}`,
-    `Use a workspace-relative path. The current workspace root is: ${workspacePath}`,
+    "Use a workspace-relative path under the current workspace.",
   );
 }
 
@@ -142,7 +141,7 @@ export function resolveWorkspaceTarget(
     !isInsideWorkspace(workspacePath, absoluteRequestedPath) &&
     !isInsideWorkspace(workspaceInputPath, absoluteRequestedPath)
   ) {
-    throw outsideWorkspaceError(toolName, requestedPath, workspacePath);
+    throw outsideWorkspaceError(toolName, requestedPath);
   }
 
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
@@ -170,7 +169,7 @@ export function resolveWorkspaceTarget(
 
   const targetPath = realpathSync(absoluteRequestedPath);
   if (!isInsideWorkspace(workspacePath, targetPath)) {
-    throw outsideWorkspaceError(toolName, requestedPath, workspacePath);
+    throw outsideWorkspaceError(toolName, requestedPath);
   }
 
   return { workspacePath, requestedPath: absoluteRequestedPath, targetPath };
@@ -193,7 +192,7 @@ export function resolveWorkspaceCreateTarget(
     !isInsideWorkspace(workspacePath, absoluteRequestedPath) &&
     !isInsideWorkspace(workspaceInputPath, absoluteRequestedPath)
   ) {
-    throw outsideWorkspaceError(toolName, requestedPath, workspacePath);
+    throw outsideWorkspaceError(toolName, requestedPath);
   }
 
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
@@ -218,7 +217,7 @@ export function resolveWorkspaceCreateTarget(
   );
   const existingAncestorRealPath = realpathSync(existingAncestorPath);
   if (!isInsideWorkspace(workspacePath, existingAncestorRealPath)) {
-    throw outsideWorkspaceError(toolName, requestedPath, workspacePath);
+    throw outsideWorkspaceError(toolName, requestedPath);
   }
   const existingAncestorStat = lstatSync(existingAncestorRealPath);
   if (!existingAncestorStat.isDirectory()) {

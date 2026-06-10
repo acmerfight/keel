@@ -50,7 +50,7 @@ export function executeWrite(
     throw new KeelError(
       "tool_path_outside_workspace",
       `write failed: path is outside the workspace: ${filePath}`,
-      `Use a workspace-relative path. The current workspace root is: ${workspacePath}`,
+      "Use a workspace-relative path under the current workspace.",
     );
   }
 

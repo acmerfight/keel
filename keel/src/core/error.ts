@@ -8,6 +8,7 @@ export type RecoverableToolErrorCode =
   | "tool_not_file"
   | "tool_not_directory"
   | "tool_old_string_not_found"
+  | "tool_old_string_not_unique"
   | "tool_path_ignored"
   | "tool_path_outside_workspace";
 
@@ -19,7 +20,6 @@ export type KeelErrorCode =
   | "tool_aborted"
   | "tool_invalid_bash_timeout"
   | "tool_invalid_read_options"
-  | "tool_old_string_not_unique"
   | "tool_read_offset_out_of_range"
   | "tool_unavailable"
   | "provider_auth_failed"

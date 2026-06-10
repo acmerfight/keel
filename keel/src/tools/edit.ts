@@ -5,6 +5,27 @@ import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
 import { resolveWorkspaceTarget } from "./workspace-path.ts";
 
+function countLines(content: string): number {
+  let lineCount = 1;
+  for (const character of content) {
+    if (character === "\n") {
+      lineCount++;
+    }
+  }
+  return lineCount;
+}
+
+function countOccurrences(content: string, search: string): number {
+  let count = 0;
+  let start = 0;
+  while (true) {
+    const index = content.indexOf(search, start);
+    if (index < 0) return count;
+    count++;
+    start = index + search.length;
+  }
+}
+
 export function executeEdit(
   workspace: string,
   filePath: string,
@@ -40,9 +61,9 @@ export function executeEdit(
   }
 
   const content = readFileSync(targetPath, "utf8");
-  const lineCount = content.split("\n").length;
   const firstMatch = content.indexOf(oldString);
   if (firstMatch < 0) {
+    const lineCount = countLines(content);
     throw new KeelError(
       "tool_old_string_not_found",
       `edit failed: old string not found in ${filePath} (${lineCount} lines)`,
@@ -52,7 +73,7 @@ export function executeEdit(
 
   const secondMatch = content.indexOf(oldString, firstMatch + oldString.length);
   if (secondMatch >= 0) {
-    const matchCount = content.split(oldString).length - 1;
+    const matchCount = countOccurrences(content, oldString);
     throw new KeelError(
       "tool_old_string_not_unique",
       `edit failed: old string appears ${matchCount} times in ${filePath}`,

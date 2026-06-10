@@ -1,4 +1,11 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -674,6 +681,7 @@ describe("File Editing", () => {
       );
       expect(toolMessage?.content).toContain("outside the workspace");
       expect(toolMessage?.content).toContain("Recovery:");
+      expect(toolMessage?.content).not.toContain(await realpath(workspace));
       expect(events).toContainEqual({
         type: "text",
         text: "Outside path rejected.",
@@ -2251,30 +2259,55 @@ describe("File Editing", () => {
 
   test(`Given replacement text appears more than once,
     When the agent validates the edit,
-    Then the edit is rejected and the file is unchanged`, async () => {
+    Then the failure is reported for recovery and the file is unchanged`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "old then old\n", "utf8");
+    let secondTurnMessages: readonly Message[] = [];
     const provider = createFakeProvider([
       fakeEditResponse("note.txt", "old", "new"),
+      fakeResponse("Need more context."),
     ]);
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "replace duplicate text",
-            systemPrompt: "You are a helpful assistant.",
-            signal: freshSignal(),
-          }),
-        ),
-      ).rejects.toThrow("old string appears");
+      const recordingProvider: LLMProvider = {
+        id: "record-duplicate-edit",
+        async *stream(options) {
+          if (options.messages.some((message) => message.role === "tool")) {
+            secondTurnMessages = options.messages;
+          }
+          yield* provider.stream(options);
+        },
+      };
+
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider: recordingProvider,
+          userMessage: "replace duplicate text",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const toolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "fake_tool_call_1",
+        content: expect.stringContaining("old string appears"),
+      });
+      expect(toolMessage?.content).toContain("Recovery:");
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "old then old\n",
       );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Need more context.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
