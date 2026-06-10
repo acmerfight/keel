@@ -929,6 +929,10 @@ describe("CLI File Editing", () => {
         (message) =>
           message.role === "tool" && message.tool_call_id === "call_grep",
       );
+      expect(toolMessage?.content).toContain("Recovery:");
+      expect(toolMessage?.content).toContain(
+        "This file is excluded by project .gitignore.",
+      );
       expect(toolMessage?.content).not.toContain("do-not-print");
     } finally {
       await close(server);
