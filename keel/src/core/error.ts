@@ -1,23 +1,26 @@
-export type KeelErrorCode =
-  | "agent_missing_stop"
-  | "agent_tool_call_limit_exceeded"
-  | "agent_unsupported_tool_calls"
+export type RecoverableToolErrorCode =
   | "tool_binary_file"
-  | "tool_aborted"
+  | "tool_file_exists"
+  | "tool_file_not_found"
   | "tool_empty_command"
   | "tool_empty_old_string"
   | "tool_empty_pattern"
-  | "tool_file_exists"
-  | "tool_file_not_found"
-  | "tool_invalid_bash_timeout"
-  | "tool_invalid_read_options"
   | "tool_not_file"
   | "tool_not_directory"
   | "tool_old_string_not_found"
   | "tool_old_string_not_unique"
   | "tool_path_ignored"
   | "tool_path_outside_workspace"
-  | "tool_read_offset_out_of_range"
+  | "tool_read_offset_out_of_range";
+
+export type KeelErrorCode =
+  | "agent_missing_stop"
+  | "agent_tool_call_limit_exceeded"
+  | "agent_unsupported_tool_calls"
+  | RecoverableToolErrorCode
+  | "tool_aborted"
+  | "tool_invalid_bash_timeout"
+  | "tool_invalid_read_options"
   | "tool_unavailable"
   | "provider_auth_failed"
   | "provider_rate_limited"
@@ -29,10 +32,24 @@ export type KeelErrorCode =
 
 export class KeelError extends Error {
   readonly code: KeelErrorCode;
+  readonly recovery?: string;
 
-  constructor(code: KeelErrorCode, message: string) {
+  constructor(
+    code: RecoverableToolErrorCode,
+    message: string,
+    recovery: string,
+  );
+  constructor(
+    code: Exclude<KeelErrorCode, RecoverableToolErrorCode>,
+    message: string,
+    recovery?: string,
+  );
+  constructor(code: KeelErrorCode, message: string, recovery?: string) {
     super(message);
     this.name = "KeelError";
     this.code = code;
+    if (recovery !== undefined) {
+      this.recovery = recovery;
+    }
   }
 }

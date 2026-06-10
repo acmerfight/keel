@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -171,7 +172,7 @@ describe("Write Tool", () => {
 
   test(`Given an existing parent path is a symlink to outside the workspace,
     When the write tool creates a child file through that parent,
-    Then it rejects the escaped path and leaves the outside directory unchanged`, async () => {
+    Then it rejects the escaped path without leaking the workspace root`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-write-tool-"));
     const outside = await mkdtemp(join(tmpdir(), "keel-write-outside-"));
@@ -179,11 +180,20 @@ describe("Write Tool", () => {
 
     try {
       // When / Then
-      expectWriteError(
-        () => executeWrite(workspace, "linked-dir/secret.txt", "leak\n"),
-        "tool_path_outside_workspace",
-        "outside the workspace",
-      );
+      try {
+        executeWrite(workspace, "linked-dir/secret.txt", "leak\n");
+        throw new Error("Expected write tool to throw");
+      } catch (error) {
+        expect(error).toMatchObject({
+          name: "KeelError",
+          code: "tool_path_outside_workspace",
+          message: expect.stringContaining("outside the workspace"),
+          recovery: expect.stringContaining("workspace-relative path"),
+        });
+        expect(error).toMatchObject({
+          recovery: expect.not.stringContaining(await realpath(workspace)),
+        });
+      }
       await expect(
         readFile(join(outside, "secret.txt"), "utf8"),
       ).rejects.toMatchObject({

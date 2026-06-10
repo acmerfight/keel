@@ -916,14 +916,22 @@ describe("CLI File Editing", () => {
       expect(capturedBodies).toHaveLength(2);
 
       const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
-      expect(secondRequest.messages).toContainEqual({
-        role: "tool",
-        tool_call_id: "call_grep",
-        content: "Tool failed: grep failed: ignored path: secret.txt",
-      });
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_grep",
+          content: expect.stringContaining(
+            "Tool failed: grep failed: ignored path: secret.txt",
+          ),
+        }),
+      );
       const toolMessage = secondRequest.messages?.find(
         (message) =>
           message.role === "tool" && message.tool_call_id === "call_grep",
+      );
+      expect(toolMessage?.content).toContain("Recovery:");
+      expect(toolMessage?.content).toContain(
+        "This file is excluded by project .gitignore.",
       );
       expect(toolMessage?.content).not.toContain("do-not-print");
     } finally {

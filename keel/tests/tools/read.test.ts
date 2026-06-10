@@ -65,6 +65,7 @@ function expectReadError(
   action: () => unknown,
   code: KeelErrorCode,
   message: string,
+  recovery?: string,
 ): void {
   try {
     action();
@@ -74,6 +75,9 @@ function expectReadError(
       name: "KeelError",
       code,
       message: expect.stringContaining(message),
+      ...(recovery !== undefined
+        ? { recovery: expect.stringContaining(recovery) }
+        : {}),
     });
   }
 }
@@ -130,6 +134,7 @@ describe("Read Tool", () => {
         () => executeRead(workspace, "note.txt", { offset: 3 }),
         "tool_read_offset_out_of_range",
         "offset 3 is beyond end of file",
+        "Available lines: 2.",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
