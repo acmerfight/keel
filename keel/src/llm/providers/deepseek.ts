@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { CostModel } from "../../core/cost.ts";
-import { KeelError, type KeelErrorCode } from "../../core/error.ts";
+import {
+  KeelError,
+  type KeelErrorCode,
+  type RecoverableToolErrorCode,
+} from "../../core/error.ts";
 import type {
   LLMEvent,
   LLMProvider,
@@ -245,7 +249,9 @@ export interface DeepseekConfig {
   readonly model: string;
 }
 
-function httpErrorCode(status: number): KeelErrorCode {
+function httpErrorCode(
+  status: number,
+): Exclude<KeelErrorCode, RecoverableToolErrorCode> {
   if (status === 401 || status === 403) return "provider_auth_failed";
   if (status === 429) return "provider_rate_limited";
   if (status >= 500) return "provider_server_error";

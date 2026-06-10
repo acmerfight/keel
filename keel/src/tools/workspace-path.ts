@@ -56,6 +56,7 @@ function outsideWorkspaceError(
   return new KeelError(
     "tool_path_outside_workspace",
     `${toolName} failed: path is outside the workspace: ${requestedPath}`,
+    "Use a workspace-relative path under the current workspace.",
   );
 }
 
@@ -66,6 +67,7 @@ function ignoredPathError(
   return new KeelError(
     "tool_path_ignored",
     `${toolName} failed: ignored path: ${requestedPath}`,
+    "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
   );
 }
 
@@ -76,6 +78,7 @@ function fileExistsError(
   return new KeelError(
     "tool_file_exists",
     `${toolName} failed: file already exists: ${requestedPath}`,
+    "Use edit to modify the existing file instead of write, or choose a different file name.",
   );
 }
 
@@ -86,6 +89,7 @@ function notDirectoryError(
   return new KeelError(
     "tool_not_directory",
     `${toolName} failed: parent path is not a directory: ${requestedPath}`,
+    "The parent path is a file, not a directory. Choose a different path.",
   );
 }
 
@@ -159,6 +163,7 @@ export function resolveWorkspaceTarget(
     throw new KeelError(
       "tool_file_not_found",
       `${toolName} failed: file not found: ${requestedPath}`,
+      "Use grep to search for the content, or check the directory structure to find the correct path.",
     );
   }
 

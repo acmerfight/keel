@@ -1,4 +1,11 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -151,6 +158,7 @@ describe("File Editing", () => {
         toolCallId: "existing_write",
         content: expect.stringContaining("file already exists"),
       });
+      expect(toolMessages[0]?.content).toContain("Recovery:");
       expect(toolMessages[1]).toEqual({
         role: "tool",
         toolCallId: "new_write",
@@ -253,6 +261,7 @@ describe("File Editing", () => {
         toolCallId: "existing_write",
         content: expect.stringContaining("file already exists"),
       });
+      expect(failedToolMessage?.content).toContain("Recovery:");
       expect(await readFile(join(workspace, "config.json"), "utf8")).toBe(
         '{"old":true}\n',
       );
@@ -615,6 +624,7 @@ describe("File Editing", () => {
         toolCallId: "empty_file_edit",
         content: expect.stringContaining("old string is empty"),
       });
+      expect(toolMessages[0]?.content).toContain("Recovery:");
       expect(toolMessages[1]).toEqual({
         role: "tool",
         toolCallId: "second_edit",
@@ -670,6 +680,8 @@ describe("File Editing", () => {
         (message) => message.role === "tool",
       );
       expect(toolMessage?.content).toContain("outside the workspace");
+      expect(toolMessage?.content).toContain("Recovery:");
+      expect(toolMessage?.content).not.toContain(await realpath(workspace));
       expect(events).toContainEqual({
         type: "text",
         text: "Outside path rejected.",
@@ -771,6 +783,7 @@ describe("File Editing", () => {
         toolCallId: "wrong_edit",
         content: expect.stringContaining("old string not found"),
       });
+      expect(toolMessage?.content).toContain("Recovery:");
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello there\n",
       );
@@ -1148,6 +1161,71 @@ describe("File Editing", () => {
       expect(content).not.toContain("two\n");
       expect(content).not.toContain("five\n");
       expect(content).toContain("Use offset=5");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the first read starts beyond the end of the file,
+    When the agent reports the failure and receives a smaller offset,
+    Then the next response receives the recovered file content`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "one\ntwo\n", "utf8");
+    let toolTurn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    let thirdTurnMessages: readonly Message[] = [];
+    const provider = createFakeProvider([
+      fakeReadResponse("note.txt", undefined, { offset: 3 }),
+      fakeReadResponse("note.txt", undefined, { offset: 1, limit: 1 }),
+      fakeResponse("done"),
+    ]);
+    const recordingProvider: LLMProvider = {
+      id: "recover-read-offset-out-of-range",
+      async *stream(options) {
+        if (options.messages.some((message) => message.role === "tool")) {
+          if (toolTurn === 0) {
+            secondTurnMessages = options.messages;
+          } else {
+            thirdTurnMessages = options.messages;
+          }
+          toolTurn++;
+        }
+        yield* provider.stream(options);
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider: recordingProvider,
+          userMessage: "read from line 3",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const failedToolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(failedToolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "fake_tool_call_1",
+        content: expect.stringContaining("offset 3 is beyond end of file"),
+      });
+      expect(failedToolMessage?.content).toContain("Recovery:");
+      expect(failedToolMessage?.content).toContain("smaller offset");
+      expect(failedToolMessage?.content).toContain("Available lines: 2.");
+      const successfulToolMessage = thirdTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "fake_tool_call_2",
+      );
+      expect(successfulToolMessage?.content).toContain("one\n");
+      expect(successfulToolMessage?.content).not.toContain("two\n");
+      expect(events).toContainEqual({ type: "text", text: "done" });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -2246,30 +2324,55 @@ describe("File Editing", () => {
 
   test(`Given replacement text appears more than once,
     When the agent validates the edit,
-    Then the edit is rejected and the file is unchanged`, async () => {
+    Then the failure is reported for recovery and the file is unchanged`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "old then old\n", "utf8");
+    let secondTurnMessages: readonly Message[] = [];
     const provider = createFakeProvider([
       fakeEditResponse("note.txt", "old", "new"),
+      fakeResponse("Need more context."),
     ]);
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "replace duplicate text",
-            systemPrompt: "You are a helpful assistant.",
-            signal: freshSignal(),
-          }),
-        ),
-      ).rejects.toThrow("old string is not unique");
+      const recordingProvider: LLMProvider = {
+        id: "record-duplicate-edit",
+        async *stream(options) {
+          if (options.messages.some((message) => message.role === "tool")) {
+            secondTurnMessages = options.messages;
+          }
+          yield* provider.stream(options);
+        },
+      };
+
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider: recordingProvider,
+          userMessage: "replace duplicate text",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const toolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "fake_tool_call_1",
+        content: expect.stringContaining("old string appears"),
+      });
+      expect(toolMessage?.content).toContain("Recovery:");
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "old then old\n",
       );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Need more context.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

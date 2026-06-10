@@ -17,6 +17,7 @@ function ignoredPathError(filePath: string): KeelError {
   return new KeelError(
     "tool_path_ignored",
     `write failed: ignored path: ${filePath}`,
+    "This file is excluded by project .gitignore. Choose a different file path that is not ignored.",
   );
 }
 
@@ -38,6 +39,7 @@ export function executeWrite(
       throw new KeelError(
         "tool_not_directory",
         `write failed: parent path is not a directory: ${filePath}`,
+        "The parent path is a file, not a directory. Choose a different path.",
       );
     }
     throw error;
@@ -48,6 +50,7 @@ export function executeWrite(
     throw new KeelError(
       "tool_path_outside_workspace",
       `write failed: path is outside the workspace: ${filePath}`,
+      "Use a workspace-relative path under the current workspace.",
     );
   }
 
@@ -64,12 +67,14 @@ export function executeWrite(
       throw new KeelError(
         "tool_file_exists",
         `write failed: file already exists: ${filePath}`,
+        `Use edit to modify the existing file instead of write, or choose a different file name.`,
       );
     }
     if (isErrnoException(error) && error.code === "ENOTDIR") {
       throw new KeelError(
         "tool_not_directory",
         `write failed: parent path is not a directory: ${filePath}`,
+        "The parent path is a file, not a directory. Choose a different path.",
       );
     }
     throw error;
