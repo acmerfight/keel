@@ -14,12 +14,12 @@ describe("module boundaries", () => {
   });
 
   test("llm/ does not import cli/", () => {
-    const source = readFileSync("src/llm/registry.ts", "utf8");
+    const source = readFileSync("src/llm/providers/deepseek.ts", "utf8");
     expect(source).not.toMatch(/import.*from.*['"].*\/cli\//);
   });
 
   test("llm/ does not import agent/", () => {
-    const source = readFileSync("src/llm/registry.ts", "utf8");
+    const source = readFileSync("src/llm/providers/deepseek.ts", "utf8");
     expect(source).not.toMatch(/import.*from.*['"].*\/agent\//);
   });
 });
