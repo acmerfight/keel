@@ -90,11 +90,7 @@ function isRecoverableToolErrorCode(
 }
 
 function isRecoverableToolError(error: unknown): error is RecoverableToolError {
-  return (
-    error instanceof KeelError &&
-    isRecoverableToolErrorCode(error.code) &&
-    typeof error.recovery === "string"
-  );
+  return error instanceof KeelError && isRecoverableToolErrorCode(error.code);
 }
 
 function toolFailureMessage(error: RecoverableToolError): string {
