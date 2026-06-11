@@ -94,8 +94,8 @@ Cover behavior at the boundary that owns the risk:
 
 1. **Tool tests cover tool contracts.** Each tool owns path safety, input validation, resource limits, output shape, and error codes.
 2. **Provider tests cover protocol contracts.** Each provider owns stream parsing, tool-call decoding, usage accounting, abort behavior, and upstream error classification.
-3. **Agent tests cover control-flow classes.** Add agent coverage when behavior changes the loop: recoverable errors, retry decisions, stop conditions, tool-call limits, budget stops, compaction handoff, or final response behavior.
-4. **Stateful systems need invariant tests.** Compaction, persisted sessions, cost budgets, and concurrency should be tested with invariants or focused state-machine cases before broad CLI/E2E coverage.
+3. **Agent tests cover control-flow classes.** Add agent coverage when behavior changes the loop: recoverable errors, retry decisions, stop conditions, tool-call limits, budget stops, or final response behavior.
+4. **Stateful systems need invariant tests.** Persisted sessions, cost budgets, and concurrency should be tested with invariants or focused state-machine cases before broad CLI/E2E coverage.
 5. **CLI tests are smoke tests.** Use them for the user entrypoint, environment handling, process exit, stdout/stderr, and signals, not for duplicating every tool/provider case.
 
 Do not add an agent test for every tool if the loop behavior is already covered by an equivalent control-flow class. When adding a new tool, add exhaustive `tests/tools/` coverage first; add `tests/agent/` coverage only if the tool introduces a new agent decision path or a new recoverable/terminal result class.

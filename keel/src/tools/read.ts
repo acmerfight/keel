@@ -5,8 +5,8 @@ import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
 import { resolveWorkspaceTarget } from "./workspace-path.ts";
 
-export const MAX_READ_LINES = 2000;
-export const MAX_READ_BYTES = 50 * 1024;
+const MAX_READ_LINES = 2000;
+const MAX_READ_BYTES = 50 * 1024;
 
 const BINARY_SAMPLE_BYTES = 4096;
 const READ_CHUNK_BYTES = 8192;

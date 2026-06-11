@@ -2,7 +2,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { z } from "zod";
 import { KeelError } from "../core/error.ts";
 
-export type RipgrepProvider = "vscode-ripgrep";
+type RipgrepProvider = "vscode-ripgrep";
 
 export interface RipgrepCommand {
   readonly path: string;
