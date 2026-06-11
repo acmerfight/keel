@@ -356,16 +356,15 @@ async function runRipgrep(
     });
   }
 
-  // Multi-line patterns are rejected before ripgrep runs, so a non-zero exit
-  // here is a genuine ripgrep failure (e.g. a file unreadable mid-search), not
-  // an input mistake. Keep it recoverable so it never crashes the run, but with
-  // a generic hint rather than assuming the pattern was at fault.
+  // Multi-line patterns are rejected before ripgrep runs and per-file I/O
+  // errors are suppressed by --no-messages, so a non-zero exit here is a genuine
+  // ripgrep failure (like a missing binary or a timeout), not an LLM input
+  // mistake. It stays fatal, consistent with the other environment errors.
   throw new KeelError(
-    "tool_invalid_pattern",
+    "tool_unavailable",
     `grep failed: ripgrep exited with code ${result.code ?? "unknown"}${
       result.stderr.trim() ? `: ${result.stderr.trim()}` : ""
     }`,
-    "The search could not be completed. Simplify the pattern (it is matched as literal text) or verify the target path, then retry.",
   );
 }
 
