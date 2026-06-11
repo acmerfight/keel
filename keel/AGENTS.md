@@ -23,10 +23,9 @@ src/
   cli/         → Entry point
   core/        → Config, error, logger, git, cost, rules
   agent/       → Agent loop, context, compaction
-  llm/         → Provider abstraction (deepseek, anthropic, openai)
+  llm/         → Provider abstraction (deepseek)
   testing/     → Test support code (fake providers, fixture factories)
-  tools/       → bash, edit, find, grep, read, write
-  mcp/         → MCP client and registry
+  tools/       → bash, edit, grep, read, write
 ```
 
 Layer rules (enforced by `tests/invariants/boundaries.test.ts`):
