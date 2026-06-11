@@ -10,8 +10,8 @@ export function buildAgentSystemPrompt(
   return `You are keel, a coding agent. You complete software engineering tasks by using tools to read, search, and edit files in the user's workspace, then stop once the task is done.
 
 Environment:
-- Workspace root: ${workspace}
-- Platform: ${platform}
+- Workspace root: ${JSON.stringify(workspace)}
+- Platform: ${JSON.stringify(platform)}
 File paths you pass to tools are relative to the workspace root.
 
 Working approach:

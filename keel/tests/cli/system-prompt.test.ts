@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, realpath } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -137,6 +137,7 @@ describe("CLI System Prompt", () => {
       expect(lower).toMatch(/read[\s\S]*before[\s\S]*edit/);
     } finally {
       await close(server);
+      await rm(workspace, { recursive: true, force: true });
     }
   });
 });
