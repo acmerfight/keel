@@ -59,6 +59,7 @@ async function expectGrepError(
   action: () => unknown | Promise<unknown>,
   code: KeelErrorCode,
   message: string,
+  recovery?: string,
 ): Promise<void> {
   try {
     await action();
@@ -68,6 +69,9 @@ async function expectGrepError(
       name: "KeelError",
       code,
       message: expect.stringContaining(message),
+      ...(recovery !== undefined
+        ? { recovery: expect.stringContaining(recovery) }
+        : {}),
     });
   }
 }
@@ -507,6 +511,26 @@ describe("Grep Tool Process Lifecycle", () => {
           }),
         "tool_unavailable",
         "timed out",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a search pattern that spans multiple lines,
+    When the grep tool runs the search,
+    Then it rejects the pattern as recoverable with a single-line recovery hint instead of failing fatally`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(join(workspace, "app.ts"), "alpha\nbeta\n", "utf8");
+
+    try {
+      // When / Then
+      await expectGrepError(
+        () => executeGrep(workspace, "alpha\nbeta"),
+        "tool_invalid_pattern",
+        "grep failed",
+        "single line",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

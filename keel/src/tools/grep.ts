@@ -356,6 +356,10 @@ async function runRipgrep(
     });
   }
 
+  // Multi-line patterns are rejected before ripgrep runs and per-file I/O
+  // errors are suppressed by --no-messages, so a non-zero exit here is a genuine
+  // ripgrep failure (like a missing binary or a timeout), not an LLM input
+  // mistake. It stays fatal, consistent with the other environment errors.
   throw new KeelError(
     "tool_unavailable",
     `grep failed: ripgrep exited with code ${result.code ?? "unknown"}${
@@ -374,6 +378,14 @@ export async function executeGrep(
       "tool_empty_pattern",
       "grep failed: pattern is empty",
       "Provide a non-empty search pattern.",
+    );
+  }
+
+  if (/[\r\n]/.test(pattern)) {
+    throw new KeelError(
+      "tool_invalid_pattern",
+      "grep failed: pattern spans multiple lines",
+      "grep matches literal text within a single line. Remove newlines from the pattern and search for a unique single-line substring; read the file to inspect multi-line context.",
     );
   }
 
