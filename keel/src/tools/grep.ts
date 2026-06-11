@@ -9,7 +9,7 @@ import { resolveRipgrep } from "./ripgrep.ts";
 import type { ToolResult } from "./types.ts";
 import { resolveWorkspaceTarget } from "./workspace-path.ts";
 
-export const MAX_GREP_MATCHES = 50;
+const MAX_GREP_MATCHES = 50;
 
 const DEFAULT_RIPGREP_TIMEOUT_MS = 20_000;
 const RIPGREP_KILL_GRACE_MS = 1_000;
