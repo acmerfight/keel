@@ -5,6 +5,7 @@ export type RecoverableToolErrorCode =
   | "tool_empty_command"
   | "tool_empty_old_string"
   | "tool_empty_pattern"
+  | "tool_invalid_pattern"
   | "tool_not_file"
   | "tool_not_directory"
   | "tool_old_string_not_found"
