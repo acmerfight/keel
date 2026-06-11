@@ -356,12 +356,16 @@ async function runRipgrep(
     });
   }
 
+  // Multi-line patterns are rejected before ripgrep runs, so a non-zero exit
+  // here is a genuine ripgrep failure (e.g. a file unreadable mid-search), not
+  // an input mistake. Keep it recoverable so it never crashes the run, but with
+  // a generic hint rather than assuming the pattern was at fault.
   throw new KeelError(
     "tool_invalid_pattern",
     `grep failed: ripgrep exited with code ${result.code ?? "unknown"}${
       result.stderr.trim() ? `: ${result.stderr.trim()}` : ""
     }`,
-    "grep matches literal text within a single line. Remove newlines from the pattern and search for a unique single-line substring; read the file to inspect multi-line context.",
+    "The search could not be completed. Simplify the pattern (it is matched as literal text) or verify the target path, then retry.",
   );
 }
 
@@ -375,6 +379,14 @@ export async function executeGrep(
       "tool_empty_pattern",
       "grep failed: pattern is empty",
       "Provide a non-empty search pattern.",
+    );
+  }
+
+  if (/[\r\n]/.test(pattern)) {
+    throw new KeelError(
+      "tool_invalid_pattern",
+      "grep failed: pattern spans multiple lines",
+      "grep matches literal text within a single line. Remove newlines from the pattern and search for a unique single-line substring; read the file to inspect multi-line context.",
     );
   }
 
