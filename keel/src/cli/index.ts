@@ -3,6 +3,7 @@
 import { z } from "zod";
 import type { CostReport } from "../agent/loop.ts";
 import { runAgent } from "../agent/loop.ts";
+import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import { restoreLastEditCheckpoint } from "../core/git.ts";
 import {
   createDeepseekProvider,
@@ -290,11 +291,15 @@ async function main(): Promise<void> {
   process.once("SIGINT", abort);
 
   try {
+    const workspace = process.cwd();
     const stream = runAgent({
-      workspace: process.cwd(),
+      workspace,
       provider,
       userMessage,
-      systemPrompt: "You are a helpful assistant.",
+      systemPrompt: buildAgentSystemPrompt({
+        workspace,
+        platform: process.platform,
+      }),
       signal: abortController.signal,
       ...(cliArgs.allowBash ? { allowBash: true } : {}),
       ...(cliArgs.maxCostUsd !== undefined
