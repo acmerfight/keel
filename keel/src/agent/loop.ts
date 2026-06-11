@@ -16,7 +16,7 @@ export interface CostReport {
   readonly budgetExceeded: boolean;
 }
 
-export interface CostTrackingOptions {
+interface CostTrackingOptions {
   readonly model: CostModel;
   readonly maxCostUsd?: number;
 }

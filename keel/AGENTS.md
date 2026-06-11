@@ -21,8 +21,8 @@ pnpm knip           # Dead code detection
 ```
 src/
   cli/         → Entry point
-  core/        → Config, error, logger, git, cost, rules
-  agent/       → Agent loop, context, compaction
+  core/        → error, logger, git, cost
+  agent/       → Agent loop, prompt
   llm/         → Provider abstraction (deepseek)
   testing/     → Test support code (fake providers, fixture factories)
   tools/       → bash, edit, grep, read, write

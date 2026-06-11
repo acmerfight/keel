@@ -5,7 +5,7 @@ export interface Usage {
   readonly outputTokens: number;
 }
 
-export interface UserMessage {
+interface UserMessage {
   readonly role: "user";
   readonly content: string;
 }
@@ -44,13 +44,13 @@ export type ToolCall =
       readonly timeoutMs?: number;
     };
 
-export interface AssistantMessage {
+interface AssistantMessage {
   readonly role: "assistant";
   readonly content: string;
   readonly toolCalls?: readonly ToolCall[];
 }
 
-export interface ToolMessage {
+interface ToolMessage {
   readonly role: "tool";
   readonly toolCallId: string;
   readonly content: string;
