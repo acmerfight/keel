@@ -357,10 +357,11 @@ async function runRipgrep(
   }
 
   throw new KeelError(
-    "tool_unavailable",
+    "tool_invalid_pattern",
     `grep failed: ripgrep exited with code ${result.code ?? "unknown"}${
       result.stderr.trim() ? `: ${result.stderr.trim()}` : ""
     }`,
+    "grep matches literal text within a single line. Remove newlines from the pattern and search for a unique single-line substring; read the file to inspect multi-line context.",
   );
 }
 

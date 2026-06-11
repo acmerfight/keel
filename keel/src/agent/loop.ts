@@ -76,6 +76,7 @@ function isRecoverableToolErrorCode(
     case "tool_empty_command":
     case "tool_empty_old_string":
     case "tool_empty_pattern":
+    case "tool_invalid_pattern":
     case "tool_not_file":
     case "tool_not_directory":
     case "tool_old_string_not_found":
