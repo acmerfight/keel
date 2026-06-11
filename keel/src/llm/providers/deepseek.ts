@@ -25,7 +25,12 @@ const editTool = {
   type: "function",
   function: {
     name: "edit",
-    description: "Replace one exact string in a workspace file.",
+    description: [
+      "Replace one exact string in an existing workspace file. oldString must match the current file content exactly and appear exactly once.",
+      "Use when: changing an existing file after read confirmed the exact target text.",
+      "Do not use when: creating a new file (use write), or when you have not read the file and would be guessing oldString from memory.",
+      "On failure: if the string is not found, read the file and retry with the exact current text; if it appears more than once, include more surrounding lines in oldString to make it unique.",
+    ].join("\n"),
     parameters: {
       type: "object",
       properties: {
@@ -52,8 +57,12 @@ const writeTool = {
   type: "function",
   function: {
     name: "write",
-    description:
-      "Create a new workspace file. Fails if the file already exists. Automatically creates parent directories.",
+    description: [
+      "Create a new workspace file with the given content. Fails if the file already exists. Automatically creates parent directories.",
+      "Use when: adding a file that does not exist yet.",
+      "Do not use when: the file already exists (use edit to change it).",
+      "On failure: if the file already exists, read it and apply edit instead of recreating it.",
+    ].join("\n"),
     parameters: {
       type: "object",
       properties: {
@@ -76,8 +85,12 @@ const readTool = {
   type: "function",
   function: {
     name: "read",
-    description:
-      "Read a workspace file. Output is capped at 2000 lines or 50KB; use offset and limit to read later sections.",
+    description: [
+      "Read a workspace text file. Output is capped at 2000 lines or 50KB; use offset and limit to read later sections.",
+      "Use when: you need exact file content, especially before editing or after grep located a match.",
+      "Do not use when: the path is a directory or a binary file, or you only need to find where text lives across files (use grep).",
+      "On failure: if the file is not found, grep for a distinctive string to discover the correct path; if output is truncated, read again with offset and limit.",
+    ].join("\n"),
     parameters: {
       type: "object",
       properties: {
@@ -106,8 +119,12 @@ const grepTool = {
   type: "function",
   function: {
     name: "grep",
-    description:
-      "Search workspace text files for a literal string. Returns capped path:line:snippet matches.",
+    description: [
+      "Search workspace text files for a literal single-line string, skipping gitignored files. Returns capped path:line:snippet matches.",
+      "Use when: locating code, file paths, or usages before reading or editing — do not guess file paths.",
+      "Do not use when: you already know the exact file and need its content (use read); the pattern is a regex or spans multiple lines (not supported).",
+      "On failure: if the pattern contains newlines, search for a unique single-line substring instead; zero matches means the text is absent from non-ignored files — retry with a shorter or different substring before concluding it does not exist.",
+    ].join("\n"),
     parameters: {
       type: "object",
       properties: {
@@ -131,8 +148,12 @@ const bashTool = {
   type: "function",
   function: {
     name: "bash",
-    description:
-      "Run a trusted shell command in the workspace. Shell commands use the current OS user's permissions and are not constrained by Keel's gitignore file-tool policy. Use dedicated read, grep, and edit tools for file inspection and edits when possible.",
+    description: [
+      "Run a trusted shell command in the workspace. Commands use the current OS user's permissions and are not constrained by Keel's gitignore file-tool policy. Output is capped to the last 20KB per stream.",
+      "Use when: the task needs commands the file tools cannot do, such as running builds, tests, or git.",
+      "Do not use when: a dedicated tool can do the job — prefer read, grep, edit, and write for file inspection and changes.",
+      "On failure: a non-zero exit code returns stdout/stderr for diagnosis — fix the command rather than retrying it unchanged; if the command timed out, raise timeoutMs (up to 60000) or run a narrower command.",
+    ].join("\n"),
     parameters: {
       type: "object",
       properties: {
