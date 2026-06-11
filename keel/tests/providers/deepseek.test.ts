@@ -3169,4 +3169,70 @@ describe("DeepSeek Provider", () => {
       await closeServer(captureServer);
     }
   });
+
+  test(`Given the provider advertises workspace tools,
+    When it sends the request body,
+    Then every tool description carries use-when, do-not-use, and on-failure guidance`, async () => {
+    // Given
+    let capturedBody = "";
+    const captureServer = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBody = body;
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(sseChunk("ok"));
+        res.write(sseFinish(1, 1));
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => {
+      captureServer.listen(0, "127.0.0.1", resolve);
+    });
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl: `http://127.0.0.1:${getPort(captureServer)}`,
+      model: "deepseek-v4-flash",
+    });
+
+    try {
+      // When
+      await collect(
+        provider.stream({
+          systemPrompt: "sys",
+          messages: [{ role: "user", content: "hi" }],
+          signal: freshSignal(),
+          allowBash: true,
+        }),
+      );
+
+      // Then
+      const parsed = parseDeepseekRequestBody(capturedBody);
+      if (parsed.tools === undefined) {
+        throw new Error("Expected tools array");
+      }
+      expect(parsed.tools.map((tool) => tool.function.name)).toEqual([
+        "read",
+        "grep",
+        "edit",
+        "write",
+        "bash",
+      ]);
+      for (const tool of parsed.tools) {
+        const description = tool.function.description;
+        if (typeof description !== "string") {
+          throw new Error(
+            `Expected a description string for ${tool.function.name}`,
+          );
+        }
+        expect(description).toContain("Use when:");
+        expect(description).toContain("Do not use when:");
+        expect(description).toContain("On failure:");
+      }
+    } finally {
+      await closeServer(captureServer);
+    }
+  });
 });
