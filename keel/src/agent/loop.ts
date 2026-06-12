@@ -287,7 +287,7 @@ export async function* runAgent(
 
     const decision = stopPolicy.shouldStopAfterTurn({
       completedTurns,
-      hasPendingToolCalls: turnResult.toolCalls.length > 0,
+      toolCalls: turnResult.toolCalls,
       ...(cost !== undefined ? { cost } : {}),
     });
 
