@@ -138,13 +138,14 @@ function sanitizeAssistantText(text: string): string {
 }
 
 // Labels are paths/patterns/commands, not prose, so beyond C0/C1 controls we
-// also escape bidi controls (visual reordering, Trojan Source class) and
+// also escape bidi controls and invisible directional marks (visual
+// reordering, Trojan Source class; UAX #9 marks ALM/LRM/RLM included) and
 // zero-width characters (invisible path segments). The length cap keeps one
 // tool call to exactly one readable stderr line.
 function sanitizeToolLabel(label: string): string {
   const escaped = label.replace(
     // biome-ignore lint/suspicious/noControlCharactersInRegex: escaping control characters is the point
-    /[\u0000-\u001f\u007f-\u009f\u200b-\u200d\u2060\u202a-\u202e\u2066-\u2069\ufeff]/g,
+    /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2060\u202a-\u202e\u2066-\u2069\ufeff]/g,
     (char) => {
       const code = char.charCodeAt(0);
       return code <= 0x9f
