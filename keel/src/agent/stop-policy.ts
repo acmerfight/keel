@@ -8,6 +8,7 @@ const DEFAULT_REPEATED_TOOL_CALL_STOP_THRESHOLD = 3;
 interface StopContext {
   readonly completedTurns: number;
   readonly toolCalls: readonly ToolCall[];
+  readonly priorToolCalls: readonly ToolCall[];
   readonly cost?: CostReport;
 }
 
@@ -53,15 +54,22 @@ function toolCallKey(toolCall: ToolCall): string {
 export function repeatedToolCallPolicy(
   stopThreshold = DEFAULT_REPEATED_TOOL_CALL_STOP_THRESHOLD,
 ): AgentStopPolicy {
-  let lastKey: string | null = null;
-  let streak = 0;
-
   return {
     shouldStopAfterTurn: (context) => {
-      for (const toolCall of context.toolCalls) {
-        const key = toolCallKey(toolCall);
-        streak = key === lastKey ? streak + 1 : 1;
-        lastKey = key;
+      const calls = [...context.priorToolCalls, ...context.toolCalls];
+      const latest = calls.at(-1);
+      if (latest === undefined) {
+        return { type: "continue" };
+      }
+
+      const latestKey = toolCallKey(latest);
+      let streak = 0;
+      for (let index = calls.length - 1; index >= 0; index--) {
+        const call = calls.at(index);
+        if (call === undefined || toolCallKey(call) !== latestKey) {
+          break;
+        }
+        streak++;
         if (streak >= stopThreshold) {
           return { type: "stop" };
         }

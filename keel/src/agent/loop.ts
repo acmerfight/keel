@@ -230,6 +230,7 @@ export async function* runAgent(
     stopPolicy = defaultStopPolicy(),
   } = options;
   const messages: Message[] = [{ role: "user", content: userMessage }];
+  const priorToolCalls: ToolCall[] = [];
   let totalUsage: Usage = {
     inputTokens: 0,
     cachedInputTokens: 0,
@@ -288,6 +289,7 @@ export async function* runAgent(
     const decision = stopPolicy.shouldStopAfterTurn({
       completedTurns,
       toolCalls: turnResult.toolCalls,
+      priorToolCalls,
       ...(cost !== undefined ? { cost } : {}),
     });
 
@@ -318,6 +320,7 @@ export async function* runAgent(
       content: turnResult.text,
       toolCalls: turnResult.toolCalls,
     });
+    priorToolCalls.push(...turnResult.toolCalls);
 
     for (const toolCall of turnResult.toolCalls) {
       yield { type: "tool_start", toolCall };

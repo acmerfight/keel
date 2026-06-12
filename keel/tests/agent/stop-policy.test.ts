@@ -316,6 +316,57 @@ describe("Agent Stopping", () => {
     }
   });
 
+  test(`Given a caller reuses one stop policy instance across two sessions,
+    When the second session starts with the same read the first session repeated,
+    Then leftover history from the first session does not stop the second`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "a.txt"), "alpha\n", "utf8");
+    const sharedPolicy = repeatedToolCallPolicy();
+    const sameRead = fakeReadResponse("a.txt");
+    const firstProvider = createFakeProvider([
+      sameRead,
+      sameRead,
+      fakeResponse("First task done."),
+    ]);
+    const secondProvider = createFakeProvider([
+      sameRead,
+      fakeResponse("Second task done."),
+    ]);
+
+    try {
+      // When
+      await collect(
+        runAgent({
+          workspace,
+          provider: firstProvider,
+          userMessage: "first task",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          stopPolicy: sharedPolicy,
+        }),
+      );
+      const secondEvents = await collect(
+        runAgent({
+          workspace,
+          provider: secondProvider,
+          userMessage: "second task",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          stopPolicy: sharedPolicy,
+        }),
+      );
+
+      // Then
+      expect(secondEvents).toContainEqual({
+        type: "text",
+        text: "Second task done.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a stop rule that never ends the session,
     When a response ends without completing,
     Then the terminal error still fails the run`, async () => {
