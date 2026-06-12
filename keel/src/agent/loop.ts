@@ -7,8 +7,8 @@ import { executeEdit } from "../tools/edit.ts";
 import { executeGrep } from "../tools/grep.ts";
 import { executeRead } from "../tools/read.ts";
 import { executeWrite } from "../tools/write.ts";
-
-const MAX_AGENT_TURNS = 16;
+import type { AgentStopPolicy } from "./stop-policy.ts";
+import { defaultStopPolicy } from "./stop-policy.ts";
 
 export interface CostReport {
   readonly spentUsd: number;
@@ -43,6 +43,7 @@ export interface RunAgentOptions {
   readonly signal: AbortSignal;
   readonly costTracking?: CostTrackingOptions;
   readonly allowBash?: boolean;
+  readonly stopPolicy?: AgentStopPolicy;
 }
 
 interface AgentTurn {
@@ -226,6 +227,7 @@ export async function* runAgent(
     signal,
     costTracking,
     allowBash = false,
+    stopPolicy = defaultStopPolicy(),
   } = options;
   const messages: Message[] = [{ role: "user", content: userMessage }];
   let totalUsage: Usage = {
@@ -235,7 +237,7 @@ export async function* runAgent(
     outputTokens: 0,
   };
 
-  for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
+  for (let completedTurns = 1; ; completedTurns++) {
     const stream = provider.stream({
       systemPrompt,
       messages,
@@ -283,8 +285,22 @@ export async function* runAgent(
             };
           })();
 
-    if (cost?.budgetExceeded === true) {
-      yield { type: "end", usage: totalUsage, cost };
+    const decision = stopPolicy.shouldStopAfterTurn({
+      completedTurns,
+      hasPendingToolCalls: turnResult.toolCalls.length > 0,
+      ...(cost !== undefined ? { cost } : {}),
+    });
+
+    if (decision.type === "fail") {
+      throw decision.error;
+    }
+
+    if (decision.type === "stop") {
+      yield {
+        type: "end",
+        usage: totalUsage,
+        ...(cost !== undefined ? { cost } : {}),
+      };
       return;
     }
 
@@ -319,9 +335,4 @@ export async function* runAgent(
       });
     }
   }
-
-  throw new KeelError(
-    "agent_tool_call_limit_exceeded",
-    "Agent exceeded tool call limit",
-  );
 }
