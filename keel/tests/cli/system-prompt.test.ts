@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { Server } from "node:net";
@@ -6,8 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-
-const CLI_PATH = join(import.meta.dirname, "../../src/cli/index.ts");
+import { runCli } from "../../src/testing/cli-harness.ts";
 
 const requestSchema = z.object({
   messages: z.array(z.object({ role: z.string(), content: z.string() })),
@@ -47,27 +45,6 @@ const STOP_SSE = [
   "data: [DONE]\n\n",
 ].join("");
 
-function runCli(
-  args: readonly string[],
-  env: Record<string, string>,
-  cwd: string,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return new Promise((resolve) => {
-    const child = execFile(
-      "node",
-      ["--experimental-strip-types", CLI_PATH, ...args],
-      { cwd, env: { ...process.env, ...env }, timeout: 5000 },
-      (error, stdout, stderr) => {
-        resolve({
-          stdout,
-          stderr,
-          exitCode: error?.code ? Number(error.code) : (child.exitCode ?? 0),
-        });
-      },
-    );
-  });
-}
-
 describe("CLI System Prompt", () => {
   test(`Given a user message and a configured provider,
     When the user runs keel in their workspace,
@@ -100,14 +77,13 @@ describe("CLI System Prompt", () => {
 
     try {
       // When
-      const result = await runCli(
-        ["fix the bug"],
-        {
+      const result = await runCli(["fix the bug"], {
+        cwd: workspace,
+        env: {
           DEEPSEEK_API_KEY: "test-key",
           DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
         },
-        workspace,
-      );
+      });
 
       // Then
       expect(result.exitCode).toBe(0);
