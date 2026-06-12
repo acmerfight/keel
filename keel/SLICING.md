@@ -61,7 +61,7 @@ Slice 2: CLI + real provider text reply
 → A user can set OPENAI_API_KEY, run `keel "hi"`, and see streamed text.
 ```
 
-Examples are illustrative, not a fixed roadmap. Always re-check the current product entrypoint before choosing the next slice.
+Examples are illustrative, not a fixed roadmap. Always re-check the current product entrypoint before choosing the next slice. For *which* capability to slice next, use the priority list in [ROADMAP.md](ROADMAP.md); this document only defines *how* to cut it.
 
 ## Applying to Tests (BDD)
 
