@@ -1,41 +1,8 @@
-import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-
-const CLI_PATH = join(import.meta.dirname, "../../src/cli/index.ts");
-
-function runCli(
-  args: readonly string[],
-  options: {
-    readonly cwd: string;
-    readonly env?: Record<string, string>;
-  },
-): Promise<{
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly exitCode: number;
-}> {
-  return new Promise((resolve) => {
-    const child = execFile(
-      "node",
-      ["--experimental-strip-types", CLI_PATH, ...args],
-      {
-        cwd: options.cwd,
-        env: { ...process.env, ...options.env },
-        timeout: 5000,
-      },
-      (error, stdout, stderr) => {
-        resolve({
-          stdout,
-          stderr,
-          exitCode: error?.code ? Number(error.code) : (child.exitCode ?? 0),
-        });
-      },
-    );
-  });
-}
+import { runCli } from "../../src/testing/cli-harness.ts";
 
 describe("CLI Tool Progress", () => {
   test(`Given a workspace file contains text to replace,

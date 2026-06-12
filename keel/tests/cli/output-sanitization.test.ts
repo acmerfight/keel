@@ -1,43 +1,10 @@
-import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-
-const CLI_PATH = join(import.meta.dirname, "../../src/cli/index.ts");
-
-function runCli(
-  args: readonly string[],
-  options: {
-    readonly cwd?: string;
-    readonly env?: Record<string, string>;
-  } = {},
-): Promise<{
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly exitCode: number;
-}> {
-  return new Promise((resolve) => {
-    const child = execFile(
-      "node",
-      ["--experimental-strip-types", CLI_PATH, ...args],
-      {
-        ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-        env: { ...process.env, ...options.env },
-        timeout: 5000,
-      },
-      (error, stdout, stderr) => {
-        resolve({
-          stdout,
-          stderr,
-          exitCode: error?.code ? Number(error.code) : (child.exitCode ?? 0),
-        });
-      },
-    );
-  });
-}
+import { runCli } from "../../src/testing/cli-harness.ts";
 
 function getPort(server: Server): number {
   const addr = server.address();

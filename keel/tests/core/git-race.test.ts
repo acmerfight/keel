@@ -1,60 +1,12 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-
-interface CommandResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly exitCode: number;
-}
-
-function runCommand(
-  command: string,
-  args: readonly string[],
-  cwd: string,
-): Promise<CommandResult> {
-  return new Promise((resolve) => {
-    const child = execFile(
-      command,
-      [...args],
-      { cwd },
-      (error, stdout, stderr) => {
-        resolve({
-          stdout,
-          stderr,
-          exitCode: error?.code ? Number(error.code) : (child.exitCode ?? 0),
-        });
-      },
-    );
-  });
-}
-
-async function git(
-  cwd: string,
-  args: readonly string[],
-): Promise<CommandResult> {
-  return await runCommand("git", args, cwd);
-}
-
-async function createGitWorkspace(): Promise<string> {
-  const workspace = await mkdtemp(join(tmpdir(), "keel-git-race-"));
-  await git(workspace, ["init"]);
-  await git(workspace, ["config", "user.name", "Keel Test"]);
-  await git(workspace, ["config", "user.email", "keel@example.com"]);
-  return workspace;
-}
+import { withGitWorkspace as withHarnessGitWorkspace } from "../../src/testing/cli-harness.ts";
 
 async function withGitWorkspace(
   action: (workspace: string) => Promise<void>,
 ): Promise<void> {
-  const workspace = await createGitWorkspace();
-  try {
-    await action(workspace);
-  } finally {
-    await rm(workspace, { recursive: true, force: true });
-  }
+  await withHarnessGitWorkspace(action, "keel-git-race-");
 }
 
 async function importGitWithFs(
