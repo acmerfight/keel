@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import {
   lstat,
   mkdir,
@@ -18,50 +17,12 @@ import {
   recordLastEditCheckpoint,
   restoreLastEditCheckpoint,
 } from "../../src/core/git.ts";
+import {
+  createGitWorkspace,
+  runGit as git,
+} from "../../src/testing/cli-harness.ts";
 
 const DEBUG_ENV_KEY = "KEEL_DEBUG";
-
-interface CommandResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly exitCode: number;
-}
-
-function runCommand(
-  command: string,
-  args: readonly string[],
-  cwd: string,
-): Promise<CommandResult> {
-  return new Promise((resolve) => {
-    const child = execFile(
-      command,
-      [...args],
-      { cwd },
-      (error, stdout, stderr) => {
-        resolve({
-          stdout,
-          stderr,
-          exitCode: error?.code ? Number(error.code) : (child.exitCode ?? 0),
-        });
-      },
-    );
-  });
-}
-
-async function git(
-  cwd: string,
-  args: readonly string[],
-): Promise<CommandResult> {
-  return await runCommand("git", args, cwd);
-}
-
-async function createGitWorkspace(): Promise<string> {
-  const workspace = await mkdtemp(join(tmpdir(), "keel-git-"));
-  await git(workspace, ["init"]);
-  await git(workspace, ["config", "user.name", "Keel Test"]);
-  await git(workspace, ["config", "user.email", "keel@example.com"]);
-  return workspace;
-}
 
 async function checkpointPath(workspace: string): Promise<string> {
   const result = await git(workspace, [

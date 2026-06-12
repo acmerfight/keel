@@ -1,82 +1,12 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-
-const CLI_PATH = join(import.meta.dirname, "../../src/cli/index.ts");
-
-interface CommandResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly exitCode: number;
-}
-
-function runCommand(
-  command: string,
-  args: readonly string[],
-  cwd: string,
-  env: Record<string, string> = {},
-): Promise<CommandResult> {
-  return new Promise((resolve) => {
-    const child = execFile(
-      command,
-      [...args],
-      {
-        cwd,
-        env: { ...process.env, ...env },
-        timeout: 5000,
-      },
-      (error, stdout, stderr) => {
-        resolve({
-          stdout,
-          stderr,
-          exitCode: error?.code ? Number(error.code) : (child.exitCode ?? 0),
-        });
-      },
-    );
-  });
-}
-
-function runCli(
-  args: readonly string[],
-  options: {
-    readonly cwd: string;
-    readonly env?: Record<string, string>;
-  },
-): Promise<CommandResult> {
-  return runCommand(
-    "node",
-    ["--experimental-strip-types", CLI_PATH, ...args],
-    options.cwd,
-    options.env,
-  );
-}
-
-async function git(
-  cwd: string,
-  args: readonly string[],
-): Promise<CommandResult> {
-  return await runCommand("git", args, cwd);
-}
-
-async function createGitWorkspace(): Promise<string> {
-  const workspace = await mkdtemp(join(tmpdir(), "keel-cli-undo-"));
-  await git(workspace, ["init"]);
-  await git(workspace, ["config", "user.name", "Keel Test"]);
-  await git(workspace, ["config", "user.email", "keel@example.com"]);
-  return workspace;
-}
-
-async function commitFile(
-  workspace: string,
-  path: string,
-  content: string,
-): Promise<void> {
-  await writeFile(join(workspace, path), content, "utf8");
-  await git(workspace, ["add", path]);
-  await git(workspace, ["commit", "-m", `add ${path}`]);
-}
+import {
+  commitFile,
+  createGitWorkspace,
+  runCli,
+  runGit,
+} from "../../src/testing/cli-harness.ts";
 
 describe("CLI Undo", () => {
   test(`Given a git workspace file is edited by Keel,
@@ -163,7 +93,7 @@ describe("CLI Undo", () => {
         "hello old world\n",
       );
       expect(
-        (await git(workspace, ["status", "--porcelain", "--", "note.txt"]))
+        (await runGit(workspace, ["status", "--porcelain", "--", "note.txt"]))
           .stdout,
       ).toBe("?? note.txt\n");
     } finally {
@@ -210,10 +140,10 @@ describe("CLI Undo", () => {
     const workspace = await createGitWorkspace();
     await commitFile(workspace, "note.txt", "hello old world\n");
     await writeFile(join(workspace, "staged.txt"), "base\n", "utf8");
-    await git(workspace, ["add", "staged.txt"]);
-    await git(workspace, ["commit", "-m", "add staged"]);
+    await runGit(workspace, ["add", "staged.txt"]);
+    await runGit(workspace, ["commit", "-m", "add staged"]);
     await writeFile(join(workspace, "staged.txt"), "staged change\n", "utf8");
-    await git(workspace, ["add", "staged.txt"]);
+    await runGit(workspace, ["add", "staged.txt"]);
 
     try {
       const edit = await runCli(["replace old with new in note.txt"], {
@@ -231,10 +161,12 @@ describe("CLI Undo", () => {
         "hello old world\n",
       );
       expect(
-        (await git(workspace, ["diff", "--cached", "--", "staged.txt"])).stdout,
+        (await runGit(workspace, ["diff", "--cached", "--", "staged.txt"]))
+          .stdout,
       ).toContain("+staged change");
       expect(
-        (await git(workspace, ["diff", "--cached", "--", "note.txt"])).stdout,
+        (await runGit(workspace, ["diff", "--cached", "--", "note.txt"]))
+          .stdout,
       ).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });

@@ -1,75 +1,23 @@
-import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import type { Server } from "node:net";
-import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-
-const CLI_PATH = join(import.meta.dirname, "../../src/cli/index.ts");
-
-interface SpawnResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly exitCode: number | null;
-  readonly signal: NodeJS.Signals | null;
-}
+import {
+  runCli as runCliCommand,
+  runCliProcess as runCliProcessCommand,
+} from "../../src/testing/cli-harness.ts";
 
 function runCli(
   args: readonly string[],
   env: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return new Promise((resolve) => {
-    const child = execFile(
-      "node",
-      ["--experimental-strip-types", CLI_PATH, ...args],
-      {
-        env: { ...process.env, ...env },
-        timeout: 5000,
-      },
-      (error, stdout, stderr) => {
-        resolve({
-          stdout,
-          stderr,
-          exitCode: error?.code ? Number(error.code) : (child.exitCode ?? 0),
-        });
-      },
-    );
-  });
+  return runCliCommand(args, { env });
 }
 
 function runCliProcess(
   args: readonly string[],
   env: Record<string, string> = {},
 ) {
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  const child = spawn(
-    "node",
-    ["--experimental-strip-types", CLI_PATH, ...args],
-    {
-      env: { ...process.env, ...env },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-
-  child.stdout.on("data", (chunk: Buffer) => {
-    stdout.push(chunk);
-  });
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr.push(chunk);
-  });
-
-  const result = new Promise<SpawnResult>((resolve) => {
-    child.on("exit", (exitCode, signal) => {
-      resolve({
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
-        exitCode,
-        signal,
-      });
-    });
-  });
-
-  return { child, result };
+  return runCliProcessCommand(args, { env });
 }
 
 function getPort(server: Server): number {
