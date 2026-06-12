@@ -1,11 +1,14 @@
 import { KeelError } from "../core/error.ts";
+import type { ToolCall } from "../llm/types.ts";
 import type { CostReport } from "./loop.ts";
 
 const DEFAULT_MAX_AGENT_TURNS = 16;
+const DEFAULT_REPEATED_TOOL_CALL_STOP_THRESHOLD = 3;
 
 interface StopContext {
   readonly completedTurns: number;
-  readonly hasPendingToolCalls: boolean;
+  readonly toolCalls: readonly ToolCall[];
+  readonly priorToolCalls: readonly ToolCall[];
   readonly cost?: CostReport;
 }
 
@@ -43,10 +46,43 @@ export function costBudgetStopPolicy(): AgentStopPolicy {
   };
 }
 
+function toolCallKey(toolCall: ToolCall): string {
+  const { id: _id, ...args } = toolCall;
+  return JSON.stringify(args, Object.keys(args).sort());
+}
+
+export function repeatedToolCallPolicy(
+  stopThreshold = DEFAULT_REPEATED_TOOL_CALL_STOP_THRESHOLD,
+): AgentStopPolicy {
+  return {
+    shouldStopAfterTurn: (context) => {
+      const calls = [...context.priorToolCalls, ...context.toolCalls];
+      const latest = calls.at(-1);
+      if (latest === undefined) {
+        return { type: "continue" };
+      }
+
+      const latestKey = toolCallKey(latest);
+      let streak = 0;
+      for (let index = calls.length - 1; index >= 0; index--) {
+        const call = calls.at(index);
+        if (call === undefined || toolCallKey(call) !== latestKey) {
+          break;
+        }
+        streak++;
+        if (streak >= stopThreshold) {
+          return { type: "stop" };
+        }
+      }
+      return { type: "continue" };
+    },
+  };
+}
+
 export function maxTurnFallbackPolicy(maxTurns: number): AgentStopPolicy {
   return {
     shouldStopAfterTurn: (context) =>
-      context.hasPendingToolCalls && context.completedTurns >= maxTurns
+      context.toolCalls.length > 0 && context.completedTurns >= maxTurns
         ? {
             type: "fail",
             error: new KeelError(
@@ -61,6 +97,7 @@ export function maxTurnFallbackPolicy(maxTurns: number): AgentStopPolicy {
 export function defaultStopPolicy(): AgentStopPolicy {
   return composeStopPolicies([
     costBudgetStopPolicy(),
+    repeatedToolCallPolicy(),
     maxTurnFallbackPolicy(DEFAULT_MAX_AGENT_TURNS),
   ]);
 }
