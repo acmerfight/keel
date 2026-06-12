@@ -3,10 +3,14 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   commitFile,
-  createGitWorkspace,
+  createGitWorkspace as createHarnessGitWorkspace,
   runCli,
   runGit,
 } from "../../src/testing/cli-harness.ts";
+
+function createGitWorkspace(): Promise<string> {
+  return createHarnessGitWorkspace("keel-cli-undo-");
+}
 
 describe("CLI Undo", () => {
   test(`Given a git workspace file is edited by Keel,

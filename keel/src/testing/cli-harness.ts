@@ -41,11 +41,20 @@ function runCommand(
         resolve({
           stdout,
           stderr,
-          exitCode: error?.code ? Number(error.code) : (child.exitCode ?? 0),
+          exitCode: commandExitCode(error, child.exitCode),
         });
       },
     );
   });
+}
+
+function commandExitCode(
+  error: { readonly code?: unknown } | null,
+  exitCode: number | null,
+): number {
+  if (typeof error?.code === "number") return error.code;
+  if (exitCode !== null) return exitCode;
+  return error === null ? 0 : 1;
 }
 
 export function runCli(
