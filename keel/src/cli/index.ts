@@ -9,7 +9,7 @@ import {
   createDeepseekProvider,
   DEEPSEEK_V4_FLASH_COST_MODEL,
 } from "../llm/providers/deepseek.ts";
-import type { LLMProvider } from "../llm/types.ts";
+import type { LLMProvider, ToolCall } from "../llm/types.ts";
 import { createFakeProvider, fakeResponse } from "../testing/fake-provider.ts";
 import { runDoctor } from "./doctor.ts";
 
@@ -104,6 +104,49 @@ function parseCliArgs(args: readonly string[]): CliArgs {
 
 function formatUsd(value: number): string {
   return value < 0.0001 ? value.toFixed(6) : value.toFixed(4);
+}
+
+const TOOL_LABEL_MAX_LENGTH = 160;
+
+// Tool call arguments are model-controlled. Escape control characters and
+// cap the length so one tool call is always exactly one stderr line and can
+// never forge extra progress records or emit terminal control sequences.
+function sanitizeToolLabel(label: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: escaping control characters is the point
+  const escaped = label.replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => {
+    switch (char) {
+      case "\n":
+        return "\\n";
+      case "\r":
+        return "\\r";
+      case "\t":
+        return "\\t";
+      default:
+        return `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`;
+    }
+  });
+  return escaped.length <= TOOL_LABEL_MAX_LENGTH
+    ? escaped
+    : `${escaped.slice(0, TOOL_LABEL_MAX_LENGTH)}...`;
+}
+
+function toolCallLabel(toolCall: ToolCall): string {
+  switch (toolCall.tool) {
+    case "read":
+      return sanitizeToolLabel(`read ${toolCall.path}`);
+    case "grep":
+      return sanitizeToolLabel(
+        toolCall.path === undefined
+          ? `grep ${toolCall.pattern}`
+          : `grep ${toolCall.pattern} ${toolCall.path}`,
+      );
+    case "edit":
+      return sanitizeToolLabel(`edit ${toolCall.path}`);
+    case "write":
+      return sanitizeToolLabel(`write ${toolCall.path}`);
+    case "bash":
+      return sanitizeToolLabel(`bash ${toolCall.command}`);
+  }
 }
 
 function formatCostReport(cost: CostReport): string {
@@ -316,6 +359,16 @@ async function main(): Promise<void> {
     for await (const event of stream) {
       if (event.type === "text") {
         process.stdout.write(event.text);
+      } else if (event.type === "tool_start") {
+        process.stderr.write(`Tool: ${toolCallLabel(event.toolCall)}\n`);
+      } else if (event.type === "tool_end") {
+        // Status lives in the line prefix because the label is
+        // model-controlled text and could end with a forged failure marker.
+        if (!event.ok) {
+          process.stderr.write(
+            `Tool failed: ${toolCallLabel(event.toolCall)}\n`,
+          );
+        }
       } else if (event.type === "end") {
         finalCost = event.cost;
       }
