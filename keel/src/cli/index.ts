@@ -108,23 +108,50 @@ function formatUsd(value: number): string {
 
 const TOOL_LABEL_MAX_LENGTH = 160;
 
-// Tool call arguments are model-controlled. Escape control characters and
-// cap the length so one tool call is always exactly one stderr line and can
-// never forge extra progress records or emit terminal control sequences.
+// Shared escape style for model-controlled bytes: control characters become
+// visible \xNN (or \n-style) escapes so the terminal never interprets them.
+function escapeControlChar(char: string): string {
+  switch (char) {
+    case "\n":
+      return "\\n";
+    case "\r":
+      return "\\r";
+    case "\t":
+      return "\\t";
+    default:
+      return `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`;
+  }
+}
+
+// Assistant text is model-controlled. Newlines and tabs are legitimate prose
+// formatting, but every other C0/C1 control character (ESC, BEL, raw CSI/OSC
+// bytes) could drive the terminal: clear the screen, move the cursor over
+// earlier output, retitle the window, or write the clipboard via OSC 52.
+// Escaping per code unit keeps streamed chunks safe — no sequence can
+// straddle a chunk boundary once ESC and C1 bytes are neutralized.
+function sanitizeAssistantText(text: string): string {
+  return text.replace(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: escaping control characters is the point
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g,
+    escapeControlChar,
+  );
+}
+
+// Labels are paths/patterns/commands, not prose, so beyond C0/C1 controls we
+// also escape bidi controls (visual reordering, Trojan Source class) and
+// zero-width characters (invisible path segments). The length cap keeps one
+// tool call to exactly one readable stderr line.
 function sanitizeToolLabel(label: string): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: escaping control characters is the point
-  const escaped = label.replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => {
-    switch (char) {
-      case "\n":
-        return "\\n";
-      case "\r":
-        return "\\r";
-      case "\t":
-        return "\\t";
-      default:
-        return `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`;
-    }
-  });
+  const escaped = label.replace(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: escaping control characters is the point
+    /[\u0000-\u001f\u007f-\u009f\u200b-\u200d\u2060\u202a-\u202e\u2066-\u2069\ufeff]/g,
+    (char) => {
+      const code = char.charCodeAt(0);
+      return code <= 0x9f
+        ? escapeControlChar(char)
+        : `\\u{${code.toString(16)}}`;
+    },
+  );
   return escaped.length <= TOOL_LABEL_MAX_LENGTH
     ? escaped
     : `${escaped.slice(0, TOOL_LABEL_MAX_LENGTH)}...`;
@@ -358,7 +385,7 @@ async function main(): Promise<void> {
     let finalCost: CostReport | undefined;
     for await (const event of stream) {
       if (event.type === "text") {
-        process.stdout.write(event.text);
+        process.stdout.write(sanitizeAssistantText(event.text));
       } else if (event.type === "tool_start") {
         process.stderr.write(`Tool: ${toolCallLabel(event.toolCall)}\n`);
       } else if (event.type === "tool_end") {
