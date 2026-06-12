@@ -200,6 +200,7 @@ describe("Text Reply", () => {
             id: `read_package_${turn}`,
             tool: "read",
             path: "package.json",
+            limit: turn + 1,
           };
           turn++;
           yield {
@@ -245,18 +246,21 @@ describe("Text Reply", () => {
     });
   });
 
-  test(`Given the assistant repeatedly asks to inspect files,
+  test(`Given the assistant keeps requesting new inspections without finishing,
     When the agent exceeds its action limit,
     Then agent reports an action limit error`, async () => {
     // Given
+    let round = 0;
     const loopingProvider: LLMProvider = {
       id: "looping-tools",
       async *stream() {
+        round++;
         yield {
           type: "tool_call",
-          id: "read_package",
+          id: `read_package_${round}`,
           tool: "read",
           path: "package.json",
+          limit: round,
         };
         yield {
           type: "stop",

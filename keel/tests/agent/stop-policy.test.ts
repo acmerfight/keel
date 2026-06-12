@@ -9,12 +9,15 @@ import {
   composeStopPolicies,
   costBudgetStopPolicy,
   maxTurnFallbackPolicy,
+  repeatedToolCallPolicy,
 } from "../../src/agent/stop-policy.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import type { LLMProvider } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
   fakeEditResponse,
+  fakeGrepResponse,
+  fakeReadResponse,
   fakeResponse,
 } from "../../src/testing/fake-provider.ts";
 
@@ -191,6 +194,173 @@ describe("Agent Stopping", () => {
           maxUsd: 0.5,
           budgetExceeded: true,
         },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an assistant stuck retrying the identical failing edit,
+    When the default stop rules are in effect,
+    Then the run ends cleanly after a few repeats and the file stays unchanged`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "original\n", "utf8");
+    const sameFailingEdit = fakeEditResponse("note.txt", "missing", "patched");
+    const provider = createFakeProvider(
+      Array.from({ length: 16 }, () => sameFailingEdit),
+    );
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "fix the note",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "original\n",
+      );
+      const executedCalls = events.filter(
+        (event) => event.type === "tool_start",
+      );
+      expect(executedCalls).toHaveLength(2);
+      expect(events.at(-1)).toMatchObject({ type: "end" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a long task that needs many different tool calls,
+    When the assistant works through them one after another,
+    Then the run completes normally with the final answer`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "a.txt"), "alpha\n", "utf8");
+    await writeFile(join(workspace, "b.txt"), "beta\n", "utf8");
+    const provider = createFakeProvider([
+      fakeReadResponse("a.txt"),
+      fakeReadResponse("b.txt"),
+      fakeGrepResponse("alpha"),
+      fakeGrepResponse("beta"),
+      fakeReadResponse("a.txt", undefined, { limit: 1 }),
+      fakeReadResponse("b.txt", undefined, { limit: 1 }),
+      fakeResponse("All done."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "inspect the workspace",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      const executedCalls = events.filter(
+        (event) => event.type === "tool_start",
+      );
+      expect(executedCalls).toHaveLength(6);
+      expect(events).toContainEqual({ type: "text", text: "All done." });
+      expect(events.at(-1)).toMatchObject({ type: "end" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the repeated-call guard combined with a generous round limit,
+    When the assistant keeps requesting the exact same read,
+    Then the agent stops gracefully long before the round limit`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "a.txt"), "alpha\n", "utf8");
+    const sameRead = fakeReadResponse("a.txt");
+    const provider = createFakeProvider(
+      Array.from({ length: 100 }, () => sameRead),
+    );
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "read the file forever",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          stopPolicy: composeStopPolicies([
+            repeatedToolCallPolicy(),
+            maxTurnFallbackPolicy(100),
+          ]),
+        }),
+      );
+
+      // Then
+      const executedCalls = events.filter(
+        (event) => event.type === "tool_start",
+      );
+      expect(executedCalls).toHaveLength(2);
+      expect(events.at(-1)).toMatchObject({ type: "end" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a caller reuses one stop policy instance across two sessions,
+    When the second session starts with the same read the first session repeated,
+    Then leftover history from the first session does not stop the second`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "a.txt"), "alpha\n", "utf8");
+    const sharedPolicy = repeatedToolCallPolicy();
+    const sameRead = fakeReadResponse("a.txt");
+    const firstProvider = createFakeProvider([
+      sameRead,
+      sameRead,
+      fakeResponse("First task done."),
+    ]);
+    const secondProvider = createFakeProvider([
+      sameRead,
+      fakeResponse("Second task done."),
+    ]);
+
+    try {
+      // When
+      await collect(
+        runAgent({
+          workspace,
+          provider: firstProvider,
+          userMessage: "first task",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          stopPolicy: sharedPolicy,
+        }),
+      );
+      const secondEvents = await collect(
+        runAgent({
+          workspace,
+          provider: secondProvider,
+          userMessage: "second task",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          stopPolicy: sharedPolicy,
+        }),
+      );
+
+      // Then
+      expect(secondEvents).toContainEqual({
+        type: "text",
+        text: "Second task done.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
