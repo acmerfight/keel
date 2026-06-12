@@ -915,7 +915,7 @@ describe("CLI File Editing", () => {
       expect(result.stdout).toContain("secret.txt");
       expect(result.stdout).not.toContain("do-not-print");
       expect(result.stderr).toBe(
-        "Tool: grep SECRET_VALUE secret.txt\nTool: grep SECRET_VALUE secret.txt (failed)\n",
+        "Tool: grep SECRET_VALUE secret.txt\nTool failed: grep SECRET_VALUE secret.txt\n",
       );
       expect(capturedBodies).toHaveLength(2);
 

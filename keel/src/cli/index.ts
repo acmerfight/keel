@@ -362,9 +362,11 @@ async function main(): Promise<void> {
       } else if (event.type === "tool_start") {
         process.stderr.write(`Tool: ${toolCallLabel(event.toolCall)}\n`);
       } else if (event.type === "tool_end") {
+        // Status lives in the line prefix because the label is
+        // model-controlled text and could end with a forged failure marker.
         if (!event.ok) {
           process.stderr.write(
-            `Tool: ${toolCallLabel(event.toolCall)} (failed)\n`,
+            `Tool failed: ${toolCallLabel(event.toolCall)}\n`,
           );
         }
       } else if (event.type === "end") {

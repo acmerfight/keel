@@ -83,7 +83,7 @@ describe("CLI Tool Progress", () => {
       expect(result.exitCode).toBe(0);
       const escapedLabel = "edit note.txt\\nTool: edit forged.txt";
       expect(result.stderr).toBe(
-        `Tool: ${escapedLabel}\nTool: ${escapedLabel} (failed)\n`,
+        `Tool: ${escapedLabel}\nTool failed: ${escapedLabel}\n`,
       );
       expect(result.stderr).not.toContain("\nTool: edit forged.txt\n");
     } finally {
@@ -144,6 +144,31 @@ describe("CLI Tool Progress", () => {
     }
   });
 
+  test(`Given a tool call path literally ends with the failure marker,
+    When user runs the CLI,
+    Then start lines and failure lines stay distinguishable by their prefix`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-progress-"));
+    const spoofedPath = "note.txt (failed)";
+
+    try {
+      // When
+      const result = await runCli([`replace old with new in ${spoofedPath}`], {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "fake" },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      const lines = result.stderr.split("\n").filter((line) => line !== "");
+      expect(lines[0]).toBe("Tool: edit note.txt (failed)");
+      expect(lines[0]).not.toMatch(/^Tool failed: /);
+      expect(lines[1]).toBe("Tool failed: edit note.txt (failed)");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an edit targets text that does not exist,
     When user runs the CLI,
     Then the user sees the tool call marked as failed`, async () => {
@@ -164,7 +189,7 @@ describe("CLI Tool Progress", () => {
         "hello world\n",
       );
       expect(result.stderr).toBe(
-        "Tool: edit note.txt\nTool: edit note.txt (failed)\n",
+        "Tool: edit note.txt\nTool failed: edit note.txt\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
