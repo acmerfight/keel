@@ -9,7 +9,7 @@ import {
   createDeepseekProvider,
   DEEPSEEK_V4_FLASH_COST_MODEL,
 } from "../llm/providers/deepseek.ts";
-import type { LLMProvider } from "../llm/types.ts";
+import type { LLMProvider, ToolCall } from "../llm/types.ts";
 import { createFakeProvider, fakeResponse } from "../testing/fake-provider.ts";
 import { runDoctor } from "./doctor.ts";
 
@@ -104,6 +104,23 @@ function parseCliArgs(args: readonly string[]): CliArgs {
 
 function formatUsd(value: number): string {
   return value < 0.0001 ? value.toFixed(6) : value.toFixed(4);
+}
+
+function toolCallLabel(toolCall: ToolCall): string {
+  switch (toolCall.tool) {
+    case "read":
+      return `read ${toolCall.path}`;
+    case "grep":
+      return toolCall.path === undefined
+        ? `grep ${toolCall.pattern}`
+        : `grep ${toolCall.pattern} ${toolCall.path}`;
+    case "edit":
+      return `edit ${toolCall.path}`;
+    case "write":
+      return `write ${toolCall.path}`;
+    case "bash":
+      return `bash ${toolCall.command}`;
+  }
 }
 
 function formatCostReport(cost: CostReport): string {
@@ -316,6 +333,14 @@ async function main(): Promise<void> {
     for await (const event of stream) {
       if (event.type === "text") {
         process.stdout.write(event.text);
+      } else if (event.type === "tool_start") {
+        process.stderr.write(`Tool: ${toolCallLabel(event.toolCall)}\n`);
+      } else if (event.type === "tool_end") {
+        if (!event.ok) {
+          process.stderr.write(
+            `Tool: ${toolCallLabel(event.toolCall)} (failed)\n`,
+          );
+        }
       } else if (event.type === "end") {
         finalCost = event.cost;
       }

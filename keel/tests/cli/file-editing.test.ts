@@ -367,7 +367,7 @@ describe("CLI File Editing", () => {
         "hello new world\n",
       );
       expect(result.stdout).toBe("Edited note.txt\n");
-      expect(result.stderr).toBe("");
+      expect(result.stderr).toBe("Tool: edit note.txt\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -432,7 +432,7 @@ describe("CLI File Editing", () => {
         "hello new world\n",
       );
       expect(result.stdout).toBe("Done.\n");
-      expect(result.stderr).toBe("");
+      expect(result.stderr).toBe("Tool: edit note.txt\n");
 
       const request = JSON.parse(capturedBody);
       expect(
@@ -506,7 +506,7 @@ describe("CLI File Editing", () => {
         '{"created":true}\n',
       );
       expect(result.stdout).toBe("Created config.json.\n");
-      expect(result.stderr).toBe("");
+      expect(result.stderr).toBe("Tool: write config.json\n");
       expect(capturedBodies).toHaveLength(2);
 
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
@@ -664,7 +664,9 @@ describe("CLI File Editing", () => {
       // Then
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe("SECRET_VALUE=trusted-shell-visible\n");
-      expect(result.stderr).toBe("");
+      expect(result.stderr).toBe(
+        `Tool: bash node -e "process.stdout.write(require('node:fs').readFileSync('secret.txt', 'utf8'))"\n`,
+      );
       expect(capturedBodies).toHaveLength(2);
 
       const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
@@ -749,7 +751,7 @@ describe("CLI File Editing", () => {
         "hello new world\n",
       );
       expect(result.stdout).toBe("Done.\n");
-      expect(result.stderr).toBe("");
+      expect(result.stderr).toBe("Tool: read note.txt\nTool: edit note.txt\n");
       expect(capturedBodies).toHaveLength(3);
 
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
@@ -833,7 +835,7 @@ describe("CLI File Editing", () => {
       // Then
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe("Found app.ts.\n");
-      expect(result.stderr).toBe("");
+      expect(result.stderr).toBe("Tool: grep handleSubmit\n");
       expect(capturedBodies).toHaveLength(2);
 
       const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
@@ -912,7 +914,9 @@ describe("CLI File Editing", () => {
       expect(result.stdout).toContain("ignored path");
       expect(result.stdout).toContain("secret.txt");
       expect(result.stdout).not.toContain("do-not-print");
-      expect(result.stderr).toBe("");
+      expect(result.stderr).toBe(
+        "Tool: grep SECRET_VALUE secret.txt\nTool: grep SECRET_VALUE secret.txt (failed)\n",
+      );
       expect(capturedBodies).toHaveLength(2);
 
       const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
@@ -1050,7 +1054,7 @@ describe("CLI File Editing", () => {
         "hello new there\n",
       );
       expect(result.stdout).toBe("Done.\n");
-      expect(result.stderr).toBe("");
+      expect(result.stderr).toBe("Tool: edit note.txt\nTool: edit note.txt\n");
       expect(requestCount).toBe(2);
       const secondRequest = requestWithMessagesSchema.parse(
         JSON.parse(secondRequestBody),
@@ -1248,7 +1252,7 @@ describe("CLI File Editing", () => {
         "goodbye world\n",
       );
       expect(result.stdout).toBe("Fixed both files.\n");
-      expect(result.stderr).toBe("");
+      expect(result.stderr).toBe("Tool: edit a.txt\nTool: edit b.txt\n");
       expect(requestCount).toBe(3);
     } finally {
       await close(server);

@@ -23,6 +23,12 @@ interface CostTrackingOptions {
 
 export type AgentEvent =
   | { readonly type: "text"; readonly text: string }
+  | { readonly type: "tool_start"; readonly toolCall: ToolCall }
+  | {
+      readonly type: "tool_end";
+      readonly toolCall: ToolCall;
+      readonly ok: boolean;
+    }
   | {
       readonly type: "end";
       readonly usage: Usage;
@@ -55,6 +61,11 @@ interface ExecuteToolCallOptions {
 interface RecoverableToolError extends KeelError {
   readonly code: RecoverableToolErrorCode;
   readonly recovery: string;
+}
+
+interface ToolExecution {
+  readonly content: string;
+  readonly ok: boolean;
 }
 
 function addUsage(left: Usage, right: Usage): Usage {
@@ -119,7 +130,7 @@ function finishAgentTurn(
 
 async function executeToolCall(
   options: ExecuteToolCallOptions,
-): Promise<string> {
+): Promise<ToolExecution> {
   const { workspace, toolCall, signal, allowBash } = options;
   switch (toolCall.tool) {
     case "grep": {
@@ -128,12 +139,12 @@ async function executeToolCall(
           ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
           signal,
         });
-        return result.content;
+        return { content: result.content, ok: true };
       } catch (error) {
         if (!isRecoverableToolError(error)) {
           throw error;
         }
-        return toolFailureMessage(error);
+        return { content: toolFailureMessage(error), ok: false };
       }
     }
     case "read": {
@@ -142,17 +153,21 @@ async function executeToolCall(
           offset: toolCall.offset,
           limit: toolCall.limit,
         });
-        return result.content;
+        return { content: result.content, ok: true };
       } catch (error) {
         if (!isRecoverableToolError(error)) {
           throw error;
         }
-        return toolFailureMessage(error);
+        return { content: toolFailureMessage(error), ok: false };
       }
     }
     case "bash": {
       if (!allowBash) {
-        return "Tool failed: bash failed: shell commands are disabled. Re-run with --allow-bash to enable them.";
+        return {
+          content:
+            "Tool failed: bash failed: shell commands are disabled. Re-run with --allow-bash to enable them.",
+          ok: false,
+        };
       }
 
       try {
@@ -162,12 +177,12 @@ async function executeToolCall(
             ? { timeoutMs: toolCall.timeoutMs }
             : {}),
         });
-        return result.content;
+        return { content: result.content, ok: true };
       } catch (error) {
         if (!isRecoverableToolError(error)) {
           throw error;
         }
-        return toolFailureMessage(error);
+        return { content: toolFailureMessage(error), ok: false };
       }
     }
     case "edit": {
@@ -178,23 +193,23 @@ async function executeToolCall(
           toolCall.oldString,
           toolCall.newString,
         );
-        return result.content;
+        return { content: result.content, ok: true };
       } catch (error) {
         if (!isRecoverableToolError(error)) {
           throw error;
         }
-        return toolFailureMessage(error);
+        return { content: toolFailureMessage(error), ok: false };
       }
     }
     case "write": {
       try {
         const result = executeWrite(workspace, toolCall.path, toolCall.content);
-        return result.content;
+        return { content: result.content, ok: true };
       } catch (error) {
         if (!isRecoverableToolError(error)) {
           throw error;
         }
-        return toolFailureMessage(error);
+        return { content: toolFailureMessage(error), ok: false };
       }
     }
   }
@@ -238,9 +253,11 @@ export async function* runAgent(
           assistantText.push(event.text);
           yield { type: "text", text: event.text };
           break;
-        case "tool_call":
-          pendingToolCalls.push(event);
+        case "tool_call": {
+          const { type: _llmEventType, ...toolCall } = event;
+          pendingToolCalls.push(toolCall);
           break;
+        }
         case "stop":
           usage = event.usage;
           break;
@@ -287,16 +304,18 @@ export async function* runAgent(
     });
 
     for (const toolCall of turnResult.toolCalls) {
-      const content = await executeToolCall({
+      yield { type: "tool_start", toolCall };
+      const execution = await executeToolCall({
         workspace,
         toolCall,
         signal,
         allowBash,
       });
+      yield { type: "tool_end", toolCall, ok: execution.ok };
       messages.push({
         role: "tool",
         toolCallId: toolCall.id,
-        content,
+        content: execution.content,
       });
     }
   }
