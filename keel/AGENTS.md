@@ -113,6 +113,8 @@ Litmus test: if you would write `?? defaultValue` every time you read this field
 
 Before choosing the next feature, inspect the current product entrypoint. Prefer the smallest user-runnable slice over the next internal architecture step. Examples in SLICING.md are illustrative, not a fixed roadmap.
 
+**Choosing what to build next:** [ROADMAP.md](ROADMAP.md) defines the north-star goals (replace Codex CLI / Claude Code for daily coding; exceed Claude Code / Codex / Kimi Code in measured harness execution quality) and a priority-ordered gap list. Pick the highest-priority gap that can ship as a vertical slice.
+
 ## Merge to Main
 
 Never push directly to main. Always use a PR and wait for CI to pass. Workflow:
