@@ -64,6 +64,86 @@ describe("CLI Tool Progress", () => {
     }
   });
 
+  test(`Given a tool call path embeds a newline that forges a progress line,
+    When user runs the CLI,
+    Then each progress record stays on one line with the newline made visible`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-progress-"));
+    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    const forgedPath = "note.txt\nTool: edit forged.txt";
+
+    try {
+      // When
+      const result = await runCli([`replace old with new in ${forgedPath}`], {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "fake" },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      const escapedLabel = "edit note.txt\\nTool: edit forged.txt";
+      expect(result.stderr).toBe(
+        `Tool: ${escapedLabel}\nTool: ${escapedLabel} (failed)\n`,
+      );
+      expect(result.stderr).not.toContain("\nTool: edit forged.txt\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a tool call path embeds a terminal control sequence,
+    When user runs the CLI,
+    Then the control character is printed as a visible escape instead of executing`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-progress-"));
+    const clearScreenPath = "\u001b[2Jnote.txt";
+
+    try {
+      // When
+      const result = await runCli(
+        [`replace old with new in ${clearScreenPath}`],
+        {
+          cwd: workspace,
+          env: { KEEL_PROVIDER: "fake" },
+        },
+      );
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).not.toContain("\u001b");
+      expect(result.stderr).toContain("Tool: edit \\x1b[2Jnote.txt\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a tool call argument is very long,
+    When user runs the CLI,
+    Then the progress line is truncated to a readable length`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-progress-"));
+    const longPath = `${"a".repeat(300)}.txt`;
+
+    try {
+      // When
+      const result = await runCli([`replace old with new in ${longPath}`], {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "fake" },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      const lines = result.stderr.split("\n").filter((line) => line !== "");
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line.length).toBeLessThanOrEqual(200);
+      }
+      expect(result.stderr).toContain("...");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an edit targets text that does not exist,
     When user runs the CLI,
     Then the user sees the tool call marked as failed`, async () => {

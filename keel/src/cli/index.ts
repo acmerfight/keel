@@ -106,20 +106,46 @@ function formatUsd(value: number): string {
   return value < 0.0001 ? value.toFixed(6) : value.toFixed(4);
 }
 
+const TOOL_LABEL_MAX_LENGTH = 160;
+
+// Tool call arguments are model-controlled. Escape control characters and
+// cap the length so one tool call is always exactly one stderr line and can
+// never forge extra progress records or emit terminal control sequences.
+function sanitizeToolLabel(label: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: escaping control characters is the point
+  const escaped = label.replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => {
+    switch (char) {
+      case "\n":
+        return "\\n";
+      case "\r":
+        return "\\r";
+      case "\t":
+        return "\\t";
+      default:
+        return `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`;
+    }
+  });
+  return escaped.length <= TOOL_LABEL_MAX_LENGTH
+    ? escaped
+    : `${escaped.slice(0, TOOL_LABEL_MAX_LENGTH)}...`;
+}
+
 function toolCallLabel(toolCall: ToolCall): string {
   switch (toolCall.tool) {
     case "read":
-      return `read ${toolCall.path}`;
+      return sanitizeToolLabel(`read ${toolCall.path}`);
     case "grep":
-      return toolCall.path === undefined
-        ? `grep ${toolCall.pattern}`
-        : `grep ${toolCall.pattern} ${toolCall.path}`;
+      return sanitizeToolLabel(
+        toolCall.path === undefined
+          ? `grep ${toolCall.pattern}`
+          : `grep ${toolCall.pattern} ${toolCall.path}`,
+      );
     case "edit":
-      return `edit ${toolCall.path}`;
+      return sanitizeToolLabel(`edit ${toolCall.path}`);
     case "write":
-      return `write ${toolCall.path}`;
+      return sanitizeToolLabel(`write ${toolCall.path}`);
     case "bash":
-      return `bash ${toolCall.command}`;
+      return sanitizeToolLabel(`bash ${toolCall.command}`);
   }
 }
 
