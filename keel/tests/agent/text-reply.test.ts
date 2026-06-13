@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { type AgentEvent, runAgent } from "../../src/agent/loop.ts";
-import type { LLMProvider } from "../../src/llm/types.ts";
+import {
+  type AgentEvent,
+  runAgent,
+  runAgentTurn,
+} from "../../src/agent/loop.ts";
+import type { LLMProvider, Message } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
   fakeResponse,
@@ -64,6 +68,65 @@ describe("Text Reply", () => {
 
     const endEvents = events.filter(isEnd);
     expect(endEvents).toHaveLength(1);
+  });
+
+  test(`Given an in-process session has prior messages,
+    When user sends a follow-up message,
+    Then the provider receives the earlier context`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "remember alpha" }];
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "observed-session",
+      async *stream(options) {
+        turn++;
+        if (turn === 2) {
+          secondTurnMessages = [...options.messages];
+        }
+        yield {
+          type: "text",
+          text: turn === 1 ? "Remembered alpha." : "You asked about alpha.",
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+    messages.push({ role: "user", content: "what did I ask you to remember?" });
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(secondTurnMessages).toEqual([
+      { role: "user", content: "remember alpha" },
+      { role: "assistant", content: "Remembered alpha." },
+      { role: "user", content: "what did I ask you to remember?" },
+    ]);
   });
 
   test(`Given a short assistant reply,

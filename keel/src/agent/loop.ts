@@ -51,6 +51,17 @@ export interface RunAgentOptions {
   readonly stopPolicy?: AgentStopPolicy;
 }
 
+export interface RunAgentTurnOptions {
+  readonly workspace: string;
+  readonly provider: LLMProvider;
+  readonly messages: Message[];
+  readonly systemPrompt: string;
+  readonly signal: AbortSignal;
+  readonly costTracking?: CostTrackingOptions;
+  readonly allowBash?: boolean;
+  readonly stopPolicy?: AgentStopPolicy;
+}
+
 interface AgentTurn {
   readonly text: string;
   readonly toolCalls: readonly ToolCall[];
@@ -113,6 +124,12 @@ function isRecoverableToolError(error: unknown): error is RecoverableToolError {
 
 function toolFailureMessage(error: RecoverableToolError): string {
   return `Tool failed: ${error.message}\nRecovery: ${error.recovery}`;
+}
+
+function priorToolCallsFromMessages(messages: readonly Message[]): ToolCall[] {
+  return messages.flatMap((message) =>
+    message.role === "assistant" ? (message.toolCalls ?? []) : [],
+  );
 }
 
 function finishAgentTurn(
@@ -274,21 +291,20 @@ async function executeToolCall(
   }
 }
 
-export async function* runAgent(
-  options: RunAgentOptions,
+export async function* runAgentTurn(
+  options: RunAgentTurnOptions,
 ): AsyncGenerator<AgentEvent> {
   const {
     workspace,
     provider,
-    userMessage,
+    messages,
     systemPrompt,
     signal,
     costTracking,
     allowBash = false,
     stopPolicy = defaultStopPolicy(),
   } = options;
-  const messages: Message[] = [{ role: "user", content: userMessage }];
-  const priorToolCalls: ToolCall[] = [];
+  const priorToolCalls = priorToolCallsFromMessages(messages);
   let totalUsage: Usage = {
     inputTokens: 0,
     cachedInputTokens: 0,
@@ -377,6 +393,9 @@ export async function* runAgent(
     }
 
     if (turnResult.toolCalls.length === 0) {
+      if (turnResult.text !== "") {
+        messages.push({ role: "assistant", content: turnResult.text });
+      }
       yield {
         type: "end",
         usage: totalUsage,
@@ -410,4 +429,26 @@ export async function* runAgent(
       });
     }
   }
+}
+
+export async function* runAgent(
+  options: RunAgentOptions,
+): AsyncGenerator<AgentEvent> {
+  const messages: Message[] = [{ role: "user", content: options.userMessage }];
+  yield* runAgentTurn({
+    workspace: options.workspace,
+    provider: options.provider,
+    messages,
+    systemPrompt: options.systemPrompt,
+    signal: options.signal,
+    ...(options.costTracking !== undefined
+      ? { costTracking: options.costTracking }
+      : {}),
+    ...(options.allowBash !== undefined
+      ? { allowBash: options.allowBash }
+      : {}),
+    ...(options.stopPolicy !== undefined
+      ? { stopPolicy: options.stopPolicy }
+      : {}),
+  });
 }

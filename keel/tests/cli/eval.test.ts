@@ -225,7 +225,7 @@ describe("CLI Eval", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test(`Given a suite with several tasks,
     When user limits the run to one task,

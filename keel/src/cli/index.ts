@@ -2,9 +2,10 @@
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { z } from "zod";
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
-import { runAgent } from "../agent/loop.ts";
+import { runAgent, runAgentTurn } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import type { CostModel } from "../core/cost.ts";
 import { restoreLastEditCheckpoint } from "../core/git.ts";
@@ -13,7 +14,7 @@ import {
   createDeepseekProvider,
   DEEPSEEK_V4_FLASH_COST_MODEL,
 } from "../llm/providers/deepseek.ts";
-import type { LLMProvider, ToolCall } from "../llm/types.ts";
+import type { LLMProvider, Message, ToolCall } from "../llm/types.ts";
 import { createFakeProvider, fakeResponse } from "../testing/fake-provider.ts";
 import { runDoctor } from "./doctor.ts";
 
@@ -447,11 +448,32 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
   };
 }
 
+function createInteractiveFakeProvider(): LLMProvider {
+  return {
+    id: "fake",
+    async *stream(options) {
+      const userMessages = options.messages.filter(
+        (message) => message.role === "user",
+      );
+      const latest = userMessages.at(-1)?.content ?? "";
+      const previous = userMessages.at(-2)?.content;
+      const text =
+        previous !== undefined && latest.endsWith("remember?")
+          ? `Earlier you said: ${previous}`
+          : `Remembered: ${latest}`;
+      yield { type: "text", text };
+      yield { type: "stop", usage: ZERO_USAGE };
+    },
+  };
+}
+
 interface ResolvedProvider {
   readonly provider: LLMProvider;
   readonly model: string;
   readonly costModel: CostModel;
 }
+
+type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 
 const ZERO_COST_MODEL: CostModel = {
   uncachedInputPerMillionTokens: 0,
@@ -459,12 +481,18 @@ const ZERO_COST_MODEL: CostModel = {
   outputPerMillionTokens: 0,
 };
 
-function resolveProvider(userMessage: string): ResolvedProvider {
+function resolveProvider(
+  userMessage: string,
+  options: { readonly interactive?: boolean } = {},
+): ResolvedProvider {
   const providerId = env("KEEL_PROVIDER") ?? "deepseek";
 
   if (providerId === "fake") {
     return {
-      provider: createCliFakeProvider(userMessage),
+      provider:
+        options.interactive === true
+          ? createInteractiveFakeProvider()
+          : createCliFakeProvider(userMessage),
       model: "fake",
       costModel: ZERO_COST_MODEL,
     };
@@ -492,6 +520,79 @@ function resolveProvider(userMessage: string): ResolvedProvider {
 
   process.stderr.write(`Error: unknown provider "${providerId}"\n`);
   process.exit(1);
+}
+
+async function printAgentEvents(
+  stream: AsyncIterable<AgentEvent>,
+): Promise<EndEvent | undefined> {
+  let finalEnd: EndEvent | undefined;
+  for await (const event of stream) {
+    if (event.type === "text") {
+      process.stdout.write(sanitizeAssistantText(event.text));
+    } else if (event.type === "tool_start") {
+      process.stderr.write(`Tool: ${toolCallLabel(event.toolCall)}\n`);
+    } else if (event.type === "tool_end") {
+      // Status lives in the line prefix because the label is
+      // model-controlled text and could end with a forged failure marker.
+      if (!event.ok) {
+        process.stderr.write(`Tool failed: ${toolCallLabel(event.toolCall)}\n`);
+      }
+    } else if (event.type === "end") {
+      finalEnd = event;
+    }
+  }
+  return finalEnd;
+}
+
+async function runInteractiveSession(
+  cliArgs: Extract<CliArgs, { readonly command: "run" }>,
+  signal: AbortSignal,
+): Promise<void> {
+  const workspace = process.cwd();
+  const systemPrompt = buildAgentSystemPrompt({
+    workspace,
+    platform: process.platform,
+  });
+  const messages: Message[] = [];
+  let resolved: ResolvedProvider | null = null;
+  const input = createInterface({
+    input: process.stdin,
+    crlfDelay: Number.POSITIVE_INFINITY,
+  });
+
+  try {
+    for await (const rawLine of input) {
+      const userMessage = rawLine.trim();
+      if (userMessage === "") continue;
+      resolved ??= resolveProvider(userMessage, { interactive: true });
+      messages.push({ role: "user", content: userMessage });
+      const stream = runAgentTurn({
+        workspace,
+        provider: resolved.provider,
+        messages,
+        systemPrompt,
+        signal,
+        ...(cliArgs.allowBash ? { allowBash: true } : {}),
+        ...(cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
+          ? {
+              costTracking: {
+                model: resolved.costModel,
+                ...(cliArgs.maxCostUsd !== undefined
+                  ? { maxCostUsd: cliArgs.maxCostUsd }
+                  : {}),
+              },
+            }
+          : {}),
+      });
+      const finalEnd = await printAgentEvents(stream);
+      process.stdout.write("\n");
+      if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
+        process.stderr.write(formatCostReport(finalEnd.cost));
+      }
+    }
+  } finally {
+    input.close();
+  }
 }
 
 async function main(): Promise<void> {
@@ -535,8 +636,27 @@ async function main(): Promise<void> {
 
   const userMessage = cliArgs.userMessage;
   if (!userMessage) {
-    process.stderr.write(`${USAGE}\n`);
-    process.exit(1);
+    if (process.stdin.isTTY !== true && env("KEEL_FORCE_INTERACTIVE") !== "1") {
+      process.stderr.write(`${USAGE}\n`);
+      process.exit(1);
+    }
+    const abortController = new AbortController();
+    const abort = () => {
+      abortController.abort();
+    };
+    process.once("SIGINT", abort);
+    try {
+      await runInteractiveSession(cliArgs, abortController.signal);
+    } catch (error) {
+      if (!abortController.signal.aborted) {
+        throw error;
+      }
+      process.stdout.write("\n");
+      process.exitCode = 130;
+    } finally {
+      process.off("SIGINT", abort);
+    }
+    return;
   }
 
   const { provider, model, costModel } = resolveProvider(userMessage);
@@ -571,24 +691,7 @@ async function main(): Promise<void> {
         : {}),
     });
 
-    let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
-    for await (const event of stream) {
-      if (event.type === "text") {
-        process.stdout.write(sanitizeAssistantText(event.text));
-      } else if (event.type === "tool_start") {
-        process.stderr.write(`Tool: ${toolCallLabel(event.toolCall)}\n`);
-      } else if (event.type === "tool_end") {
-        // Status lives in the line prefix because the label is
-        // model-controlled text and could end with a forged failure marker.
-        if (!event.ok) {
-          process.stderr.write(
-            `Tool failed: ${toolCallLabel(event.toolCall)}\n`,
-          );
-        }
-      } else if (event.type === "end") {
-        finalEnd = event;
-      }
-    }
+    const finalEnd = await printAgentEvents(stream);
     process.stdout.write("\n");
     if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
       process.stderr.write(formatCostReport(finalEnd.cost));
