@@ -66,7 +66,7 @@ A task is a directory under `evals/tasks/`:
 
 ```
 evals/tasks/<task-id>/
-  task.json       # { "prompt", "timeoutMs"?, "allowBash"?, "maxCostUsd"? }
+  task.json       # { "prompt", "timeoutMs"?, "scriptTimeoutMs"?, "allowBash"?, "maxCostUsd"? }
   workspace/      # fixture files copied into a fresh temp dir per trial
   verify.sh       # runs in the workspace after the agent; exit 0 = pass
   solution.sh     # reference solution applied without an LLM; required
