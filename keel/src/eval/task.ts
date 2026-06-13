@@ -3,10 +3,16 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 
 const DEFAULT_TASK_TIMEOUT_MS = 300_000;
+const DEFAULT_SCRIPT_TIMEOUT_MS = 60_000;
 
 const taskConfigSchema = z.object({
   prompt: z.string().min(1),
   timeoutMs: z.number().int().positive().default(DEFAULT_TASK_TIMEOUT_MS),
+  scriptTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_SCRIPT_TIMEOUT_MS),
   allowBash: z.boolean().default(false),
   maxCostUsd: z.number().positive().optional(),
 });
@@ -18,6 +24,7 @@ export interface EvalTask {
   readonly solutionScript: string;
   readonly prompt: string;
   readonly timeoutMs: number;
+  readonly scriptTimeoutMs: number;
   readonly allowBash: boolean;
   readonly maxCostUsd?: number;
 }
@@ -52,6 +59,11 @@ function loadTask(suiteDir: string, id: string): EvalTask {
   }
   const config = parseTaskConfig(id, configPath);
 
+  const workspaceDir = join(dir, "workspace");
+  if (!existsSync(workspaceDir) || !statSync(workspaceDir).isDirectory()) {
+    throw new Error(`eval task "${id}" is missing workspace/ directory`);
+  }
+
   const verifyScript = join(dir, "verify.sh");
   if (!existsSync(verifyScript)) {
     throw new Error(`eval task "${id}" is missing verify.sh`);
@@ -67,11 +79,12 @@ function loadTask(suiteDir: string, id: string): EvalTask {
 
   return {
     id,
-    workspaceDir: join(dir, "workspace"),
+    workspaceDir,
     verifyScript,
     solutionScript,
     prompt: config.prompt,
     timeoutMs: config.timeoutMs,
+    scriptTimeoutMs: config.scriptTimeoutMs,
     allowBash: config.allowBash,
     ...(config.maxCostUsd !== undefined
       ? { maxCostUsd: config.maxCostUsd }

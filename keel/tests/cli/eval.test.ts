@@ -39,6 +39,7 @@ interface TaskFixture {
   readonly verify: string;
   readonly solution?: string;
   readonly timeoutMs?: number;
+  readonly scriptTimeoutMs?: number;
 }
 
 async function createTask(
@@ -54,6 +55,9 @@ async function createTask(
       prompt: fixture.prompt,
       ...(fixture.timeoutMs !== undefined
         ? { timeoutMs: fixture.timeoutMs }
+        : {}),
+      ...(fixture.scriptTimeoutMs !== undefined
+        ? { scriptTimeoutMs: fixture.scriptTimeoutMs }
         : {}),
     }),
     "utf8",
@@ -275,6 +279,36 @@ describe("CLI Eval", () => {
     }
   });
 
+  test(`Given a verifier exceeds its time limit,
+    When user runs keel eval,
+    Then the trial is recorded as a timeout failure and the eval exits as failed`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    await createTask(suiteDir, "slow-verifier", {
+      ...FIX_NOTE_TASK,
+      verify: "sleep 10\n",
+      scriptTimeoutMs: 1,
+    });
+
+    try {
+      // When
+      const result = await runCli(
+        ["eval", "--suite", suiteDir, "--out", outFile],
+        { cwd: root, env: { KEEL_PROVIDER: "fake" }, timeoutMs: 60_000 },
+      );
+
+      // Then
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toContain("slow-verifier: 0/1 pass");
+
+      const lines = await readResultLines(outFile);
+      expect(lines[0]).toMatchObject({ pass: false, outcome: "timeout" });
+      expect(lines[0]?.report).toBeDefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the agent process crashes before writing a run report,
     When user runs keel eval,
     Then the trial is recorded as crashed and the eval exits as failed`, async () => {
@@ -391,6 +425,37 @@ describe("CLI Eval", () => {
       // Then
       expect(result.exitCode).not.toBe(0);
       expect(result.stderr).toContain("bad-task");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a task is missing its workspace directory,
+    When user runs keel eval,
+    Then the CLI exits with an error naming the invalid task`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const taskDir = join(suiteDir, "missing-workspace");
+    await mkdir(taskDir, { recursive: true });
+    await writeFile(
+      join(taskDir, "task.json"),
+      JSON.stringify({ prompt: "do the task" }),
+      "utf8",
+    );
+    await writeFile(join(taskDir, "verify.sh"), "exit 0\n", "utf8");
+    await writeFile(join(taskDir, "solution.sh"), "exit 0\n", "utf8");
+
+    try {
+      // When
+      const result = await runCli(
+        ["eval", "--suite", suiteDir, "--out", outFile],
+        { cwd: root, env: { KEEL_PROVIDER: "fake" } },
+      );
+
+      // Then
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("missing-workspace");
+      expect(result.stderr).toContain("workspace");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -13,8 +13,6 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import { type EvalTask, loadEvalTasks } from "./task.ts";
 
-const SCRIPT_TIMEOUT_MS = 60_000;
-
 // Mirrors the CLI --report payload. The runner consumes the report through
 // the same file a user would, so this schema is the eval side of that
 // contract; bump expectations together with the CLI's schemaVersion.
@@ -132,9 +130,7 @@ function withTrialWorkspace<T>(
   // outside the workspace so neither the agent nor the verifier can see it.
   const workDir = mkdtempSync(join(tmpdir(), `keel-eval-${task.id}-`));
   const metaDir = mkdtempSync(join(tmpdir(), "keel-eval-meta-"));
-  if (existsSync(task.workspaceDir)) {
-    cpSync(task.workspaceDir, workDir, { recursive: true });
-  }
+  cpSync(task.workspaceDir, workDir, { recursive: true });
   return action(workDir, metaDir).finally(() => {
     rmSync(workDir, { recursive: true, force: true });
     rmSync(metaDir, { recursive: true, force: true });
@@ -191,8 +187,11 @@ async function runTrial(
 
     const verify = await runProcess("bash", [task.verifyScript], {
       cwd: workDir,
-      timeoutMs: SCRIPT_TIMEOUT_MS,
+      timeoutMs: task.scriptTimeoutMs,
     });
+    if (verify.timedOut) {
+      return { outcome: "timeout", wallMs, report };
+    }
     return {
       outcome: verify.exitCode === 0 ? "verified" : "verify_failed",
       wallMs,
@@ -205,13 +204,13 @@ async function checkTask(task: EvalTask): Promise<boolean> {
   return withTrialWorkspace(task, async (workDir) => {
     const solution = await runProcess("bash", [task.solutionScript], {
       cwd: workDir,
-      timeoutMs: SCRIPT_TIMEOUT_MS,
+      timeoutMs: task.scriptTimeoutMs,
     });
     if (solution.exitCode !== 0) return false;
 
     const verify = await runProcess("bash", [task.verifyScript], {
       cwd: workDir,
-      timeoutMs: SCRIPT_TIMEOUT_MS,
+      timeoutMs: task.scriptTimeoutMs,
     });
     return verify.exitCode === 0;
   });
