@@ -155,6 +155,9 @@ jobs:
           lines.push("");
           lines.push(`- Pass: ${passed}/${rows.length}`);
           lines.push(`- Harness failures: ${harnessFailures}`);
+          if (harnessFailures > 0) {
+            lines.push(`- **Harness failures require investigation**; see \`${resultPath}\`.`);
+          }
           lines.push(`- Reported turns: ${totalTurns}`);
           lines.push(`- Reported tokens: ${totalTokens}`);
           lines.push(`- Reported cost: $${totalCost.toFixed(6)}`);
