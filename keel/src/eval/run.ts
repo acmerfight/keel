@@ -56,6 +56,7 @@ interface TrialResult {
 
 interface ProcessResult {
   readonly exitCode: number | null;
+  readonly spawnFailed: boolean;
   readonly timedOut: boolean;
   readonly stderrTail: string;
 }
@@ -106,14 +107,23 @@ function runProcess(
       clearTimeout(timer);
       resolve({
         exitCode,
+        spawnFailed: false,
         timedOut,
         stderrTail: Buffer.concat(stderrChunks)
           .toString("utf8")
           .slice(-STDERR_TAIL_CHARS),
       });
     };
-    child.on("error", () => {
-      finish(null);
+    child.on("error", (error) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve({
+        exitCode: null,
+        spawnFailed: true,
+        timedOut,
+        stderrTail: error instanceof Error ? error.message : String(error),
+      });
     });
     child.on("exit", (code) => {
       finish(code);
@@ -189,6 +199,9 @@ async function runTrial(
       cwd: workDir,
       timeoutMs: task.scriptTimeoutMs,
     });
+    if (verify.spawnFailed) {
+      return { outcome: "crashed", wallMs, report };
+    }
     if (verify.timedOut) {
       return { outcome: "timeout", wallMs, report };
     }
