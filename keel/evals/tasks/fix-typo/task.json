@@ -1,0 +1,5 @@
+{
+  "prompt": "Fix the spelling mistake in README.md: \"Instal\" should be \"Install\". Do not change anything else.",
+  "timeoutMs": 180000,
+  "maxCostUsd": 0.05
+}
