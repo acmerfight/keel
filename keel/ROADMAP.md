@@ -96,9 +96,11 @@ Known limits that shape the priorities below:
    appends per-trial JSONL results, supports multi-trial runs, and
    validates each task's reference solution via `--check`. The current
    seed suite covers exact edits, search/edit, multi-file rename, new file
-   creation, bash-driven test fixing, and long-file editing. The next
-   work here is corpus growth from real daily-use failures, transcript
-   review tooling, and cross-agent same-model comparison after P0-2.
+   creation, bash-driven test fixing, long-file editing, stale edit
+   recovery, repeated-string disambiguation, test-preserving bug fixes,
+   and pattern-following feature additions. The next work here is corpus
+   growth from real daily-use failures, transcript review tooling, and
+   cross-agent same-model comparison after P0-2.
 
 ## P1 — Daily friction and the harness-quality competitive surface
 

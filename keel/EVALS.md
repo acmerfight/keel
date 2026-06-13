@@ -104,12 +104,13 @@ enforces the mechanical parts:
 6. **Read transcripts when scores move.** Numbers say *whether* it got
    better; only transcripts say *why*. Failures should look fair.
 
-The seed tasks cover keel's current tool surface: single exact edit,
-constant change behind an import, multi-file rename, new file creation,
-bash-driven test fixing, and an edit deep inside a long file (the edit
-reliability surface tracked in ROADMAP P1). Grow the suite from real
-daily-use tasks: when keel fails or annoys you in real work, distill that
-session into a task directory.
+The seed tasks cover keel's current tool surface and the highest-risk
+failure modes: single exact edit, constant change behind an import,
+multi-file rename, new file creation, bash-driven test fixing, an edit
+deep inside a long file, stale edit recovery, repeated-string
+disambiguation, test-preserving bug fixes, and pattern-following feature
+addition. Grow the suite from real daily-use tasks: when keel fails or
+annoys you in real work, distill that session into a task directory.
 
 ## What this is not (yet)
 
