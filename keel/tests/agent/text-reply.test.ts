@@ -84,6 +84,30 @@ describe("Text Reply", () => {
     expect(endEvents).toHaveLength(1);
   });
 
+  test(`Given an in-process turn starts with an empty transcript,
+    When agent responds,
+    Then the assistant reply starts the transcript`, async () => {
+    // Given
+    const messages: Message[] = [];
+    const provider = createFakeProvider([fakeResponse("Session started.")]);
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(messages).toEqual([
+      { role: "assistant", content: "Session started." },
+    ]);
+  });
+
   test(`Given an in-process session has prior messages,
     When user sends a follow-up message,
     Then the provider receives the earlier context`, async () => {
