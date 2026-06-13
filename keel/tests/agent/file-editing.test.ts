@@ -799,6 +799,8 @@ describe("File Editing", () => {
           uncachedInputTokens: 6,
           outputTokens: 6,
         },
+        turns: 3,
+        stopReason: "completed",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1652,6 +1654,8 @@ describe("File Editing", () => {
           uncachedInputTokens: 6,
           outputTokens: 6,
         },
+        turns: 3,
+        stopReason: "completed",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

@@ -21,6 +21,9 @@ interface CostTrackingOptions {
   readonly maxCostUsd?: number;
 }
 
+// stopReason is "completed" when the assistant finished with a plain answer;
+// otherwise it is the stop policy's reason label (e.g. "cost_budget",
+// "repeated_tool_call", "turn_limit").
 export type AgentEvent =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "tool_start"; readonly toolCall: ToolCall }
@@ -32,6 +35,8 @@ export type AgentEvent =
   | {
       readonly type: "end";
       readonly usage: Usage;
+      readonly turns: number;
+      readonly stopReason: string;
       readonly cost?: CostReport;
     };
 
@@ -330,6 +335,8 @@ export async function* runAgent(
       yield {
         type: "end",
         usage: totalUsage,
+        turns: completedTurns,
+        stopReason: decision.reason,
         ...(cost !== undefined ? { cost } : {}),
       };
       return;
@@ -362,6 +369,8 @@ export async function* runAgent(
       yield {
         type: "end",
         usage: totalUsage,
+        turns: completedTurns + 1,
+        stopReason: decision.reason,
         ...(finalCost !== undefined ? { cost: finalCost } : {}),
       };
       return;
@@ -371,6 +380,8 @@ export async function* runAgent(
       yield {
         type: "end",
         usage: totalUsage,
+        turns: completedTurns,
+        stopReason: "completed",
         ...(cost !== undefined ? { cost } : {}),
       };
       return;
