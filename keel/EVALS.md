@@ -21,6 +21,17 @@ keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl
 Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
 (appends; gitignored).
 
+## GitHub Actions
+
+The `Keel Eval` workflow is intentionally manual (`workflow_dispatch`), not
+a required PR check. It needs the `DEEPSEEK_API_KEY` repository secret, then
+uploads the JSONL result file as an artifact:
+
+1. Open **Actions → Keel Eval → Run workflow**.
+2. Pick `trials` (default `1`; use `3+` before making quality claims).
+3. Optionally set `task` to run one task id.
+4. Download the `keel-eval-results` artifact and compare it with prior runs.
+
 ## Reading results
 
 Each trial appends one JSON line:
