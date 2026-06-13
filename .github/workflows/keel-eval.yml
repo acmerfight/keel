@@ -1,0 +1,187 @@
+name: Keel Eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      trials:
+        description: Number of trials per task
+        required: true
+        default: "1"
+        type: string
+      task:
+        description: Optional task id to run
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keel-eval-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: keel
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      EVAL_RESULTS: evals/results/keel-eval-${{ github.run_id }}.jsonl
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        with:
+          package_json_file: keel/package.json
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: keel/package.json
+          cache: pnpm
+          cache-dependency-path: keel/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm eval:check
+
+      - run: pnpm build
+
+      - name: Run real eval
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          EVAL_TRIALS: ${{ inputs.trials }}
+          EVAL_TASK: ${{ inputs.task }}
+        run: |
+          mkdir -p evals/results
+
+          if [ -z "$DEEPSEEK_API_KEY" ]; then
+            echo "DEEPSEEK_API_KEY repository secret is required." >&2
+            exit 1
+          fi
+
+          if ! [[ "$EVAL_TRIALS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "trials must be a positive integer." >&2
+            exit 1
+          fi
+
+          args=(eval --trials "$EVAL_TRIALS" --out "$EVAL_RESULTS")
+          if [ -n "$EVAL_TASK" ]; then
+            args+=(--task "$EVAL_TASK")
+          fi
+
+          node dist/cli/index.js "${args[@]}"
+
+      - name: Summarize eval results
+        if: always()
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const fs = require("node:fs");
+          const { z } = require("zod");
+
+          const resultLineSchema = z.object({
+            schemaVersion: z.literal(1),
+            timestamp: z.string(),
+            keelVersion: z.string(),
+            taskId: z.string(),
+            trial: z.number().int().positive(),
+            pass: z.boolean(),
+            outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
+            wallMs: z.number().nonnegative(),
+            report: z
+              .object({
+                schemaVersion: z.literal(1),
+                provider: z.string(),
+                model: z.string(),
+                turns: z.number().int().positive(),
+                stopReason: z.string(),
+                usage: z.object({
+                  inputTokens: z.number(),
+                  cachedInputTokens: z.number(),
+                  uncachedInputTokens: z.number(),
+                  outputTokens: z.number(),
+                }),
+                durationMs: z.number().nonnegative(),
+                costUsd: z.number(),
+              })
+              .optional(),
+          });
+
+          const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+          if (!summaryPath) process.exit(0);
+
+          const resultPath = process.env.EVAL_RESULTS;
+          const lines = [];
+          lines.push("## Keel Eval");
+          lines.push("");
+
+          if (!resultPath || !fs.existsSync(resultPath)) {
+            lines.push("No eval result file was produced.");
+            fs.appendFileSync(summaryPath, `${lines.join("\n")}\n`);
+            process.exit(0);
+          }
+
+          const rows = fs
+            .readFileSync(resultPath, "utf8")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => resultLineSchema.parse(JSON.parse(line)));
+
+          const passed = rows.filter((row) => row.pass).length;
+          const harnessFailures = rows.filter(
+            (row) => row.outcome === "crashed" || row.outcome === "timeout",
+          ).length;
+          const totalCost = rows.reduce(
+            (sum, row) => sum + (row.report?.costUsd ?? 0),
+            0,
+          );
+          const totalTurns = rows.reduce(
+            (sum, row) => sum + (row.report?.turns ?? 0),
+            0,
+          );
+          const totalTokens = rows.reduce(
+            (sum, row) =>
+              sum +
+              (row.report?.usage?.inputTokens ?? 0) +
+              (row.report?.usage?.outputTokens ?? 0),
+            0,
+          );
+
+          lines.push(`Result file: \`${resultPath}\``);
+          lines.push("");
+          lines.push(`- Pass: ${passed}/${rows.length}`);
+          lines.push(`- Harness failures: ${harnessFailures}`);
+          if (harnessFailures > 0) {
+            lines.push(`- **Harness failures require investigation**; see \`${resultPath}\`.`);
+          }
+          lines.push(`- Reported turns: ${totalTurns}`);
+          lines.push(`- Reported tokens: ${totalTokens}`);
+          lines.push(`- Reported cost: $${totalCost.toFixed(6)}`);
+          lines.push("");
+          lines.push("| Task | Trial | Outcome | Turns | Tokens | Cost |");
+          lines.push("|---|---:|---|---:|---:|---:|");
+
+          for (const row of rows) {
+            const tokens =
+              (row.report?.usage?.inputTokens ?? 0) +
+              (row.report?.usage?.outputTokens ?? 0);
+            const cost = row.report?.costUsd ?? 0;
+            lines.push(
+              `| ${row.taskId} | ${row.trial} | ${row.outcome} | ${row.report?.turns ?? ""} | ${tokens || ""} | ${cost ? `$${cost.toFixed(6)}` : ""} |`,
+            );
+          }
+
+          fs.appendFileSync(summaryPath, `${lines.join("\n")}\n`);
+          NODE
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: keel-eval-results
+          path: keel/${{ env.EVAL_RESULTS }}
+          if-no-files-found: ignore
+          retention-days: 90
