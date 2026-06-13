@@ -28,7 +28,7 @@ defaults:
 jobs:
   eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -52,22 +52,25 @@ jobs:
           EVAL_TRIALS: ${{ inputs.trials }}
           EVAL_TASK: ${{ inputs.task }}
         run: |
+          mkdir -p evals/results
+          out="evals/results/keel-eval-${GITHUB_RUN_ID}.jsonl"
+          echo "EVAL_RESULTS=$out" >> "$GITHUB_ENV"
+
           if [ -z "$DEEPSEEK_API_KEY" ]; then
             echo "DEEPSEEK_API_KEY repository secret is required." >&2
             exit 1
           fi
 
-          mkdir -p evals/results
-          out="evals/results/keel-eval-${GITHUB_RUN_ID}.jsonl"
           args=(eval --trials "$EVAL_TRIALS" --out "$out")
           if [ -n "$EVAL_TASK" ]; then
             args+=(--task "$EVAL_TASK")
           fi
 
           node --experimental-strip-types src/cli/index.ts "${args[@]}"
-          echo "EVAL_RESULTS=$out" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
         with:
           name: keel-eval-results
           path: keel/${{ env.EVAL_RESULTS }}
+          if-no-files-found: ignore
