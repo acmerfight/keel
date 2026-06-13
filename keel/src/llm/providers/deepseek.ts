@@ -326,8 +326,7 @@ function createChatCompletionsBody(
     model,
     stream: true,
     stream_options: { include_usage: true },
-    tools,
-    tool_choice: "auto",
+    ...(options.toolChoice === "none" ? {} : { tools, tool_choice: "auto" }),
     messages: [
       { role: "system", content: options.systemPrompt },
       ...options.messages.map(toDeepseekMessage),

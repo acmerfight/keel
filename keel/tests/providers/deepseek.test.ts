@@ -2988,6 +2988,53 @@ describe("DeepSeek Provider", () => {
     }
   });
 
+  test(`Given the caller forbids tool use for a wrap-up turn,
+    When provider sends the request body,
+    Then it advertises no tools so the model cannot call any`, async () => {
+    // Given
+    let capturedBody = "";
+    const captureServer = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBody = body;
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(sseChunk("ok"));
+        res.write(sseFinish(1, 1));
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => {
+      captureServer.listen(0, "127.0.0.1", resolve);
+    });
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl: `http://127.0.0.1:${getPort(captureServer)}`,
+      model: "deepseek-v4-flash",
+    });
+
+    try {
+      // When
+      await collect(
+        provider.stream({
+          systemPrompt: "sys",
+          messages: [{ role: "user", content: "hi" }],
+          signal: freshSignal(),
+          toolChoice: "none",
+        }),
+      );
+
+      // Then
+      const parsed = parseDeepseekRequestBody(capturedBody);
+      expect(parsed.tools).toBeUndefined();
+      expect(parsed).not.toHaveProperty("tool_choice");
+    } finally {
+      await closeServer(captureServer);
+    }
+  });
+
   test(`Given shell commands are allowed,
     When provider sends the request body,
     Then it advertises the bash tool with command validation owned by the tool`, async () => {

@@ -16,7 +16,6 @@ export type RecoverableToolErrorCode =
 
 export type KeelErrorCode =
   | "agent_missing_stop"
-  | "agent_tool_call_limit_exceeded"
   | "agent_unsupported_tool_calls"
   | RecoverableToolErrorCode
   | "tool_aborted"
