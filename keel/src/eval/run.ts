@@ -1,0 +1,302 @@
+import { spawn } from "node:child_process";
+import {
+  appendFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { z } from "zod";
+import { type EvalTask, loadEvalTasks } from "./task.ts";
+
+const SCRIPT_TIMEOUT_MS = 60_000;
+
+// Mirrors the CLI --report payload. The runner consumes the report through
+// the same file a user would, so this schema is the eval side of that
+// contract; bump expectations together with the CLI's schemaVersion.
+const runReportSchema = z.object({
+  schemaVersion: z.literal(1),
+  provider: z.string(),
+  model: z.string(),
+  turns: z.number().int().positive(),
+  stopReason: z.string(),
+  usage: z.object({
+    inputTokens: z.number(),
+    cachedInputTokens: z.number(),
+    uncachedInputTokens: z.number(),
+    outputTokens: z.number(),
+  }),
+  durationMs: z.number().nonnegative(),
+  costUsd: z.number().optional(),
+});
+
+type RunReport = z.infer<typeof runReportSchema>;
+
+const packageJsonSchema = z.object({ version: z.string() });
+
+function keelVersion(): string {
+  const raw = readFileSync(
+    join(import.meta.dirname, "../../package.json"),
+    "utf8",
+  );
+  return packageJsonSchema.parse(JSON.parse(raw)).version;
+}
+
+// Trial outcomes separate harness failures (timeout, crashed) from graded
+// failures (verify_failed) so a broken environment never reads as a bad agent.
+type TrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
+
+interface TrialResult {
+  readonly outcome: TrialOutcome;
+  readonly wallMs: number;
+  readonly report?: RunReport;
+}
+
+interface ProcessResult {
+  readonly exitCode: number | null;
+  readonly timedOut: boolean;
+  readonly stderrTail: string;
+}
+
+const STDERR_TAIL_CHARS = 400;
+
+function runProcess(
+  command: string,
+  args: readonly string[],
+  options: { readonly cwd: string; readonly timeoutMs: number },
+): Promise<ProcessResult> {
+  return new Promise((resolve) => {
+    const child = spawn(command, [...args], {
+      cwd: options.cwd,
+      env: process.env,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    const stderrChunks: Buffer[] = [];
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrChunks.push(chunk);
+    });
+
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, options.timeoutMs);
+
+    const finish = (exitCode: number | null) => {
+      clearTimeout(timer);
+      resolve({
+        exitCode,
+        timedOut,
+        stderrTail: Buffer.concat(stderrChunks)
+          .toString("utf8")
+          .slice(-STDERR_TAIL_CHARS),
+      });
+    };
+    child.on("error", () => {
+      finish(null);
+    });
+    child.on("exit", (code) => {
+      finish(code);
+    });
+  });
+}
+
+function withTrialWorkspace<T>(
+  task: EvalTask,
+  action: (workDir: string, metaDir: string) => Promise<T>,
+): Promise<T> {
+  // Every trial starts from a fresh copy of the fixture in a throwaway
+  // directory: no state can leak between trials. The report file lives
+  // outside the workspace so neither the agent nor the verifier can see it.
+  const workDir = mkdtempSync(join(tmpdir(), `keel-eval-${task.id}-`));
+  const metaDir = mkdtempSync(join(tmpdir(), "keel-eval-meta-"));
+  if (existsSync(task.workspaceDir)) {
+    cpSync(task.workspaceDir, workDir, { recursive: true });
+  }
+  return action(workDir, metaDir).finally(() => {
+    rmSync(workDir, { recursive: true, force: true });
+    rmSync(metaDir, { recursive: true, force: true });
+  });
+}
+
+function readRunReport(reportPath: string): RunReport | null {
+  if (!existsSync(reportPath)) return null;
+  try {
+    const parsed = runReportSchema.safeParse(
+      JSON.parse(readFileSync(reportPath, "utf8")),
+    );
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+async function runTrial(
+  task: EvalTask,
+  cliEntry: string,
+): Promise<TrialResult> {
+  return withTrialWorkspace(task, async (workDir, metaDir) => {
+    const reportPath = join(metaDir, "report.json");
+    const cliArgs = [
+      ...process.execArgv,
+      cliEntry,
+      ...(task.allowBash ? ["--allow-bash"] : []),
+      ...(task.maxCostUsd !== undefined
+        ? ["--max-cost", String(task.maxCostUsd)]
+        : []),
+      "--report",
+      reportPath,
+      task.prompt,
+    ];
+
+    const startedAt = Date.now();
+    const run = await runProcess(process.execPath, cliArgs, {
+      cwd: workDir,
+      timeoutMs: task.timeoutMs,
+    });
+    const wallMs = Date.now() - startedAt;
+
+    if (run.timedOut) {
+      return { outcome: "timeout", wallMs };
+    }
+    const report = readRunReport(reportPath);
+    if (run.exitCode !== 0 || report === null) {
+      if (run.stderrTail !== "") {
+        process.stderr.write(`[${task.id}] agent stderr: ${run.stderrTail}\n`);
+      }
+      return { outcome: "crashed", wallMs };
+    }
+
+    const verify = await runProcess("bash", [task.verifyScript], {
+      cwd: workDir,
+      timeoutMs: SCRIPT_TIMEOUT_MS,
+    });
+    return {
+      outcome: verify.exitCode === 0 ? "verified" : "verify_failed",
+      wallMs,
+      report,
+    };
+  });
+}
+
+async function checkTask(task: EvalTask): Promise<boolean> {
+  return withTrialWorkspace(task, async (workDir) => {
+    const solution = await runProcess("bash", [task.solutionScript], {
+      cwd: workDir,
+      timeoutMs: SCRIPT_TIMEOUT_MS,
+    });
+    if (solution.exitCode !== 0) return false;
+
+    const verify = await runProcess("bash", [task.verifyScript], {
+      cwd: workDir,
+      timeoutMs: SCRIPT_TIMEOUT_MS,
+    });
+    return verify.exitCode === 0;
+  });
+}
+
+interface ResultLine {
+  readonly schemaVersion: 1;
+  readonly timestamp: string;
+  readonly keelVersion: string;
+  readonly taskId: string;
+  readonly trial: number;
+  readonly pass: boolean;
+  readonly outcome: TrialOutcome;
+  readonly wallMs: number;
+  readonly report?: RunReport;
+}
+
+function appendResultLine(outFile: string, line: ResultLine): void {
+  mkdirSync(dirname(outFile), { recursive: true });
+  appendFileSync(outFile, `${JSON.stringify(line)}\n`, "utf8");
+}
+
+export interface EvalCommandArgs {
+  readonly suiteDir: string;
+  readonly outFile: string;
+  readonly trials: number;
+  readonly taskId?: string;
+  readonly check: boolean;
+  readonly cliEntry: string;
+}
+
+function selectTasks(args: EvalCommandArgs): readonly EvalTask[] {
+  const tasks = loadEvalTasks(args.suiteDir);
+  if (args.taskId === undefined) return tasks;
+
+  const selected = tasks.filter((task) => task.id === args.taskId);
+  if (selected.length === 0) {
+    throw new Error(`eval task "${args.taskId}" not found in ${args.suiteDir}`);
+  }
+  return selected;
+}
+
+async function runCheck(tasks: readonly EvalTask[]): Promise<number> {
+  let broken = 0;
+  for (const task of tasks) {
+    const ok = await checkTask(task);
+    process.stdout.write(
+      ok
+        ? `${task.id}: verifier ok\n`
+        : `${task.id}: verifier BROKEN (reference solution rejected)\n`,
+    );
+    if (!ok) broken++;
+  }
+  return broken === 0 ? 0 : 1;
+}
+
+export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
+  let tasks: readonly EvalTask[];
+  try {
+    tasks = selectTasks(args);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`Error: ${message}\n`);
+    return 1;
+  }
+
+  if (args.check) {
+    return runCheck(tasks);
+  }
+
+  const version = keelVersion();
+  let passingTasks = 0;
+  let passingTrials = 0;
+  for (const task of tasks) {
+    let passes = 0;
+    for (let trial = 1; trial <= args.trials; trial++) {
+      const result = await runTrial(task, args.cliEntry);
+      const pass = result.outcome === "verified";
+      if (pass) passes++;
+      appendResultLine(args.outFile, {
+        schemaVersion: 1,
+        timestamp: new Date().toISOString(),
+        keelVersion: version,
+        taskId: task.id,
+        trial,
+        pass,
+        outcome: result.outcome,
+        wallMs: result.wallMs,
+        ...(result.report !== undefined ? { report: result.report } : {}),
+      });
+      process.stderr.write(
+        `[${task.id}] trial ${trial}: ${result.outcome} (${result.wallMs}ms)\n`,
+      );
+    }
+    if (passes === args.trials) passingTasks++;
+    passingTrials += passes;
+    process.stdout.write(`${task.id}: ${passes}/${args.trials} pass\n`);
+  }
+
+  const totalTrials = tasks.length * args.trials;
+  process.stdout.write(
+    `suite: ${passingTasks}/${tasks.length} tasks pass (${passingTrials}/${totalTrials} trials)\n`,
+  );
+  process.stdout.write(`results: ${args.outFile}\n`);
+  return 0;
+}
