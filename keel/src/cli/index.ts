@@ -213,8 +213,24 @@ interface RunReportInput {
   readonly durationMs: number;
 }
 
+interface RunReport {
+  readonly schemaVersion: 1;
+  readonly provider: string;
+  readonly model: string;
+  readonly turns: number;
+  readonly stopReason: string;
+  readonly usage: Extract<AgentEvent, { readonly type: "end" }>["usage"];
+  readonly durationMs: number;
+  readonly costUsd: number;
+}
+
 function writeRunReport(filePath: string, input: RunReportInput): void {
-  const report = {
+  const cost = input.end.cost;
+  if (cost === undefined) {
+    throw new Error("run report requires cost tracking to be enabled");
+  }
+
+  const report: RunReport = {
     schemaVersion: 1,
     provider: input.provider,
     model: input.model,
@@ -222,9 +238,7 @@ function writeRunReport(filePath: string, input: RunReportInput): void {
     stopReason: input.end.stopReason,
     usage: input.end.usage,
     durationMs: input.durationMs,
-    ...(input.end.cost !== undefined
-      ? { costUsd: input.end.cost.spentUsd }
-      : {}),
+    costUsd: cost.spentUsd,
   };
   writeFileSync(filePath, `${JSON.stringify(report)}\n`, "utf8");
 }
