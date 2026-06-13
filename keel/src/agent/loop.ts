@@ -129,6 +129,52 @@ function finishAgentTurn(
   };
 }
 
+const WRAP_UP_INSTRUCTION =
+  "You have used all available tool rounds for this task. Do not request any more tools. Briefly summarize what you completed and what remains to be done.";
+
+interface StreamTurnOptions {
+  readonly provider: LLMProvider;
+  readonly systemPrompt: string;
+  readonly messages: readonly Message[];
+  readonly signal: AbortSignal;
+  readonly allowBash: boolean;
+}
+
+async function* streamAgentTurn(
+  options: StreamTurnOptions,
+): AsyncGenerator<AgentEvent, AgentTurn> {
+  const { provider, systemPrompt, messages, signal, allowBash } = options;
+  const stream = provider.stream({
+    systemPrompt,
+    messages,
+    signal,
+    ...(allowBash ? { allowBash: true } : {}),
+  });
+
+  let usage: Usage | null = null;
+  const assistantText: string[] = [];
+  const pendingToolCalls: ToolCall[] = [];
+
+  for await (const event of stream) {
+    switch (event.type) {
+      case "text":
+        assistantText.push(event.text);
+        yield { type: "text", text: event.text };
+        break;
+      case "tool_call": {
+        const { type: _llmEventType, ...toolCall } = event;
+        pendingToolCalls.push(toolCall);
+        break;
+      }
+      case "stop":
+        usage = event.usage;
+        break;
+    }
+  }
+
+  return finishAgentTurn(assistantText, pendingToolCalls, usage);
+}
+
 async function executeToolCall(
   options: ExecuteToolCallOptions,
 ): Promise<ToolExecution> {
@@ -238,53 +284,33 @@ export async function* runAgent(
     outputTokens: 0,
   };
 
+  function reportCost(usage: Usage): CostReport | undefined {
+    if (costTracking === undefined) {
+      return undefined;
+    }
+    const spentUsd = calculateCostUsd(usage, costTracking.model);
+    const budgetExceeded =
+      costTracking.maxCostUsd !== undefined &&
+      spentUsd > costTracking.maxCostUsd;
+    return {
+      spentUsd,
+      ...(costTracking.maxCostUsd !== undefined
+        ? { maxUsd: costTracking.maxCostUsd }
+        : {}),
+      budgetExceeded,
+    };
+  }
+
   for (let completedTurns = 1; ; completedTurns++) {
-    const stream = provider.stream({
+    const turnResult = yield* streamAgentTurn({
+      provider,
       systemPrompt,
       messages,
       signal,
-      ...(allowBash ? { allowBash: true } : {}),
+      allowBash,
     });
-
-    let usage: Usage | null = null;
-    const assistantText: string[] = [];
-    const pendingToolCalls: ToolCall[] = [];
-
-    for await (const event of stream) {
-      switch (event.type) {
-        case "text":
-          assistantText.push(event.text);
-          yield { type: "text", text: event.text };
-          break;
-        case "tool_call": {
-          const { type: _llmEventType, ...toolCall } = event;
-          pendingToolCalls.push(toolCall);
-          break;
-        }
-        case "stop":
-          usage = event.usage;
-          break;
-      }
-    }
-
-    const turnResult = finishAgentTurn(assistantText, pendingToolCalls, usage);
     totalUsage = addUsage(totalUsage, turnResult.usage);
-    const cost =
-      costTracking === undefined
-        ? undefined
-        : (() => {
-            const spentUsd = calculateCostUsd(totalUsage, costTracking.model);
-            const budgetExceeded =
-              costTracking.maxCostUsd !== undefined &&
-              spentUsd > costTracking.maxCostUsd;
-            return {
-              spentUsd,
-              ...(costTracking.maxCostUsd !== undefined
-                ? { maxUsd: costTracking.maxCostUsd }
-                : {}),
-              budgetExceeded,
-            };
-          })();
+    const cost = reportCost(totalUsage);
 
     const decision = stopPolicy.shouldStopAfterTurn({
       completedTurns,
@@ -293,15 +319,31 @@ export async function* runAgent(
       ...(cost !== undefined ? { cost } : {}),
     });
 
-    if (decision.type === "fail") {
-      throw decision.error;
-    }
-
     if (decision.type === "stop") {
       yield {
         type: "end",
         usage: totalUsage,
         ...(cost !== undefined ? { cost } : {}),
+      };
+      return;
+    }
+
+    if (decision.type === "summarize") {
+      // The over-limit turn's tool calls are dropped, so its assistant
+      // message (which expects tool results) must not enter the transcript.
+      const wrapUpTurn = yield* streamAgentTurn({
+        provider,
+        systemPrompt,
+        messages: [...messages, { role: "user", content: WRAP_UP_INSTRUCTION }],
+        signal,
+        allowBash,
+      });
+      totalUsage = addUsage(totalUsage, wrapUpTurn.usage);
+      const finalCost = reportCost(totalUsage);
+      yield {
+        type: "end",
+        usage: totalUsage,
+        ...(finalCost !== undefined ? { cost: finalCost } : {}),
       };
       return;
     }

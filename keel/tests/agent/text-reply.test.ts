@@ -247,13 +247,31 @@ describe("Text Reply", () => {
   });
 
   test(`Given the assistant keeps requesting new inspections without finishing,
-    When the agent exceeds its action limit,
-    Then agent reports an action limit error`, async () => {
+    When the agent exhausts its round limit,
+    Then the run ends with a progress summary instead of an error`, async () => {
     // Given
     let round = 0;
     const loopingProvider: LLMProvider = {
       id: "looping-tools",
-      async *stream() {
+      async *stream(options) {
+        const lastMessage = options.messages.at(-1);
+        if (options.messages.length > 1 && lastMessage?.role === "user") {
+          yield {
+            type: "text",
+            text: "Out of rounds: inspected many files, the task is unfinished.",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
         round++;
         yield {
           type: "tool_call",
@@ -274,20 +292,24 @@ describe("Text Reply", () => {
       },
     };
 
-    // When / Then
-    await expect(
-      collect(
-        runAgent({
-          workspace: workspace(),
-          provider: loopingProvider,
-          userMessage: "inspect forever",
-          systemPrompt: "You are helpful.",
-          signal: freshSignal(),
-        }),
-      ),
-    ).rejects.toMatchObject({
-      code: "agent_tool_call_limit_exceeded",
-      message: "Agent exceeded tool call limit",
+    // When
+    const events = await collect(
+      runAgent({
+        workspace: workspace(),
+        provider: loopingProvider,
+        userMessage: "inspect forever",
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    const executedCalls = events.filter((event) => event.type === "tool_start");
+    expect(executedCalls.length).toBeGreaterThan(16);
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Out of rounds: inspected many files, the task is unfinished.",
     });
+    expect(events.at(-1)).toMatchObject({ type: "end" });
   });
 });

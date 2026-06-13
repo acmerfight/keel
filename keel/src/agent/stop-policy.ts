@@ -1,8 +1,7 @@
-import { KeelError } from "../core/error.ts";
 import type { ToolCall } from "../llm/types.ts";
 import type { CostReport } from "./loop.ts";
 
-const DEFAULT_MAX_AGENT_TURNS = 16;
+const DEFAULT_MAX_AGENT_TURNS = 64;
 const DEFAULT_REPEATED_TOOL_CALL_STOP_THRESHOLD = 3;
 
 interface StopContext {
@@ -15,7 +14,7 @@ interface StopContext {
 type StopDecision =
   | { readonly type: "continue" }
   | { readonly type: "stop" }
-  | { readonly type: "fail"; readonly error: KeelError };
+  | { readonly type: "summarize" };
 
 export interface AgentStopPolicy {
   readonly shouldStopAfterTurn: (context: StopContext) => StopDecision;
@@ -83,13 +82,7 @@ export function maxTurnFallbackPolicy(maxTurns: number): AgentStopPolicy {
   return {
     shouldStopAfterTurn: (context) =>
       context.toolCalls.length > 0 && context.completedTurns >= maxTurns
-        ? {
-            type: "fail",
-            error: new KeelError(
-              "agent_tool_call_limit_exceeded",
-              "Agent exceeded tool call limit",
-            ),
-          }
+        ? { type: "summarize" }
         : { type: "continue" },
   };
 }

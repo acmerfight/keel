@@ -45,10 +45,17 @@ const budgetModel: CostModel = {
   outputPerMillionTokens: 2,
 };
 
+const ZERO_USAGE = {
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  uncachedInputTokens: 0,
+  outputTokens: 0,
+};
+
 describe("Agent Stopping", () => {
   test(`Given a caller limits the session to two tool rounds,
     When the task needs a third round,
-    Then the run fails with the action limit error before further changes are applied`, async () => {
+    Then the run ends with a progress summary instead of an error and the extra change stays unapplied`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
@@ -56,28 +63,84 @@ describe("Agent Stopping", () => {
     const provider = createFakeProvider([
       fakeEditResponse("a.txt", "old", "new"),
       fakeEditResponse("b.txt", "old", "new"),
-      fakeResponse("Done."),
+      fakeResponse(
+        "Round limit reached: a.txt is updated, b.txt still needs the same edit.",
+      ),
     ]);
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "edit both files",
-            systemPrompt: "You are helpful.",
-            signal: freshSignal(),
-            stopPolicy: maxTurnFallbackPolicy(2),
-          }),
-        ),
-      ).rejects.toMatchObject({
-        code: "agent_tool_call_limit_exceeded",
-        message: "Agent exceeded tool call limit",
-      });
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "edit both files",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          stopPolicy: maxTurnFallbackPolicy(2),
+        }),
+      );
+
+      // Then
       expect(await readFile(join(workspace, "a.txt"), "utf8")).toBe("new a\n");
       expect(await readFile(join(workspace, "b.txt"), "utf8")).toBe("old b\n");
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Round limit reached: a.txt is updated, b.txt still needs the same edit.",
+      });
+      expect(events.at(-1)).toMatchObject({ type: "end" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the session hits its round limit mid-task,
+    When the agent asks the assistant to wrap up,
+    Then the assistant is told to summarize progress instead of using more tools`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
+    const wrapUpInstructions: string[] = [];
+    const provider: LLMProvider = {
+      id: "records-wrap-up",
+      async *stream(options) {
+        const lastMessage = options.messages.at(-1);
+        if (options.messages.length > 1 && lastMessage?.role === "user") {
+          wrapUpInstructions.push(lastMessage.content);
+          yield { type: "text", text: "Stopping here." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        yield {
+          type: "tool_call",
+          id: "edit_a",
+          tool: "edit",
+          path: "a.txt",
+          oldString: "old",
+          newString: "new",
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "edit the file",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          stopPolicy: maxTurnFallbackPolicy(1),
+        }),
+      );
+
+      // Then
+      expect(wrapUpInstructions).toHaveLength(1);
+      expect(wrapUpInstructions[0]).toContain("summarize");
+      expect(await readFile(join(workspace, "a.txt"), "utf8")).toBe("old a\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
