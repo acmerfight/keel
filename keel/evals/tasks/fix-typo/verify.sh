@@ -1,3 +1,14 @@
 set -euo pipefail
-grep -q "Install the dependencies" README.md
-! grep -q "Instal the dependencies" README.md
+expected="$(mktemp)"
+cat > "$expected" <<'EOF'
+# Sample Project
+
+## Setup
+
+Install the dependencies before running the app.
+
+## Usage
+
+Run `node index.js` to start.
+EOF
+cmp README.md "$expected"
