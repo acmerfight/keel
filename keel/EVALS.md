@@ -26,7 +26,9 @@ Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
 The `Keel Eval` workflow is intentionally manual (`workflow_dispatch`), not
 a required PR check. It needs the `DEEPSEEK_API_KEY` repository secret, then
 builds the CLI, runs the compiled `dist/cli/index.js`, prints a Markdown job
-summary, and uploads the JSONL result file as an artifact:
+summary, and uploads the JSONL result file as an artifact. The workflow job
+timeout is 180 minutes, enough for the current full suite at `trials=3` even
+when tasks run near their per-task time limits:
 
 1. Open **Actions → Keel Eval → Run workflow**.
 2. Pick `trials` (positive integer, default `1`; use `3+` before making
