@@ -1,5 +1,10 @@
 set -euo pipefail
-test "$(shasum -a 256 test.js | awk '{print $1}')" = "71b6f08af83aab26b48a87729d2ad168e75319535af5501fa56dc3e8eb12be2d"
+node -e '
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const actual = crypto.createHash("sha256").update(fs.readFileSync("test.js")).digest("hex");
+if (actual !== "71b6f08af83aab26b48a87729d2ad168e75319535af5501fa56dc3e8eb12be2d") process.exit(1);
+'
 node test.js
 node -e '
 const assert = require("node:assert");
