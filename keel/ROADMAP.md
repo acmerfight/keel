@@ -36,7 +36,8 @@ What a user can do today:
 
 - `keel "<message>"` — one-shot agent run: streamed text, multi-round tool
   calls (read / grep / edit / write / bash), recoverable tool errors with
-  LLM-facing recovery hints, tool progress on stderr.
+  LLM-facing recovery hints, tool progress on stderr, graceful stop with
+  a progress summary when the 64-turn limit is exhausted.
 - `keel --allow-bash` — trusted shell mode (all-or-nothing).
 - `keel --max-cost <usd>` — cost tracking with budget stop.
 - `keel /undo` — restore the last edit checkpoint.
@@ -47,7 +48,6 @@ Known limits that shape the priorities below:
 - One-shot only: no interactive session, no mid-run steering.
 - Single hardcoded provider/model (`deepseek-v4-flash`).
 - No provider retry: the first 429 or 5xx kills the run.
-- Hard 16-turn cap; overflow is a thrown error, not a graceful stop.
 - Tool calls execute strictly sequentially.
 - Exact-match single-string edit only.
 - No way to measure harness quality against another agent.
@@ -75,15 +75,10 @@ Known limits that shape the priorities below:
    retry — it needs compaction, not repetition. Slice test: *a run that
    hits one 429 completes anyway; the user sees a retry notice, not a
    crash.*
-4. **Survive medium tasks.** `DEFAULT_MAX_AGENT_TURNS = 16` and overflow
-   throws. No reference harness uses a hard turn cap as its primary
-   control: Codex has no cap at all (compaction + steering manage
-   length); Kimi escalates gradually (remind → report → block → stop).
-   A "change 5 files and run the tests" task must finish: raise the cap,
-   and turn overflow into a graceful stop with a usable summary. Full
-   compaction is P1; this slice is the bridge. Slice test: *a task
-   needing >16 turns completes or ends with a summary instead of an
-   error.*
+4. **Survive medium tasks.** ✅ Done (2026-06): the turn cap is 64, and
+   reaching it triggers a final summary turn ("what was done / what
+   remains") instead of a thrown error. Full compaction is P1; this
+   slice was the bridge.
 5. **Per-command bash approval.** `--allow-bash` is all-or-nothing trust.
    Daily coding needs to run tests/builds without granting blanket shell
    access: prompt per command with a session-scoped "always allow"
