@@ -29,6 +29,8 @@ jobs:
   eval:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    env:
+      EVAL_RESULTS: evals/results/keel-eval-${{ github.run_id }}.jsonl
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -55,8 +57,6 @@ jobs:
           EVAL_TASK: ${{ inputs.task }}
         run: |
           mkdir -p evals/results
-          out="evals/results/keel-eval-${GITHUB_RUN_ID}.jsonl"
-          echo "EVAL_RESULTS=$out" >> "$GITHUB_ENV"
 
           if [ -z "$DEEPSEEK_API_KEY" ]; then
             echo "DEEPSEEK_API_KEY repository secret is required." >&2
@@ -68,7 +68,7 @@ jobs:
             exit 1
           fi
 
-          args=(eval --trials "$EVAL_TRIALS" --out "$out")
+          args=(eval --trials "$EVAL_TRIALS" --out "$EVAL_RESULTS")
           if [ -n "$EVAL_TASK" ]; then
             args+=(--task "$EVAL_TASK")
           fi
