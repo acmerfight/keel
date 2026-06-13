@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
 import { runAgent } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
+import type { CostModel } from "../core/cost.ts";
 import { restoreLastEditCheckpoint } from "../core/git.ts";
 import {
   createDeepseekProvider,
@@ -41,7 +42,7 @@ const USAGE = [
   "       keel /undo",
   "",
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
-  "--report writes a machine-readable JSON run report (turns, stop reason, token usage) to the given file.",
+  "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
 ].join("\n");
 
 const maxCostSchema = z.coerce.number().finite().positive();
@@ -349,13 +350,24 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
 interface ResolvedProvider {
   readonly provider: LLMProvider;
   readonly model: string;
+  readonly costModel: CostModel;
 }
+
+const ZERO_COST_MODEL: CostModel = {
+  uncachedInputPerMillionTokens: 0,
+  cachedInputPerMillionTokens: 0,
+  outputPerMillionTokens: 0,
+};
 
 function resolveProvider(userMessage: string): ResolvedProvider {
   const providerId = env("KEEL_PROVIDER") ?? "deepseek";
 
   if (providerId === "fake") {
-    return { provider: createCliFakeProvider(userMessage), model: "fake" };
+    return {
+      provider: createCliFakeProvider(userMessage),
+      model: "fake",
+      costModel: ZERO_COST_MODEL,
+    };
   }
 
   if (providerId === "deepseek") {
@@ -374,6 +386,7 @@ function resolveProvider(userMessage: string): ResolvedProvider {
         model,
       }),
       model,
+      costModel: DEEPSEEK_V4_FLASH_COST_MODEL,
     };
   }
 
@@ -414,7 +427,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const { provider, model } = resolveProvider(userMessage);
+  const { provider, model, costModel } = resolveProvider(userMessage);
   const abortController = new AbortController();
   const abort = () => {
     abortController.abort();
@@ -434,11 +447,13 @@ async function main(): Promise<void> {
       }),
       signal: abortController.signal,
       ...(cliArgs.allowBash ? { allowBash: true } : {}),
-      ...(cliArgs.maxCostUsd !== undefined
+      ...(cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
         ? {
             costTracking: {
-              model: DEEPSEEK_V4_FLASH_COST_MODEL,
-              maxCostUsd: cliArgs.maxCostUsd,
+              model: costModel,
+              ...(cliArgs.maxCostUsd !== undefined
+                ? { maxCostUsd: cliArgs.maxCostUsd }
+                : {}),
             },
           }
         : {}),
@@ -463,7 +478,7 @@ async function main(): Promise<void> {
       }
     }
     process.stdout.write("\n");
-    if (finalEnd?.cost !== undefined) {
+    if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
       process.stderr.write(formatCostReport(finalEnd.cost));
     }
     if (cliArgs.reportFile !== undefined && finalEnd !== undefined) {

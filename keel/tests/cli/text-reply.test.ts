@@ -113,7 +113,7 @@ describe("CLI Text Reply", () => {
         "       keel /undo",
         "",
         "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
-        "--report writes a machine-readable JSON run report (turns, stop reason, token usage) to the given file.",
+        "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
         "",
       ].join("\n"),
     );

@@ -18,7 +18,7 @@ const runReportSchema = z.object({
     outputTokens: z.number(),
   }),
   durationMs: z.number().nonnegative(),
-  costUsd: z.number().optional(),
+  costUsd: z.number(),
 });
 
 describe("CLI Run Report", () => {
@@ -49,6 +49,8 @@ describe("CLI Run Report", () => {
       expect(report.model).toBe("fake");
       expect(report.turns).toBe(2);
       expect(report.stopReason).toBe("completed");
+      expect(report.costUsd).toBe(0);
+      expect(result.stderr).toBe("Tool: edit note.txt\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
