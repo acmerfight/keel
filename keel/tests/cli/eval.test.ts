@@ -18,7 +18,7 @@ const runReportSchema = z.object({
     outputTokens: z.number(),
   }),
   durationMs: z.number().nonnegative(),
-  costUsd: z.number().optional(),
+  costUsd: z.number(),
 });
 
 const resultLineSchema = z.object({

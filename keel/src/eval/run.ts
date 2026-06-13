@@ -31,7 +31,7 @@ const runReportSchema = z.object({
     outputTokens: z.number(),
   }),
   durationMs: z.number().nonnegative(),
-  costUsd: z.number().optional(),
+  costUsd: z.number(),
 });
 
 type RunReport = z.infer<typeof runReportSchema>;
