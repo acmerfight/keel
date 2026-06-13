@@ -21,6 +21,24 @@ keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl
 Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
 (appends; gitignored).
 
+## GitHub Actions
+
+The `Keel Eval` workflow is intentionally manual (`workflow_dispatch`), not
+a required PR check. It needs the `DEEPSEEK_API_KEY` repository secret, then
+builds the CLI, runs the compiled `dist/cli/index.js`, prints a Markdown job
+summary, and uploads the JSONL result file as an artifact. The workflow job
+timeout is 180 minutes, enough for the current full suite at `trials=3` even
+when tasks run near their per-task time limits:
+
+1. Open **Actions → Keel Eval → Run workflow**.
+2. Pick `trials` (positive integer, default `1`; use `3+` before making
+   quality claims).
+3. Optionally set `task` to run one task id.
+4. Read the job summary for pass rate, turns, tokens, cost, and per-task
+   outcomes.
+5. Download the `keel-eval-results` artifact when you need the raw JSONL for
+   comparison with prior runs.
+
 ## Reading results
 
 Each trial appends one JSON line:
@@ -52,6 +70,9 @@ Each trial appends one JSON line:
   `verify_failed` are the agent's score; `timeout` / `crashed` mean the
   environment or harness broke and the trial must not be read as agent
   quality.
+- `wallMs` is measured around the spawned agent CLI run. It excludes the
+  later verifier step, so read it as agent wall time rather than full
+  trial wall time.
 - Regression comparison is `diff`-shaped by design: run the suite on two
   keel versions, compare pass counts, turns, and tokens per task from the
   two JSONL files.
