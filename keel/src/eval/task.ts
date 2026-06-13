@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 
 const DEFAULT_TASK_TIMEOUT_MS = 300_000;
@@ -80,11 +80,15 @@ function loadTask(suiteDir: string, id: string): EvalTask {
 }
 
 export function loadEvalTasks(suiteDir: string): readonly EvalTask[] {
-  if (!existsSync(suiteDir) || !statSync(suiteDir).isDirectory()) {
+  const absoluteSuiteDir = resolve(suiteDir);
+  if (
+    !existsSync(absoluteSuiteDir) ||
+    !statSync(absoluteSuiteDir).isDirectory()
+  ) {
     throw new Error(`eval suite directory not found: ${suiteDir}`);
   }
 
-  const taskIds = readdirSync(suiteDir, { withFileTypes: true })
+  const taskIds = readdirSync(absoluteSuiteDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
@@ -92,5 +96,5 @@ export function loadEvalTasks(suiteDir: string): readonly EvalTask[] {
     throw new Error(`eval suite has no task directories: ${suiteDir}`);
   }
 
-  return taskIds.map((id) => loadTask(suiteDir, id));
+  return taskIds.map((id) => loadTask(absoluteSuiteDir, id));
 }

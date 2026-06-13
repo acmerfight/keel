@@ -64,6 +64,20 @@ interface ProcessResult {
 
 const STDERR_TAIL_CHARS = 400;
 
+function killProcessGroup(child: ReturnType<typeof spawn>): void {
+  const pid = child.pid;
+  if (pid === undefined || process.platform === "win32") {
+    child.kill("SIGKILL");
+    return;
+  }
+
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
 function runProcess(
   command: string,
   args: readonly string[],
@@ -72,6 +86,7 @@ function runProcess(
   return new Promise((resolve) => {
     const child = spawn(command, [...args], {
       cwd: options.cwd,
+      detached: process.platform !== "win32",
       env: process.env,
       stdio: ["ignore", "ignore", "pipe"],
     });
@@ -81,12 +96,15 @@ function runProcess(
     });
 
     let timedOut = false;
+    let finished = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      killProcessGroup(child);
     }, options.timeoutMs);
 
     const finish = (exitCode: number | null) => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
       resolve({
         exitCode,
