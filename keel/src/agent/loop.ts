@@ -54,6 +54,8 @@ export interface RunAgentOptions {
 export interface RunAgentTurnOptions {
   readonly workspace: string;
   readonly provider: LLMProvider;
+  // Mutated in place: user messages are supplied by the session owner, while
+  // agent turns append assistant/tool messages so later turns share context.
   readonly messages: Message[];
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
@@ -130,6 +132,12 @@ function priorToolCallsFromMessages(messages: readonly Message[]): ToolCall[] {
   return messages.flatMap((message) =>
     message.role === "assistant" ? (message.toolCalls ?? []) : [],
   );
+}
+
+function appendAssistantText(messages: Message[], text: string): void {
+  if (text !== "") {
+    messages.push({ role: "assistant", content: text });
+  }
 }
 
 function finishAgentTurn(
@@ -348,6 +356,7 @@ export async function* runAgentTurn(
     });
 
     if (decision.type === "stop") {
+      appendAssistantText(messages, turnResult.text);
       yield {
         type: "end",
         usage: totalUsage,
@@ -380,6 +389,12 @@ export async function* runAgentTurn(
       if (wrapUpTurn.text === "") {
         yield { type: "text", text: MISSING_SUMMARY_NOTICE };
       }
+      appendAssistantText(
+        messages,
+        `${turnResult.text}${
+          wrapUpTurn.text === "" ? MISSING_SUMMARY_NOTICE : wrapUpTurn.text
+        }`,
+      );
       totalUsage = addUsage(totalUsage, wrapUpTurn.usage);
       const finalCost = reportCost(totalUsage);
       yield {
@@ -393,9 +408,7 @@ export async function* runAgentTurn(
     }
 
     if (turnResult.toolCalls.length === 0) {
-      if (turnResult.text !== "") {
-        messages.push({ role: "assistant", content: turnResult.text });
-      }
+      appendAssistantText(messages, turnResult.text);
       yield {
         type: "end",
         usage: totalUsage,

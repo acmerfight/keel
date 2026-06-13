@@ -4,6 +4,7 @@ import {
   runAgent,
   runAgentTurn,
 } from "../../src/agent/loop.ts";
+import type { CostModel } from "../../src/core/cost.ts";
 import type { LLMProvider, Message } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
@@ -38,6 +39,12 @@ function freshSignal(): AbortSignal {
 function workspace(): string {
   return process.cwd();
 }
+
+const budgetModel: CostModel = {
+  uncachedInputPerMillionTokens: 1,
+  cachedInputPerMillionTokens: 0,
+  outputPerMillionTokens: 0,
+};
 
 describe("Text Reply", () => {
   test(`Given user asks for help,
@@ -126,6 +133,69 @@ describe("Text Reply", () => {
       { role: "user", content: "remember alpha" },
       { role: "assistant", content: "Remembered alpha." },
       { role: "user", content: "what did I ask you to remember?" },
+    ]);
+  });
+
+  test(`Given a session turn stops after exceeding its cost budget,
+    When user sends a follow-up message,
+    Then the provider still receives the visible assistant reply`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "summarize alpha" }];
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "budgeted-session",
+      async *stream(options) {
+        turn++;
+        if (turn === 2) {
+          secondTurnMessages = [...options.messages];
+        }
+        yield {
+          type: "text",
+          text: turn === 1 ? "Alpha summary before budget stop." : "Follow-up.",
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: turn === 1 ? 1_000_000 : 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: turn === 1 ? 1_000_000 : 1,
+            outputTokens: 0,
+          },
+        };
+      },
+    };
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        costTracking: {
+          model: budgetModel,
+          maxCostUsd: 0.5,
+        },
+      }),
+    );
+    messages.push({ role: "user", content: "continue from that summary" });
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(secondTurnMessages).toEqual([
+      { role: "user", content: "summarize alpha" },
+      { role: "assistant", content: "Alpha summary before budget stop." },
+      { role: "user", content: "continue from that summary" },
     ]);
   });
 
