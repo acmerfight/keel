@@ -78,6 +78,10 @@ export function repeatedToolCallPolicy(
   };
 }
 
+// maxTurns counts model turns, not executed tool rounds: the turn at the cap
+// may still answer in plain text, but if it requests tools those are not
+// executed — the run is converted into a wrap-up summary instead. So at most
+// maxTurns - 1 tool rounds execute, plus one final summary turn.
 export function maxTurnFallbackPolicy(maxTurns: number): AgentStopPolicy {
   return {
     shouldStopAfterTurn: (context) =>

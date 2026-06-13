@@ -12,7 +12,7 @@ import {
   repeatedToolCallPolicy,
 } from "../../src/agent/stop-policy.ts";
 import type { CostModel } from "../../src/core/cost.ts";
-import type { LLMProvider } from "../../src/llm/types.ts";
+import type { LLMProvider, Message } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
   fakeEditResponse,
@@ -96,22 +96,27 @@ describe("Agent Stopping", () => {
 
   test(`Given the session hits its round limit mid-task,
     When the agent asks the assistant to wrap up,
-    Then the assistant is told to summarize progress instead of using more tools`, async () => {
+    Then the wrap-up request forbids tools at the protocol level and keeps the assistant's last words`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
     const wrapUpInstructions: string[] = [];
+    const wrapUpToolChoices: (string | undefined)[] = [];
+    const wrapUpTranscripts: (readonly Message[])[] = [];
     const provider: LLMProvider = {
       id: "records-wrap-up",
       async *stream(options) {
         const lastMessage = options.messages.at(-1);
         if (options.messages.length > 1 && lastMessage?.role === "user") {
           wrapUpInstructions.push(lastMessage.content);
+          wrapUpToolChoices.push(options.toolChoice);
+          wrapUpTranscripts.push(options.messages);
           yield { type: "text", text: "Stopping here." };
           yield { type: "stop", usage: ZERO_USAGE };
           return;
         }
 
+        yield { type: "text", text: "Editing a.txt next." };
         yield {
           type: "tool_call",
           id: "edit_a",
@@ -140,7 +145,51 @@ describe("Agent Stopping", () => {
       // Then
       expect(wrapUpInstructions).toHaveLength(1);
       expect(wrapUpInstructions[0]).toContain("summarize");
+      expect(wrapUpToolChoices).toEqual(["none"]);
+      expect(wrapUpTranscripts[0]).toContainEqual({
+        role: "assistant",
+        content: "Editing a.txt next.",
+      });
       expect(await readFile(join(workspace, "a.txt"), "utf8")).toBe("old a\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a wrap-up assistant that ignores instructions and requests another tool,
+    When the round limit has already been reached,
+    Then the run ends with a visible notice instead of silent empty success`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
+    const provider = createFakeProvider([
+      fakeEditResponse("a.txt", "old", "new"),
+      fakeEditResponse("a.txt", "old a", "rogue"),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "edit the file",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          stopPolicy: maxTurnFallbackPolicy(1),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "a.txt"), "utf8")).toBe("old a\n");
+      const textEvents = events.filter((event) => event.type === "text");
+      expect(textEvents.map((event) => event.text).join("")).toContain(
+        "round limit",
+      );
+      expect(
+        events.filter((event) => event.type === "tool_start"),
+      ).toHaveLength(0);
+      expect(events.at(-1)).toMatchObject({ type: "end" });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

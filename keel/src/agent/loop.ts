@@ -132,12 +132,16 @@ function finishAgentTurn(
 const WRAP_UP_INSTRUCTION =
   "You have used all available tool rounds for this task. Do not request any more tools. Briefly summarize what you completed and what remains to be done.";
 
+const MISSING_SUMMARY_NOTICE =
+  "\nReached the tool round limit before the task finished; the model did not provide a summary of the remaining work.";
+
 interface StreamTurnOptions {
   readonly provider: LLMProvider;
   readonly systemPrompt: string;
   readonly messages: readonly Message[];
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
+  readonly toolChoice?: "none";
 }
 
 async function* streamAgentTurn(
@@ -149,6 +153,9 @@ async function* streamAgentTurn(
     messages,
     signal,
     ...(allowBash ? { allowBash: true } : {}),
+    ...(options.toolChoice !== undefined
+      ? { toolChoice: options.toolChoice }
+      : {}),
   });
 
   let usage: Usage | null = null;
@@ -329,15 +336,27 @@ export async function* runAgent(
     }
 
     if (decision.type === "summarize") {
-      // The over-limit turn's tool calls are dropped, so its assistant
-      // message (which expects tool results) must not enter the transcript.
+      // The over-limit turn's tool calls are dropped and never executed, so
+      // the assistant message that requested them (and would expect tool
+      // results) must not enter the transcript. Its streamed text already
+      // reached the user, so keep that text as a plain assistant message.
       const wrapUpTurn = yield* streamAgentTurn({
         provider,
         systemPrompt,
-        messages: [...messages, { role: "user", content: WRAP_UP_INSTRUCTION }],
+        messages: [
+          ...messages,
+          ...(turnResult.text === ""
+            ? []
+            : [{ role: "assistant", content: turnResult.text } as const]),
+          { role: "user", content: WRAP_UP_INSTRUCTION },
+        ],
         signal,
         allowBash,
+        toolChoice: "none",
       });
+      if (wrapUpTurn.text === "") {
+        yield { type: "text", text: MISSING_SUMMARY_NOTICE };
+      }
       totalUsage = addUsage(totalUsage, wrapUpTurn.usage);
       const finalCost = reportCost(totalUsage);
       yield {
