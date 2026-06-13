@@ -46,6 +46,13 @@ const budgetModel: CostModel = {
   outputPerMillionTokens: 0,
 };
 
+const ZERO_USAGE = {
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  uncachedInputTokens: 0,
+  outputTokens: 0,
+};
+
 describe("Text Reply", () => {
   test(`Given user asks for help,
     When agent responds,
@@ -196,6 +203,84 @@ describe("Text Reply", () => {
       { role: "user", content: "summarize alpha" },
       { role: "assistant", content: "Alpha summary before budget stop." },
       { role: "user", content: "continue from that summary" },
+    ]);
+  });
+
+  test(`Given an in-process session executes a tool,
+    When user sends a follow-up message,
+    Then the provider receives the assistant tool call and tool result`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "inspect package" }];
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "tool-session",
+      async *stream(options) {
+        turn++;
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_package",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (turn === 2) {
+          yield { type: "text", text: "Inspected package." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        secondTurnMessages = [...options.messages];
+        yield { type: "text", text: "Continuing with package context." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+    messages.push({ role: "user", content: "continue from the package" });
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(secondTurnMessages).toEqual([
+      { role: "user", content: "inspect package" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_package",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          },
+        ],
+      },
+      expect.objectContaining({
+        role: "tool",
+        toolCallId: "read_package",
+      }),
+      { role: "assistant", content: "Inspected package." },
+      { role: "user", content: "continue from the package" },
     ]);
   });
 

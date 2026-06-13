@@ -129,7 +129,12 @@ function toolFailureMessage(error: RecoverableToolError): string {
 }
 
 function priorToolCallsFromMessages(messages: readonly Message[]): ToolCall[] {
-  return messages.flatMap((message) =>
+  const lastUserIndex = messages.findLastIndex(
+    (message) => message.role === "user",
+  );
+  const currentTurnHistory =
+    lastUserIndex < 0 ? messages : messages.slice(lastUserIndex + 1);
+  return currentTurnHistory.flatMap((message) =>
     message.role === "assistant" ? (message.toolCalls ?? []) : [],
   );
 }

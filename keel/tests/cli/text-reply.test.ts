@@ -152,6 +152,23 @@ describe("CLI Text Reply", () => {
     }
   });
 
+  test(`Given user requests an interactive session report,
+    When user runs the CLI without a message,
+    Then the CLI rejects the unsupported report option`, async () => {
+    // Given
+    const args: readonly string[] = ["--report", "run.json"];
+
+    // When
+    const result = await runCli(args, { KEEL_FORCE_INTERACTIVE: "1" });
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Error: --report is only supported for one-shot runs.\n",
+    );
+  });
+
   test(`Given user asks for diagnostics,
     When user runs the CLI doctor command,
     Then the CLI reports bundled ripgrep status without requiring a provider`, async () => {

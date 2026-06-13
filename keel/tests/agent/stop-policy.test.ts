@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
-import { runAgent } from "../../src/agent/loop.ts";
+import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
 import type { AgentStopPolicy } from "../../src/agent/stop-policy.ts";
 import {
   composeStopPolicies,
@@ -479,6 +479,62 @@ describe("Agent Stopping", () => {
       expect(secondEvents).toContainEqual({
         type: "text",
         text: "Second task done.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one interactive session has repeated tool calls in an earlier user turn,
+    When the next user turn starts with the same tool call,
+    Then repeated-call detection starts fresh for the new request`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "a.txt"), "alpha\n", "utf8");
+    const messages: Message[] = [{ role: "user", content: "first task" }];
+    const sameRead = fakeReadResponse("a.txt");
+    const firstProvider = createFakeProvider([
+      sameRead,
+      sameRead,
+      fakeResponse("First task done."),
+    ]);
+    const secondProvider = createFakeProvider([
+      sameRead,
+      fakeResponse("Second task done."),
+    ]);
+
+    try {
+      // When
+      await collect(
+        runAgentTurn({
+          workspace,
+          provider: firstProvider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          stopPolicy: repeatedToolCallPolicy(),
+        }),
+      );
+      messages.push({ role: "user", content: "second task" });
+      const secondEvents = await collect(
+        runAgentTurn({
+          workspace,
+          provider: secondProvider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          stopPolicy: repeatedToolCallPolicy(),
+        }),
+      );
+
+      // Then
+      expect(secondEvents).toContainEqual({
+        type: "text",
+        text: "Second task done.",
+      });
+      expect(secondEvents.at(-1)).toMatchObject({
+        type: "end",
+        stopReason: "completed",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

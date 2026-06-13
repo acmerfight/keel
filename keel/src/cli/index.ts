@@ -640,6 +640,12 @@ async function main(): Promise<void> {
       process.stderr.write(`${USAGE}\n`);
       process.exit(1);
     }
+    if (cliArgs.reportFile !== undefined) {
+      process.stderr.write(
+        "Error: --report is only supported for one-shot runs.\n",
+      );
+      process.exit(1);
+    }
     const abortController = new AbortController();
     const abort = () => {
       abortController.abort();
