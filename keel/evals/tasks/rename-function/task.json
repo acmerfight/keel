@@ -1,0 +1,5 @@
+{
+  "prompt": "Rename the function calcTotal to calculateTotal everywhere in this project, including its definition and every call site. The program must still work: node index.js should print the same output as before.",
+  "timeoutMs": 240000,
+  "maxCostUsd": 0.05
+}

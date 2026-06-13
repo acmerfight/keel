@@ -19,6 +19,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "eval:check": "node --experimental-strip-types src/cli/index.ts eval --check",
     "knip": "knip",
     "postinstall": "simple-git-hooks"
   },

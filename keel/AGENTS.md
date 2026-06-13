@@ -13,6 +13,7 @@ pnpm lint:fix       # biome check --write --error-on-warnings
 pnpm test           # vitest run
 pnpm test:watch     # vitest (watch mode)
 pnpm test:coverage  # Final verification: vitest run --coverage
+pnpm eval:check     # Validate bundled eval task verifiers without provider calls
 pnpm knip           # Dead code detection
 ```
 

@@ -40,6 +40,11 @@ What a user can do today:
   a progress summary when the 64-turn limit is exhausted.
 - `keel --allow-bash` — trusted shell mode (all-or-nothing).
 - `keel --max-cost <usd>` — cost tracking with budget stop.
+- `keel --report <file>` — write a machine-readable run report with turns,
+  stop reason, token usage, duration, provider/model, and cost when tracked.
+- `keel eval [--check] [--trials <n>]` — run a repeatable harness eval suite
+  from `evals/tasks`, with per-trial JSONL results and reference-solution
+  verifier checks.
 - `keel /undo` — restore the last edit checkpoint.
 - `keel --doctor` — environment check.
 
@@ -50,7 +55,8 @@ Known limits that shape the priorities below:
 - No provider retry: the first 429 or 5xx kills the run.
 - Tool calls execute strictly sequentially.
 - Exact-match single-string edit only.
-- No way to measure harness quality against another agent.
+- Eval results compare keel across versions; cross-agent same-model
+  comparisons still wait on P0-2's frontier/multi-provider work.
 
 ## P0 — Blocks daily use or makes the quality goal unfalsifiable
 
@@ -85,15 +91,16 @@ Known limits that shape the priorities below:
    memory (the codex/opencode/kimi pattern), plus a non-interactive
    fallback. Slice test: *the agent proposes `pnpm test`, the user
    approves that one command, and a disallowed command stays blocked.*
-6. **Harness eval baseline.** Without measurement, "keel's harness is
-   better" is unfalsifiable. Start small: a repeatable suite of real
-   tasks (drawn from actual daily use) that reports per-task success,
-   interventions, turns, and tokens — first comparable across keel
-   versions (regression detection), then across agents once P0-2 enables
-   same-model runs. Public suites like Terminal-Bench can serve as a
-   later external check, but the personal suite is the primary metric.
-   Slice test: *one command runs the suite and prints a comparable
-   per-task report.*
+6. **Harness eval baseline.** ✅ Baseline done (2026-06): `keel eval`
+   runs deterministic outcome-graded task directories from `evals/tasks`,
+   appends per-trial JSONL results, supports multi-trial runs, and
+   validates each task's reference solution via `--check`. The current
+   seed suite covers exact edits, search/edit, multi-file rename, new file
+   creation, bash-driven test fixing, long-file editing, stale edit
+   recovery, repeated-string disambiguation, test-preserving bug fixes,
+   and pattern-following feature additions. The next work here is corpus
+   growth from real daily-use failures, transcript review tooling, and
+   cross-agent same-model comparison after P0-2.
 
 ## P1 — Daily friction and the harness-quality competitive surface
 
