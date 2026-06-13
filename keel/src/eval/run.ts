@@ -267,12 +267,16 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
   const version = keelVersion();
   let passingTasks = 0;
   let passingTrials = 0;
+  let harnessFailures = 0;
   for (const task of tasks) {
     let passes = 0;
     for (let trial = 1; trial <= args.trials; trial++) {
       const result = await runTrial(task, args.cliEntry);
       const pass = result.outcome === "verified";
       if (pass) passes++;
+      if (result.outcome === "crashed" || result.outcome === "timeout") {
+        harnessFailures++;
+      }
       appendResultLine(args.outFile, {
         schemaVersion: 1,
         timestamp: new Date().toISOString(),
@@ -298,5 +302,5 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
     `suite: ${passingTasks}/${tasks.length} tasks pass (${passingTrials}/${totalTrials} trials)\n`,
   );
   process.stdout.write(`results: ${args.outFile}\n`);
-  return 0;
+  return harnessFailures === 0 ? 0 : 1;
 }
