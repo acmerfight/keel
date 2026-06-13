@@ -1,6 +1,8 @@
 node_modules/
 dist/
 coverage/
+eval-results.jsonl
+evals/results/
 .env
 .env.*
 *.pem

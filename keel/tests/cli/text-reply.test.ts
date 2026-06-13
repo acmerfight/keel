@@ -110,6 +110,7 @@ describe("CLI Text Reply", () => {
     expect(result.stderr).toBe(
       [
         "Usage: keel [--allow-bash] [--max-cost <usd>] [--report <file>] <message>",
+        "       keel eval [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
         "       keel /undo",
         "",
         "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",

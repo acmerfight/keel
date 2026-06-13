@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
 import { runAgent } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import type { CostModel } from "../core/cost.ts";
 import { restoreLastEditCheckpoint } from "../core/git.ts";
+import { runEvalCommand } from "../eval/run.ts";
 import {
   createDeepseekProvider,
   DEEPSEEK_V4_FLASH_COST_MODEL,
@@ -26,9 +28,19 @@ interface CliWriteRequest {
   readonly content: string;
 }
 
+interface EvalCliArgs {
+  readonly command: "eval";
+  readonly suiteDir: string;
+  readonly outFile: string;
+  readonly trials: number;
+  readonly taskId?: string;
+  readonly check: boolean;
+}
+
 type CliArgs =
   | { readonly command: "doctor" }
   | { readonly command: "undo" }
+  | EvalCliArgs
   | {
       readonly command: "run";
       readonly allowBash: boolean;
@@ -39,6 +51,7 @@ type CliArgs =
 
 const USAGE = [
   "Usage: keel [--allow-bash] [--max-cost <usd>] [--report <file>] <message>",
+  "       keel eval [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
   "       keel /undo",
   "",
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
@@ -68,6 +81,75 @@ function parseReportFile(raw: string | undefined): string {
   return raw;
 }
 
+const trialsSchema = z.coerce.number().int().positive();
+
+function parseTrials(raw: string | undefined): number {
+  const result = trialsSchema.safeParse(raw);
+  if (!result.success) {
+    process.stderr.write("Error: --trials must be a positive integer.\n");
+    process.exit(1);
+  }
+  return result.data;
+}
+
+function requireOptionValue(option: string, raw: string | undefined): string {
+  if (raw === undefined || raw === "") {
+    process.stderr.write(`Error: ${option} requires a value.\n`);
+    process.exit(1);
+  }
+  return raw;
+}
+
+function parseEvalArgs(args: readonly string[]): EvalCliArgs {
+  let suiteDir = join("evals", "tasks");
+  let outFile = "eval-results.jsonl";
+  let trials = 1;
+  let taskId: string | undefined;
+  let check = false;
+
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === undefined) continue;
+
+    if (arg === "--suite") {
+      suiteDir = requireOptionValue("--suite", args[index + 1]);
+      index++;
+      continue;
+    }
+    if (arg === "--out") {
+      outFile = requireOptionValue("--out", args[index + 1]);
+      index++;
+      continue;
+    }
+    if (arg === "--trials") {
+      trials = parseTrials(args[index + 1]);
+      index++;
+      continue;
+    }
+    if (arg === "--task") {
+      taskId = requireOptionValue("--task", args[index + 1]);
+      index++;
+      continue;
+    }
+    if (arg === "--check") {
+      check = true;
+      continue;
+    }
+
+    process.stderr.write(`Error: unknown eval option "${arg}"\n`);
+    process.exit(1);
+  }
+
+  return {
+    command: "eval",
+    suiteDir,
+    outFile,
+    trials,
+    ...(taskId !== undefined ? { taskId } : {}),
+    check,
+  };
+}
+
 function parseCliArgs(args: readonly string[]): CliArgs {
   if (args[0] === "--doctor") {
     return { command: "doctor" };
@@ -75,6 +157,10 @@ function parseCliArgs(args: readonly string[]): CliArgs {
 
   if (args[0] === "/undo") {
     return { command: "undo" };
+  }
+
+  if (args[0] === "eval") {
+    return parseEvalArgs(args.slice(1));
   }
 
   let allowBash = false;
@@ -415,6 +501,18 @@ async function main(): Promise<void> {
     process.stdout.write(result.stdout);
     process.stderr.write(result.stderr);
     process.exitCode = result.exitCode;
+    return;
+  }
+
+  if (cliArgs.command === "eval") {
+    process.exitCode = await runEvalCommand({
+      suiteDir: cliArgs.suiteDir,
+      outFile: cliArgs.outFile,
+      trials: cliArgs.trials,
+      ...(cliArgs.taskId !== undefined ? { taskId: cliArgs.taskId } : {}),
+      check: cliArgs.check,
+      cliEntry: import.meta.filename,
+    });
     return;
   }
 
