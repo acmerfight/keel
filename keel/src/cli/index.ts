@@ -573,13 +573,11 @@ async function runInteractiveSession(
         systemPrompt,
         signal,
         ...(cliArgs.allowBash ? { allowBash: true } : {}),
-        ...(cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
+        ...(cliArgs.maxCostUsd !== undefined
           ? {
               costTracking: {
                 model: resolved.costModel,
-                ...(cliArgs.maxCostUsd !== undefined
-                  ? { maxCostUsd: cliArgs.maxCostUsd }
-                  : {}),
+                maxCostUsd: cliArgs.maxCostUsd,
               },
             }
           : {}),
