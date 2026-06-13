@@ -70,6 +70,9 @@ Each trial appends one JSON line:
   `verify_failed` are the agent's score; `timeout` / `crashed` mean the
   environment or harness broke and the trial must not be read as agent
   quality.
+- `wallMs` is measured around the spawned agent CLI run. It excludes the
+  later verifier step, so read it as agent wall time rather than full
+  trial wall time.
 - Regression comparison is `diff`-shaped by design: run the suite on two
   keel versions, compare pass counts, turns, and tokens per task from the
   two JSONL files.

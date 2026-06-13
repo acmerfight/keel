@@ -78,7 +78,7 @@ jobs:
       - name: Summarize eval results
         if: always()
         run: |
-          node <<'NODE'
+          node --input-type=commonjs <<'NODE'
           const fs = require("node:fs");
           const { z } = require("zod");
 
