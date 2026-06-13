@@ -203,7 +203,9 @@ describe("Agent Stopping", () => {
     await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
     const stopAfterFirstRound: AgentStopPolicy = {
       shouldStopAfterTurn: (context) =>
-        context.completedTurns >= 1 ? { type: "stop" } : { type: "continue" },
+        context.completedTurns >= 1
+          ? { type: "stop", reason: "caller_rule" }
+          : { type: "continue" },
     };
     const provider = createFakeProvider([
       fakeEditResponse("a.txt", "old", "new"),
@@ -233,6 +235,8 @@ describe("Agent Stopping", () => {
           uncachedInputTokens: 0,
           outputTokens: 0,
         },
+        turns: 1,
+        stopReason: "caller_rule",
       });
       expect(events.some((event) => event.type === "text")).toBe(false);
     } finally {
@@ -301,6 +305,8 @@ describe("Agent Stopping", () => {
           uncachedInputTokens: 1_000_000,
           outputTokens: 0,
         },
+        turns: 1,
+        stopReason: "cost_budget",
         cost: {
           spentUsd: 1,
           maxUsd: 0.5,

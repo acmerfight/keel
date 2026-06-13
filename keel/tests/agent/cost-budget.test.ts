@@ -85,6 +85,8 @@ describe("Cost Budget", () => {
           uncachedInputTokens: 1_000_000,
           outputTokens: 0,
         },
+        turns: 1,
+        stopReason: "cost_budget",
         cost: {
           spentUsd: 1,
           maxUsd: 0.5,
@@ -227,6 +229,8 @@ describe("Cost Budget", () => {
           uncachedInputTokens: 1_000_000,
           outputTokens: 0,
         },
+        turns: 1,
+        stopReason: "cost_budget",
         cost: {
           spentUsd: 1,
           maxUsd: 0.5,

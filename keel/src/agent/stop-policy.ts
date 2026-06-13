@@ -11,10 +11,12 @@ interface StopContext {
   readonly cost?: CostReport;
 }
 
+// reason is a stable label surfaced as the run's stopReason in reports.
+// Built-in policies use "cost_budget", "repeated_tool_call", "turn_limit".
 type StopDecision =
   | { readonly type: "continue" }
-  | { readonly type: "stop" }
-  | { readonly type: "summarize" };
+  | { readonly type: "stop"; readonly reason: string }
+  | { readonly type: "summarize"; readonly reason: string };
 
 export interface AgentStopPolicy {
   readonly shouldStopAfterTurn: (context: StopContext) => StopDecision;
@@ -40,7 +42,7 @@ export function costBudgetStopPolicy(): AgentStopPolicy {
   return {
     shouldStopAfterTurn: (context) =>
       context.cost?.budgetExceeded === true
-        ? { type: "stop" }
+        ? { type: "stop", reason: "cost_budget" }
         : { type: "continue" },
   };
 }
@@ -70,7 +72,7 @@ export function repeatedToolCallPolicy(
         }
         streak++;
         if (streak >= stopThreshold) {
-          return { type: "stop" };
+          return { type: "stop", reason: "repeated_tool_call" };
         }
       }
       return { type: "continue" };
@@ -86,7 +88,7 @@ export function maxTurnFallbackPolicy(maxTurns: number): AgentStopPolicy {
   return {
     shouldStopAfterTurn: (context) =>
       context.toolCalls.length > 0 && context.completedTurns >= maxTurns
-        ? { type: "summarize" }
+        ? { type: "summarize", reason: "turn_limit" }
         : { type: "continue" },
   };
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
+import { writeFileSync } from "node:fs";
 import { z } from "zod";
-import type { CostReport } from "../agent/loop.ts";
+import type { AgentEvent, CostReport } from "../agent/loop.ts";
 import { runAgent } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import { restoreLastEditCheckpoint } from "../core/git.ts";
@@ -32,13 +33,15 @@ type CliArgs =
       readonly allowBash: boolean;
       readonly userMessage?: string;
       readonly maxCostUsd?: number;
+      readonly reportFile?: string;
     };
 
 const USAGE = [
-  "Usage: keel [--allow-bash] [--max-cost <usd>] <message>",
+  "Usage: keel [--allow-bash] [--max-cost <usd>] [--report <file>] <message>",
   "       keel /undo",
   "",
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
+  "--report writes a machine-readable JSON run report (turns, stop reason, token usage) to the given file.",
 ].join("\n");
 
 const maxCostSchema = z.coerce.number().finite().positive();
@@ -56,6 +59,14 @@ function parseMaxCost(raw: string | undefined): number {
   return result.data;
 }
 
+function parseReportFile(raw: string | undefined): string {
+  if (raw === undefined || raw === "") {
+    process.stderr.write("Error: --report requires a file path.\n");
+    process.exit(1);
+  }
+  return raw;
+}
+
 function parseCliArgs(args: readonly string[]): CliArgs {
   if (args[0] === "--doctor") {
     return { command: "doctor" };
@@ -67,8 +78,10 @@ function parseCliArgs(args: readonly string[]): CliArgs {
 
   let allowBash = false;
   let maxCostUsd: number | undefined;
+  let reportFile: string | undefined;
   let userMessage: string | undefined;
   const maxCostPrefix = "--max-cost=";
+  const reportPrefix = "--report=";
 
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -90,6 +103,17 @@ function parseCliArgs(args: readonly string[]): CliArgs {
       continue;
     }
 
+    if (arg === "--report") {
+      reportFile = parseReportFile(args[index + 1]);
+      index++;
+      continue;
+    }
+
+    if (arg.startsWith(reportPrefix)) {
+      reportFile = parseReportFile(arg.slice(reportPrefix.length));
+      continue;
+    }
+
     userMessage = arg;
     break;
   }
@@ -99,6 +123,7 @@ function parseCliArgs(args: readonly string[]): CliArgs {
     allowBash,
     ...(userMessage !== undefined ? { userMessage } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
+    ...(reportFile !== undefined ? { reportFile } : {}),
   };
 }
 
@@ -175,6 +200,32 @@ function toolCallLabel(toolCall: ToolCall): string {
     case "bash":
       return sanitizeToolLabel(`bash ${toolCall.command}`);
   }
+}
+
+// The report schema is consumed by external tooling (the eval runner and any
+// script comparing runs across keel versions). Bump schemaVersion on any
+// breaking change to the shape.
+interface RunReportInput {
+  readonly provider: string;
+  readonly model: string;
+  readonly end: Extract<AgentEvent, { readonly type: "end" }>;
+  readonly durationMs: number;
+}
+
+function writeRunReport(filePath: string, input: RunReportInput): void {
+  const report = {
+    schemaVersion: 1,
+    provider: input.provider,
+    model: input.model,
+    turns: input.end.turns,
+    stopReason: input.end.stopReason,
+    usage: input.end.usage,
+    durationMs: input.durationMs,
+    ...(input.end.cost !== undefined
+      ? { costUsd: input.end.cost.spentUsd }
+      : {}),
+  };
+  writeFileSync(filePath, `${JSON.stringify(report)}\n`, "utf8");
 }
 
 function formatCostReport(cost: CostReport): string {
@@ -295,11 +346,16 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
   };
 }
 
-function resolveProvider(userMessage: string): LLMProvider {
+interface ResolvedProvider {
+  readonly provider: LLMProvider;
+  readonly model: string;
+}
+
+function resolveProvider(userMessage: string): ResolvedProvider {
   const providerId = env("KEEL_PROVIDER") ?? "deepseek";
 
   if (providerId === "fake") {
-    return createCliFakeProvider(userMessage);
+    return { provider: createCliFakeProvider(userMessage), model: "fake" };
   }
 
   if (providerId === "deepseek") {
@@ -310,11 +366,15 @@ function resolveProvider(userMessage: string): LLMProvider {
       );
       process.exit(1);
     }
-    return createDeepseekProvider({
-      apiKey,
-      baseUrl: env("DEEPSEEK_BASE_URL") ?? "https://api.deepseek.com",
-      model: "deepseek-v4-flash",
-    });
+    const model = "deepseek-v4-flash";
+    return {
+      provider: createDeepseekProvider({
+        apiKey,
+        baseUrl: env("DEEPSEEK_BASE_URL") ?? "https://api.deepseek.com",
+        model,
+      }),
+      model,
+    };
   }
 
   process.stderr.write(`Error: unknown provider "${providerId}"\n`);
@@ -354,7 +414,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const provider = resolveProvider(userMessage);
+  const { provider, model } = resolveProvider(userMessage);
   const abortController = new AbortController();
   const abort = () => {
     abortController.abort();
@@ -363,6 +423,7 @@ async function main(): Promise<void> {
 
   try {
     const workspace = process.cwd();
+    const startedAt = Date.now();
     const stream = runAgent({
       workspace,
       provider,
@@ -383,7 +444,7 @@ async function main(): Promise<void> {
         : {}),
     });
 
-    let finalCost: CostReport | undefined;
+    let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
     for await (const event of stream) {
       if (event.type === "text") {
         process.stdout.write(sanitizeAssistantText(event.text));
@@ -398,12 +459,20 @@ async function main(): Promise<void> {
           );
         }
       } else if (event.type === "end") {
-        finalCost = event.cost;
+        finalEnd = event;
       }
     }
     process.stdout.write("\n");
-    if (finalCost !== undefined) {
-      process.stderr.write(formatCostReport(finalCost));
+    if (finalEnd?.cost !== undefined) {
+      process.stderr.write(formatCostReport(finalEnd.cost));
+    }
+    if (cliArgs.reportFile !== undefined && finalEnd !== undefined) {
+      writeRunReport(cliArgs.reportFile, {
+        provider: provider.id,
+        model,
+        end: finalEnd,
+        durationMs: Date.now() - startedAt,
+      });
     }
   } catch (error) {
     if (!abortController.signal.aborted) {
