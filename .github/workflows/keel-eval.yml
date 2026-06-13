@@ -46,6 +46,8 @@ jobs:
 
       - run: pnpm eval:check
 
+      - run: pnpm build
+
       - name: Run real eval
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -61,18 +63,52 @@ jobs:
             exit 1
           fi
 
+          if ! [[ "$EVAL_TRIALS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "trials must be a positive integer." >&2
+            exit 1
+          fi
+
           args=(eval --trials "$EVAL_TRIALS" --out "$out")
           if [ -n "$EVAL_TASK" ]; then
             args+=(--task "$EVAL_TASK")
           fi
 
-          node --experimental-strip-types src/cli/index.ts "${args[@]}"
+          node dist/cli/index.js "${args[@]}"
 
       - name: Summarize eval results
         if: always()
         run: |
           node <<'NODE'
           const fs = require("node:fs");
+          const { z } = require("zod");
+
+          const resultLineSchema = z.object({
+            schemaVersion: z.literal(1),
+            timestamp: z.string(),
+            keelVersion: z.string(),
+            taskId: z.string(),
+            trial: z.number().int().positive(),
+            pass: z.boolean(),
+            outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
+            wallMs: z.number().nonnegative(),
+            report: z
+              .object({
+                schemaVersion: z.literal(1),
+                provider: z.string(),
+                model: z.string(),
+                turns: z.number().int().positive(),
+                stopReason: z.string(),
+                usage: z.object({
+                  inputTokens: z.number(),
+                  cachedInputTokens: z.number(),
+                  uncachedInputTokens: z.number(),
+                  outputTokens: z.number(),
+                }),
+                durationMs: z.number().nonnegative(),
+                costUsd: z.number(),
+              })
+              .optional(),
+          });
 
           const summaryPath = process.env.GITHUB_STEP_SUMMARY;
           if (!summaryPath) process.exit(0);
@@ -93,7 +129,7 @@ jobs:
             .trim()
             .split("\n")
             .filter(Boolean)
-            .map((line) => JSON.parse(line));
+            .map((line) => resultLineSchema.parse(JSON.parse(line)));
 
           const passed = rows.filter((row) => row.pass).length;
           const harnessFailures = rows.filter(
@@ -145,3 +181,4 @@ jobs:
           name: keel-eval-results
           path: keel/${{ env.EVAL_RESULTS }}
           if-no-files-found: ignore
+          retention-days: 90
