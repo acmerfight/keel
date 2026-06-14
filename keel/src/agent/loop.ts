@@ -1,6 +1,9 @@
 import { type CostModel, calculateCostUsd } from "../core/cost.ts";
-import type { KeelErrorCode, RecoverableToolErrorCode } from "../core/error.ts";
-import { KeelError } from "../core/error.ts";
+import {
+  isRecoverableToolErrorCode,
+  KeelError,
+  type RecoverableToolErrorCode,
+} from "../core/error.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
 import { executeBash } from "../tools/bash.ts";
 import { executeEdit } from "../tools/edit.ts";
@@ -94,30 +97,6 @@ function addUsage(left: Usage, right: Usage): Usage {
     uncachedInputTokens: left.uncachedInputTokens + right.uncachedInputTokens,
     outputTokens: left.outputTokens + right.outputTokens,
   };
-}
-
-function isRecoverableToolErrorCode(
-  code: KeelErrorCode,
-): code is RecoverableToolErrorCode {
-  switch (code) {
-    case "tool_binary_file":
-    case "tool_file_exists":
-    case "tool_file_not_found":
-    case "tool_empty_command":
-    case "tool_empty_old_string":
-    case "tool_empty_pattern":
-    case "tool_invalid_pattern":
-    case "tool_not_file":
-    case "tool_not_directory":
-    case "tool_old_string_not_found":
-    case "tool_old_string_not_unique":
-    case "tool_path_ignored":
-    case "tool_path_outside_workspace":
-    case "tool_read_offset_out_of_range":
-      return true;
-    default:
-      return false;
-  }
 }
 
 function isRecoverableToolError(error: unknown): error is RecoverableToolError {
