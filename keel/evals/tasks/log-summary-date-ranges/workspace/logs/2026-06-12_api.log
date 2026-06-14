@@ -1,0 +1,4 @@
+2026-06-12T12:00:00Z INFO api request ok
+2026-06-12T12:03:00Z WARN api high latency
+2026-06-12T12:04:00Z ERROR api timeout
+2026-06-12T12:06:00Z ERROR api retry budget exhausted

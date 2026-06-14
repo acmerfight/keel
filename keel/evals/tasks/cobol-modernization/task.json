@@ -1,0 +1,6 @@
+{
+  "prompt": "Modernize the legacy COBOL batch job in src/program.cbl. It reads data/CUSTOMER.DAT and writes active VIP customers to REPORT.TXT. Create modernized.js that implements the same logic in Node.js, then run it so REPORT.TXT exists. Preserve the exact output format implied by the COBOL program.",
+  "timeoutMs": 240000,
+  "allowBash": true,
+  "maxCostUsd": 0.05
+}

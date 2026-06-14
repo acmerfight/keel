@@ -1,0 +1,3 @@
+2026-06-09T09:00:00Z INFO api boot
+2026-06-09T09:04:00Z WARN api slow upstream
+2026-06-09T09:07:00Z ERROR api stale cache
