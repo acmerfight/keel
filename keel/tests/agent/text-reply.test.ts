@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { type AgentEvent, runAgent } from "../../src/agent/loop.ts";
-import type { LLMProvider } from "../../src/llm/types.ts";
+import {
+  type AgentEvent,
+  runAgent,
+  runAgentTurn,
+} from "../../src/agent/loop.ts";
+import type { CostModel } from "../../src/core/cost.ts";
+import type { LLMProvider, Message } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
   fakeResponse,
@@ -35,6 +40,19 @@ function workspace(): string {
   return process.cwd();
 }
 
+const budgetModel: CostModel = {
+  uncachedInputPerMillionTokens: 1,
+  cachedInputPerMillionTokens: 0,
+  outputPerMillionTokens: 0,
+};
+
+const ZERO_USAGE = {
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  uncachedInputTokens: 0,
+  outputTokens: 0,
+};
+
 describe("Text Reply", () => {
   test(`Given user asks for help,
     When agent responds,
@@ -64,6 +82,281 @@ describe("Text Reply", () => {
 
     const endEvents = events.filter(isEnd);
     expect(endEvents).toHaveLength(1);
+  });
+
+  test(`Given an in-process turn starts with an empty transcript,
+    When agent responds,
+    Then the assistant reply starts the transcript`, async () => {
+    // Given
+    const messages: Message[] = [];
+    const provider = createFakeProvider([fakeResponse("Session started.")]);
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(messages).toEqual([
+      { role: "assistant", content: "Session started." },
+    ]);
+  });
+
+  test(`Given an in-process turn produces no visible text,
+    When user sends a follow-up message,
+    Then the empty turn adds no assistant message to the transcript`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "stay silent" }];
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "silent-session",
+      async *stream(options) {
+        turn++;
+        if (turn === 2) {
+          secondTurnMessages = [...options.messages];
+        }
+        if (turn === 1) {
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "Now responding." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+    messages.push({ role: "user", content: "are you there?" });
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(secondTurnMessages).toEqual([
+      { role: "user", content: "stay silent" },
+      { role: "user", content: "are you there?" },
+    ]);
+  });
+
+  test(`Given an in-process session has prior messages,
+    When user sends a follow-up message,
+    Then the provider receives the earlier context`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "remember alpha" }];
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "observed-session",
+      async *stream(options) {
+        turn++;
+        if (turn === 2) {
+          secondTurnMessages = [...options.messages];
+        }
+        yield {
+          type: "text",
+          text: turn === 1 ? "Remembered alpha." : "You asked about alpha.",
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+    messages.push({ role: "user", content: "what did I ask you to remember?" });
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(secondTurnMessages).toEqual([
+      { role: "user", content: "remember alpha" },
+      { role: "assistant", content: "Remembered alpha." },
+      { role: "user", content: "what did I ask you to remember?" },
+    ]);
+  });
+
+  test(`Given a session turn stops after exceeding its cost budget,
+    When user sends a follow-up message,
+    Then the provider still receives the visible assistant reply`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "summarize alpha" }];
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "budgeted-session",
+      async *stream(options) {
+        turn++;
+        if (turn === 2) {
+          secondTurnMessages = [...options.messages];
+        }
+        yield {
+          type: "text",
+          text: turn === 1 ? "Alpha summary before budget stop." : "Follow-up.",
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: turn === 1 ? 1_000_000 : 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: turn === 1 ? 1_000_000 : 1,
+            outputTokens: 0,
+          },
+        };
+      },
+    };
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        costTracking: {
+          model: budgetModel,
+          maxCostUsd: 0.5,
+        },
+      }),
+    );
+    messages.push({ role: "user", content: "continue from that summary" });
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(secondTurnMessages).toEqual([
+      { role: "user", content: "summarize alpha" },
+      { role: "assistant", content: "Alpha summary before budget stop." },
+      { role: "user", content: "continue from that summary" },
+    ]);
+  });
+
+  test(`Given an in-process session executes a tool,
+    When user sends a follow-up message,
+    Then the provider receives the assistant tool call and tool result`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "inspect package" }];
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "tool-session",
+      async *stream(options) {
+        turn++;
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_package",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (turn === 2) {
+          yield { type: "text", text: "Inspected package." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        secondTurnMessages = [...options.messages];
+        yield { type: "text", text: "Continuing with package context." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+    messages.push({ role: "user", content: "continue from the package" });
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(secondTurnMessages).toEqual([
+      { role: "user", content: "inspect package" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_package",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          },
+        ],
+      },
+      expect.objectContaining({
+        role: "tool",
+        toolCallId: "read_package",
+      }),
+      { role: "assistant", content: "Inspected package." },
+      { role: "user", content: "continue from the package" },
+    ]);
   });
 
   test(`Given a short assistant reply,

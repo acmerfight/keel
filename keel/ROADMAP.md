@@ -38,6 +38,8 @@ What a user can do today:
   calls (read / grep / edit / write / bash), recoverable tool errors with
   LLM-facing recovery hints, tool progress on stderr, graceful stop with
   a progress summary when the 64-turn limit is exhausted.
+- `keel` — interactive in-process session: sequential follow-up messages
+  reuse prior user / assistant / tool context from the same terminal run.
 - `keel --allow-bash` — trusted shell mode (all-or-nothing).
 - `keel --max-cost <usd>` — cost tracking with budget stop.
 - `keel --report <file>` — write a machine-readable run report with turns,
@@ -50,7 +52,9 @@ What a user can do today:
 
 Known limits that shape the priorities below:
 
-- One-shot only: no interactive session, no mid-run steering.
+- Interactive sessions are process-local only: no mid-run steering, no
+  resume/persistence, no TUI, no session-level report, and cost limits apply
+  to each submitted turn rather than the whole interactive session.
 - Single hardcoded provider/model (`deepseek-v4-flash`).
 - No provider retry: the first 429 or 5xx kills the run.
 - Tool calls execute strictly sequentially.
@@ -60,14 +64,15 @@ Known limits that shape the priorities below:
 
 ## P0 — Blocks daily use or makes the quality goal unfalsifiable
 
-1. **Interactive session with steering.** The CLI accepts one message and
-   exits. Real coding is conversational: follow-ups, corrections, "now
-   also fix the tests" — including while a run is in progress (every
-   surveyed harness buffers mid-run user input and injects it at a turn
-   boundary). Daily use also generates the real-task corpus the eval
-   suite (P0-6) needs. Slice test: *a user starts `keel`, sends two
-   related messages, and the second answer uses context from the first.*
-   Steering can ship as a follow-up slice.
+1. **Interactive session with steering.** ✅ Partial (2026-06): `keel`
+   now starts a process-local interactive session; a user can send two
+   related messages, and the second answer uses context from the first.
+   Remaining work: mid-run steering (every surveyed harness buffers
+   mid-run user input and injects it at a turn boundary), persistence /
+   resume, and clearer interactive UX. Real coding is conversational:
+   follow-ups, corrections, "now also fix the tests" — including while a
+   run is in progress. Daily use also generates the real-task corpus the
+   eval suite (P0-6) needs.
 2. **Frontier-model provider.** Only `deepseek-v4-flash` is wired in.
    This carries double weight: daily use needs a frontier model, and
    proving harness superiority requires running the **same model** as

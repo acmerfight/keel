@@ -51,6 +51,19 @@ export interface RunAgentOptions {
   readonly stopPolicy?: AgentStopPolicy;
 }
 
+export interface RunAgentTurnOptions {
+  readonly workspace: string;
+  readonly provider: LLMProvider;
+  // Mutated in place: user messages are supplied by the session owner, while
+  // agent turns append assistant/tool messages so later turns share context.
+  readonly messages: Message[];
+  readonly systemPrompt: string;
+  readonly signal: AbortSignal;
+  readonly costTracking?: CostTrackingOptions;
+  readonly allowBash?: boolean;
+  readonly stopPolicy?: AgentStopPolicy;
+}
+
 interface AgentTurn {
   readonly text: string;
   readonly toolCalls: readonly ToolCall[];
@@ -113,6 +126,35 @@ function isRecoverableToolError(error: unknown): error is RecoverableToolError {
 
 function toolFailureMessage(error: RecoverableToolError): string {
   return `Tool failed: ${error.message}\nRecovery: ${error.recovery}`;
+}
+
+function priorToolCallsFromMessages(messages: readonly Message[]): ToolCall[] {
+  const lastUserIndex = messages.findLastIndex(
+    (message) => message.role === "user",
+  );
+  const currentTurnHistory =
+    lastUserIndex < 0 ? messages : messages.slice(lastUserIndex + 1);
+  return currentTurnHistory.flatMap((message) =>
+    message.role === "assistant" ? (message.toolCalls ?? []) : [],
+  );
+}
+
+function toolRequestMessage(turn: AgentTurn): Message {
+  return {
+    role: "assistant",
+    content: turn.text,
+    toolCalls: turn.toolCalls,
+  };
+}
+
+function finalReplyMessage(text: string): Message | null {
+  return text === "" ? null : { role: "assistant", content: text };
+}
+
+function appendMessage(messages: Message[], message: Message | null): void {
+  if (message !== null) {
+    messages.push(message);
+  }
 }
 
 function finishAgentTurn(
@@ -274,21 +316,20 @@ async function executeToolCall(
   }
 }
 
-export async function* runAgent(
-  options: RunAgentOptions,
+export async function* runAgentTurn(
+  options: RunAgentTurnOptions,
 ): AsyncGenerator<AgentEvent> {
   const {
     workspace,
     provider,
-    userMessage,
+    messages,
     systemPrompt,
     signal,
     costTracking,
     allowBash = false,
     stopPolicy = defaultStopPolicy(),
   } = options;
-  const messages: Message[] = [{ role: "user", content: userMessage }];
-  const priorToolCalls: ToolCall[] = [];
+  const priorToolCalls = priorToolCallsFromMessages(messages);
   let totalUsage: Usage = {
     inputTokens: 0,
     cachedInputTokens: 0,
@@ -332,6 +373,7 @@ export async function* runAgent(
     });
 
     if (decision.type === "stop") {
+      appendMessage(messages, finalReplyMessage(turnResult.text));
       yield {
         type: "end",
         usage: totalUsage,
@@ -343,27 +385,28 @@ export async function* runAgent(
     }
 
     if (decision.type === "summarize") {
-      // The over-limit turn's tool calls are dropped and never executed, so
-      // the assistant message that requested them (and would expect tool
-      // results) must not enter the transcript. Its streamed text already
-      // reached the user, so keep that text as a plain assistant message.
+      const interimReply = finalReplyMessage(turnResult.text);
       const wrapUpTurn = yield* streamAgentTurn({
         provider,
         systemPrompt,
         messages: [
           ...messages,
-          ...(turnResult.text === ""
-            ? []
-            : [{ role: "assistant", content: turnResult.text } as const]),
+          ...(interimReply === null ? [] : [interimReply]),
           { role: "user", content: WRAP_UP_INSTRUCTION },
         ],
         signal,
         allowBash,
         toolChoice: "none",
       });
+      const summary =
+        wrapUpTurn.text === "" ? MISSING_SUMMARY_NOTICE : wrapUpTurn.text;
       if (wrapUpTurn.text === "") {
         yield { type: "text", text: MISSING_SUMMARY_NOTICE };
       }
+      appendMessage(
+        messages,
+        finalReplyMessage(`${turnResult.text}${summary}`),
+      );
       totalUsage = addUsage(totalUsage, wrapUpTurn.usage);
       const finalCost = reportCost(totalUsage);
       yield {
@@ -377,6 +420,7 @@ export async function* runAgent(
     }
 
     if (turnResult.toolCalls.length === 0) {
+      appendMessage(messages, finalReplyMessage(turnResult.text));
       yield {
         type: "end",
         usage: totalUsage,
@@ -387,11 +431,7 @@ export async function* runAgent(
       return;
     }
 
-    messages.push({
-      role: "assistant",
-      content: turnResult.text,
-      toolCalls: turnResult.toolCalls,
-    });
+    messages.push(toolRequestMessage(turnResult));
     priorToolCalls.push(...turnResult.toolCalls);
 
     for (const toolCall of turnResult.toolCalls) {
@@ -410,4 +450,26 @@ export async function* runAgent(
       });
     }
   }
+}
+
+export async function* runAgent(
+  options: RunAgentOptions,
+): AsyncGenerator<AgentEvent> {
+  const messages: Message[] = [{ role: "user", content: options.userMessage }];
+  yield* runAgentTurn({
+    workspace: options.workspace,
+    provider: options.provider,
+    messages,
+    systemPrompt: options.systemPrompt,
+    signal: options.signal,
+    ...(options.costTracking !== undefined
+      ? { costTracking: options.costTracking }
+      : {}),
+    ...(options.allowBash !== undefined
+      ? { allowBash: options.allowBash }
+      : {}),
+    ...(options.stopPolicy !== undefined
+      ? { stopPolicy: options.stopPolicy }
+      : {}),
+  });
 }
