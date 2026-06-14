@@ -130,8 +130,17 @@ failure modes: single exact edit, constant change behind an import,
 multi-file rename, new file creation, bash-driven test fixing, an edit
 deep inside a long file, stale edit recovery, repeated-string
 disambiguation, test-preserving bug fixes, and pattern-following feature
-addition. Grow the suite from real daily-use tasks: when keel fails or
-annoys you in real work, distill that session into a task directory.
+addition. Terminal-Bench-inspired internal tasks extend this regression
+corpus into representative daily-work categories (git recovery, log
+analysis, SQL optimization, security filter bypass, and legacy data
+modernization), but they are still keel-native seed tasks rather than an
+official Terminal-Bench score.
+
+Grow the suite from real daily-use tasks: when keel fails or annoys you
+in real work, distill that session into a task directory. Once a task is
+accepted into the baseline, freeze its prompt and verifier before
+reporting trial results; if a later run exposes a task bug, fix the task
+and treat prior scores for that task version as invalid.
 
 ## What this is not (yet)
 
