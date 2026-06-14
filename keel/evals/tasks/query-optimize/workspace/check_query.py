@@ -2,9 +2,6 @@ import sqlite3
 from pathlib import Path
 
 query = Path("my-sql-query.sql").read_text()
-normalized = " ".join(query.upper().split())
-if "SELECT COUNT(*) FROM ORDERS" in normalized or "SELECT COALESCE(SUM" in normalized:
-    raise SystemExit("query still uses repeated correlated subqueries")
 
 db = sqlite3.connect(":memory:")
 db.executescript(
@@ -42,3 +39,10 @@ expected = [
 ]
 if rows != expected:
     raise SystemExit(f"unexpected rows: {rows!r}")
+
+plan = "\n".join(
+    " ".join(str(part) for part in row).upper()
+    for row in db.execute(f"EXPLAIN QUERY PLAN {query}").fetchall()
+)
+if "CORRELATED" in plan:
+    raise SystemExit(f"query still uses a correlated subquery:\n{plan}")
