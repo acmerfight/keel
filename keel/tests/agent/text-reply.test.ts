@@ -108,6 +108,57 @@ describe("Text Reply", () => {
     ]);
   });
 
+  test(`Given an in-process turn produces no visible text,
+    When user sends a follow-up message,
+    Then the empty turn adds no assistant message to the transcript`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "stay silent" }];
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "silent-session",
+      async *stream(options) {
+        turn++;
+        if (turn === 2) {
+          secondTurnMessages = [...options.messages];
+        }
+        if (turn === 1) {
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "Now responding." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+    messages.push({ role: "user", content: "are you there?" });
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(secondTurnMessages).toEqual([
+      { role: "user", content: "stay silent" },
+      { role: "user", content: "are you there?" },
+    ]);
+  });
+
   test(`Given an in-process session has prior messages,
     When user sends a follow-up message,
     Then the provider receives the earlier context`, async () => {

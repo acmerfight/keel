@@ -139,9 +139,21 @@ function priorToolCallsFromMessages(messages: readonly Message[]): ToolCall[] {
   );
 }
 
-function appendAssistantText(messages: Message[], text: string): void {
-  if (text !== "") {
-    messages.push({ role: "assistant", content: text });
+function toolRequestMessage(turn: AgentTurn): Message {
+  return {
+    role: "assistant",
+    content: turn.text,
+    toolCalls: turn.toolCalls,
+  };
+}
+
+function finalReplyMessage(text: string): Message | null {
+  return text === "" ? null : { role: "assistant", content: text };
+}
+
+function appendMessage(messages: Message[], message: Message | null): void {
+  if (message !== null) {
+    messages.push(message);
   }
 }
 
@@ -361,7 +373,7 @@ export async function* runAgentTurn(
     });
 
     if (decision.type === "stop") {
-      appendAssistantText(messages, turnResult.text);
+      appendMessage(messages, finalReplyMessage(turnResult.text));
       yield {
         type: "end",
         usage: totalUsage,
@@ -373,32 +385,27 @@ export async function* runAgentTurn(
     }
 
     if (decision.type === "summarize") {
-      // The over-limit turn's tool calls are dropped and never executed, so
-      // the assistant message that requested them (and would expect tool
-      // results) must not enter the transcript. Its streamed text already
-      // reached the user, so keep that text as a plain assistant message.
+      const interimReply = finalReplyMessage(turnResult.text);
       const wrapUpTurn = yield* streamAgentTurn({
         provider,
         systemPrompt,
         messages: [
           ...messages,
-          ...(turnResult.text === ""
-            ? []
-            : [{ role: "assistant", content: turnResult.text } as const]),
+          ...(interimReply === null ? [] : [interimReply]),
           { role: "user", content: WRAP_UP_INSTRUCTION },
         ],
         signal,
         allowBash,
         toolChoice: "none",
       });
+      const summary =
+        wrapUpTurn.text === "" ? MISSING_SUMMARY_NOTICE : wrapUpTurn.text;
       if (wrapUpTurn.text === "") {
         yield { type: "text", text: MISSING_SUMMARY_NOTICE };
       }
-      appendAssistantText(
+      appendMessage(
         messages,
-        `${turnResult.text}${
-          wrapUpTurn.text === "" ? MISSING_SUMMARY_NOTICE : wrapUpTurn.text
-        }`,
+        finalReplyMessage(`${turnResult.text}${summary}`),
       );
       totalUsage = addUsage(totalUsage, wrapUpTurn.usage);
       const finalCost = reportCost(totalUsage);
@@ -413,7 +420,7 @@ export async function* runAgentTurn(
     }
 
     if (turnResult.toolCalls.length === 0) {
-      appendAssistantText(messages, turnResult.text);
+      appendMessage(messages, finalReplyMessage(turnResult.text));
       yield {
         type: "end",
         usage: totalUsage,
@@ -424,11 +431,7 @@ export async function* runAgentTurn(
       return;
     }
 
-    messages.push({
-      role: "assistant",
-      content: turnResult.text,
-      toolCalls: turnResult.toolCalls,
-    });
+    messages.push(toolRequestMessage(turnResult));
     priorToolCalls.push(...turnResult.toolCalls);
 
     for (const toolCall of turnResult.toolCalls) {
