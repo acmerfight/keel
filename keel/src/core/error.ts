@@ -1,18 +1,22 @@
+const recoverableToolErrorCodes = [
+  "tool_binary_file",
+  "tool_file_exists",
+  "tool_file_not_found",
+  "tool_empty_command",
+  "tool_empty_old_string",
+  "tool_empty_pattern",
+  "tool_invalid_pattern",
+  "tool_not_file",
+  "tool_not_directory",
+  "tool_old_string_not_found",
+  "tool_old_string_not_unique",
+  "tool_path_ignored",
+  "tool_path_outside_workspace",
+  "tool_read_offset_out_of_range",
+] as const;
+
 export type RecoverableToolErrorCode =
-  | "tool_binary_file"
-  | "tool_file_exists"
-  | "tool_file_not_found"
-  | "tool_empty_command"
-  | "tool_empty_old_string"
-  | "tool_empty_pattern"
-  | "tool_invalid_pattern"
-  | "tool_not_file"
-  | "tool_not_directory"
-  | "tool_old_string_not_found"
-  | "tool_old_string_not_unique"
-  | "tool_path_ignored"
-  | "tool_path_outside_workspace"
-  | "tool_read_offset_out_of_range";
+  (typeof recoverableToolErrorCodes)[number];
 
 export type KeelErrorCode =
   | "agent_missing_stop"
@@ -29,6 +33,16 @@ export type KeelErrorCode =
   | "provider_protocol_error"
   | "provider_aborted"
   | "provider_network_error";
+
+const recoverableToolErrorCodeSet: ReadonlySet<KeelErrorCode> = new Set(
+  recoverableToolErrorCodes,
+);
+
+export function isRecoverableToolErrorCode(
+  code: KeelErrorCode,
+): code is RecoverableToolErrorCode {
+  return recoverableToolErrorCodeSet.has(code);
+}
 
 export class KeelError extends Error {
   readonly code: KeelErrorCode;
