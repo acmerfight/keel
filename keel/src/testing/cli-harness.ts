@@ -79,6 +79,7 @@ export function runCliProcess(
   options: {
     readonly env?: Record<string, string>;
     readonly cwd?: string;
+    readonly stdin?: "pipe" | "ignore";
   } = {},
 ) {
   const stdout: Buffer[] = [];
@@ -89,9 +90,12 @@ export function runCliProcess(
     {
       ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
       env: { ...process.env, ...options.env },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [options.stdin ?? "ignore", "pipe", "pipe"],
     },
   );
+  if (child.stdout === null || child.stderr === null) {
+    throw new Error("CLI process harness requires piped stdout and stderr");
+  }
 
   child.stdout.on("data", (chunk: Buffer) => {
     stdout.push(chunk);

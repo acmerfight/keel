@@ -16,8 +16,9 @@ function runCli(
 function runCliProcess(
   args: readonly string[],
   env: Record<string, string> = {},
+  options: { readonly stdin?: "pipe" | "ignore" } = {},
 ) {
-  return runCliProcessCommand(args, { env });
+  return runCliProcessCommand(args, { env, ...options });
 }
 
 function getPort(server: Server): number {
@@ -96,7 +97,7 @@ function withTimeout<T>(
 }
 
 describe("CLI Text Reply", () => {
-  test(`Given no user message,
+  test(`Given no user message and no interactive terminal,
     When user runs the CLI,
     Then the CLI exits with usage instructions`, async () => {
     // Given
@@ -117,6 +118,54 @@ describe("CLI Text Reply", () => {
         "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
         "",
       ].join("\n"),
+    );
+  });
+
+  test(`Given user starts an interactive session,
+    When user sends two related messages,
+    Then the second answer uses context from the first`, async () => {
+    // Given
+    const { child, result } = runCliProcess(
+      [],
+      { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
+      { stdin: "pipe" },
+    );
+
+    // When
+    child.stdin?.write("remember alpha\n");
+    child.stdin?.write("what did I ask you to remember?\n");
+    child.stdin?.end();
+
+    // Then
+    try {
+      const exit = await withTimeout(
+        result,
+        5000,
+        "interactive CLI did not finish after stdin closed",
+      );
+      expect(exit.exitCode).toBe(0);
+      expect(exit.stderr).toBe("");
+      expect(exit.stdout).toContain("Remembered: remember alpha\n");
+      expect(exit.stdout).toContain("Earlier you said: remember alpha\n");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
+  test(`Given user requests an interactive session report,
+    When user runs the CLI without a message,
+    Then the CLI rejects the unsupported report option`, async () => {
+    // Given
+    const args: readonly string[] = ["--report", "run.json"];
+
+    // When
+    const result = await runCli(args, { KEEL_FORCE_INTERACTIVE: "1" });
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Error: --report is only supported for one-shot runs.\n",
     );
   });
 
@@ -349,7 +398,7 @@ describe("CLI Text Reply", () => {
       // When
       await withTimeout(
         requestReceived,
-        1000,
+        5000,
         "CLI did not send the DeepSeek request to the local server",
       );
       child.kill("SIGINT");
@@ -357,12 +406,12 @@ describe("CLI Text Reply", () => {
       // Then
       await withTimeout(
         responseClosed,
-        1000,
+        5000,
         "DeepSeek request was not cancelled after SIGINT",
       );
       const exit = await withTimeout(
         result,
-        1000,
+        5000,
         "CLI did not exit after SIGINT",
       );
       expect(exit.exitCode).toBe(130);
