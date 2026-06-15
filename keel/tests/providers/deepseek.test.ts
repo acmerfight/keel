@@ -2055,6 +2055,38 @@ describe("DeepSeek Provider", () => {
     expect(textEvents.map((e) => e.text).join("")).toBe("Hello world");
   });
 
+  test(`Given the calculated retry delay exceeds the configured maximum,
+    When provider retries a transient server error,
+    Then it uses the capped delay and returns the successful stream`, async () => {
+    // Given
+    transientServerErrorRequests = 0;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: {
+        maxRetries: 1,
+        initialDelayMs: 10_000,
+        maxDelayMs: 0,
+        jitterRatio: 0,
+      },
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "transient-server-error" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(transientServerErrorRequests).toBe(2);
+    const textEvents = events.filter((e) => e.type === "text");
+    expect(textEvents.map((e) => e.text).join("")).toBe("Hello world");
+  });
+
   test(`Given rate limits continue past the retry budget,
     When provider attempts to stream,
     Then it throws the final rate limit error`, async () => {

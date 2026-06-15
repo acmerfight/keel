@@ -353,10 +353,6 @@ function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 409 || status === 429 || status >= 500;
 }
 
-function isRetryableTransportError(error: KeelError): boolean {
-  return error.code === "provider_network_error";
-}
-
 function parseRetryAfterMs(headers: Headers, nowMs: number): number | null {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs !== null) {
@@ -391,15 +387,22 @@ function retryDelayMs(
     return { type: "skip" };
   }
 
+  return {
+    type: "delay",
+    ms: exponentialRetryDelayMs(attemptIndex, retry),
+  };
+}
+
+function exponentialRetryDelayMs(
+  attemptIndex: number,
+  retry: ResolvedProviderRetryConfig,
+): number {
   const exponentialDelay = Math.min(
     retry.initialDelayMs * 2 ** attemptIndex,
     retry.maxDelayMs,
   );
   const jitterMultiplier = 1 - Math.random() * retry.jitterRatio;
-  return {
-    type: "delay",
-    ms: Math.max(0, exponentialDelay * jitterMultiplier),
-  };
+  return Math.max(0, exponentialDelay * jitterMultiplier);
 }
 
 function sleepWithAbort(
@@ -443,12 +446,23 @@ async function discardResponseBody(response: Response): Promise<void> {
   }
 }
 
-async function waitBeforeRetry(
-  delay: RetryDelay,
+async function retryResponseIfAllowed(
+  response: Response,
+  attempt: number,
+  retry: ResolvedProviderRetryConfig,
   signal: AbortSignal,
   providerName: string,
 ): Promise<boolean> {
-  if (delay.type === "skip") return false;
+  if (attempt >= retry.maxRetries || !isRetryableStatus(response.status)) {
+    return false;
+  }
+
+  const delay = retryDelayMs(attempt, response.headers, retry);
+  if (delay.type === "skip") {
+    return false;
+  }
+
+  await discardResponseBody(response);
   await sleepWithAbort(delay.ms, signal, providerName);
   return true;
 }
@@ -566,16 +580,15 @@ async function requestChatCompletions(
       );
       if (
         attempt >= retry.maxRetries ||
-        !isRetryableTransportError(keelError)
+        keelError.code !== "provider_network_error"
       ) {
         throw keelError;
       }
-      const shouldRetry = await waitBeforeRetry(
-        retryDelayMs(attempt, null, retry),
+      await sleepWithAbort(
+        exponentialRetryDelayMs(attempt, retry),
         signal,
         providerName,
       );
-      if (!shouldRetry) throw keelError;
       continue;
     }
 
@@ -583,14 +596,16 @@ async function requestChatCompletions(
       return response;
     }
 
-    if (attempt < retry.maxRetries && isRetryableStatus(response.status)) {
-      const delay = retryDelayMs(attempt, response.headers, retry);
-      const shouldRetry = delay.type !== "skip";
-      if (shouldRetry) {
-        await discardResponseBody(response);
-        await sleepWithAbort(delay.ms, signal, providerName);
-        continue;
-      }
+    if (
+      await retryResponseIfAllowed(
+        response,
+        attempt,
+        retry,
+        signal,
+        providerName,
+      )
+    ) {
+      continue;
     }
 
     const text = await response.text();
