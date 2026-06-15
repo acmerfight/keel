@@ -240,6 +240,33 @@ describe("CLI Main", () => {
     }
   });
 
+  test(`Given eval runs without a task filter,
+    When the CLI main dispatches to the eval runner,
+    Then it omits the optional task selection`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-eval-all-"));
+    const fixture = createRuntime(
+      [
+        "eval",
+        "--suite",
+        join(workspace, "missing-suite"),
+        "--out",
+        join(workspace, "results.jsonl"),
+      ],
+      { cwd: workspace },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given there is no edit checkpoint,
     When the CLI main dispatches undo,
     Then it returns the user-visible undo failure`, async () => {
@@ -381,6 +408,23 @@ describe("CLI Main", () => {
     Then it prints the provider reply and exits successfully`, async () => {
     // Given
     const fixture = createRuntime(["hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toBe("Hello from fake provider.\n");
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given trusted shell mode is enabled,
+    When the CLI main runs a one-shot request,
+    Then it passes the allow-bash option into the agent run`, async () => {
+    // Given
+    const fixture = createRuntime(["--allow-bash", "hello"], {
       env: { KEEL_PROVIDER: "fake" },
     });
 
