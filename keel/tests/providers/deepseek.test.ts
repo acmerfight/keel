@@ -251,6 +251,7 @@ const deepseekRequestBodySchema = z
             function: z
               .object({
                 name: z.string(),
+                description: z.string().optional(),
                 parameters: z
                   .object({
                     properties: z.record(z.string(), z.unknown()),
@@ -262,6 +263,43 @@ const deepseekRequestBodySchema = z
           .passthrough(),
       )
       .optional(),
+  })
+  .passthrough();
+
+const stringToolParameterSchema = z
+  .object({
+    type: z.literal("string"),
+  })
+  .passthrough();
+
+const bashToolParametersSchema = z
+  .object({
+    properties: z
+      .object({
+        command: stringToolParameterSchema,
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+const grepToolParametersSchema = z
+  .object({
+    properties: z
+      .object({
+        pattern: stringToolParameterSchema,
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+const writeToolParametersSchema = z
+  .object({
+    properties: z
+      .object({
+        path: stringToolParameterSchema,
+        content: stringToolParameterSchema,
+      })
+      .passthrough(),
   })
   .passthrough();
 
@@ -3088,8 +3126,9 @@ describe("DeepSeek Provider", () => {
       if (bashToolDefinition === undefined) {
         throw new Error("Expected bash tool definition");
       }
-      const commandSchema =
-        bashToolDefinition.function.parameters.properties.command;
+      const commandSchema = bashToolParametersSchema.parse(
+        bashToolDefinition.function.parameters,
+      ).properties.command;
       expect(commandSchema).toMatchObject({ type: "string" });
       expect(commandSchema).not.toHaveProperty("minLength");
     } finally {
@@ -3145,8 +3184,9 @@ describe("DeepSeek Provider", () => {
       if (grepToolDefinition === undefined) {
         throw new Error("Expected grep tool definition");
       }
-      const patternSchema =
-        grepToolDefinition.function.parameters.properties.pattern;
+      const patternSchema = grepToolParametersSchema.parse(
+        grepToolDefinition.function.parameters,
+      ).properties.pattern;
       expect(patternSchema).toMatchObject({ type: "string" });
       expect(patternSchema).not.toHaveProperty("minLength");
     } finally {
@@ -3202,7 +3242,9 @@ describe("DeepSeek Provider", () => {
       if (writeToolDefinition === undefined) {
         throw new Error("Expected write tool definition");
       }
-      const parameters = writeToolDefinition.function.parameters;
+      const parameters = writeToolParametersSchema.parse(
+        writeToolDefinition.function.parameters,
+      );
       expect(parameters).toMatchObject({
         required: ["path", "content"],
         additionalProperties: false,

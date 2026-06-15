@@ -3,6 +3,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { withGitWorkspace as withHarnessGitWorkspace } from "../../src/testing/cli-harness.ts";
 
+interface FsOverrides {
+  readonly realpathSync?: (
+    path: Parameters<typeof import("node:fs").realpathSync>[0],
+  ) => string;
+  readonly writeFileSync?: typeof import("node:fs").writeFileSync;
+}
+
 async function withGitWorkspace(
   action: (workspace: string) => Promise<void>,
 ): Promise<void> {
@@ -10,7 +17,7 @@ async function withGitWorkspace(
 }
 
 async function importGitWithFs(
-  overrides: Partial<typeof import("node:fs")>,
+  overrides: FsOverrides,
 ): Promise<typeof import("../../src/core/git.ts")> {
   vi.resetModules();
   const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
