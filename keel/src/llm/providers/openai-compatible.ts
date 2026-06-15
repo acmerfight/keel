@@ -253,6 +253,7 @@ export interface ProviderRetryConfig {
   readonly maxDelayMs?: number;
   readonly jitterRatio?: number;
   readonly maxRetryAfterMs?: number;
+  readonly maxTotalDelayMs?: number;
 }
 
 interface ResolvedProviderRetryConfig {
@@ -261,6 +262,7 @@ interface ResolvedProviderRetryConfig {
   readonly maxDelayMs: number;
   readonly jitterRatio: number;
   readonly maxRetryAfterMs: number;
+  readonly maxTotalDelayMs: number;
 }
 
 interface ProviderConfig {
@@ -297,8 +299,9 @@ const DEFAULT_PROVIDER_RETRY_CONFIG: ResolvedProviderRetryConfig = {
   maxRetries: 4,
   initialDelayMs: 500,
   maxDelayMs: 8_000,
-  jitterRatio: 0.25,
+  jitterRatio: 1,
   maxRetryAfterMs: 60_000,
+  maxTotalDelayMs: 120_000,
 };
 
 function resolveRetryConfig(
@@ -321,6 +324,8 @@ function resolveRetryConfig(
     ),
     maxRetryAfterMs:
       retry.maxRetryAfterMs ?? DEFAULT_PROVIDER_RETRY_CONFIG.maxRetryAfterMs,
+    maxTotalDelayMs:
+      retry.maxTotalDelayMs ?? DEFAULT_PROVIDER_RETRY_CONFIG.maxTotalDelayMs,
   };
 }
 
@@ -406,8 +411,9 @@ function exponentialRetryDelayMs(
     retry.initialDelayMs * 2 ** attemptIndex,
     retry.maxDelayMs,
   );
-  const jitterMultiplier = 1 - Math.random() * retry.jitterRatio;
-  return Math.max(0, exponentialDelay * jitterMultiplier);
+  const minimumDelay = exponentialDelay * (1 - retry.jitterRatio);
+  const jitterRange = exponentialDelay - minimumDelay;
+  return Math.max(0, minimumDelay + Math.random() * jitterRange);
 }
 
 function sleepWithAbort(
@@ -458,10 +464,19 @@ interface RetryResponseDecision {
   readonly delayMs: number;
 }
 
+function fitsRetryDelayBudget(
+  totalRetryDelayMs: number,
+  delayMs: number,
+  retry: ResolvedProviderRetryConfig,
+): boolean {
+  return totalRetryDelayMs + delayMs <= retry.maxTotalDelayMs;
+}
+
 function retryResponseDecision(
   response: Response,
   attempt: number,
   retry: ResolvedProviderRetryConfig,
+  totalRetryDelayMs: number,
 ): RetryResponseDecision | null {
   if (attempt >= retry.maxRetries || !isRetryableStatus(response.status)) {
     return null;
@@ -469,6 +484,9 @@ function retryResponseDecision(
 
   const delay = retryDelayMs(attempt, response.headers, retry);
   if (delay.type === "skip") {
+    return null;
+  }
+  if (!fitsRetryDelayBudget(totalRetryDelayMs, delay.ms, retry)) {
     return null;
   }
 
@@ -587,6 +605,10 @@ async function* requestChatCompletions(
   providerName: string,
 ): AsyncGenerator<LLMEvent, Response> {
   const retry = resolveRetryConfig(config.retry);
+  let totalRetryDelayMs = 0;
+  // Retries cover request setup and HTTP error responses before SSE parsing.
+  // Mid-stream disconnects still fail the turn to avoid replaying partial text
+  // or tool calls.
   for (let attempt = 0; ; attempt++) {
     let response: Response;
     try {
@@ -613,6 +635,9 @@ async function* requestChatCompletions(
         throw keelError;
       }
       const delayMs = exponentialRetryDelayMs(attempt, retry);
+      if (!fitsRetryDelayBudget(totalRetryDelayMs, delayMs, retry)) {
+        throw keelError;
+      }
       yield providerRetryEvent(
         providerName,
         keelError.code,
@@ -620,6 +645,7 @@ async function* requestChatCompletions(
         retry.maxRetries,
         delayMs,
       );
+      totalRetryDelayMs += delayMs;
       await sleepWithAbort(delayMs, signal, providerName);
       continue;
     }
@@ -628,7 +654,12 @@ async function* requestChatCompletions(
       return response;
     }
 
-    const retryDecision = retryResponseDecision(response, attempt, retry);
+    const retryDecision = retryResponseDecision(
+      response,
+      attempt,
+      retry,
+      totalRetryDelayMs,
+    );
     if (retryDecision !== null) {
       yield providerRetryEvent(
         providerName,
@@ -638,6 +669,7 @@ async function* requestChatCompletions(
         retryDecision.delayMs,
       );
       await discardResponseBody(response);
+      totalRetryDelayMs += retryDecision.delayMs;
       await sleepWithAbort(retryDecision.delayMs, signal, providerName);
       continue;
     }

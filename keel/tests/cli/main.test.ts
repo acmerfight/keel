@@ -592,7 +592,7 @@ describe("CLI Main", () => {
       expect(requestCount).toBe(2);
       expect(fixture.stdout()).toBe("Recovered.\n");
       expect(fixture.stderr()).toBe(
-        "Provider retry: DeepSeek provider_rate_limited attempt 1/4 in 0ms\n",
+        "Provider retry: DeepSeek rate limited (attempt 1/4 in 0ms)\n",
       );
     } finally {
       await close(server);

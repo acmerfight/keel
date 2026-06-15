@@ -331,6 +331,7 @@ describe("DeepSeek Provider", () => {
   let transientTimeoutRequests = 0;
   let transientConflictRequests = 0;
   let invalidRetryAfterRequests = 0;
+  let cumulativeRetryBudgetRequests = 0;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -441,6 +442,16 @@ describe("DeepSeek Provider", () => {
               res.end(JSON.stringify({ error: { message: "Rate limited" } }));
               return;
             }
+          }
+
+          if (parsed.messages?.[1]?.content === "cumulative-retry-budget") {
+            cumulativeRetryBudgetRequests++;
+            res.writeHead(429, {
+              "Content-Type": "application/json",
+              "retry-after-ms": "1",
+            });
+            res.end(JSON.stringify({ error: { message: "Rate limited" } }));
+            return;
           }
 
           if (parsed.messages?.[1]?.content === "server-error") {
@@ -2053,6 +2064,39 @@ describe("DeepSeek Provider", () => {
     expect(invalidRetryAfterRequests).toBe(2);
     const textEvents = events.filter((e) => e.type === "text");
     expect(textEvents.map((e) => e.text).join("")).toBe("Hello world");
+  });
+
+  test(`Given retry-after waits would exceed the total retry budget,
+    When provider attempts to stream,
+    Then it stops retrying and returns the rate limit error`, async () => {
+    // Given
+    cumulativeRetryBudgetRequests = 0;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: {
+        maxRetries: 2,
+        maxRetryAfterMs: 100,
+        maxTotalDelayMs: 1,
+      },
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "cumulative-retry-budget" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_rate_limited",
+      message: expect.stringMatching(/DeepSeek API error \(429\)/),
+    });
+    expect(cumulativeRetryBudgetRequests).toBe(2);
   });
 
   test(`Given the API returns a server error,

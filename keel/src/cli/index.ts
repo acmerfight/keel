@@ -351,6 +351,17 @@ function toolCallLabel(toolCall: ToolCall): string {
   }
 }
 
+const providerRetryReasonLabels: Readonly<Record<string, string>> = {
+  provider_rate_limited: "rate limited",
+  provider_server_error: "server error",
+  provider_network_error: "network error",
+  provider_http_error: "HTTP error",
+};
+
+function providerRetryReasonLabel(reason: string): string {
+  return providerRetryReasonLabels[reason] ?? "provider error";
+}
+
 // The report schema is consumed by external tooling (the eval runner and any
 // script comparing runs across keel versions). Bump schemaVersion on any
 // breaking change to the shape.
@@ -674,7 +685,7 @@ async function printAgentEvents(
       runtime.writeStdout(sanitizeAssistantText(event.text));
     } else if (event.type === "provider_retry") {
       runtime.writeStderr(
-        `Provider retry: ${sanitizeToolLabel(event.provider)} ${event.reason} attempt ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)}ms\n`,
+        `Provider retry: ${sanitizeToolLabel(event.provider)} ${providerRetryReasonLabel(event.reason)} (attempt ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)}ms)\n`,
       );
     } else if (event.type === "tool_start") {
       runtime.writeStderr(`Tool: ${toolCallLabel(event.toolCall)}\n`);
