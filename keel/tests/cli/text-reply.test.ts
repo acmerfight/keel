@@ -116,6 +116,7 @@ describe("CLI Text Reply", () => {
         "",
         "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
         "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
+        "Provider env: KEEL_PROVIDER=deepseek|kimi, DEEPSEEK_API_KEY, KIMI_API_KEY, optional *_BASE_URL and KIMI_MODEL.",
         "",
       ].join("\n"),
     );
@@ -338,6 +339,46 @@ describe("CLI Text Reply", () => {
     // Then
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toMatch(/api key/i);
+  });
+
+  test(`Given Kimi is configured without an API key,
+    When user runs the CLI,
+    Then the CLI exits with a Kimi API key error`, async () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "kimi",
+      KIMI_API_KEY: "",
+    };
+
+    // When
+    const result = await runCli(["hello"], env);
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toBe(
+      "Error: KIMI_API_KEY is required. Set the API key to use Kimi.\n",
+    );
+  });
+
+  test(`Given Kimi is configured with an unsupported cost model,
+    When user runs the CLI with a max cost,
+    Then the CLI rejects cost tracking before contacting the provider`, async () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "kimi",
+      KIMI_API_KEY: "test-key",
+      KIMI_MODEL: "kimi-k2.5",
+    };
+
+    // When
+    const result = await runCli(["--max-cost", "1", "hello"], env);
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      'Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="kimi-k2.5".\n',
+    );
   });
 
   test(`Given an unknown provider is configured,
