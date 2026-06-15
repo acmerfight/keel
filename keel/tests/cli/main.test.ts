@@ -23,12 +23,18 @@ interface RuntimeFixture {
   readonly stderr: () => string;
 }
 
+interface SigintCapture {
+  handler: (() => void) | null;
+}
+
 function createRuntime(
   args: readonly string[],
   options: {
     readonly cwd?: string;
     readonly env?: Record<string, string>;
     readonly input?: PassThrough;
+    readonly onSigint?: (handler: () => void) => void;
+    readonly offSigint?: (handler: () => void) => void;
   } = {},
 ): RuntimeFixture {
   let stdout = "";
@@ -50,8 +56,8 @@ function createRuntime(
       writeStderr: (text) => {
         stderr += text;
       },
-      onSigint: () => {},
-      offSigint: () => {},
+      onSigint: options.onSigint ?? (() => {}),
+      offSigint: options.offSigint ?? (() => {}),
       forceExit: (code) => {
         throw new Error(`unexpected forceExit(${code})`);
       },
@@ -254,6 +260,21 @@ describe("CLI Main", () => {
     }
   });
 
+  test(`Given the user asks for diagnostics,
+    When the CLI main dispatches the doctor command,
+    Then it returns the diagnostic result`, async () => {
+    // Given
+    const fixture = createRuntime(["--doctor"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toContain("Keel doctor");
+    expect(fixture.stderr()).toBe("");
+  });
+
   test(`Given the last edit checkpoint can be restored,
     When the CLI main dispatches undo,
     Then it restores the file and reports the path`, async () => {
@@ -374,6 +395,69 @@ describe("CLI Main", () => {
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe("Hello\\x1b[31m from DeepSeek.\n");
       expect(fixture.stderr()).toBe("");
+    } finally {
+      await close(server);
+    }
+  });
+
+  test(`Given a one-shot provider request is interrupted,
+    When the CLI main receives SIGINT,
+    Then it aborts the request and returns the interrupted exit code`, async () => {
+    // Given
+    const sigint: SigintCapture = { handler: null };
+    let receiveRequest: () => void = () => {};
+    const requestReceived = new Promise<void>((resolve) => {
+      receiveRequest = resolve;
+    });
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      receiveRequest();
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      res.write(
+        `data: ${JSON.stringify({
+          choices: [{ delta: { content: "partial" } }],
+        })}\n\n`,
+      );
+    });
+    await listen(server);
+    const fixture = createRuntime(["hello"], {
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      onSigint: (handler) => {
+        sigint.handler = handler;
+      },
+      offSigint: (handler) => {
+        if (sigint.handler === handler) sigint.handler = null;
+      },
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await requestReceived;
+      const handler = sigint.handler;
+      if (handler === null) {
+        throw new Error("SIGINT handler was not registered");
+      }
+      handler();
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(130);
+      expect(fixture.stdout()).toBe("\n");
+      expect(fixture.stderr()).toBe("");
+      expect(sigint.handler).toBeNull();
     } finally {
       await close(server);
     }
