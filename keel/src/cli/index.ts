@@ -462,7 +462,10 @@ function createInteractiveFakeProvider(): LLMProvider {
       );
       const latest = userMessages.at(-1)?.content ?? "";
       const previous = userMessages.at(-2)?.content;
-      if (latest === "hang ignoring abort") {
+      if (
+        env("KEEL_TEST_HANG_ON_ABORT") === "1" &&
+        latest === "hang ignoring abort"
+      ) {
         yield { type: "text", text: "Hanging" };
         await new Promise<void>((resolve) => {
           options.signal.addEventListener("abort", () => resolve(), {

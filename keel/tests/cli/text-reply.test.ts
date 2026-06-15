@@ -215,7 +215,11 @@ describe("CLI Text Reply", () => {
     });
     const { child, result } = runCliProcess(
       [],
-      { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
+      {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_TEST_HANG_ON_ABORT: "1",
+      },
       { stdin: "pipe" },
     );
     child.stdin?.on("error", () => {});
