@@ -330,6 +330,67 @@ describe("Kimi Provider", () => {
           return;
         }
 
+        if (userMessage === "cache-hit-over-total") {
+          writeSseResponse(res, [
+            sseText("metered"),
+            `${sseData({
+              choices: [{ delta: {}, finish_reason: "stop" }],
+              usage: {
+                prompt_tokens: 10,
+                completion_tokens: 3,
+                prompt_cache_hit_tokens: 11,
+              },
+            })}data: [DONE]\n\n`,
+          ]);
+          return;
+        }
+
+        if (userMessage === "cache-miss-over-total") {
+          writeSseResponse(res, [
+            sseText("metered"),
+            `${sseData({
+              choices: [{ delta: {}, finish_reason: "stop" }],
+              usage: {
+                prompt_tokens: 10,
+                completion_tokens: 3,
+                prompt_cache_miss_tokens: 11,
+              },
+            })}data: [DONE]\n\n`,
+          ]);
+          return;
+        }
+
+        if (userMessage === "cached-detail-over-total") {
+          writeSseResponse(res, [
+            sseText("metered"),
+            `${sseData({
+              choices: [{ delta: {}, finish_reason: "stop" }],
+              usage: {
+                prompt_tokens: 10,
+                completion_tokens: 3,
+                prompt_tokens_details: { cached_tokens: 11 },
+              },
+            })}data: [DONE]\n\n`,
+          ]);
+          return;
+        }
+
+        if (userMessage === "cache-hit-detail-mismatch") {
+          writeSseResponse(res, [
+            sseText("metered"),
+            `${sseData({
+              choices: [{ delta: {}, finish_reason: "stop" }],
+              usage: {
+                prompt_tokens: 10,
+                completion_tokens: 3,
+                prompt_cache_hit_tokens: 4,
+                prompt_tokens_details: { cached_tokens: 5 },
+              },
+            })}data: [DONE]\n\n`,
+          ]);
+          return;
+        }
+
         if (userMessage === "miss-only-usage") {
           writeSseResponse(res, [
             sseText("metered"),
@@ -1214,6 +1275,22 @@ describe("Kimi Provider", () => {
     await expectProviderError("negative-usage", "provider_protocol_error");
     await expectProviderError(
       "inconsistent-cache-usage",
+      "provider_protocol_error",
+    );
+    await expectProviderError(
+      "cache-hit-over-total",
+      "provider_protocol_error",
+    );
+    await expectProviderError(
+      "cache-miss-over-total",
+      "provider_protocol_error",
+    );
+    await expectProviderError(
+      "cached-detail-over-total",
+      "provider_protocol_error",
+    );
+    await expectProviderError(
+      "cache-hit-detail-mismatch",
       "provider_protocol_error",
     );
     await expectProviderError(

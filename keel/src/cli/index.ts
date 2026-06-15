@@ -561,15 +561,8 @@ function resolveInteractiveProvider(userMessage: string): ResolvedProvider {
 function requireKnownCostModel(resolved: ResolvedProvider): CostModel {
   if (resolved.costModel !== null) return resolved.costModel;
 
-  if (resolved.provider.id === "kimi") {
-    process.stderr.write(
-      `Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="${resolved.model}".\n`,
-    );
-    process.exit(1);
-  }
-
   process.stderr.write(
-    `Error: cost tracking is not supported for provider "${resolved.provider.id}" model "${resolved.model}".\n`,
+    `Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="${resolved.model}".\n`,
   );
   process.exit(1);
 }

@@ -263,7 +263,6 @@ interface OpenAICompatibleProviderConfig {
     chunk: OpenAICompatibleChunk,
     choice: OpenAICompatibleChoice | undefined,
   ) => void;
-  readonly normalizeToolCallId?: (id: string) => string;
 }
 
 type ToolCallEvent = Extract<LLMEvent, { readonly type: "tool_call" }>;
@@ -582,7 +581,6 @@ function appendToolCallDelta(
   state: OpenAICompatibleStreamState,
   toolCall: OpenAICompatibleToolCallDelta,
   providerName: string,
-  normalizeToolCallId: ((id: string) => string) | undefined,
 ): void {
   const index = toolCall.index;
   if (index === undefined) {
@@ -601,7 +599,7 @@ function appendToolCallDelta(
   if (toolCall.id) {
     state.toolCalls.set(index, {
       ...current,
-      id: normalizeToolCallId?.(toolCall.id) ?? toolCall.id,
+      id: toolCall.id,
     });
   }
   if (toolFunction?.name) {
@@ -656,12 +654,7 @@ function* parseSseLine(
     }
 
     for (const toolCall of choice.delta?.tool_calls ?? []) {
-      appendToolCallDelta(
-        state,
-        toolCall,
-        config.providerName,
-        config.normalizeToolCallId,
-      );
+      appendToolCallDelta(state, toolCall, config.providerName);
     }
 
     if (choice.finish_reason) {
