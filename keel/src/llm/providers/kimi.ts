@@ -138,6 +138,5 @@ export function createKimiProvider(config: KimiConfig) {
     config,
     parseChunk: parseKimiChunk,
     captureUsage: captureKimiUsage,
-    normalizeToolCallId: (id) => id.slice(0, 64),
   });
 }

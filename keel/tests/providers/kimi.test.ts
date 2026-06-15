@@ -151,7 +151,7 @@ function toolCallWithoutId(argumentsJson: string): {
 }
 
 function longToolCallId(): string {
-  return `call_kimi_${"x".repeat(80)}`;
+  return `functions.read:0.${"x".repeat(80)}`;
 }
 
 async function collect(stream: AsyncIterable<LLMEvent>): Promise<LLMEvent[]> {
@@ -962,10 +962,10 @@ describe("Kimi Provider", () => {
 
   test(`Given Kimi returns an overlong tool call id,
     When Keel records and replays the tool round,
-    Then the truncated id is used consistently in following history`, async () => {
+    Then the provider id is preserved exactly in following history`, async () => {
     // Given
     const provider = createProvider();
-    const truncatedToolCallId = longToolCallId().slice(0, 64);
+    const providerToolCallId = longToolCallId();
 
     // When
     const events = await collect(
@@ -985,7 +985,7 @@ describe("Kimi Provider", () => {
             content: "",
             toolCalls: [
               {
-                id: truncatedToolCallId,
+                id: providerToolCallId,
                 tool: "read",
                 path: "note.txt",
               },
@@ -993,7 +993,7 @@ describe("Kimi Provider", () => {
           },
           {
             role: "tool",
-            toolCallId: truncatedToolCallId,
+            toolCallId: providerToolCallId,
             content: "hello\n",
           },
           { role: "user", content: "continue after long id" },
@@ -1005,7 +1005,7 @@ describe("Kimi Provider", () => {
     // Then
     expect(events[0]).toEqual({
       type: "tool_call",
-      id: truncatedToolCallId,
+      id: providerToolCallId,
       tool: "read",
       path: "note.txt",
     });
@@ -1017,7 +1017,7 @@ describe("Kimi Provider", () => {
         content: null,
         tool_calls: [
           {
-            id: truncatedToolCallId,
+            id: providerToolCallId,
             type: "function",
             function: {
               name: "read",
@@ -1028,7 +1028,7 @@ describe("Kimi Provider", () => {
       },
       {
         role: "tool",
-        tool_call_id: truncatedToolCallId,
+        tool_call_id: providerToolCallId,
         content: "hello\n",
       },
       { role: "user", content: "continue after long id" },
