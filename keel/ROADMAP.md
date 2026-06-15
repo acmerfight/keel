@@ -55,7 +55,9 @@ Known limits that shape the priorities below:
 - Interactive sessions are process-local only: no mid-run steering, no
   resume/persistence, no TUI, no session-level report, and cost limits apply
   to each submitted turn rather than the whole interactive session.
-- Single hardcoded provider/model (`deepseek-v4-flash`).
+- Provider selection supports DeepSeek (`deepseek-v4-flash`) and Kimi
+  (`kimi-k2.6`) through environment configuration; broader provider/model
+  configuration is still missing.
 - No provider retry: the first 429 or 5xx kills the run.
 - Tool calls execute strictly sequentially.
 - Exact-match single-string edit only.
@@ -73,12 +75,15 @@ Known limits that shape the priorities below:
    follow-ups, corrections, "now also fix the tests" — including while a
    run is in progress. Daily use also generates the real-task corpus the
    eval suite (P0-6) needs.
-2. **Frontier-model provider.** Only `deepseek-v4-flash` is wired in.
-   This carries double weight: daily use needs a frontier model, and
-   proving harness superiority requires running the **same model** as
-   Claude Code / Codex / Kimi Code in an A/B comparison. Slice test:
-   *a user sets a different provider key and the same prompt runs
-   end-to-end.*
+2. **Frontier-model provider.** ✅ Partial (2026-06): Kimi's
+   OpenAI-compatible API is wired through `KEEL_PROVIDER=kimi`, with
+   `KIMI_API_KEY`, `KIMI_BASE_URL`, and `KIMI_MODEL` selecting
+   `kimi-k2.6` by default. Remaining work is a general provider/model
+   configuration surface and additional frontier providers. This carries
+   double weight: daily use needs frontier models, and proving harness
+   superiority requires running the **same model** as Claude Code / Codex /
+   Kimi Code in an A/B comparison. Slice test: *a user sets a different
+   provider key and the same prompt runs end-to-end.*
 3. **Provider retry with backoff.** A transient 429/5xx currently kills
    the whole run; keel already classifies these errors but never retries.
    Every reference harness retries with exponential backoff (opencode

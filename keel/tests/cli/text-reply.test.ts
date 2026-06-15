@@ -340,6 +340,25 @@ describe("CLI Text Reply", () => {
     expect(result.stderr).toMatch(/api key/i);
   });
 
+  test(`Given Kimi is configured without an API key,
+    When user runs the CLI,
+    Then the CLI exits with a Kimi API key error`, async () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "kimi",
+      KIMI_API_KEY: "",
+    };
+
+    // When
+    const result = await runCli(["hello"], env);
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toBe(
+      "Error: KIMI_API_KEY is required. Set the API key to use Kimi.\n",
+    );
+  });
+
   test(`Given an unknown provider is configured,
     When user runs the CLI,
     Then the CLI exits with a provider configuration error`, async () => {

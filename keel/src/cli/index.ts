@@ -14,6 +14,10 @@ import {
   createDeepseekProvider,
   DEEPSEEK_V4_FLASH_COST_MODEL,
 } from "../llm/providers/deepseek.ts";
+import {
+  createKimiProvider,
+  KIMI_K2_6_COST_MODEL,
+} from "../llm/providers/kimi.ts";
 import type { LLMProvider, Message, ToolCall } from "../llm/types.ts";
 import { createFakeProvider, fakeResponse } from "../testing/fake-provider.ts";
 import { runDoctor } from "./doctor.ts";
@@ -515,6 +519,26 @@ function resolveProvider(
       }),
       model,
       costModel: DEEPSEEK_V4_FLASH_COST_MODEL,
+    };
+  }
+
+  if (providerId === "kimi") {
+    const apiKey = env("KIMI_API_KEY");
+    if (!apiKey) {
+      process.stderr.write(
+        "Error: KIMI_API_KEY is required. Set the API key to use Kimi.\n",
+      );
+      process.exit(1);
+    }
+    const model = env("KIMI_MODEL") ?? "kimi-k2.6";
+    return {
+      provider: createKimiProvider({
+        apiKey,
+        baseUrl: env("KIMI_BASE_URL") ?? "https://api.moonshot.cn/v1",
+        model,
+      }),
+      model,
+      costModel: KIMI_K2_6_COST_MODEL,
     };
   }
 
