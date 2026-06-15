@@ -44,6 +44,10 @@ export function isRecoverableToolErrorCode(
   return recoverableToolErrorCodeSet.has(code);
 }
 
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class KeelError extends Error {
   readonly code: KeelErrorCode;
   readonly recovery?: string;

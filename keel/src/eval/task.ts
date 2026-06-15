@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
+import { errorMessage } from "../core/error.ts";
 
 const DEFAULT_TASK_TIMEOUT_MS = 300_000;
 const DEFAULT_SCRIPT_TIMEOUT_MS = 60_000;
@@ -37,7 +38,7 @@ function parseTaskConfig(
   try {
     raw = JSON.parse(readFileSync(configPath, "utf8"));
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = errorMessage(error);
     throw new Error(`eval task "${id}" has unreadable task.json: ${detail}`);
   }
 

@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
+import { errorMessage } from "../core/error.ts";
 import { type EvalTask, loadEvalTasks } from "./task.ts";
 
 // Mirrors the CLI --report payload. The runner consumes the report through
@@ -65,7 +66,13 @@ const STDERR_TAIL_CHARS = 400;
 
 function killProcessGroup(child: ReturnType<typeof spawn>): void {
   const pid = child.pid;
-  if (pid === undefined || process.platform === "win32") {
+  /* v8 ignore next 3: spawn can fail before assigning a pid. */
+  if (pid === undefined) {
+    child.kill("SIGKILL");
+    return;
+  }
+  /* v8 ignore next 3: process groups are unavailable on Windows. */
+  if (process.platform === "win32") {
     child.kill("SIGKILL");
     return;
   }
@@ -102,6 +109,7 @@ function runProcess(
     }, options.timeoutMs);
 
     const finish = (exitCode: number | null) => {
+      /* v8 ignore next 1: child_process can emit close/error races. */
       if (finished) return;
       finished = true;
       clearTimeout(timer);
@@ -115,6 +123,7 @@ function runProcess(
       });
     };
     child.on("error", (error) => {
+      /* v8 ignore next 1: child_process can emit close/error races. */
       if (finished) return;
       finished = true;
       clearTimeout(timer);
@@ -122,7 +131,7 @@ function runProcess(
         exitCode: null,
         spawnFailed: true,
         timedOut,
-        stderrTail: error instanceof Error ? error.message : String(error),
+        stderrTail: error.message,
       });
     });
     child.on("exit", (code) => {
@@ -199,6 +208,7 @@ async function runTrial(
       cwd: workDir,
       timeoutMs: task.scriptTimeoutMs,
     });
+    /* v8 ignore next 3: CI and supported user environments provide bash. */
     if (verify.spawnFailed) {
       return { outcome: "crashed", wallMs, report };
     }
@@ -285,7 +295,7 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
   try {
     tasks = selectTasks(args);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     process.stderr.write(`Error: ${message}\n`);
     return 1;
   }
