@@ -3349,6 +3349,40 @@ describe("DeepSeek Provider", () => {
     }
   });
 
+  test(`Given a network retry would exceed the total retry budget,
+    When provider cannot connect,
+    Then it stops without waiting for the retry`, async () => {
+    // Given
+    const port = await unusedLocalPort();
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl: `http://127.0.0.1:${port}`,
+      model: "deepseek-v4-flash",
+      retry: {
+        maxRetries: 1,
+        initialDelayMs: 1,
+        maxDelayMs: 1,
+        jitterRatio: 0,
+        maxTotalDelayMs: 0,
+      },
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "hi" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_network_error",
+      message: "DeepSeek request failed before response",
+    });
+  });
+
   test(`Given a retryable provider failure enters backoff,
     When the caller aborts before the retry,
     Then it throws an aborted provider error`, async () => {
