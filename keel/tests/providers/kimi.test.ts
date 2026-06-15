@@ -991,6 +991,67 @@ describe("Kimi Provider", () => {
     ]);
   });
 
+  test(`Given prior assistant tool call history includes text,
+    When Kimi receives the next request,
+    Then assistant content is preserved beside tool calls`, async () => {
+    // Given
+    const provider = createProvider();
+
+    // When
+    await collect(
+      provider.stream({
+        systemPrompt: "You are Keel.",
+        messages: [
+          { role: "user", content: "first" },
+          {
+            role: "assistant",
+            content: "I will read the note before continuing.",
+            toolCalls: [
+              {
+                id: "call_read_history",
+                tool: "read",
+                path: "note.txt",
+              },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "call_read_history",
+            content: "hello\n",
+          },
+          { role: "user", content: "continue" },
+        ],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(capturedBody?.messages).toMatchObject([
+      { role: "system", content: "You are Keel." },
+      { role: "user", content: "first" },
+      {
+        role: "assistant",
+        content: "I will read the note before continuing.",
+        tool_calls: [
+          {
+            id: "call_read_history",
+            type: "function",
+            function: {
+              name: "read",
+              arguments: JSON.stringify({ path: "note.txt" }),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "call_read_history",
+        content: "hello\n",
+      },
+      { role: "user", content: "continue" },
+    ]);
+  });
+
   test(`Given Kimi streams usage on the final choice,
     When the provider reads the response,
     Then it preserves cached token accounting and ignores reasoning content`, async () => {

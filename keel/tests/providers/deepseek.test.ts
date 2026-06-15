@@ -1504,7 +1504,7 @@ describe("DeepSeek Provider", () => {
       { role: "assistant", content: "plain answer" },
       {
         role: "assistant",
-        content: null,
+        content: "I need to inspect the readme.",
         tool_calls: [
           {
             id: "read_0",
@@ -1523,7 +1523,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         role: "assistant",
-        content: null,
+        content: "I need to inspect a file window.",
         tool_calls: [
           {
             id: "read_1",
@@ -1542,7 +1542,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         role: "assistant",
-        content: null,
+        content: "I need to search the workspace.",
         tool_calls: [
           {
             id: "grep_1",
@@ -1561,7 +1561,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         role: "assistant",
-        content: null,
+        content: "I can now edit.",
         tool_calls: [
           {
             id: "edit_1",
@@ -1580,7 +1580,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         role: "assistant",
-        content: null,
+        content: "I can now create a file.",
         tool_calls: [
           {
             id: "write_1",
@@ -1599,7 +1599,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         role: "assistant",
-        content: null,
+        content: "I need to run the test command.",
         tool_calls: [
           {
             id: "bash_1",

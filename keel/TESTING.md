@@ -100,6 +100,8 @@ Cover behavior at the boundary that owns the risk:
 
 Do not add an agent test for every tool if the loop behavior is already covered by an equivalent control-flow class. When adding a new tool, add exhaustive `tests/tools/` coverage first; add `tests/agent/` coverage only if the tool introduces a new agent decision path or a new recoverable/terminal result class.
 
+Provider history replay must preserve all model-visible context across turns. Do not drop assistant text, tool-call metadata, tool results, or their linkage during protocol serialization, because the harness depends on the prior plan, rationale, constraints, and tool/result continuity to keep multi-turn tasks on track.
+
 ## Do NOT
 
 - Mock anything except LLM
