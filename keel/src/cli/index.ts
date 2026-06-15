@@ -66,6 +66,7 @@ const USAGE = [
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
   "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
   "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY, optional *_BASE_URL and *_MODEL.",
+  "Qwen keys are region-bound; set QWEN_BASE_URL for China region or workspace-scoped DashScope endpoints.",
 ].join("\n");
 
 const maxCostSchema = z.coerce.number().finite().positive();
@@ -550,7 +551,7 @@ function resolveProvider(userMessage: string): ResolvedProvider {
     const apiKey = env("DASHSCOPE_API_KEY") ?? env("QWEN_API_KEY");
     if (!apiKey) {
       process.stderr.write(
-        "Error: DASHSCOPE_API_KEY is required. Set the API key to use Qwen.\n",
+        "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Set QWEN_BASE_URL for China region or workspace-scoped DashScope endpoints.\n",
       );
       process.exit(1);
     }
