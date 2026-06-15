@@ -330,6 +330,7 @@ describe("DeepSeek Provider", () => {
   let longRetryAfterRequests = 0;
   let transientTimeoutRequests = 0;
   let transientConflictRequests = 0;
+  let invalidRetryAfterRequests = 0;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -425,6 +426,19 @@ describe("DeepSeek Provider", () => {
                 "Retry-After": new Date(0).toUTCString(),
               });
               res.end(JSON.stringify({ error: { message: "Conflict" } }));
+              return;
+            }
+          }
+
+          if (parsed.messages?.[1]?.content === "invalid-retry-after") {
+            invalidRetryAfterRequests++;
+            if (invalidRetryAfterRequests === 1) {
+              res.writeHead(429, {
+                "Content-Type": "application/json",
+                "retry-after-ms": "-1",
+                "Retry-After": "not-a-date",
+              });
+              res.end(JSON.stringify({ error: { message: "Rate limited" } }));
               return;
             }
           }
@@ -1997,6 +2011,38 @@ describe("DeepSeek Provider", () => {
 
     // Then
     expect(transientConflictRequests).toBe(2);
+    const textEvents = events.filter((e) => e.type === "text");
+    expect(textEvents.map((e) => e.text).join("")).toBe("Hello world");
+  });
+
+  test(`Given the API returns invalid retry-after headers,
+    When provider streams the response,
+    Then it falls back to local backoff and returns the successful stream`, async () => {
+    // Given
+    invalidRetryAfterRequests = 0;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: {
+        maxRetries: 1,
+        initialDelayMs: 0,
+        maxDelayMs: 0,
+        jitterRatio: 0,
+      },
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "invalid-retry-after" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(invalidRetryAfterRequests).toBe(2);
     const textEvents = events.filter((e) => e.type === "text");
     expect(textEvents.map((e) => e.text).join("")).toBe("Hello world");
   });
