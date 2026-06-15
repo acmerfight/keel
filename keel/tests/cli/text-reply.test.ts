@@ -116,6 +116,7 @@ describe("CLI Text Reply", () => {
         "",
         "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
         "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
+        "Provider env: KEEL_PROVIDER=deepseek|kimi, DEEPSEEK_API_KEY, KIMI_API_KEY, optional *_BASE_URL and KIMI_MODEL.",
         "",
       ].join("\n"),
     );

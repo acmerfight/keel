@@ -279,6 +279,16 @@ describe("Kimi Provider", () => {
           return;
         }
 
+        if (userMessage === "abort-during-stream") {
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          });
+          res.write(sseText("partial"));
+          return;
+        }
+
         if (userMessage === "invalid-json") {
           writeSseResponse(res, ["data: {not-json}\n\n"]);
           return;
@@ -1261,6 +1271,60 @@ describe("Kimi Provider", () => {
     await expectProviderError("server-error", "provider_server_error");
     await expectProviderError("bad-request", "provider_http_error");
     await expectProviderError("no-body", "provider_protocol_error");
+  });
+
+  test(`Given the caller aborts a Kimi request,
+    When the provider attempts to stream,
+    Then it throws an aborted provider error`, async () => {
+    // Given
+    const provider = createProvider();
+    const controller = new AbortController();
+    controller.abort();
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [{ role: "user", content: "hello" }],
+          signal: controller.signal,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_aborted",
+      message: "Kimi request was aborted",
+    });
+  });
+
+  test(`Given the caller aborts while Kimi is streaming,
+    When the provider reads the next chunk,
+    Then it throws an aborted provider error`, async () => {
+    // Given
+    const provider = createProvider();
+    const controller = new AbortController();
+    const iterator = provider
+      .stream({
+        systemPrompt: "You are Keel.",
+        messages: [{ role: "user", content: "abort-during-stream" }],
+        signal: controller.signal,
+      })
+      [Symbol.asyncIterator]();
+
+    // When
+    const first = await iterator.next();
+    controller.abort();
+
+    // Then
+    expect(first).toEqual({
+      done: false,
+      value: { type: "text", text: "partial" },
+    });
+    await expect(iterator.next()).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_aborted",
+      message: "Kimi request was aborted",
+    });
   });
 
   test(`Given Kimi returns malformed or incomplete streams,
