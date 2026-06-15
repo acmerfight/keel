@@ -251,6 +251,7 @@ const deepseekRequestBodySchema = z
             function: z
               .object({
                 name: z.string(),
+                description: z.string().optional(),
                 parameters: z
                   .object({
                     properties: z.record(z.string(), z.unknown()),
@@ -269,6 +270,13 @@ function parseDeepseekRequestBody(
   body: string,
 ): z.infer<typeof deepseekRequestBodySchema> {
   return deepseekRequestBodySchema.parse(JSON.parse(body));
+}
+
+function schemaProperty(
+  properties: Record<string, unknown>,
+  property: string,
+): unknown {
+  return properties[property];
 }
 
 async function unusedLocalPort(): Promise<number> {
@@ -3088,8 +3096,10 @@ describe("DeepSeek Provider", () => {
       if (bashToolDefinition === undefined) {
         throw new Error("Expected bash tool definition");
       }
-      const commandSchema =
-        bashToolDefinition.function.parameters.properties.command;
+      const commandSchema = schemaProperty(
+        bashToolDefinition.function.parameters.properties,
+        "command",
+      );
       expect(commandSchema).toMatchObject({ type: "string" });
       expect(commandSchema).not.toHaveProperty("minLength");
     } finally {
@@ -3145,8 +3155,10 @@ describe("DeepSeek Provider", () => {
       if (grepToolDefinition === undefined) {
         throw new Error("Expected grep tool definition");
       }
-      const patternSchema =
-        grepToolDefinition.function.parameters.properties.pattern;
+      const patternSchema = schemaProperty(
+        grepToolDefinition.function.parameters.properties,
+        "pattern",
+      );
       expect(patternSchema).toMatchObject({ type: "string" });
       expect(patternSchema).not.toHaveProperty("minLength");
     } finally {
@@ -3207,8 +3219,12 @@ describe("DeepSeek Provider", () => {
         required: ["path", "content"],
         additionalProperties: false,
       });
-      expect(parameters.properties.path).toMatchObject({ type: "string" });
-      expect(parameters.properties.content).toMatchObject({ type: "string" });
+      expect(schemaProperty(parameters.properties, "path")).toMatchObject({
+        type: "string",
+      });
+      expect(schemaProperty(parameters.properties, "content")).toMatchObject({
+        type: "string",
+      });
       expect(writeToolDefinition.function.description).toContain(
         "Fails if the file already exists",
       );

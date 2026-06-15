@@ -4,6 +4,21 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
 
+type PathLike = Parameters<typeof import("node:fs").realpathSync>[0];
+
+interface FsOverrides {
+  readonly lstatSync?: (
+    path: PathLike,
+  ) => ReturnType<typeof import("node:fs").lstatSync>;
+  readonly mkdirSync?: (path: PathLike) => void;
+  readonly realpathSync?: (path: PathLike) => string;
+  readonly writeFileSync?: (
+    path: PathLike,
+    data: string,
+    options?: unknown,
+  ) => void;
+}
+
 function errno(code: string): Error & { readonly code: string } {
   return Object.assign(new Error(code), { code });
 }
@@ -37,7 +52,7 @@ async function withWriteWorkspace(
 }
 
 async function importWriteWithFs(
-  overrides: Partial<typeof import("node:fs")>,
+  overrides: FsOverrides,
 ): Promise<typeof import("../../src/tools/write.ts")> {
   vi.resetModules();
   const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");

@@ -74,7 +74,14 @@ const qwenRequestBodySchema = z
           .passthrough(),
       )
       .optional(),
-    messages: z.array(z.object({ role: z.string() }).passthrough()),
+    messages: z.array(
+      z
+        .object({
+          role: z.string(),
+          content: z.string().nullable().optional(),
+        })
+        .passthrough(),
+    ),
   })
   .passthrough();
 
