@@ -2,7 +2,10 @@ import { createServer, type ServerResponse } from "node:http";
 import type { Server } from "node:net";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { z } from "zod";
-import { createQwenProvider } from "../../src/llm/providers/qwen.ts";
+import {
+  createQwenProvider,
+  qwenCostModel,
+} from "../../src/llm/providers/qwen.ts";
 import type { LLMEvent } from "../../src/llm/types.ts";
 
 function getPort(server: Server): number {
@@ -104,6 +107,31 @@ describe("Qwen Provider", () => {
         capturedBody = parsed;
         capturedAuthorization = req.headers.authorization;
         const userMessage = parsed.messages[1]?.content;
+
+        if (userMessage === "invalid-json") {
+          writeSseResponse(res, ["data: {not json}\n\n", "data: [DONE]\n\n"]);
+          return;
+        }
+
+        if (userMessage === "empty-schema-chunk") {
+          writeSseResponse(res, [sseData({}), "data: [DONE]\n\n"]);
+          return;
+        }
+
+        if (userMessage === "invalid-cache-usage") {
+          writeSseResponse(res, [
+            sseData({
+              choices: [{ delta: {}, finish_reason: "stop" }],
+              usage: {
+                prompt_tokens: 10,
+                completion_tokens: 1,
+                prompt_tokens_details: { cached_tokens: 11 },
+              },
+            }),
+            "data: [DONE]\n\n",
+          ]);
+          return;
+        }
 
         if (userMessage === "use tool") {
           writeSseResponse(res, [
@@ -258,5 +286,95 @@ describe("Qwen Provider", () => {
         },
       },
     ]);
+  });
+
+  test(`Given Qwen emits a stream chunk with invalid JSON,
+    When Keel reads the stream,
+    Then it throws a provider protocol error`, async () => {
+    // Given
+    const provider = createQwenProvider({
+      apiKey: "test-qwen-key",
+      baseUrl,
+      model: "qwen3.7-plus",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [{ role: "user", content: "invalid-json" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "Qwen stream chunk has invalid JSON",
+    });
+  });
+
+  test(`Given Qwen emits a stream chunk with no choices or usage,
+    When Keel validates the chunk,
+    Then it throws a provider protocol error`, async () => {
+    // Given
+    const provider = createQwenProvider({
+      apiKey: "test-qwen-key",
+      baseUrl,
+      model: "qwen3.7-plus",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [{ role: "user", content: "empty-schema-chunk" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "Qwen stream chunk has invalid schema",
+    });
+  });
+
+  test(`Given Qwen reports more cached tokens than prompt tokens,
+    When Keel validates usage,
+    Then it throws a provider protocol error before reporting cost data`, async () => {
+    // Given
+    const provider = createQwenProvider({
+      apiKey: "test-qwen-key",
+      baseUrl,
+      model: "qwen3.7-plus",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [{ role: "user", content: "invalid-cache-usage" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "Qwen stream chunk has invalid schema",
+    });
+  });
+
+  test(`Given Qwen cost tracking is requested,
+    When the configured model is selected,
+    Then only the single-tier Max model returns a cost model`, () => {
+    // Given / When / Then
+    expect(qwenCostModel("qwen3.7-max")).toMatchObject({
+      uncachedInputPerMillionTokens: 2.5,
+      cachedInputPerMillionTokens: 0.25,
+      outputPerMillionTokens: 7.5,
+    });
+    expect(qwenCostModel("qwen3.7-plus")).toBeNull();
   });
 });
