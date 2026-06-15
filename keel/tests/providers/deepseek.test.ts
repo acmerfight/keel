@@ -323,6 +323,11 @@ describe("DeepSeek Provider", () => {
   let server: Server;
   let baseUrl: string;
   let capturedMessages: unknown;
+  let transientRateLimitRequests = 0;
+  let transientServerErrorRequests = 0;
+  let authRetryRequests = 0;
+  let hangingRateLimitRequests = 0;
+  let longRetryAfterRequests = 0;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -351,8 +356,49 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "auth-never-retry") {
+            authRetryRequests++;
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "Invalid API key" } }));
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "rate-limited") {
             res.writeHead(429, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "Rate limited" } }));
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "transient-rate-limit") {
+            transientRateLimitRequests++;
+            if (transientRateLimitRequests === 1) {
+              res.writeHead(429, {
+                "Content-Type": "application/json",
+                "Retry-After": "0",
+              });
+              res.end(JSON.stringify({ error: { message: "Rate limited" } }));
+              return;
+            }
+          }
+
+          if (parsed.messages?.[1]?.content === "hanging-rate-limit-body") {
+            hangingRateLimitRequests++;
+            if (hangingRateLimitRequests === 1) {
+              res.writeHead(429, {
+                "Content-Type": "application/json",
+                "Retry-After": "0",
+              });
+              res.write(JSON.stringify({ error: { message: "Rate limited" } }));
+              return;
+            }
+          }
+
+          if (parsed.messages?.[1]?.content === "long-retry-after") {
+            longRetryAfterRequests++;
+            res.writeHead(429, {
+              "Content-Type": "application/json",
+              "Retry-After": "120",
+            });
             res.end(JSON.stringify({ error: { message: "Rate limited" } }));
             return;
           }
@@ -361,6 +407,15 @@ describe("DeepSeek Provider", () => {
             res.writeHead(500, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: { message: "Server error" } }));
             return;
+          }
+
+          if (parsed.messages?.[1]?.content === "transient-server-error") {
+            transientServerErrorRequests++;
+            if (transientServerErrorRequests === 1) {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: { message: "Server error" } }));
+              return;
+            }
           }
 
           if (parsed.messages?.[1]?.content === "bad-request") {
@@ -1764,6 +1819,7 @@ describe("DeepSeek Provider", () => {
       apiKey: "test-key",
       baseUrl,
       model: "deepseek-v4-flash",
+      retry: { maxRetries: 0 },
     });
 
     // When / Then
@@ -1782,6 +1838,89 @@ describe("DeepSeek Provider", () => {
     });
   });
 
+  test(`Given the API rate limits a request once,
+    When provider streams the response,
+    Then it retries with backoff and returns the successful stream`, async () => {
+    // Given
+    transientRateLimitRequests = 0;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: { maxRetries: 1, initialDelayMs: 0, maxDelayMs: 0 },
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "transient-rate-limit" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(transientRateLimitRequests).toBe(2);
+    const textEvents = events.filter((e) => e.type === "text");
+    expect(textEvents.map((e) => e.text).join("")).toBe("Hello world");
+  });
+
+  test(`Given a retryable response body does not finish,
+    When provider streams the response,
+    Then retry does not wait for the error body`, async () => {
+    // Given
+    hangingRateLimitRequests = 0;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: { maxRetries: 1, initialDelayMs: 0, maxDelayMs: 0 },
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "hanging-rate-limit-body" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(hangingRateLimitRequests).toBe(2);
+    const textEvents = events.filter((e) => e.type === "text");
+    expect(textEvents.map((e) => e.text).join("")).toBe("Hello world");
+  });
+
+  test(`Given the API asks to retry after the configured wait ceiling,
+    When provider attempts to stream,
+    Then it does not retry earlier than the provider allows`, async () => {
+    // Given
+    longRetryAfterRequests = 0;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: { maxRetries: 1, maxRetryAfterMs: 1_000 },
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "long-retry-after" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_rate_limited",
+      message: expect.stringMatching(/DeepSeek API error \(429\)/),
+    });
+    expect(longRetryAfterRequests).toBe(1);
+  });
+
   test(`Given the API returns a server error,
     When provider attempts to stream,
     Then it throws a provider server error with status and message`, async () => {
@@ -1790,6 +1929,7 @@ describe("DeepSeek Provider", () => {
       apiKey: "test-key",
       baseUrl,
       model: "deepseek-v4-flash",
+      retry: { maxRetries: 0 },
     });
 
     // When / Then
@@ -1806,6 +1946,88 @@ describe("DeepSeek Provider", () => {
       code: "provider_server_error",
       message: expect.stringMatching(/DeepSeek API error \(500\)/),
     });
+  });
+
+  test(`Given the API returns a server error once,
+    When provider streams the response,
+    Then it retries and returns the successful stream`, async () => {
+    // Given
+    transientServerErrorRequests = 0;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: { maxRetries: 1, initialDelayMs: 0, maxDelayMs: 0 },
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "transient-server-error" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(transientServerErrorRequests).toBe(2);
+    const textEvents = events.filter((e) => e.type === "text");
+    expect(textEvents.map((e) => e.text).join("")).toBe("Hello world");
+  });
+
+  test(`Given rate limits continue past the retry budget,
+    When provider attempts to stream,
+    Then it throws the final rate limit error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: { maxRetries: 1, initialDelayMs: 0, maxDelayMs: 0 },
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "rate-limited" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_rate_limited",
+      message: expect.stringMatching(/DeepSeek API error \(429\)/),
+    });
+  });
+
+  test(`Given the API rejects authentication,
+    When provider attempts to stream with retries configured,
+    Then it does not retry the request`, async () => {
+    // Given
+    authRetryRequests = 0;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: { maxRetries: 2, initialDelayMs: 0, maxDelayMs: 0 },
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "auth-never-retry" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_auth_failed",
+    });
+    expect(authRetryRequests).toBe(1);
   });
 
   test(`Given the API returns another HTTP error,
@@ -2844,6 +3066,7 @@ describe("DeepSeek Provider", () => {
       apiKey: "test-key",
       baseUrl: `http://127.0.0.1:${port}`,
       model: "deepseek-v4-flash",
+      retry: { maxRetries: 0 },
     });
 
     // When / Then

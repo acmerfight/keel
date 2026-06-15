@@ -7,6 +7,7 @@ import {
   type OpenAICompatibleChoice,
   type OpenAICompatibleChunk,
   type OpenAICompatibleStreamState,
+  type ProviderRetryConfig,
 } from "./openai-compatible.ts";
 
 // Kimi K2.6 prices are per 1M tokens.
@@ -103,6 +104,7 @@ export interface KimiConfig {
   readonly apiKey: string;
   readonly baseUrl: string;
   readonly model: string;
+  readonly retry?: ProviderRetryConfig;
 }
 
 function parseKimiChunk(data: string): OpenAICompatibleChunk {

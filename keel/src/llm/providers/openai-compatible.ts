@@ -247,10 +247,27 @@ export interface OpenAICompatibleStreamState {
   pendingToolCalls: readonly ToolCallEvent[];
 }
 
+export interface ProviderRetryConfig {
+  readonly maxRetries?: number;
+  readonly initialDelayMs?: number;
+  readonly maxDelayMs?: number;
+  readonly jitterRatio?: number;
+  readonly maxRetryAfterMs?: number;
+}
+
+interface ResolvedProviderRetryConfig {
+  readonly maxRetries: number;
+  readonly initialDelayMs: number;
+  readonly maxDelayMs: number;
+  readonly jitterRatio: number;
+  readonly maxRetryAfterMs: number;
+}
+
 interface ProviderConfig {
   readonly apiKey: string;
   readonly baseUrl: string;
   readonly model: string;
+  readonly retry?: ProviderRetryConfig;
 }
 
 interface OpenAICompatibleProviderConfig {
@@ -266,6 +283,41 @@ interface OpenAICompatibleProviderConfig {
 }
 
 type ToolCallEvent = Extract<LLMEvent, { readonly type: "tool_call" }>;
+
+type RetryDelay =
+  | { readonly type: "delay"; readonly ms: number }
+  | { readonly type: "skip" };
+
+const DEFAULT_PROVIDER_RETRY_CONFIG: ResolvedProviderRetryConfig = {
+  maxRetries: 4,
+  initialDelayMs: 500,
+  maxDelayMs: 8_000,
+  jitterRatio: 0.25,
+  maxRetryAfterMs: 60_000,
+};
+
+function resolveRetryConfig(
+  retry: ProviderRetryConfig | undefined,
+): ResolvedProviderRetryConfig {
+  if (retry === undefined) {
+    return DEFAULT_PROVIDER_RETRY_CONFIG;
+  }
+  return {
+    maxRetries: retry.maxRetries ?? DEFAULT_PROVIDER_RETRY_CONFIG.maxRetries,
+    initialDelayMs:
+      retry.initialDelayMs ?? DEFAULT_PROVIDER_RETRY_CONFIG.initialDelayMs,
+    maxDelayMs: retry.maxDelayMs ?? DEFAULT_PROVIDER_RETRY_CONFIG.maxDelayMs,
+    jitterRatio: Math.max(
+      0,
+      Math.min(
+        retry.jitterRatio ?? DEFAULT_PROVIDER_RETRY_CONFIG.jitterRatio,
+        1,
+      ),
+    ),
+    maxRetryAfterMs:
+      retry.maxRetryAfterMs ?? DEFAULT_PROVIDER_RETRY_CONFIG.maxRetryAfterMs,
+  };
+}
 
 function httpErrorCode(
   status: number,
@@ -295,6 +347,110 @@ function transportError(
     );
   }
   return new KeelError("provider_network_error", message);
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
+function isRetryableTransportError(error: KeelError): boolean {
+  return error.code === "provider_network_error";
+}
+
+function parseRetryAfterMs(headers: Headers, nowMs: number): number | null {
+  const retryAfterMs = headers.get("retry-after-ms");
+  if (retryAfterMs !== null) {
+    const parsed = Number.parseFloat(retryAfterMs);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+
+  const retryAfter = headers.get("retry-after");
+  if (retryAfter === null) return null;
+
+  const seconds = Number.parseFloat(retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1_000;
+  }
+
+  const dateMs = Date.parse(retryAfter);
+  if (Number.isNaN(dateMs)) return null;
+  return Math.max(0, dateMs - nowMs);
+}
+
+function retryDelayMs(
+  attemptIndex: number,
+  headers: Headers | null,
+  retry: ResolvedProviderRetryConfig,
+): RetryDelay {
+  const retryAfterMs =
+    headers === null ? null : parseRetryAfterMs(headers, Date.now());
+  if (retryAfterMs !== null) {
+    if (retryAfterMs <= retry.maxRetryAfterMs) {
+      return { type: "delay", ms: retryAfterMs };
+    }
+    return { type: "skip" };
+  }
+
+  const exponentialDelay = Math.min(
+    retry.initialDelayMs * 2 ** attemptIndex,
+    retry.maxDelayMs,
+  );
+  const jitterMultiplier = 1 - Math.random() * retry.jitterRatio;
+  return {
+    type: "delay",
+    ms: Math.max(0, exponentialDelay * jitterMultiplier),
+  };
+}
+
+function sleepWithAbort(
+  delayMs: number,
+  signal: AbortSignal,
+  providerName: string,
+): Promise<void> {
+  if (signal.aborted) {
+    throw new KeelError(
+      "provider_aborted",
+      `${providerName} request was aborted`,
+    );
+  }
+  if (delayMs <= 0) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(
+        new KeelError(
+          "provider_aborted",
+          `${providerName} request was aborted`,
+        ),
+      );
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function discardResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Best effort only; the retry decision must not depend on error body IO.
+  }
+}
+
+async function waitBeforeRetry(
+  delay: RetryDelay,
+  signal: AbortSignal,
+  providerName: string,
+): Promise<boolean> {
+  if (delay.type === "skip") return false;
+  await sleepWithAbort(delay.ms, signal, providerName);
+  return true;
 }
 
 function createChatCompletionsBody(
@@ -388,35 +544,61 @@ async function requestChatCompletions(
   signal: AbortSignal,
   providerName: string,
 ): Promise<Response> {
-  let response: Response;
-  try {
-    response = await fetch(`${config.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body,
-      signal,
-    });
-  } catch (error) {
-    throw transportError(
-      error,
-      signal,
-      providerName,
-      `${providerName} request failed before response`,
-    );
-  }
+  const retry = resolveRetryConfig(config.retry);
+  for (let attempt = 0; ; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(`${config.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body,
+        signal,
+      });
+    } catch (error) {
+      const keelError = transportError(
+        error,
+        signal,
+        providerName,
+        `${providerName} request failed before response`,
+      );
+      if (
+        attempt >= retry.maxRetries ||
+        !isRetryableTransportError(keelError)
+      ) {
+        throw keelError;
+      }
+      const shouldRetry = await waitBeforeRetry(
+        retryDelayMs(attempt, null, retry),
+        signal,
+        providerName,
+      );
+      if (!shouldRetry) throw keelError;
+      continue;
+    }
 
-  if (!response.ok) {
+    if (response.ok) {
+      return response;
+    }
+
+    if (attempt < retry.maxRetries && isRetryableStatus(response.status)) {
+      const delay = retryDelayMs(attempt, response.headers, retry);
+      const shouldRetry = delay.type !== "skip";
+      if (shouldRetry) {
+        await discardResponseBody(response);
+        await sleepWithAbort(delay.ms, signal, providerName);
+        continue;
+      }
+    }
+
     const text = await response.text();
     throw new KeelError(
       httpErrorCode(response.status),
       `${providerName} API error (${response.status}): ${text}`,
     );
   }
-
-  return response;
 }
 
 function getResponseReader(
