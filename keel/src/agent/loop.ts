@@ -168,12 +168,14 @@ interface StreamTurnOptions {
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
   readonly toolChoice?: "none";
+  readonly textPrefix?: string;
 }
 
 async function* streamAgentTurn(
   options: StreamTurnOptions,
 ): AsyncGenerator<AgentEvent, AgentTurn> {
   const { provider, systemPrompt, messages, signal, allowBash } = options;
+  let textPrefix = options.textPrefix ?? "";
   const stream = provider.stream({
     systemPrompt,
     messages,
@@ -191,6 +193,13 @@ async function* streamAgentTurn(
   for await (const event of stream) {
     switch (event.type) {
       case "text":
+        if (event.text !== "" && textPrefix !== "") {
+          if (!event.text.startsWith("\n")) {
+            assistantText.push(textPrefix);
+            yield { type: "text", text: textPrefix };
+          }
+          textPrefix = "";
+        }
         assistantText.push(event.text);
         yield { type: "text", text: event.text };
         break;
@@ -376,6 +385,8 @@ export async function* runAgentTurn(
         signal,
         allowBash,
         toolChoice: "none",
+        textPrefix:
+          turnResult.text === "" || turnResult.text.endsWith("\n") ? "" : "\n",
       });
       const summary =
         wrapUpTurn.text === "" ? MISSING_SUMMARY_NOTICE : wrapUpTurn.text;
