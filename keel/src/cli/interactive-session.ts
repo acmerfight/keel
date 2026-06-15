@@ -7,7 +7,7 @@ import type { LLMProvider, Message } from "../llm/types.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 
-export interface InteractiveSessionArgs {
+interface InteractiveSessionArgs {
   readonly allowBash: boolean;
   readonly maxCostUsd?: number;
 }
