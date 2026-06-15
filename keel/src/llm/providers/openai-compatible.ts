@@ -366,7 +366,10 @@ function toOpenAICompatibleMessage(message: Message): Record<string, unknown> {
       }));
       return {
         role: "assistant",
-        content: toolCalls && toolCalls.length > 0 ? null : message.content,
+        content:
+          toolCalls && toolCalls.length > 0 && message.content === ""
+            ? null
+            : message.content,
         ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       };
     }

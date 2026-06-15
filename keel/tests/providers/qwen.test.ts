@@ -295,6 +295,71 @@ describe("Qwen Provider", () => {
     ]);
   });
 
+  test(`Given prior assistant tool call history includes text,
+    When Qwen receives the next request,
+    Then assistant content is preserved beside tool calls`, async () => {
+    // Given
+    const provider = createQwenProvider({
+      apiKey: "test-qwen-key",
+      baseUrl,
+      model: "qwen3.7-plus",
+    });
+
+    // When
+    await collect(
+      provider.stream({
+        systemPrompt: "You are Keel.",
+        messages: [
+          { role: "user", content: "qwen-history" },
+          {
+            role: "assistant",
+            content: "I will inspect the README before answering.",
+            toolCalls: [
+              {
+                id: "call_qwen_read_history",
+                tool: "read",
+                path: "README.md",
+              },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "call_qwen_read_history",
+            content: "readme body\n",
+          },
+          { role: "user", content: "continue" },
+        ],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(capturedBody?.messages).toMatchObject([
+      { role: "system", content: "You are Keel." },
+      { role: "user", content: "qwen-history" },
+      {
+        role: "assistant",
+        content: "I will inspect the README before answering.",
+        tool_calls: [
+          {
+            id: "call_qwen_read_history",
+            type: "function",
+            function: {
+              name: "read",
+              arguments: JSON.stringify({ path: "README.md" }),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "call_qwen_read_history",
+        content: "readme body\n",
+      },
+      { role: "user", content: "continue" },
+    ]);
+  });
+
   test(`Given Qwen emits a stream chunk with invalid JSON,
     When Keel reads the stream,
     Then it throws a provider protocol error`, async () => {
