@@ -153,6 +153,53 @@ describe("CLI Text Reply", () => {
     }
   });
 
+  test(`Given an interactive session is waiting for input,
+    When user interrupts the idle session,
+    Then the CLI exits as interrupted`, async () => {
+    // Given
+    let stdout = "";
+    let receiveWarmupReply: () => void = () => {};
+    const warmupReplyReceived = new Promise<void>((resolve) => {
+      receiveWarmupReply = resolve;
+    });
+    const { child, result } = runCliProcess(
+      [],
+      { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
+      { stdin: "pipe" },
+    );
+    child.stdin?.on("error", () => {});
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+      if (stdout.includes("Remembered: warmup\n")) {
+        receiveWarmupReply();
+      }
+    });
+
+    try {
+      // When
+      child.stdin?.write("warmup\n");
+      await withTimeout(
+        warmupReplyReceived,
+        5000,
+        "interactive CLI did not become idle after warmup",
+      );
+      child.kill("SIGINT");
+
+      // Then
+      const exit = await withTimeout(
+        result,
+        5000,
+        "interactive CLI did not exit after idle SIGINT",
+      );
+      expect(exit.exitCode).toBe(130);
+      expect(exit.signal).toBeNull();
+      expect(exit.stdout).toBe("Remembered: warmup\n\n");
+      expect(exit.stderr).toBe("");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
   test(`Given an interactive provider request is interrupted,
     When user sends another prompt in the same session,
     Then the next turn uses a fresh abort signal and completes`, async () => {
@@ -160,6 +207,7 @@ describe("CLI Text Reply", () => {
     let receiveFirstRequest: () => void = () => {};
     let receiveSecondRequest: () => void = () => {};
     let closeFirstResponse: () => void = () => {};
+    let receiveSecondRequestBody: (body: string) => void = () => {};
     const firstRequestReceived = new Promise<void>((resolve) => {
       receiveFirstRequest = resolve;
     });
@@ -169,6 +217,9 @@ describe("CLI Text Reply", () => {
     const firstResponseClosed = new Promise<void>((resolve) => {
       closeFirstResponse = resolve;
     });
+    const secondRequestBodyReceived = new Promise<string>((resolve) => {
+      receiveSecondRequestBody = resolve;
+    });
     let requestCount = 0;
     const server = createServer((req, res) => {
       if (req.url !== "/chat/completions") {
@@ -177,9 +228,19 @@ describe("CLI Text Reply", () => {
         return;
       }
 
-      req.resume();
       requestCount++;
-      if (requestCount === 1) {
+      const currentRequest = requestCount;
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      if (currentRequest === 2) {
+        req.on("end", () => {
+          receiveSecondRequestBody(Buffer.concat(chunks).toString("utf8"));
+        });
+      }
+      req.resume();
+      if (currentRequest === 1) {
         receiveFirstRequest();
         res.on("close", closeFirstResponse);
         res.writeHead(200, {
@@ -245,6 +306,11 @@ describe("CLI Text Reply", () => {
         5000,
         "interactive CLI did not send the second provider request",
       );
+      const secondRequestBody = await withTimeout(
+        secondRequestBodyReceived,
+        5000,
+        "interactive CLI did not finish sending the second request body",
+      );
       const exit = await withTimeout(
         result,
         5000,
@@ -254,6 +320,8 @@ describe("CLI Text Reply", () => {
       expect(exit.signal).toBeNull();
       expect(exit.stdout).toContain("second turn survived\n");
       expect(exit.stderr).not.toMatch(/AbortError|DOMException/);
+      expect(secondRequestBody).toContain("second prompt");
+      expect(secondRequestBody).not.toContain("first prompt");
     } finally {
       child.kill("SIGKILL");
       await close(server);

@@ -606,7 +606,13 @@ async function runInteractiveSession(
   });
   let activeAbortController: AbortController | null = null;
   const abortActiveTurn = () => {
-    activeAbortController?.abort();
+    if (activeAbortController !== null) {
+      activeAbortController.abort();
+      return;
+    }
+    process.stdout.write("\n");
+    process.exitCode = 130;
+    input.close();
   };
 
   process.on("SIGINT", abortActiveTurn);
