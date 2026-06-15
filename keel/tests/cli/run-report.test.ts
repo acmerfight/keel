@@ -1,4 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -20,6 +22,48 @@ const runReportSchema = z.object({
   durationMs: z.number().nonnegative(),
   costUsd: z.number(),
 });
+
+function getPort(server: Server): number {
+  const addr = server.address();
+  if (addr === null || typeof addr === "string") {
+    throw new Error("Server not listening on a TCP port");
+  }
+  return addr.port;
+}
+
+function listen(server: Server): Promise<void> {
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+}
+
+function close(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function sseTextReplyWithUsage(text: string): string {
+  return [
+    `data: ${JSON.stringify({
+      choices: [{ delta: { content: text } }],
+    })}\n\n`,
+    `data: ${JSON.stringify({
+      choices: [{ delta: {}, finish_reason: "stop" }],
+      usage: {
+        prompt_tokens: 10,
+        completion_tokens: 3,
+      },
+    })}\n\n`,
+    "data: [DONE]\n\n",
+  ].join("");
+}
 
 describe("CLI Run Report", () => {
   test(`Given a user wants machine-readable run metrics,
@@ -115,6 +159,91 @@ describe("CLI Run Report", () => {
         JSON.parse(await readFile(reportPath, "utf8")),
       );
       expect(report.costUsd).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given Kimi is selected with an explicit model,
+    When the CLI writes a run report,
+    Then the report records the Kimi provider and configured model`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-kimi-report-"));
+    const reportPath = join(workspace, "report.json");
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Hello from Kimi."));
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["--report", reportPath, "hello"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "kimi",
+          KIMI_API_KEY: "test-key",
+          KIMI_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KIMI_MODEL: "kimi-k2.6",
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Hello from Kimi.\n");
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.provider).toBe("kimi");
+      expect(report.model).toBe("kimi-k2.6");
+      expect(report.costUsd).toBeGreaterThan(0);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given Kimi is configured with an unsupported cost model,
+    When the CLI is asked to write a run report,
+    Then it rejects the run before writing misleading cost data`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-kimi-report-cost-model-"),
+    );
+    const reportPath = join(workspace, "report.json");
+
+    try {
+      // When
+      const result = await runCli(["--report", reportPath, "hello"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "kimi",
+          KIMI_API_KEY: "test-key",
+          KIMI_MODEL: "kimi-k2.5",
+        },
+      });
+
+      // Then
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(
+        'Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="kimi-k2.5".\n',
+      );
+      await expect(readFile(reportPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

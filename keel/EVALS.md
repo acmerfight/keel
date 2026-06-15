@@ -14,6 +14,9 @@ keel eval --check
 # Run the full suite against the configured provider (spends real money).
 DEEPSEEK_API_KEY=... keel eval --trials 3 --out evals/results/$(date +%Y%m%d-%H%M%S).jsonl
 
+# Run the same suite with Kimi K2.6.
+KEEL_PROVIDER=kimi KIMI_API_KEY=... keel eval --trials 3 --out evals/results/$(date +%Y%m%d-%H%M%S).jsonl
+
 # Iterate on one task.
 keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl
 ```
@@ -21,14 +24,25 @@ keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl
 Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
 (appends; gitignored).
 
+Provider selection uses the same CLI environment variables as one-shot runs:
+DeepSeek is the default and reads `DEEPSEEK_API_KEY`,
+`DEEPSEEK_BASE_URL`, and the built-in `deepseek-v4-flash` model. Kimi uses
+`KEEL_PROVIDER=kimi`, `KIMI_API_KEY`, optional `KIMI_MODEL` (default
+`kimi-k2.6`), and optional `KIMI_BASE_URL` (default
+`https://api.moonshot.cn/v1`; set it to the official regional endpoint for
+your account when needed).
+
 ## GitHub Actions
 
 The `Keel Eval` workflow is intentionally manual (`workflow_dispatch`), not
-a required PR check. It needs the `DEEPSEEK_API_KEY` repository secret, then
-builds the CLI, runs the compiled `dist/cli/index.js`, prints a Markdown job
-summary, and uploads the JSONL result file as an artifact. The workflow job
-timeout is 180 minutes, enough for the current full suite at `trials=3` even
-when tasks run near their per-task time limits:
+a required PR check. It currently runs the default DeepSeek provider and needs
+the `DEEPSEEK_API_KEY` repository secret, then builds the CLI, runs the
+compiled `dist/cli/index.js`, prints a Markdown job summary, and uploads the
+JSONL result file as an artifact. Run Kimi evals locally with
+`KEEL_PROVIDER=kimi`, or add matching repository secrets before wiring Kimi
+into the workflow. The workflow job timeout is 180 minutes, enough for the
+current full suite at `trials=3` even when tasks run near their per-task time
+limits:
 
 1. Open **Actions → Keel Eval → Run workflow**.
 2. Pick `trials` (positive integer, default `1`; use `3+` before making
