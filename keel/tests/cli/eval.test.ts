@@ -172,7 +172,7 @@ describe("CLI Eval", () => {
 
   test(`Given a task whose outcome check rejects the agent's work,
     When user runs keel eval,
-    Then the trial is recorded as a verify failure and the suite still completes`, async () => {
+    Then the trial is recorded as a verify failure and the eval exits as failed`, async () => {
     // Given
     const { root, suiteDir, outFile } = await createEvalDir();
     await createTask(suiteDir, "impossible", {
@@ -188,7 +188,7 @@ describe("CLI Eval", () => {
       );
 
       // Then
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode).not.toBe(0);
       expect(result.stdout).toContain("impossible: 0/1 pass");
 
       const lines = await readResultLines(outFile);

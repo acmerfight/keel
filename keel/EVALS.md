@@ -24,6 +24,8 @@ keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl
 Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
 (appends; gitignored).
 
+Exit code is non-zero when any trial fails to verify, times out, or crashes.
+
 Provider selection uses the same CLI environment variables as one-shot runs:
 DeepSeek is the default and reads `DEEPSEEK_API_KEY`,
 `DEEPSEEK_BASE_URL`, and the built-in `deepseek-v4-flash` model. Kimi uses
