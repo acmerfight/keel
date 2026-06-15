@@ -7,6 +7,7 @@ import {
   type OpenAICompatibleChoice,
   type OpenAICompatibleChunk,
   type OpenAICompatibleStreamState,
+  type ProviderRetryConfig,
 } from "./openai-compatible.ts";
 
 // DeepSeek V4 Flash prices are per 1M tokens.
@@ -74,6 +75,7 @@ export interface DeepseekConfig {
   readonly apiKey: string;
   readonly baseUrl: string;
   readonly model: string;
+  readonly retry?: ProviderRetryConfig;
 }
 
 function parseDeepseekChunk(data: string): OpenAICompatibleChunk {
