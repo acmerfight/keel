@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 
-import { writeFileSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
 import { runAgent } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import type { CostModel } from "../core/cost.ts";
-import { restoreLastEditCheckpoint } from "../core/git.ts";
-import { runEvalCommand } from "../eval/run.ts";
 import {
   createDeepseekProvider,
   DEEPSEEK_V4_FLASH_COST_MODEL,
@@ -20,7 +19,6 @@ import {
 import { createQwenProvider, qwenCostModel } from "../llm/providers/qwen.ts";
 import type { LLMProvider, ToolCall } from "../llm/types.ts";
 import { createFakeProvider, fakeResponse } from "../testing/fake-provider.ts";
-import { runDoctor } from "./doctor.ts";
 import {
   type InteractiveResolvedProvider,
   runInteractiveSession,
@@ -58,6 +56,43 @@ type CliArgs =
       readonly reportFile?: string;
     };
 
+interface CliInput extends NodeJS.ReadableStream {
+  readonly isTTY?: boolean;
+}
+
+export interface CliRuntime {
+  readonly args: readonly string[];
+  readonly cliEntry: string;
+  readonly cwd: () => string;
+  readonly env: (key: string) => string | undefined;
+  readonly input: CliInput;
+  readonly platform: NodeJS.Platform;
+  readonly now: () => number;
+  readonly writeStdout: (text: string) => void;
+  readonly writeStderr: (text: string) => void;
+  readonly onSigint: (handler: () => void) => void;
+  readonly offSigint: (handler: () => void) => void;
+  readonly forceExit: (code: number) => never;
+}
+
+class CliInputError extends Error {}
+
+function cliInputError(message: string): never {
+  throw new CliInputError(message);
+}
+
+type ParseResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly message: string };
+
+function parseOk<T>(value: T): ParseResult<T> {
+  return { ok: true, value };
+}
+
+function parseError(message: string): ParseResult<never> {
+  return { ok: false, message };
+}
+
 const USAGE = [
   "Usage: keel [--allow-bash] [--max-cost <usd>] [--report <file>] <message>",
   "       keel eval [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
@@ -71,75 +106,81 @@ const USAGE = [
 
 const maxCostSchema = z.coerce.number().finite().positive();
 
-function env(key: string): string | undefined {
-  return process.env[key];
-}
-
-function parseMaxCost(raw: string | undefined): number {
+function parseMaxCost(raw: string | undefined): ParseResult<number> {
   const result = maxCostSchema.safeParse(raw);
   if (!result.success) {
-    process.stderr.write("Error: --max-cost must be a positive number.\n");
-    process.exit(1);
+    return parseError("Error: --max-cost must be a positive number.");
   }
-  return result.data;
+  return parseOk(result.data);
 }
 
-function parseReportFile(raw: string | undefined): string {
+function parseReportFile(raw: string | undefined): ParseResult<string> {
   if (raw === undefined || raw === "") {
-    process.stderr.write("Error: --report requires a file path.\n");
-    process.exit(1);
+    return parseError("Error: --report requires a file path.");
   }
-  return raw;
+  return parseOk(raw);
 }
 
 const trialsSchema = z.coerce.number().int().positive();
 
-function parseTrials(raw: string | undefined): number {
+function parseTrials(raw: string | undefined): ParseResult<number> {
   const result = trialsSchema.safeParse(raw);
   if (!result.success) {
-    process.stderr.write("Error: --trials must be a positive integer.\n");
-    process.exit(1);
+    return parseError("Error: --trials must be a positive integer.");
   }
-  return result.data;
+  return parseOk(result.data);
 }
 
-function requireOptionValue(option: string, raw: string | undefined): string {
+function requireOptionValue(
+  option: string,
+  raw: string | undefined,
+): ParseResult<string> {
   if (raw === undefined || raw === "") {
-    process.stderr.write(`Error: ${option} requires a value.\n`);
-    process.exit(1);
+    return parseError(`Error: ${option} requires a value.`);
   }
-  return raw;
+  return parseOk(raw);
 }
 
-function parseEvalArgs(args: readonly string[]): EvalCliArgs {
+function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
   let suiteDir = join("evals", "tasks");
   let outFile = "eval-results.jsonl";
   let trials = 1;
   let taskId: string | undefined;
   let check = false;
 
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    if (arg === undefined) continue;
+  let skipNext = false;
+  for (const [index, arg] of args.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
 
     if (arg === "--suite") {
-      suiteDir = requireOptionValue("--suite", args[index + 1]);
-      index++;
+      const parsed = requireOptionValue("--suite", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      suiteDir = parsed.value;
+      skipNext = true;
       continue;
     }
     if (arg === "--out") {
-      outFile = requireOptionValue("--out", args[index + 1]);
-      index++;
+      const parsed = requireOptionValue("--out", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      outFile = parsed.value;
+      skipNext = true;
       continue;
     }
     if (arg === "--trials") {
-      trials = parseTrials(args[index + 1]);
-      index++;
+      const parsed = parseTrials(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      trials = parsed.value;
+      skipNext = true;
       continue;
     }
     if (arg === "--task") {
-      taskId = requireOptionValue("--task", args[index + 1]);
-      index++;
+      const parsed = requireOptionValue("--task", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      taskId = parsed.value;
+      skipNext = true;
       continue;
     }
     if (arg === "--check") {
@@ -147,27 +188,26 @@ function parseEvalArgs(args: readonly string[]): EvalCliArgs {
       continue;
     }
 
-    process.stderr.write(`Error: unknown eval option "${arg}"\n`);
-    process.exit(1);
+    return parseError(`Error: unknown eval option "${arg}"`);
   }
 
-  return {
+  return parseOk({
     command: "eval",
     suiteDir,
     outFile,
     trials,
     ...(taskId !== undefined ? { taskId } : {}),
     check,
-  };
+  });
 }
 
-function parseCliArgs(args: readonly string[]): CliArgs {
+function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   if (args[0] === "--doctor") {
-    return { command: "doctor" };
+    return parseOk({ command: "doctor" });
   }
 
   if (args[0] === "/undo") {
-    return { command: "undo" };
+    return parseOk({ command: "undo" });
   }
 
   if (args[0] === "eval") {
@@ -181,9 +221,12 @@ function parseCliArgs(args: readonly string[]): CliArgs {
   const maxCostPrefix = "--max-cost=";
   const reportPrefix = "--report=";
 
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    if (arg === undefined) continue;
+  let skipNext = false;
+  for (const [index, arg] of args.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
 
     if (arg === "--allow-bash") {
       allowBash = true;
@@ -191,24 +234,32 @@ function parseCliArgs(args: readonly string[]): CliArgs {
     }
 
     if (arg === "--max-cost") {
-      maxCostUsd = parseMaxCost(args[index + 1]);
-      index++;
+      const parsed = parseMaxCost(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      maxCostUsd = parsed.value;
+      skipNext = true;
       continue;
     }
 
     if (arg.startsWith(maxCostPrefix)) {
-      maxCostUsd = parseMaxCost(arg.slice(maxCostPrefix.length));
+      const parsed = parseMaxCost(arg.slice(maxCostPrefix.length));
+      if (!parsed.ok) return parsed;
+      maxCostUsd = parsed.value;
       continue;
     }
 
     if (arg === "--report") {
-      reportFile = parseReportFile(args[index + 1]);
-      index++;
+      const parsed = parseReportFile(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      reportFile = parsed.value;
+      skipNext = true;
       continue;
     }
 
     if (arg.startsWith(reportPrefix)) {
-      reportFile = parseReportFile(arg.slice(reportPrefix.length));
+      const parsed = parseReportFile(arg.slice(reportPrefix.length));
+      if (!parsed.ok) return parsed;
+      reportFile = parsed.value;
       continue;
     }
 
@@ -216,13 +267,13 @@ function parseCliArgs(args: readonly string[]): CliArgs {
     break;
   }
 
-  return {
+  return parseOk({
     command: "run",
     allowBash,
     ...(userMessage !== undefined ? { userMessage } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(reportFile !== undefined ? { reportFile } : {}),
-  };
+  });
 }
 
 function formatUsd(value: number): string {
@@ -306,7 +357,7 @@ function toolCallLabel(toolCall: ToolCall): string {
 interface RunReportInput {
   readonly provider: string;
   readonly model: string;
-  readonly end: Extract<AgentEvent, { readonly type: "end" }>;
+  readonly end: EndEventWithCost;
   readonly durationMs: number;
 }
 
@@ -321,12 +372,17 @@ interface RunReport {
   readonly costUsd: number;
 }
 
-function writeRunReport(filePath: string, input: RunReportInput): void {
-  const cost = input.end.cost;
-  if (cost === undefined) {
+type EndEventWithCost = EndEvent & { readonly cost: CostReport };
+
+function assertEndEventHasCost(end: EndEvent): asserts end is EndEventWithCost {
+  /* v8 ignore next 3: --report enables cost tracking before the run starts. */
+  if (end.cost === undefined) {
     throw new Error("run report requires cost tracking to be enabled");
   }
+}
 
+function writeRunReport(filePath: string, input: RunReportInput): void {
+  const cost = input.end.cost;
   const report: RunReport = {
     schemaVersion: 1,
     provider: input.provider,
@@ -340,11 +396,9 @@ function writeRunReport(filePath: string, input: RunReportInput): void {
   writeFileSync(filePath, `${JSON.stringify(report)}\n`, "utf8");
 }
 
-function formatCostReport(cost: CostReport): string {
+function formatCostReport(cost: CostReport, maxUsd: number): string {
   const spent = `$${formatUsd(cost.spentUsd)}`;
-  if (cost.maxUsd === undefined) return `Cost: ${spent}\n`;
-
-  const budget = `$${formatUsd(cost.maxUsd)}`;
+  const budget = `$${formatUsd(maxUsd)}`;
   return cost.budgetExceeded
     ? `Cost: ${spent} (budget ${budget} exceeded)\n`
     : `Cost: ${spent} (budget ${budget})\n`;
@@ -496,8 +550,11 @@ function kimiCostModel(model: string): CostModel | null {
   return null;
 }
 
-function resolveProvider(userMessage: string): ResolvedProvider {
-  const providerId = env("KEEL_PROVIDER") ?? "deepseek";
+function resolveProvider(
+  userMessage: string,
+  runtime: CliRuntime,
+): ResolvedProvider {
+  const providerId = runtime.env("KEEL_PROVIDER") ?? "deepseek";
 
   if (providerId === "fake") {
     return {
@@ -508,18 +565,17 @@ function resolveProvider(userMessage: string): ResolvedProvider {
   }
 
   if (providerId === "deepseek") {
-    const apiKey = env("DEEPSEEK_API_KEY");
+    const apiKey = runtime.env("DEEPSEEK_API_KEY");
     if (!apiKey) {
-      process.stderr.write(
-        "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.\n",
+      cliInputError(
+        "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.",
       );
-      process.exit(1);
     }
     const model = "deepseek-v4-flash";
     return {
       provider: createDeepseekProvider({
         apiKey,
-        baseUrl: env("DEEPSEEK_BASE_URL") ?? "https://api.deepseek.com",
+        baseUrl: runtime.env("DEEPSEEK_BASE_URL") ?? "https://api.deepseek.com",
         model,
       }),
       model,
@@ -528,18 +584,17 @@ function resolveProvider(userMessage: string): ResolvedProvider {
   }
 
   if (providerId === "kimi") {
-    const apiKey = env("KIMI_API_KEY");
+    const apiKey = runtime.env("KIMI_API_KEY");
     if (!apiKey) {
-      process.stderr.write(
-        "Error: KIMI_API_KEY is required. Set the API key to use Kimi.\n",
+      cliInputError(
+        "Error: KIMI_API_KEY is required. Set the API key to use Kimi.",
       );
-      process.exit(1);
     }
-    const model = env("KIMI_MODEL") ?? "kimi-k2.6";
+    const model = runtime.env("KIMI_MODEL") ?? "kimi-k2.6";
     return {
       provider: createKimiProvider({
         apiKey,
-        baseUrl: env("KIMI_BASE_URL") ?? "https://api.moonshot.cn/v1",
+        baseUrl: runtime.env("KIMI_BASE_URL") ?? "https://api.moonshot.cn/v1",
         model,
       }),
       model,
@@ -548,19 +603,19 @@ function resolveProvider(userMessage: string): ResolvedProvider {
   }
 
   if (providerId === "qwen") {
-    const apiKey = env("DASHSCOPE_API_KEY") ?? env("QWEN_API_KEY");
+    const apiKey =
+      runtime.env("DASHSCOPE_API_KEY") ?? runtime.env("QWEN_API_KEY");
     if (!apiKey) {
-      process.stderr.write(
-        "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.\n",
+      cliInputError(
+        "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
       );
-      process.exit(1);
     }
-    const model = env("QWEN_MODEL") ?? "qwen3.7-plus";
+    const model = runtime.env("QWEN_MODEL") ?? "qwen3.7-plus";
     return {
       provider: createQwenProvider({
         apiKey,
         baseUrl:
-          env("QWEN_BASE_URL") ??
+          runtime.env("QWEN_BASE_URL") ??
           "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         model,
       }),
@@ -569,12 +624,14 @@ function resolveProvider(userMessage: string): ResolvedProvider {
     };
   }
 
-  process.stderr.write(`Error: unknown provider "${providerId}"\n`);
-  process.exit(1);
+  cliInputError(`Error: unknown provider "${providerId}"`);
 }
 
-function resolveInteractiveProvider(userMessage: string): ResolvedProvider {
-  const providerId = env("KEEL_PROVIDER") ?? "deepseek";
+function resolveInteractiveProvider(
+  userMessage: string,
+  runtime: CliRuntime,
+): ResolvedProvider {
+  const providerId = runtime.env("KEEL_PROVIDER") ?? "deepseek";
   if (providerId === "fake") {
     return {
       provider: createInteractiveFakeProvider(),
@@ -583,46 +640,45 @@ function resolveInteractiveProvider(userMessage: string): ResolvedProvider {
     };
   }
 
-  return resolveProvider(userMessage);
+  return resolveProvider(userMessage, runtime);
 }
 
 function requireKnownCostModel(resolved: ResolvedProvider): CostModel {
   if (resolved.costModel !== null) return resolved.costModel;
 
   if (resolved.provider.id === "kimi") {
-    process.stderr.write(
-      `Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="${resolved.model}".\n`,
+    cliInputError(
+      `Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="${resolved.model}".`,
     );
-    process.exit(1);
   }
 
   if (resolved.provider.id === "qwen") {
-    process.stderr.write(
-      `Error: cost tracking is not supported for Qwen model "${resolved.model}" because its official pricing is tiered by per-request input tokens.\n`,
+    cliInputError(
+      `Error: cost tracking is not supported for Qwen model "${resolved.model}" because its official pricing is tiered by per-request input tokens.`,
     );
-    process.exit(1);
   }
 
-  process.stderr.write(
-    `Error: cost tracking is not supported for provider "${resolved.provider.id}" model "${resolved.model}".\n`,
+  /* v8 ignore next 3: defensive guard for future providers with unknown pricing. */
+  cliInputError(
+    `Error: cost tracking is not supported for provider "${resolved.provider.id}" model "${resolved.model}".`,
   );
-  process.exit(1);
 }
 
 async function printAgentEvents(
   stream: AsyncIterable<AgentEvent>,
+  runtime: CliRuntime,
 ): Promise<EndEvent | undefined> {
   let finalEnd: EndEvent | undefined;
   for await (const event of stream) {
     if (event.type === "text") {
-      process.stdout.write(sanitizeAssistantText(event.text));
+      runtime.writeStdout(sanitizeAssistantText(event.text));
     } else if (event.type === "tool_start") {
-      process.stderr.write(`Tool: ${toolCallLabel(event.toolCall)}\n`);
+      runtime.writeStderr(`Tool: ${toolCallLabel(event.toolCall)}\n`);
     } else if (event.type === "tool_end") {
       // Status lives in the line prefix because the label is
       // model-controlled text and could end with a forged failure marker.
       if (!event.ok) {
-        process.stderr.write(`Tool failed: ${toolCallLabel(event.toolCall)}\n`);
+        runtime.writeStderr(`Tool failed: ${toolCallLabel(event.toolCall)}\n`);
       }
     } else if (event.type === "end") {
       finalEnd = event;
@@ -631,103 +687,122 @@ async function printAgentEvents(
   return finalEnd;
 }
 
-async function main(): Promise<void> {
-  const cliArgs = parseCliArgs(process.argv.slice(2));
+export async function runCliMain(runtime: CliRuntime): Promise<number> {
+  let exitCode = 0;
+  const parsedCliArgs = parseCliArgs(runtime.args);
+  if (!parsedCliArgs.ok) {
+    runtime.writeStderr(`${parsedCliArgs.message}\n`);
+    return 1;
+  }
+  const cliArgs = parsedCliArgs.value;
+
   if (cliArgs.command === "doctor") {
+    const { runDoctor } = await import("./doctor.ts");
     const result = await runDoctor();
-    process.stdout.write(result.stdout);
-    process.stderr.write(result.stderr);
-    process.exitCode = result.exitCode;
-    return;
+    runtime.writeStdout(result.stdout);
+    runtime.writeStderr(result.stderr);
+    return result.exitCode;
   }
 
   if (cliArgs.command === "eval") {
-    process.exitCode = await runEvalCommand({
+    const { runEvalCommand } = await import("../eval/run.ts");
+    return await runEvalCommand({
       suiteDir: cliArgs.suiteDir,
       outFile: cliArgs.outFile,
       trials: cliArgs.trials,
       ...(cliArgs.taskId !== undefined ? { taskId: cliArgs.taskId } : {}),
       check: cliArgs.check,
-      cliEntry: import.meta.filename,
+      cliEntry: runtime.cliEntry,
     });
-    return;
   }
 
   if (cliArgs.command === "undo") {
-    const result = restoreLastEditCheckpoint(process.cwd());
+    const { restoreLastEditCheckpoint } = await import("../core/git.ts");
+    const result = restoreLastEditCheckpoint(runtime.cwd());
     switch (result.status) {
       case "restored":
-        process.stdout.write(`Restored ${result.filePath}\n`);
-        return;
+        runtime.writeStdout(`Restored ${result.filePath}\n`);
+        return 0;
       case "none":
-        process.stderr.write(`${result.message}\n`);
-        process.exitCode = 1;
-        return;
+        runtime.writeStderr(`${result.message}\n`);
+        return 1;
       case "blocked":
-        process.stderr.write(`${result.message}\n`);
-        process.exitCode = 1;
-        return;
+        runtime.writeStderr(`${result.message}\n`);
+        return 1;
     }
   }
 
   const userMessage = cliArgs.userMessage;
   if (!userMessage) {
-    if (process.stdin.isTTY !== true && env("KEEL_FORCE_INTERACTIVE") !== "1") {
-      process.stderr.write(`${USAGE}\n`);
-      process.exit(1);
+    if (
+      runtime.input.isTTY !== true &&
+      runtime.env("KEEL_FORCE_INTERACTIVE") !== "1"
+    ) {
+      runtime.writeStderr(`${USAGE}\n`);
+      return 1;
     }
     if (cliArgs.reportFile !== undefined) {
-      process.stderr.write(
+      runtime.writeStderr(
         "Error: --report is only supported for one-shot runs.\n",
       );
-      process.exit(1);
+      return 1;
     }
-    await runInteractiveSession({
-      cliArgs,
-      workspace: process.cwd(),
-      platform: process.platform,
-      input: process.stdin,
-      writeStdout: (text) => {
-        process.stdout.write(text);
-      },
-      writeStderr: (text) => {
-        process.stderr.write(text);
-      },
-      onSigint: (handler) => {
-        process.on("SIGINT", handler);
-      },
-      offSigint: (handler) => {
-        process.off("SIGINT", handler);
-      },
-      setExitCode: (code) => {
-        process.exitCode = code;
-      },
-      forceExit: (code) => process.exit(code),
-      resolveProvider: resolveInteractiveProvider,
-      requireKnownCostModel,
-      printAgentEvents,
-      formatCostReport,
-    });
-    return;
+    try {
+      await runInteractiveSession({
+        cliArgs,
+        workspace: runtime.cwd(),
+        platform: runtime.platform,
+        input: runtime.input,
+        writeStdout: (text) => {
+          runtime.writeStdout(text);
+        },
+        writeStderr: (text) => {
+          runtime.writeStderr(text);
+        },
+        onSigint: (handler) => {
+          runtime.onSigint(handler);
+        },
+        offSigint: (handler) => {
+          runtime.offSigint(handler);
+        },
+        setExitCode: (code) => {
+          exitCode = code;
+        },
+        forceExit: runtime.forceExit,
+        resolveProvider: (message) =>
+          resolveInteractiveProvider(message, runtime),
+        requireKnownCostModel,
+        printAgentEvents: (stream) => printAgentEvents(stream, runtime),
+        formatCostReport,
+      });
+    } catch (error) {
+      if (error instanceof CliInputError) {
+        runtime.writeStderr(`${error.message}\n`);
+        return 1;
+      }
+      /* v8 ignore next: unexpected interactive runtime failures are allowed to escape. */
+      throw error;
+    }
+    return exitCode;
   }
 
-  const resolved = resolveProvider(userMessage);
   const abortController = new AbortController();
   const abort = () => {
     abortController.abort();
   };
-  process.once("SIGINT", abort);
-
   try {
-    const workspace = process.cwd();
-    const startedAt = Date.now();
+    const resolved = resolveProvider(userMessage, runtime);
+    runtime.onSigint(abort);
+
+    const workspace = runtime.cwd();
+    const startedAt = runtime.now();
     const stream = runAgent({
       workspace,
       provider: resolved.provider,
       userMessage,
       systemPrompt: buildAgentSystemPrompt({
         workspace,
-        platform: process.platform,
+        platform: runtime.platform,
       }),
       signal: abortController.signal,
       ...(cliArgs.allowBash ? { allowBash: true } : {}),
@@ -743,28 +818,73 @@ async function main(): Promise<void> {
         : {}),
     });
 
-    const finalEnd = await printAgentEvents(stream);
-    process.stdout.write("\n");
+    const finalEnd = await printAgentEvents(stream, runtime);
+    runtime.writeStdout("\n");
     if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
-      process.stderr.write(formatCostReport(finalEnd.cost));
+      runtime.writeStderr(formatCostReport(finalEnd.cost, cliArgs.maxCostUsd));
     }
     if (cliArgs.reportFile !== undefined && finalEnd !== undefined) {
+      assertEndEventHasCost(finalEnd);
       writeRunReport(cliArgs.reportFile, {
         provider: resolved.provider.id,
         model: resolved.model,
         end: finalEnd,
-        durationMs: Date.now() - startedAt,
+        durationMs: runtime.now() - startedAt,
       });
     }
   } catch (error) {
+    if (error instanceof CliInputError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    /* v8 ignore next 4: unexpected runtime failures are allowed to escape. */
     if (!abortController.signal.aborted) {
       throw error;
     }
-    process.stdout.write("\n");
-    process.exitCode = 130;
+    runtime.writeStdout("\n");
+    return 130;
   } finally {
-    process.off("SIGINT", abort);
+    runtime.offSigint(abort);
   }
+  return 0;
 }
 
-main();
+/* v8 ignore start: real process adapter is exercised by CLI subprocess tests. */
+function defaultRuntime(): CliRuntime {
+  return {
+    args: process.argv.slice(2),
+    cliEntry: import.meta.filename,
+    cwd: () => process.cwd(),
+    env: (key) => process.env[key],
+    input: process.stdin,
+    platform: process.platform,
+    now: () => Date.now(),
+    writeStdout: (text) => {
+      process.stdout.write(text);
+    },
+    writeStderr: (text) => {
+      process.stderr.write(text);
+    },
+    onSigint: (handler) => {
+      process.on("SIGINT", handler);
+    },
+    offSigint: (handler) => {
+      process.off("SIGINT", handler);
+    },
+    forceExit: (code) => process.exit(code),
+  };
+}
+
+export async function main(): Promise<void> {
+  process.exitCode = await runCliMain(defaultRuntime());
+}
+
+// process.argv[1] keeps the launch path; npm/pnpm install bins as symlinks,
+// so resolve to the real path before comparing against the resolved module URL.
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
+) {
+  await main();
+}
+/* v8 ignore stop */

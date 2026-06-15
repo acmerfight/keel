@@ -38,7 +38,7 @@ export interface InteractiveSessionOptions {
   readonly printAgentEvents: (
     stream: AsyncIterable<AgentEvent>,
   ) => Promise<EndEvent | undefined>;
-  readonly formatCostReport: (cost: CostReport) => string;
+  readonly formatCostReport: (cost: CostReport, maxUsd: number) => string;
 }
 
 export async function runInteractiveSession(
@@ -108,7 +108,9 @@ export async function runInteractiveSession(
           options.cliArgs.maxCostUsd !== undefined &&
           finalEnd?.cost !== undefined
         ) {
-          options.writeStderr(options.formatCostReport(finalEnd.cost));
+          options.writeStderr(
+            options.formatCostReport(finalEnd.cost, options.cliArgs.maxCostUsd),
+          );
         }
       } catch (error) {
         if (!turnAbortController.signal.aborted) {
