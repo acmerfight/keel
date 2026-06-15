@@ -744,6 +744,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         runtime.writeStderr(`${error.message}\n`);
         return 1;
       }
+      /* v8 ignore next: unexpected interactive runtime failures are allowed to escape. */
       throw error;
     }
     return exitCode;

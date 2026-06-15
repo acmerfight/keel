@@ -598,6 +598,59 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("");
   });
 
+  test(`Given interactive mode has cost tracking enabled,
+    When the user sends one prompt,
+    Then the CLI main prints the turn cost report`, async () => {
+    // Given
+    const input = new PassThrough();
+    input.end("hello\n");
+    const fixture = createRuntime(["--max-cost", "1"], {
+      env: { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
+      input,
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toBe("Remembered: hello\n");
+    expect(fixture.stderr()).toBe("Cost: $0.000000 (budget $1.0000)\n");
+  });
+
+  test(`Given an interactive session is idle,
+    When the CLI main receives SIGINT,
+    Then it closes the session as interrupted`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigint: SigintCapture = { handler: null };
+    const fixture = createRuntime([], {
+      env: { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
+      input,
+      onSigint: (handler) => {
+        sigint.handler = handler;
+      },
+      offSigint: (handler) => {
+        if (sigint.handler === handler) sigint.handler = null;
+      },
+    });
+
+    // When
+    const run = runCliMain(fixture.runtime);
+    const handler = sigint.handler;
+    if (handler === null) {
+      throw new Error("SIGINT handler was not registered");
+    }
+    handler();
+    const exitCode = await run;
+
+    // Then
+    expect(exitCode).toBe(130);
+    expect(fixture.stdout()).toBe("\n");
+    expect(fixture.stderr()).toBe("");
+    expect(sigint.handler).toBeNull();
+  });
+
   test(`Given interactive mode resolves a provider configuration error,
     When the user sends a prompt,
     Then the CLI main returns the user-facing error`, async () => {
