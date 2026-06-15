@@ -150,6 +150,10 @@ function toolCallWithoutId(argumentsJson: string): {
   };
 }
 
+function longToolCallId(): string {
+  return `call_kimi_${"x".repeat(80)}`;
+}
+
 async function collect(stream: AsyncIterable<LLMEvent>): Promise<LLMEvent[]> {
   const events: LLMEvent[] = [];
   for await (const event of stream) {
@@ -376,6 +380,35 @@ describe("Kimi Provider", () => {
               },
             }),
             "data: [DONE]\n\n",
+          ]);
+          return;
+        }
+
+        if (userMessage === "long-id-tool-call") {
+          writeSseResponse(res, [
+            sseData({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: longToolCallId(),
+                        type: "function",
+                        function: {
+                          name: "read",
+                          arguments: JSON.stringify({ path: "note.txt" }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            `${sseData({
+              choices: [{ delta: {}, finish_reason: "tool_calls" }],
+              usage: { prompt_tokens: 20, completion_tokens: 6 },
+            })}data: [DONE]\n\n`,
           ]);
           return;
         }
@@ -924,6 +957,81 @@ describe("Kimi Provider", () => {
           outputTokens: 6,
         },
       },
+    ]);
+  });
+
+  test(`Given Kimi returns an overlong tool call id,
+    When Keel records and replays the tool round,
+    Then the truncated id is used consistently in following history`, async () => {
+    // Given
+    const provider = createProvider();
+    const truncatedToolCallId = longToolCallId().slice(0, 64);
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are Keel.",
+        messages: [{ role: "user", content: "long-id-tool-call" }],
+        signal: freshSignal(),
+      }),
+    );
+    await collect(
+      provider.stream({
+        systemPrompt: "You are Keel.",
+        messages: [
+          { role: "user", content: "long-id-tool-call" },
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              {
+                id: truncatedToolCallId,
+                tool: "read",
+                path: "note.txt",
+              },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: truncatedToolCallId,
+            content: "hello\n",
+          },
+          { role: "user", content: "continue after long id" },
+        ],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events[0]).toEqual({
+      type: "tool_call",
+      id: truncatedToolCallId,
+      tool: "read",
+      path: "note.txt",
+    });
+    expect(capturedBody?.messages).toMatchObject([
+      { role: "system", content: "You are Keel." },
+      { role: "user", content: "long-id-tool-call" },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: truncatedToolCallId,
+            type: "function",
+            function: {
+              name: "read",
+              arguments: JSON.stringify({ path: "note.txt" }),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: truncatedToolCallId,
+        content: "hello\n",
+      },
+      { role: "user", content: "continue after long id" },
     ]);
   });
 

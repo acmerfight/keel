@@ -24,7 +24,7 @@ src/
   cli/         → Entry point
   core/        → error, logger, git, cost
   agent/       → Agent loop, prompt
-  llm/         → Provider abstraction (deepseek)
+  llm/         → Provider abstraction (DeepSeek, Kimi, OpenAI-compatible shared runtime)
   testing/     → Test support code (fake providers, fixture factories)
   tools/       → bash, edit, grep, read, write
 ```
