@@ -592,7 +592,6 @@ async function printAgentEvents(
 
 async function runInteractiveSession(
   cliArgs: Extract<CliArgs, { readonly command: "run" }>,
-  signal: AbortSignal,
 ): Promise<void> {
   const workspace = process.cwd();
   const systemPrompt = buildAgentSystemPrompt({
@@ -605,36 +604,58 @@ async function runInteractiveSession(
     input: process.stdin,
     crlfDelay: Number.POSITIVE_INFINITY,
   });
+  let activeAbortController: AbortController | null = null;
+  const abortActiveTurn = () => {
+    activeAbortController?.abort();
+  };
 
+  process.on("SIGINT", abortActiveTurn);
   try {
     for await (const rawLine of input) {
       const userMessage = rawLine.trim();
       if (userMessage === "") continue;
       resolved ??= resolveInteractiveProvider(userMessage);
+      const messageCountBeforeTurn = messages.length;
+      const turnAbortController = new AbortController();
+      activeAbortController = turnAbortController;
       messages.push({ role: "user", content: userMessage });
-      const stream = runAgentTurn({
-        workspace,
-        provider: resolved.provider,
-        messages,
-        systemPrompt,
-        signal,
-        ...(cliArgs.allowBash ? { allowBash: true } : {}),
-        ...(cliArgs.maxCostUsd !== undefined
-          ? {
-              costTracking: {
-                model: requireKnownCostModel(resolved),
-                maxCostUsd: cliArgs.maxCostUsd,
-              },
-            }
-          : {}),
-      });
-      const finalEnd = await printAgentEvents(stream);
-      process.stdout.write("\n");
-      if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
-        process.stderr.write(formatCostReport(finalEnd.cost));
+
+      try {
+        const stream = runAgentTurn({
+          workspace,
+          provider: resolved.provider,
+          messages,
+          systemPrompt,
+          signal: turnAbortController.signal,
+          ...(cliArgs.allowBash ? { allowBash: true } : {}),
+          ...(cliArgs.maxCostUsd !== undefined
+            ? {
+                costTracking: {
+                  model: requireKnownCostModel(resolved),
+                  maxCostUsd: cliArgs.maxCostUsd,
+                },
+              }
+            : {}),
+        });
+        const finalEnd = await printAgentEvents(stream);
+        process.stdout.write("\n");
+        if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
+          process.stderr.write(formatCostReport(finalEnd.cost));
+        }
+      } catch (error) {
+        if (!turnAbortController.signal.aborted) {
+          throw error;
+        }
+        messages.length = messageCountBeforeTurn;
+        process.stdout.write("\n");
+      } finally {
+        if (activeAbortController === turnAbortController) {
+          activeAbortController = null;
+        }
       }
     }
   } finally {
+    process.off("SIGINT", abortActiveTurn);
     input.close();
   }
 }
@@ -690,22 +711,7 @@ async function main(): Promise<void> {
       );
       process.exit(1);
     }
-    const abortController = new AbortController();
-    const abort = () => {
-      abortController.abort();
-    };
-    process.once("SIGINT", abort);
-    try {
-      await runInteractiveSession(cliArgs, abortController.signal);
-    } catch (error) {
-      if (!abortController.signal.aborted) {
-        throw error;
-      }
-      process.stdout.write("\n");
-      process.exitCode = 130;
-    } finally {
-      process.off("SIGINT", abort);
-    }
+    await runInteractiveSession(cliArgs);
     return;
   }
 

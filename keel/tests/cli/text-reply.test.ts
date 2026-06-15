@@ -153,6 +153,113 @@ describe("CLI Text Reply", () => {
     }
   });
 
+  test(`Given an interactive provider request is interrupted,
+    When user sends another prompt in the same session,
+    Then the next turn uses a fresh abort signal and completes`, async () => {
+    // Given
+    let receiveFirstRequest: () => void = () => {};
+    let receiveSecondRequest: () => void = () => {};
+    let closeFirstResponse: () => void = () => {};
+    const firstRequestReceived = new Promise<void>((resolve) => {
+      receiveFirstRequest = resolve;
+    });
+    const secondRequestReceived = new Promise<void>((resolve) => {
+      receiveSecondRequest = resolve;
+    });
+    const firstResponseClosed = new Promise<void>((resolve) => {
+      closeFirstResponse = resolve;
+    });
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      req.resume();
+      requestCount++;
+      if (requestCount === 1) {
+        receiveFirstRequest();
+        res.on("close", closeFirstResponse);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.write(
+          `data: ${JSON.stringify({
+            choices: [{ delta: { content: "partial" } }],
+          })}\n\n`,
+        );
+        return;
+      }
+
+      receiveSecondRequest();
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      res.end(
+        sseTextReplyWithUsage("second turn survived", {
+          promptTokens: 10,
+          promptCacheHitTokens: 0,
+          promptCacheMissTokens: 10,
+          completionTokens: 3,
+        }),
+      );
+    });
+    await listen(server);
+    const { child, result } = runCliProcess(
+      [],
+      {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_FORCE_INTERACTIVE: "1",
+      },
+      { stdin: "pipe" },
+    );
+    child.stdin?.on("error", () => {});
+
+    try {
+      // When
+      child.stdin?.write("first prompt\n");
+      await withTimeout(
+        firstRequestReceived,
+        5000,
+        "interactive CLI did not send the first provider request",
+      );
+      child.kill("SIGINT");
+      await withTimeout(
+        firstResponseClosed,
+        5000,
+        "interactive provider request was not cancelled after SIGINT",
+      );
+      child.stdin?.write("second prompt\n");
+      child.stdin?.end();
+
+      // Then
+      await withTimeout(
+        secondRequestReceived,
+        5000,
+        "interactive CLI did not send the second provider request",
+      );
+      const exit = await withTimeout(
+        result,
+        5000,
+        "interactive CLI did not finish after stdin closed",
+      );
+      expect(exit.exitCode).toBe(0);
+      expect(exit.signal).toBeNull();
+      expect(exit.stdout).toContain("second turn survived\n");
+      expect(exit.stderr).not.toMatch(/AbortError|DOMException/);
+    } finally {
+      child.kill("SIGKILL");
+      await close(server);
+    }
+  });
+
   test(`Given user requests an interactive session report,
     When user runs the CLI without a message,
     Then the CLI rejects the unsupported report option`, async () => {
