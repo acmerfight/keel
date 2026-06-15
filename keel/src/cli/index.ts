@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { writeFileSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
@@ -843,9 +843,11 @@ export async function main(): Promise<void> {
   process.exitCode = await runCliMain(defaultRuntime());
 }
 
+// process.argv[1] keeps the launch path; npm/pnpm install bins as symlinks,
+// so resolve to the real path before comparing against the resolved module URL.
 if (
   process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
+  import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
 ) {
   await main();
 }
