@@ -9,21 +9,6 @@ import {
   type OpenAICompatibleStreamState,
 } from "./openai-compatible.ts";
 
-// Qwen prices are per 1M tokens. Long-context requests use higher tiers;
-// these models capture the public short-context list prices used by Keel's
-// current single-rate cost model.
-const QWEN_3_7_PLUS_COST_MODEL: CostModel = {
-  uncachedInputPerMillionTokens: 0.4,
-  cachedInputPerMillionTokens: 0.08,
-  outputPerMillionTokens: 1.6,
-};
-
-const QWEN_3_6_FLASH_COST_MODEL: CostModel = {
-  uncachedInputPerMillionTokens: 0.25,
-  cachedInputPerMillionTokens: 0.25,
-  outputPerMillionTokens: 1.5,
-};
-
 const QWEN_3_7_MAX_COST_MODEL: CostModel = {
   uncachedInputPerMillionTokens: 2.5,
   cachedInputPerMillionTokens: 0.25,
@@ -185,8 +170,6 @@ function captureQwenUsage(
 }
 
 export function qwenCostModel(model: string): CostModel | null {
-  if (model === "qwen3.7-plus") return QWEN_3_7_PLUS_COST_MODEL;
-  if (model === "qwen3.6-flash") return QWEN_3_6_FLASH_COST_MODEL;
   if (model === "qwen3.7-max") return QWEN_3_7_MAX_COST_MODEL;
   return null;
 }

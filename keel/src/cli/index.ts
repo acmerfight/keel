@@ -597,7 +597,7 @@ function requireKnownCostModel(resolved: ResolvedProvider): CostModel {
 
   if (resolved.provider.id === "qwen") {
     process.stderr.write(
-      `Error: cost tracking is only supported for known Qwen models "qwen3.7-plus", "qwen3.6-flash", and "qwen3.7-max"; configured QWEN_MODEL="${resolved.model}".\n`,
+      `Error: cost tracking is not supported for Qwen model "${resolved.model}" because its official pricing is tiered by per-request input tokens.\n`,
     );
     process.exit(1);
   }
