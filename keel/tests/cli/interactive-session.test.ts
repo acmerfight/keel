@@ -113,6 +113,7 @@ describe("Interactive Session", () => {
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
     let stderr = "";
+    let resolvedProviders = 0;
     const session = runInteractiveSession({
       cliArgs: { allowBash: true, maxCostUsd: 1 },
       workspace: process.cwd(),
@@ -132,11 +133,14 @@ describe("Interactive Session", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      resolveProvider: () => ({
-        provider,
-        model: "fake",
-        costModel: ZERO_COST_MODEL,
-      }),
+      resolveProvider: () => {
+        resolvedProviders++;
+        return {
+          provider,
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        };
+      },
       requireKnownCostModel: () => ZERO_COST_MODEL,
       printAgentEvents: async (stream) => {
         let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
@@ -151,12 +155,13 @@ describe("Interactive Session", () => {
     });
 
     // When
-    input.write("hello\n");
+    input.write("\nhello\n");
     input.end();
 
     // Then
     await session;
     expect(stderr).toBe("Cost: $0\n");
+    expect(resolvedProviders).toBe(1);
     expect(sigintHandlers.size).toBe(0);
   });
 

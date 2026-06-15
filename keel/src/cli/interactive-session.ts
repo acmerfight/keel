@@ -112,9 +112,7 @@ export async function runInteractiveSession(
         messages.length = messageCountBeforeTurn;
         options.writeStdout("\n");
       } finally {
-        if (activeAbortController === turnAbortController) {
-          activeAbortController = null;
-        }
+        activeAbortController = null;
       }
     }
   } finally {
