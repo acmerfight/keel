@@ -4,7 +4,6 @@ import { KeelError } from "../../core/error.ts";
 import type { Usage } from "../types.ts";
 import {
   createOpenAICompatibleProvider,
-  type OpenAICompatibleChoice,
   type OpenAICompatibleChunk,
   type OpenAICompatibleStreamState,
 } from "./openai-compatible.ts";
@@ -19,48 +18,18 @@ const qwenUsageSchema = z
   .object({
     prompt_tokens: z.number().int().nonnegative(),
     completion_tokens: z.number().int().nonnegative(),
-    prompt_cache_hit_tokens: z.number().int().nonnegative().optional(),
-    prompt_cache_miss_tokens: z.number().int().nonnegative().optional(),
     prompt_tokens_details: z
       .object({
         cached_tokens: z.number().int().nonnegative().optional(),
       })
       .passthrough()
       .optional(),
-    completion_tokens_details: z
-      .object({
-        reasoning_tokens: z.number().int().nonnegative().optional(),
-        text_tokens: z.number().int().nonnegative().optional(),
-      })
-      .passthrough()
-      .optional(),
   })
   .refine((usage) => {
-    const cacheHitTokens = usage.prompt_cache_hit_tokens;
-    const cacheMissTokens = usage.prompt_cache_miss_tokens;
     const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
 
-    if (cacheHitTokens !== undefined && cacheHitTokens > usage.prompt_tokens) {
-      return false;
-    }
-    if (
-      cacheMissTokens !== undefined &&
-      cacheMissTokens > usage.prompt_tokens
-    ) {
-      return false;
-    }
     if (cachedTokens !== undefined && cachedTokens > usage.prompt_tokens) {
       return false;
-    }
-    if (
-      cacheHitTokens !== undefined &&
-      cachedTokens !== undefined &&
-      cacheHitTokens !== cachedTokens
-    ) {
-      return false;
-    }
-    if (cacheHitTokens !== undefined && cacheMissTokens !== undefined) {
-      return cacheHitTokens + cacheMissTokens === usage.prompt_tokens;
     }
     return true;
   })
@@ -85,13 +54,11 @@ const qwenChoiceSchema = z
     delta: z
       .object({
         content: z.string().nullable().optional(),
-        reasoning_content: z.string().nullable().optional(),
         tool_calls: z.array(qwenToolCallSchema).optional(),
       })
       .passthrough()
       .optional(),
     finish_reason: z.string().nullable().optional(),
-    usage: qwenUsageSchema.nullable().optional(),
   })
   .passthrough();
 
@@ -133,19 +100,11 @@ function parseQwenChunk(data: string): OpenAICompatibleChunk {
 }
 
 function usageFromQwenUsage(usage: QwenUsage): Usage {
-  const cachedInputTokens =
-    usage.prompt_cache_hit_tokens ??
-    usage.prompt_tokens_details?.cached_tokens ??
-    (usage.prompt_cache_miss_tokens !== undefined
-      ? usage.prompt_tokens - usage.prompt_cache_miss_tokens
-      : undefined) ??
-    0;
-  const uncachedInputTokens =
-    usage.prompt_cache_miss_tokens ?? usage.prompt_tokens - cachedInputTokens;
+  const cachedInputTokens = usage.prompt_tokens_details?.cached_tokens ?? 0;
   return {
     inputTokens: usage.prompt_tokens,
     cachedInputTokens,
-    uncachedInputTokens,
+    uncachedInputTokens: usage.prompt_tokens - cachedInputTokens,
     outputTokens: usage.completion_tokens,
   };
 }
@@ -153,12 +112,11 @@ function usageFromQwenUsage(usage: QwenUsage): Usage {
 function captureQwenUsage(
   state: OpenAICompatibleStreamState,
   chunk: OpenAICompatibleChunk,
-  choice: OpenAICompatibleChoice | undefined,
 ): void {
   const usageResult = qwenUsageSchema
     .nullable()
     .optional()
-    .safeParse(choice?.usage ?? chunk.usage);
+    .safeParse(chunk.usage);
   if (
     !usageResult.success ||
     usageResult.data === undefined ||
