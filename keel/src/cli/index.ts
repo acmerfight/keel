@@ -2,13 +2,12 @@
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
 import { runAgent } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import type { CostModel } from "../core/cost.ts";
-import { restoreLastEditCheckpoint } from "../core/git.ts";
-import { runEvalCommand } from "../eval/run.ts";
 import {
   createDeepseekProvider,
   DEEPSEEK_V4_FLASH_COST_MODEL,
@@ -20,7 +19,6 @@ import {
 import { createQwenProvider, qwenCostModel } from "../llm/providers/qwen.ts";
 import type { LLMProvider, ToolCall } from "../llm/types.ts";
 import { createFakeProvider, fakeResponse } from "../testing/fake-provider.ts";
-import { runDoctor } from "./doctor.ts";
 import {
   type InteractiveResolvedProvider,
   runInteractiveSession,
@@ -58,6 +56,31 @@ type CliArgs =
       readonly reportFile?: string;
     };
 
+interface CliInput extends NodeJS.ReadableStream {
+  readonly isTTY?: boolean;
+}
+
+export interface CliRuntime {
+  readonly args: readonly string[];
+  readonly cliEntry: string;
+  readonly cwd: () => string;
+  readonly env: (key: string) => string | undefined;
+  readonly input: CliInput;
+  readonly platform: NodeJS.Platform;
+  readonly now: () => number;
+  readonly writeStdout: (text: string) => void;
+  readonly writeStderr: (text: string) => void;
+  readonly onSigint: (handler: () => void) => void;
+  readonly offSigint: (handler: () => void) => void;
+  readonly forceExit: (code: number) => never;
+}
+
+class CliInputError extends Error {}
+
+function cliInputError(message: string): never {
+  throw new CliInputError(message);
+}
+
 const USAGE = [
   "Usage: keel [--allow-bash] [--max-cost <usd>] [--report <file>] <message>",
   "       keel eval [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
@@ -71,23 +94,17 @@ const USAGE = [
 
 const maxCostSchema = z.coerce.number().finite().positive();
 
-function env(key: string): string | undefined {
-  return process.env[key];
-}
-
 function parseMaxCost(raw: string | undefined): number {
   const result = maxCostSchema.safeParse(raw);
   if (!result.success) {
-    process.stderr.write("Error: --max-cost must be a positive number.\n");
-    process.exit(1);
+    cliInputError("Error: --max-cost must be a positive number.");
   }
   return result.data;
 }
 
 function parseReportFile(raw: string | undefined): string {
   if (raw === undefined || raw === "") {
-    process.stderr.write("Error: --report requires a file path.\n");
-    process.exit(1);
+    cliInputError("Error: --report requires a file path.");
   }
   return raw;
 }
@@ -97,16 +114,14 @@ const trialsSchema = z.coerce.number().int().positive();
 function parseTrials(raw: string | undefined): number {
   const result = trialsSchema.safeParse(raw);
   if (!result.success) {
-    process.stderr.write("Error: --trials must be a positive integer.\n");
-    process.exit(1);
+    cliInputError("Error: --trials must be a positive integer.");
   }
   return result.data;
 }
 
 function requireOptionValue(option: string, raw: string | undefined): string {
   if (raw === undefined || raw === "") {
-    process.stderr.write(`Error: ${option} requires a value.\n`);
-    process.exit(1);
+    cliInputError(`Error: ${option} requires a value.`);
   }
   return raw;
 }
@@ -147,8 +162,7 @@ function parseEvalArgs(args: readonly string[]): EvalCliArgs {
       continue;
     }
 
-    process.stderr.write(`Error: unknown eval option "${arg}"\n`);
-    process.exit(1);
+    cliInputError(`Error: unknown eval option "${arg}"`);
   }
 
   return {
@@ -496,8 +510,11 @@ function kimiCostModel(model: string): CostModel | null {
   return null;
 }
 
-function resolveProvider(userMessage: string): ResolvedProvider {
-  const providerId = env("KEEL_PROVIDER") ?? "deepseek";
+function resolveProvider(
+  userMessage: string,
+  runtime: CliRuntime,
+): ResolvedProvider {
+  const providerId = runtime.env("KEEL_PROVIDER") ?? "deepseek";
 
   if (providerId === "fake") {
     return {
@@ -508,18 +525,17 @@ function resolveProvider(userMessage: string): ResolvedProvider {
   }
 
   if (providerId === "deepseek") {
-    const apiKey = env("DEEPSEEK_API_KEY");
+    const apiKey = runtime.env("DEEPSEEK_API_KEY");
     if (!apiKey) {
-      process.stderr.write(
-        "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.\n",
+      cliInputError(
+        "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.",
       );
-      process.exit(1);
     }
     const model = "deepseek-v4-flash";
     return {
       provider: createDeepseekProvider({
         apiKey,
-        baseUrl: env("DEEPSEEK_BASE_URL") ?? "https://api.deepseek.com",
+        baseUrl: runtime.env("DEEPSEEK_BASE_URL") ?? "https://api.deepseek.com",
         model,
       }),
       model,
@@ -528,18 +544,17 @@ function resolveProvider(userMessage: string): ResolvedProvider {
   }
 
   if (providerId === "kimi") {
-    const apiKey = env("KIMI_API_KEY");
+    const apiKey = runtime.env("KIMI_API_KEY");
     if (!apiKey) {
-      process.stderr.write(
-        "Error: KIMI_API_KEY is required. Set the API key to use Kimi.\n",
+      cliInputError(
+        "Error: KIMI_API_KEY is required. Set the API key to use Kimi.",
       );
-      process.exit(1);
     }
-    const model = env("KIMI_MODEL") ?? "kimi-k2.6";
+    const model = runtime.env("KIMI_MODEL") ?? "kimi-k2.6";
     return {
       provider: createKimiProvider({
         apiKey,
-        baseUrl: env("KIMI_BASE_URL") ?? "https://api.moonshot.cn/v1",
+        baseUrl: runtime.env("KIMI_BASE_URL") ?? "https://api.moonshot.cn/v1",
         model,
       }),
       model,
@@ -548,19 +563,19 @@ function resolveProvider(userMessage: string): ResolvedProvider {
   }
 
   if (providerId === "qwen") {
-    const apiKey = env("DASHSCOPE_API_KEY") ?? env("QWEN_API_KEY");
+    const apiKey =
+      runtime.env("DASHSCOPE_API_KEY") ?? runtime.env("QWEN_API_KEY");
     if (!apiKey) {
-      process.stderr.write(
-        "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.\n",
+      cliInputError(
+        "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
       );
-      process.exit(1);
     }
-    const model = env("QWEN_MODEL") ?? "qwen3.7-plus";
+    const model = runtime.env("QWEN_MODEL") ?? "qwen3.7-plus";
     return {
       provider: createQwenProvider({
         apiKey,
         baseUrl:
-          env("QWEN_BASE_URL") ??
+          runtime.env("QWEN_BASE_URL") ??
           "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         model,
       }),
@@ -569,12 +584,14 @@ function resolveProvider(userMessage: string): ResolvedProvider {
     };
   }
 
-  process.stderr.write(`Error: unknown provider "${providerId}"\n`);
-  process.exit(1);
+  cliInputError(`Error: unknown provider "${providerId}"`);
 }
 
-function resolveInteractiveProvider(userMessage: string): ResolvedProvider {
-  const providerId = env("KEEL_PROVIDER") ?? "deepseek";
+function resolveInteractiveProvider(
+  userMessage: string,
+  runtime: CliRuntime,
+): ResolvedProvider {
+  const providerId = runtime.env("KEEL_PROVIDER") ?? "deepseek";
   if (providerId === "fake") {
     return {
       provider: createInteractiveFakeProvider(),
@@ -583,46 +600,45 @@ function resolveInteractiveProvider(userMessage: string): ResolvedProvider {
     };
   }
 
-  return resolveProvider(userMessage);
+  return resolveProvider(userMessage, runtime);
 }
 
 function requireKnownCostModel(resolved: ResolvedProvider): CostModel {
   if (resolved.costModel !== null) return resolved.costModel;
 
   if (resolved.provider.id === "kimi") {
-    process.stderr.write(
-      `Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="${resolved.model}".\n`,
+    cliInputError(
+      `Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="${resolved.model}".`,
     );
-    process.exit(1);
   }
 
   if (resolved.provider.id === "qwen") {
-    process.stderr.write(
-      `Error: cost tracking is not supported for Qwen model "${resolved.model}" because its official pricing is tiered by per-request input tokens.\n`,
+    cliInputError(
+      `Error: cost tracking is not supported for Qwen model "${resolved.model}" because its official pricing is tiered by per-request input tokens.`,
     );
-    process.exit(1);
   }
 
-  process.stderr.write(
-    `Error: cost tracking is not supported for provider "${resolved.provider.id}" model "${resolved.model}".\n`,
+  /* v8 ignore next 3: defensive guard for future providers with unknown pricing. */
+  cliInputError(
+    `Error: cost tracking is not supported for provider "${resolved.provider.id}" model "${resolved.model}".`,
   );
-  process.exit(1);
 }
 
 async function printAgentEvents(
   stream: AsyncIterable<AgentEvent>,
+  runtime: CliRuntime,
 ): Promise<EndEvent | undefined> {
   let finalEnd: EndEvent | undefined;
   for await (const event of stream) {
     if (event.type === "text") {
-      process.stdout.write(sanitizeAssistantText(event.text));
+      runtime.writeStdout(sanitizeAssistantText(event.text));
     } else if (event.type === "tool_start") {
-      process.stderr.write(`Tool: ${toolCallLabel(event.toolCall)}\n`);
+      runtime.writeStderr(`Tool: ${toolCallLabel(event.toolCall)}\n`);
     } else if (event.type === "tool_end") {
       // Status lives in the line prefix because the label is
       // model-controlled text and could end with a forged failure marker.
       if (!event.ok) {
-        process.stderr.write(`Tool failed: ${toolCallLabel(event.toolCall)}\n`);
+        runtime.writeStderr(`Tool failed: ${toolCallLabel(event.toolCall)}\n`);
       }
     } else if (event.type === "end") {
       finalEnd = event;
@@ -631,103 +647,125 @@ async function printAgentEvents(
   return finalEnd;
 }
 
-async function main(): Promise<void> {
-  const cliArgs = parseCliArgs(process.argv.slice(2));
+export async function runCliMain(runtime: CliRuntime): Promise<number> {
+  let exitCode = 0;
+  let cliArgs: CliArgs;
+  try {
+    cliArgs = parseCliArgs(runtime.args);
+  } catch (error) {
+    if (error instanceof CliInputError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    throw error;
+  }
+
   if (cliArgs.command === "doctor") {
+    const { runDoctor } = await import("./doctor.ts");
     const result = await runDoctor();
-    process.stdout.write(result.stdout);
-    process.stderr.write(result.stderr);
-    process.exitCode = result.exitCode;
-    return;
+    runtime.writeStdout(result.stdout);
+    runtime.writeStderr(result.stderr);
+    return result.exitCode;
   }
 
   if (cliArgs.command === "eval") {
-    process.exitCode = await runEvalCommand({
+    const { runEvalCommand } = await import("../eval/run.ts");
+    return await runEvalCommand({
       suiteDir: cliArgs.suiteDir,
       outFile: cliArgs.outFile,
       trials: cliArgs.trials,
       ...(cliArgs.taskId !== undefined ? { taskId: cliArgs.taskId } : {}),
       check: cliArgs.check,
-      cliEntry: import.meta.filename,
+      cliEntry: runtime.cliEntry,
     });
-    return;
   }
 
   if (cliArgs.command === "undo") {
-    const result = restoreLastEditCheckpoint(process.cwd());
+    const { restoreLastEditCheckpoint } = await import("../core/git.ts");
+    const result = restoreLastEditCheckpoint(runtime.cwd());
     switch (result.status) {
       case "restored":
-        process.stdout.write(`Restored ${result.filePath}\n`);
-        return;
+        runtime.writeStdout(`Restored ${result.filePath}\n`);
+        return 0;
       case "none":
-        process.stderr.write(`${result.message}\n`);
-        process.exitCode = 1;
-        return;
+        runtime.writeStderr(`${result.message}\n`);
+        return 1;
       case "blocked":
-        process.stderr.write(`${result.message}\n`);
-        process.exitCode = 1;
-        return;
+        runtime.writeStderr(`${result.message}\n`);
+        return 1;
     }
   }
 
   const userMessage = cliArgs.userMessage;
   if (!userMessage) {
-    if (process.stdin.isTTY !== true && env("KEEL_FORCE_INTERACTIVE") !== "1") {
-      process.stderr.write(`${USAGE}\n`);
-      process.exit(1);
+    if (
+      runtime.input.isTTY !== true &&
+      runtime.env("KEEL_FORCE_INTERACTIVE") !== "1"
+    ) {
+      runtime.writeStderr(`${USAGE}\n`);
+      return 1;
     }
     if (cliArgs.reportFile !== undefined) {
-      process.stderr.write(
+      runtime.writeStderr(
         "Error: --report is only supported for one-shot runs.\n",
       );
-      process.exit(1);
+      return 1;
     }
-    await runInteractiveSession({
-      cliArgs,
-      workspace: process.cwd(),
-      platform: process.platform,
-      input: process.stdin,
-      writeStdout: (text) => {
-        process.stdout.write(text);
-      },
-      writeStderr: (text) => {
-        process.stderr.write(text);
-      },
-      onSigint: (handler) => {
-        process.on("SIGINT", handler);
-      },
-      offSigint: (handler) => {
-        process.off("SIGINT", handler);
-      },
-      setExitCode: (code) => {
-        process.exitCode = code;
-      },
-      forceExit: (code) => process.exit(code),
-      resolveProvider: resolveInteractiveProvider,
-      requireKnownCostModel,
-      printAgentEvents,
-      formatCostReport,
-    });
-    return;
+    try {
+      await runInteractiveSession({
+        cliArgs,
+        workspace: runtime.cwd(),
+        platform: runtime.platform,
+        input: runtime.input,
+        writeStdout: (text) => {
+          runtime.writeStdout(text);
+        },
+        writeStderr: (text) => {
+          runtime.writeStderr(text);
+        },
+        onSigint: (handler) => {
+          runtime.onSigint(handler);
+        },
+        offSigint: (handler) => {
+          runtime.offSigint(handler);
+        },
+        setExitCode: (code) => {
+          exitCode = code;
+        },
+        forceExit: runtime.forceExit,
+        resolveProvider: (message) =>
+          resolveInteractiveProvider(message, runtime),
+        requireKnownCostModel,
+        printAgentEvents: (stream) => printAgentEvents(stream, runtime),
+        formatCostReport,
+      });
+    } catch (error) {
+      if (error instanceof CliInputError) {
+        runtime.writeStderr(`${error.message}\n`);
+        return 1;
+      }
+      throw error;
+    }
+    return exitCode;
   }
 
-  const resolved = resolveProvider(userMessage);
   const abortController = new AbortController();
   const abort = () => {
     abortController.abort();
   };
-  process.once("SIGINT", abort);
-
   try {
-    const workspace = process.cwd();
-    const startedAt = Date.now();
+    const resolved = resolveProvider(userMessage, runtime);
+    runtime.onSigint(abort);
+
+    const workspace = runtime.cwd();
+    const startedAt = runtime.now();
     const stream = runAgent({
       workspace,
       provider: resolved.provider,
       userMessage,
       systemPrompt: buildAgentSystemPrompt({
         workspace,
-        platform: process.platform,
+        platform: runtime.platform,
       }),
       signal: abortController.signal,
       ...(cliArgs.allowBash ? { allowBash: true } : {}),
@@ -743,28 +781,70 @@ async function main(): Promise<void> {
         : {}),
     });
 
-    const finalEnd = await printAgentEvents(stream);
-    process.stdout.write("\n");
+    const finalEnd = await printAgentEvents(stream, runtime);
+    runtime.writeStdout("\n");
     if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
-      process.stderr.write(formatCostReport(finalEnd.cost));
+      runtime.writeStderr(formatCostReport(finalEnd.cost));
     }
     if (cliArgs.reportFile !== undefined && finalEnd !== undefined) {
       writeRunReport(cliArgs.reportFile, {
         provider: resolved.provider.id,
         model: resolved.model,
         end: finalEnd,
-        durationMs: Date.now() - startedAt,
+        durationMs: runtime.now() - startedAt,
       });
     }
   } catch (error) {
+    if (error instanceof CliInputError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    /* v8 ignore next 4: unexpected runtime failures are allowed to escape. */
     if (!abortController.signal.aborted) {
       throw error;
     }
-    process.stdout.write("\n");
-    process.exitCode = 130;
+    runtime.writeStdout("\n");
+    return 130;
   } finally {
-    process.off("SIGINT", abort);
+    runtime.offSigint(abort);
   }
+  return 0;
 }
 
-main();
+/* v8 ignore start: real process adapter is exercised by CLI subprocess tests. */
+function defaultRuntime(): CliRuntime {
+  return {
+    args: process.argv.slice(2),
+    cliEntry: import.meta.filename,
+    cwd: () => process.cwd(),
+    env: (key) => process.env[key],
+    input: process.stdin,
+    platform: process.platform,
+    now: () => Date.now(),
+    writeStdout: (text) => {
+      process.stdout.write(text);
+    },
+    writeStderr: (text) => {
+      process.stderr.write(text);
+    },
+    onSigint: (handler) => {
+      process.on("SIGINT", handler);
+    },
+    offSigint: (handler) => {
+      process.off("SIGINT", handler);
+    },
+    forceExit: (code) => process.exit(code),
+  };
+}
+
+export async function main(): Promise<void> {
+  process.exitCode = await runCliMain(defaultRuntime());
+}
+
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  await main();
+}
+/* v8 ignore stop */
