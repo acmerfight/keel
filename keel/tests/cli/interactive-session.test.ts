@@ -238,6 +238,99 @@ describe("Interactive Session", () => {
     expect(stdout).toBe("Working\n");
   });
 
+  test(`Given an interrupted interactive turn stops normally after abort,
+    When user sends another prompt,
+    Then the cancelled user message is not kept in context`, async () => {
+    // Given
+    let receiveFirstText: () => void = () => {};
+    const firstTextReceived = new Promise<void>((resolve) => {
+      receiveFirstText = resolve;
+    });
+    const observedUserContexts: string[][] = [];
+    let turn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        turn++;
+        observedUserContexts.push(
+          options.messages
+            .filter((message) => message.role === "user")
+            .map((message) => message.content),
+        );
+        if (turn === 1) {
+          yield { type: "text", text: "Cancel me" };
+          await new Promise<void>((resolve) => {
+            options.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "Second done" };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { allowBash: false },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+            if (event.text === "Cancel me") {
+              receiveFirstText();
+            }
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTextReceived, 5000, "first turn did not start");
+    for (const handler of [...sigintHandlers]) {
+      handler();
+    }
+    input.write("second prompt\n");
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toBe("Cancel me\nSecond done\n");
+    expect(observedUserContexts).toEqual([["first prompt"], ["second prompt"]]);
+  });
+
   test(`Given an active interactive turn fails without abort,
     When the provider error reaches the session,
     Then the error is rethrown`, async () => {

@@ -98,6 +98,11 @@ export async function runInteractiveSession(
             : {}),
         });
         const finalEnd = await options.printAgentEvents(stream);
+        if (turnAbortController.signal.aborted) {
+          messages.length = messageCountBeforeTurn;
+          options.writeStdout("\n");
+          continue;
+        }
         options.writeStdout("\n");
         if (
           options.cliArgs.maxCostUsd !== undefined &&
