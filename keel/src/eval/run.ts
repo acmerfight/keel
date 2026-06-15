@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
+import { errorMessage } from "../core/error.ts";
 import { type EvalTask, loadEvalTasks } from "./task.ts";
 
 // Mirrors the CLI --report payload. The runner consumes the report through
@@ -294,7 +295,7 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
   try {
     tasks = selectTasks(args);
   } catch (error) {
-    const message = String(error).replace(/^Error: /, "");
+    const message = errorMessage(error);
     process.stderr.write(`Error: ${message}\n`);
     return 1;
   }

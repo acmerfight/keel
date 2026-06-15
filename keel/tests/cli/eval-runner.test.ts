@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { runEvalCommand } from "../../src/eval/run.ts";
 
@@ -541,6 +541,44 @@ describe("Eval Runner", () => {
       // Then
       expect(exitCode).toBe(1);
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a task definition contains malformed JSON,
+    When the eval runner loads the suite,
+    Then it reports the parser message without duplicating the error name`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const taskDir = join(suiteDir, "malformed-task");
+    await mkdir(taskDir, { recursive: true });
+    await writeFile(join(taskDir, "task.json"), "{not-json", "utf8");
+    let stderr = "";
+    const writeStderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stderr += chunk.toString();
+        return true;
+      });
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry: CLI_ENTRY,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain(
+        'Error: eval task "malformed-task" has unreadable task.json:',
+      );
+      expect(stderr).not.toContain("SyntaxError:");
+    } finally {
+      writeStderr.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });
