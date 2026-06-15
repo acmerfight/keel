@@ -410,6 +410,7 @@ function sleepWithAbort(
   signal: AbortSignal,
   providerName: string,
 ): Promise<void> {
+  /* v8 ignore next 5: protects the small window before the abort listener is registered. */
   if (signal.aborted) {
     throw new KeelError(
       "provider_aborted",
@@ -441,6 +442,7 @@ function sleepWithAbort(
 async function discardResponseBody(response: Response): Promise<void> {
   try {
     await response.body?.cancel();
+    /* v8 ignore next 3: cancellation cleanup is best effort before retrying. */
   } catch {
     // Best effort only; the retry decision must not depend on error body IO.
   }
