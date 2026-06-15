@@ -306,6 +306,40 @@ describe("CLI Main", () => {
     }
   });
 
+  test(`Given the last edit checkpoint no longer matches the file,
+    When the CLI main dispatches undo,
+    Then it refuses to overwrite the user's newer changes`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-main-undo-blocked-"),
+    );
+    await runGit(workspace, ["init"]);
+    await writeFile(join(workspace, "note.txt"), "after\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath: join(workspace, "note.txt"),
+      beforeContent: "before\n",
+      afterContent: "after\n",
+    });
+    await writeFile(join(workspace, "note.txt"), "newer change\n", "utf8");
+    const fixture = createRuntime(["/undo"], { cwd: workspace });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "newer change\n",
+      );
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).not.toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an interactive run asks for a report,
     When the CLI main sees there is no one-shot message,
     Then it rejects the unsupported report option`, async () => {

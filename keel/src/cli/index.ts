@@ -657,6 +657,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
+    /* v8 ignore next: CLI parser only raises typed input errors today. */
     throw error;
   }
 
