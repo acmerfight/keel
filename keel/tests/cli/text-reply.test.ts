@@ -116,7 +116,8 @@ describe("CLI Text Reply", () => {
         "",
         "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
         "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
-        "Provider env: KEEL_PROVIDER=deepseek|kimi, DEEPSEEK_API_KEY, KIMI_API_KEY, optional *_BASE_URL and KIMI_MODEL.",
+        "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY, optional *_BASE_URL and *_MODEL.",
+        "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
         "",
       ].join("\n"),
     );
@@ -535,6 +536,25 @@ describe("CLI Text Reply", () => {
     );
   });
 
+  test(`Given Qwen is configured without an API key,
+    When user runs the CLI,
+    Then the CLI exits with a Qwen API key error`, async () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "qwen",
+      DASHSCOPE_API_KEY: "",
+    };
+
+    // When
+    const result = await runCli(["hello"], env);
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toBe(
+      "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.\n",
+    );
+  });
+
   test(`Given Kimi is configured with an unsupported cost model,
     When user runs the CLI with a max cost,
     Then the CLI rejects cost tracking before contacting the provider`, async () => {
@@ -553,6 +573,26 @@ describe("CLI Text Reply", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toBe(
       'Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="kimi-k2.5".\n',
+    );
+  });
+
+  test(`Given Qwen's default model uses tiered pricing,
+    When user runs the CLI with a max cost,
+    Then the CLI rejects cost tracking before contacting the provider`, async () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "qwen",
+      DASHSCOPE_API_KEY: "test-key",
+    };
+
+    // When
+    const result = await runCli(["--max-cost", "1", "hello"], env);
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      'Error: cost tracking is not supported for Qwen model "qwen3.7-plus" because its official pricing is tiered by per-request input tokens.\n',
     );
   });
 
