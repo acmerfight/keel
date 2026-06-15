@@ -156,6 +156,65 @@ describe("Agent Stopping", () => {
     }
   });
 
+  test(`Given streamed assistant text before the round limit summary,
+    When the agent emits the wrap-up response,
+    Then the streamed text and stored reply keep a readable boundary`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
+    const messages: Message[] = [
+      { role: "user", content: "edit the file and explain progress" },
+    ];
+    const provider: LLMProvider = {
+      id: "wrap-up-boundary",
+      async *stream(options) {
+        const lastMessage = options.messages.at(-1);
+        if (lastMessage?.role === "user" && options.toolChoice === "none") {
+          yield { type: "text", text: "Stopping here." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        yield { type: "text", text: "Editing a.txt next." };
+        yield {
+          type: "tool_call",
+          id: "edit_a",
+          tool: "edit",
+          path: "a.txt",
+          oldString: "old",
+          newString: "new",
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          stopPolicy: maxTurnFallbackPolicy(1),
+        }),
+      );
+
+      // Then
+      const textEvents = events.filter((event) => event.type === "text");
+      expect(textEvents.map((event) => event.text).join("")).toBe(
+        "Editing a.txt next.\nStopping here.",
+      );
+      expect(messages.at(-1)).toEqual({
+        role: "assistant",
+        content: "Editing a.txt next.\nStopping here.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a wrap-up assistant that ignores instructions and requests another tool,
     When the round limit has already been reached,
     Then the run ends with a visible notice instead of silent empty success`, async () => {
