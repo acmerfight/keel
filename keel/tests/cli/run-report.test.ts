@@ -215,6 +215,56 @@ describe("CLI Run Report", () => {
     }
   });
 
+  test(`Given Qwen is selected without an explicit model,
+    When the CLI writes a run report,
+    Then the report records the Qwen provider and default model`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-qwen-report-"));
+    const reportPath = join(workspace, "report.json");
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Hello from Qwen."));
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["--report", reportPath, "hello"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "qwen",
+          DASHSCOPE_API_KEY: "test-key",
+          QWEN_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Hello from Qwen.\n");
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.provider).toBe("qwen");
+      expect(report.model).toBe("qwen3.7-plus");
+      expect(report.costUsd).toBeGreaterThan(0);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given Kimi is configured with an unsupported cost model,
     When the CLI is asked to write a run report,
     Then it rejects the run before writing misleading cost data`, async () => {

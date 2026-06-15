@@ -116,7 +116,7 @@ describe("CLI Text Reply", () => {
         "",
         "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
         "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
-        "Provider env: KEEL_PROVIDER=deepseek|kimi, DEEPSEEK_API_KEY, KIMI_API_KEY, optional *_BASE_URL and KIMI_MODEL.",
+        "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY, optional *_BASE_URL and *_MODEL.",
         "",
       ].join("\n"),
     );
@@ -532,6 +532,25 @@ describe("CLI Text Reply", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toBe(
       "Error: KIMI_API_KEY is required. Set the API key to use Kimi.\n",
+    );
+  });
+
+  test(`Given Qwen is configured without an API key,
+    When user runs the CLI,
+    Then the CLI exits with a Qwen API key error`, async () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "qwen",
+      DASHSCOPE_API_KEY: "",
+    };
+
+    // When
+    const result = await runCli(["hello"], env);
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toBe(
+      "Error: DASHSCOPE_API_KEY is required. Set the API key to use Qwen.\n",
     );
   });
 
