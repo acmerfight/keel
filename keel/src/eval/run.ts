@@ -130,8 +130,7 @@ function runProcess(
         exitCode: null,
         spawnFailed: true,
         timedOut,
-        /* v8 ignore next: child_process error events use Error instances. */
-        stderrTail: error instanceof Error ? error.message : String(error),
+        stderrTail: error.message,
       });
     });
     child.on("exit", (code) => {
@@ -295,8 +294,7 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
   try {
     tasks = selectTasks(args);
   } catch (error) {
-    /* v8 ignore next: eval task loading throws Error instances. */
-    const message = error instanceof Error ? error.message : String(error);
+    const message = String(error).replace(/^Error: /, "");
     process.stderr.write(`Error: ${message}\n`);
     return 1;
   }

@@ -81,6 +81,18 @@ function cliInputError(message: string): never {
   throw new CliInputError(message);
 }
 
+type ParseResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly message: string };
+
+function parseOk<T>(value: T): ParseResult<T> {
+  return { ok: true, value };
+}
+
+function parseError(message: string): ParseResult<never> {
+  return { ok: false, message };
+}
+
 const USAGE = [
   "Usage: keel [--allow-bash] [--max-cost <usd>] [--report <file>] <message>",
   "       keel eval [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
@@ -94,39 +106,42 @@ const USAGE = [
 
 const maxCostSchema = z.coerce.number().finite().positive();
 
-function parseMaxCost(raw: string | undefined): number {
+function parseMaxCost(raw: string | undefined): ParseResult<number> {
   const result = maxCostSchema.safeParse(raw);
   if (!result.success) {
-    cliInputError("Error: --max-cost must be a positive number.");
+    return parseError("Error: --max-cost must be a positive number.");
   }
-  return result.data;
+  return parseOk(result.data);
 }
 
-function parseReportFile(raw: string | undefined): string {
+function parseReportFile(raw: string | undefined): ParseResult<string> {
   if (raw === undefined || raw === "") {
-    cliInputError("Error: --report requires a file path.");
+    return parseError("Error: --report requires a file path.");
   }
-  return raw;
+  return parseOk(raw);
 }
 
 const trialsSchema = z.coerce.number().int().positive();
 
-function parseTrials(raw: string | undefined): number {
+function parseTrials(raw: string | undefined): ParseResult<number> {
   const result = trialsSchema.safeParse(raw);
   if (!result.success) {
-    cliInputError("Error: --trials must be a positive integer.");
+    return parseError("Error: --trials must be a positive integer.");
   }
-  return result.data;
+  return parseOk(result.data);
 }
 
-function requireOptionValue(option: string, raw: string | undefined): string {
+function requireOptionValue(
+  option: string,
+  raw: string | undefined,
+): ParseResult<string> {
   if (raw === undefined || raw === "") {
-    cliInputError(`Error: ${option} requires a value.`);
+    return parseError(`Error: ${option} requires a value.`);
   }
-  return raw;
+  return parseOk(raw);
 }
 
-function parseEvalArgs(args: readonly string[]): EvalCliArgs {
+function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
   let suiteDir = join("evals", "tasks");
   let outFile = "eval-results.jsonl";
   let trials = 1;
@@ -141,22 +156,30 @@ function parseEvalArgs(args: readonly string[]): EvalCliArgs {
     }
 
     if (arg === "--suite") {
-      suiteDir = requireOptionValue("--suite", args[index + 1]);
+      const parsed = requireOptionValue("--suite", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      suiteDir = parsed.value;
       skipNext = true;
       continue;
     }
     if (arg === "--out") {
-      outFile = requireOptionValue("--out", args[index + 1]);
+      const parsed = requireOptionValue("--out", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      outFile = parsed.value;
       skipNext = true;
       continue;
     }
     if (arg === "--trials") {
-      trials = parseTrials(args[index + 1]);
+      const parsed = parseTrials(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      trials = parsed.value;
       skipNext = true;
       continue;
     }
     if (arg === "--task") {
-      taskId = requireOptionValue("--task", args[index + 1]);
+      const parsed = requireOptionValue("--task", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      taskId = parsed.value;
       skipNext = true;
       continue;
     }
@@ -165,26 +188,26 @@ function parseEvalArgs(args: readonly string[]): EvalCliArgs {
       continue;
     }
 
-    cliInputError(`Error: unknown eval option "${arg}"`);
+    return parseError(`Error: unknown eval option "${arg}"`);
   }
 
-  return {
+  return parseOk({
     command: "eval",
     suiteDir,
     outFile,
     trials,
     ...(taskId !== undefined ? { taskId } : {}),
     check,
-  };
+  });
 }
 
-function parseCliArgs(args: readonly string[]): CliArgs {
+function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   if (args[0] === "--doctor") {
-    return { command: "doctor" };
+    return parseOk({ command: "doctor" });
   }
 
   if (args[0] === "/undo") {
-    return { command: "undo" };
+    return parseOk({ command: "undo" });
   }
 
   if (args[0] === "eval") {
@@ -211,24 +234,32 @@ function parseCliArgs(args: readonly string[]): CliArgs {
     }
 
     if (arg === "--max-cost") {
-      maxCostUsd = parseMaxCost(args[index + 1]);
+      const parsed = parseMaxCost(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      maxCostUsd = parsed.value;
       skipNext = true;
       continue;
     }
 
     if (arg.startsWith(maxCostPrefix)) {
-      maxCostUsd = parseMaxCost(arg.slice(maxCostPrefix.length));
+      const parsed = parseMaxCost(arg.slice(maxCostPrefix.length));
+      if (!parsed.ok) return parsed;
+      maxCostUsd = parsed.value;
       continue;
     }
 
     if (arg === "--report") {
-      reportFile = parseReportFile(args[index + 1]);
+      const parsed = parseReportFile(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      reportFile = parsed.value;
       skipNext = true;
       continue;
     }
 
     if (arg.startsWith(reportPrefix)) {
-      reportFile = parseReportFile(arg.slice(reportPrefix.length));
+      const parsed = parseReportFile(arg.slice(reportPrefix.length));
+      if (!parsed.ok) return parsed;
+      reportFile = parsed.value;
       continue;
     }
 
@@ -236,13 +267,13 @@ function parseCliArgs(args: readonly string[]): CliArgs {
     break;
   }
 
-  return {
+  return parseOk({
     command: "run",
     allowBash,
     ...(userMessage !== undefined ? { userMessage } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(reportFile !== undefined ? { reportFile } : {}),
-  };
+  });
 }
 
 function formatUsd(value: number): string {
@@ -658,17 +689,12 @@ async function printAgentEvents(
 
 export async function runCliMain(runtime: CliRuntime): Promise<number> {
   let exitCode = 0;
-  let cliArgs: CliArgs;
-  try {
-    cliArgs = parseCliArgs(runtime.args);
-  } catch (error) {
-    if (error instanceof CliInputError) {
-      runtime.writeStderr(`${error.message}\n`);
-      return 1;
-    }
-    /* v8 ignore next: CLI parser only raises typed input errors today. */
-    throw error;
+  const parsedCliArgs = parseCliArgs(runtime.args);
+  if (!parsedCliArgs.ok) {
+    runtime.writeStderr(`${parsedCliArgs.message}\n`);
+    return 1;
   }
+  const cliArgs = parsedCliArgs.value;
 
   if (cliArgs.command === "doctor") {
     const { runDoctor } = await import("./doctor.ts");

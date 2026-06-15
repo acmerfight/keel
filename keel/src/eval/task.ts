@@ -37,8 +37,7 @@ function parseTaskConfig(
   try {
     raw = JSON.parse(readFileSync(configPath, "utf8"));
   } catch (error) {
-    /* v8 ignore next: fs and JSON parsing failures are Error instances. */
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = String(error).replace(/^Error: /, "");
     throw new Error(`eval task "${id}" has unreadable task.json: ${detail}`);
   }
 
