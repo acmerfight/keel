@@ -117,7 +117,7 @@ describe("CLI Text Reply", () => {
         "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
         "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
         "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY, optional *_BASE_URL and *_MODEL.",
-        "Qwen keys are region-bound; set QWEN_BASE_URL for China region or workspace-scoped DashScope endpoints.",
+        "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
         "",
       ].join("\n"),
     );
@@ -551,7 +551,7 @@ describe("CLI Text Reply", () => {
     // Then
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toBe(
-      "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Set QWEN_BASE_URL for China region or workspace-scoped DashScope endpoints.\n",
+      "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.\n",
     );
   });
 
