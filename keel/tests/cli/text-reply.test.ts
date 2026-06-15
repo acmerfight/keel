@@ -206,8 +206,12 @@ describe("CLI Text Reply", () => {
     // Given
     let stdout = "";
     let receiveHangingReply: () => void = () => {};
+    let receiveAbortMarker: () => void = () => {};
     const hangingReplyReceived = new Promise<void>((resolve) => {
       receiveHangingReply = resolve;
+    });
+    const abortMarkerReceived = new Promise<void>((resolve) => {
+      receiveAbortMarker = resolve;
     });
     const { child, result } = runCliProcess(
       [],
@@ -220,6 +224,9 @@ describe("CLI Text Reply", () => {
       if (stdout.includes("Hanging")) {
         receiveHangingReply();
       }
+      if (stdout.includes("Hanging Aborted")) {
+        receiveAbortMarker();
+      }
     });
 
     try {
@@ -231,6 +238,11 @@ describe("CLI Text Reply", () => {
         "interactive CLI did not start the hanging turn",
       );
       child.kill("SIGINT");
+      await withTimeout(
+        abortMarkerReceived,
+        5000,
+        "interactive CLI did not deliver the first interrupt",
+      );
       child.kill("SIGINT");
 
       // Then
@@ -241,7 +253,7 @@ describe("CLI Text Reply", () => {
       );
       expect(exit.exitCode).toBe(130);
       expect(exit.signal).toBeNull();
-      expect(exit.stdout).toBe("Hanging\n");
+      expect(exit.stdout).toBe("Hanging Aborted\n");
       expect(exit.stderr).toBe("");
     } finally {
       child.kill("SIGKILL");
