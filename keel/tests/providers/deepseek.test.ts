@@ -328,6 +328,8 @@ describe("DeepSeek Provider", () => {
   let authRetryRequests = 0;
   let hangingRateLimitRequests = 0;
   let longRetryAfterRequests = 0;
+  let transientTimeoutRequests = 0;
+  let transientConflictRequests = 0;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -401,6 +403,30 @@ describe("DeepSeek Provider", () => {
             });
             res.end(JSON.stringify({ error: { message: "Rate limited" } }));
             return;
+          }
+
+          if (parsed.messages?.[1]?.content === "transient-timeout") {
+            transientTimeoutRequests++;
+            if (transientTimeoutRequests === 1) {
+              res.writeHead(408, {
+                "Content-Type": "application/json",
+                "retry-after-ms": "0",
+              });
+              res.end(JSON.stringify({ error: { message: "Timeout" } }));
+              return;
+            }
+          }
+
+          if (parsed.messages?.[1]?.content === "transient-conflict") {
+            transientConflictRequests++;
+            if (transientConflictRequests === 1) {
+              res.writeHead(409, {
+                "Content-Type": "application/json",
+                "Retry-After": new Date(0).toUTCString(),
+              });
+              res.end(JSON.stringify({ error: { message: "Conflict" } }));
+              return;
+            }
           }
 
           if (parsed.messages?.[1]?.content === "server-error") {
@@ -1921,6 +1947,60 @@ describe("DeepSeek Provider", () => {
     expect(longRetryAfterRequests).toBe(1);
   });
 
+  test(`Given the API times out a request once,
+    When provider streams the response,
+    Then it retries after retry-after-ms and returns the successful stream`, async () => {
+    // Given
+    transientTimeoutRequests = 0;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: { maxRetries: 1, initialDelayMs: 100, maxDelayMs: 100 },
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "transient-timeout" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(transientTimeoutRequests).toBe(2);
+    const textEvents = events.filter((e) => e.type === "text");
+    expect(textEvents.map((e) => e.text).join("")).toBe("Hello world");
+  });
+
+  test(`Given the API conflicts a request once,
+    When provider streams the response,
+    Then it retries after a retry-after date and returns the successful stream`, async () => {
+    // Given
+    transientConflictRequests = 0;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: { maxRetries: 1, initialDelayMs: 100, maxDelayMs: 100 },
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "transient-conflict" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(transientConflictRequests).toBe(2);
+    const textEvents = events.filter((e) => e.type === "text");
+    expect(textEvents.map((e) => e.text).join("")).toBe("Hello world");
+  });
+
   test(`Given the API returns a server error,
     When provider attempts to stream,
     Then it throws a provider server error with status and message`, async () => {
@@ -3082,6 +3162,97 @@ describe("DeepSeek Provider", () => {
       name: "KeelError",
       code: "provider_network_error",
       message: "DeepSeek request failed before response",
+    });
+  });
+
+  test(`Given the provider cannot connect on the first attempt,
+    When the API becomes available before the retry,
+    Then it retries the network error and streams successfully`, async () => {
+    // Given
+    const port = await unusedLocalPort();
+    let requests = 0;
+    let listening = false;
+    const retryServer = createServer((_req, res) => {
+      requests++;
+      writeSseResponse(res, [sseChunk("network recovered"), sseFinish(1, 1)]);
+    });
+    const listeningPromise = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        retryServer.listen(port, "127.0.0.1", () => {
+          listening = true;
+          resolve();
+        });
+      }, 20);
+    });
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl: `http://127.0.0.1:${port}`,
+      model: "deepseek-v4-flash",
+      retry: {
+        maxRetries: 1,
+        initialDelayMs: 50,
+        maxDelayMs: 50,
+        jitterRatio: 0,
+      },
+    });
+
+    try {
+      // When
+      const events = await collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "hi" }],
+          signal: freshSignal(),
+        }),
+      );
+      await listeningPromise;
+
+      // Then
+      expect(requests).toBe(1);
+      const textEvents = events.filter((e) => e.type === "text");
+      expect(textEvents.map((e) => e.text).join("")).toBe("network recovered");
+    } finally {
+      await listeningPromise;
+      if (listening) {
+        await closeServer(retryServer);
+      }
+    }
+  });
+
+  test(`Given a retryable provider failure enters backoff,
+    When the caller aborts before the retry,
+    Then it throws an aborted provider error`, async () => {
+    // Given
+    const controller = new AbortController();
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: {
+        maxRetries: 1,
+        initialDelayMs: 1_000,
+        maxDelayMs: 1_000,
+        jitterRatio: 0,
+      },
+    });
+    const result = collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "rate-limited" }],
+        signal: controller.signal,
+      }),
+    );
+
+    // When
+    setTimeout(() => {
+      controller.abort();
+    }, 20);
+
+    // Then
+    await expect(result).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_aborted",
+      message: "DeepSeek request was aborted",
     });
   });
 
