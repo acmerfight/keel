@@ -2,10 +2,9 @@
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createInterface } from "node:readline/promises";
 import { z } from "zod";
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
-import { runAgent, runAgentTurn } from "../agent/loop.ts";
+import { runAgent } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import type { CostModel } from "../core/cost.ts";
 import { restoreLastEditCheckpoint } from "../core/git.ts";
@@ -18,9 +17,13 @@ import {
   createKimiProvider,
   KIMI_K2_6_COST_MODEL,
 } from "../llm/providers/kimi.ts";
-import type { LLMProvider, Message, ToolCall } from "../llm/types.ts";
+import type { LLMProvider, ToolCall } from "../llm/types.ts";
 import { createFakeProvider, fakeResponse } from "../testing/fake-provider.ts";
 import { runDoctor } from "./doctor.ts";
+import {
+  type InteractiveResolvedProvider,
+  runInteractiveSession,
+} from "./interactive-session.ts";
 
 interface CliEditRequest {
   readonly path: string;
@@ -462,19 +465,6 @@ function createInteractiveFakeProvider(): LLMProvider {
       );
       const latest = userMessages.at(-1)?.content ?? "";
       const previous = userMessages.at(-2)?.content;
-      if (
-        env("KEEL_TEST_HANG_ON_ABORT") === "1" &&
-        latest === "hang ignoring abort"
-      ) {
-        yield { type: "text", text: "Hanging" };
-        await new Promise<void>((resolve) => {
-          options.signal.addEventListener("abort", () => resolve(), {
-            once: true,
-          });
-        });
-        yield { type: "text", text: " Aborted" };
-        await new Promise<never>(() => {});
-      }
       const text =
         previous !== undefined && latest.endsWith("remember?")
           ? `Earlier you said: ${previous}`
@@ -485,7 +475,7 @@ function createInteractiveFakeProvider(): LLMProvider {
   };
 }
 
-interface ResolvedProvider {
+interface ResolvedProvider extends InteractiveResolvedProvider {
   readonly provider: LLMProvider;
   readonly model: string;
   readonly costModel: CostModel | null;
@@ -603,86 +593,6 @@ async function printAgentEvents(
   return finalEnd;
 }
 
-async function runInteractiveSession(
-  cliArgs: Extract<CliArgs, { readonly command: "run" }>,
-): Promise<void> {
-  const workspace = process.cwd();
-  const systemPrompt = buildAgentSystemPrompt({
-    workspace,
-    platform: process.platform,
-  });
-  const messages: Message[] = [];
-  let resolved: ResolvedProvider | null = null;
-  const input = createInterface({
-    input: process.stdin,
-    crlfDelay: Number.POSITIVE_INFINITY,
-  });
-  let activeAbortController: AbortController | null = null;
-  const abortActiveTurn = () => {
-    if (activeAbortController !== null) {
-      if (activeAbortController.signal.aborted) {
-        process.stdout.write("\n");
-        process.exit(130);
-      }
-      activeAbortController.abort();
-      return;
-    }
-    process.stdout.write("\n");
-    process.exitCode = 130;
-    input.close();
-  };
-
-  process.on("SIGINT", abortActiveTurn);
-  try {
-    for await (const rawLine of input) {
-      const userMessage = rawLine.trim();
-      if (userMessage === "") continue;
-      resolved ??= resolveInteractiveProvider(userMessage);
-      const messageCountBeforeTurn = messages.length;
-      const turnAbortController = new AbortController();
-      activeAbortController = turnAbortController;
-      messages.push({ role: "user", content: userMessage });
-
-      try {
-        const stream = runAgentTurn({
-          workspace,
-          provider: resolved.provider,
-          messages,
-          systemPrompt,
-          signal: turnAbortController.signal,
-          ...(cliArgs.allowBash ? { allowBash: true } : {}),
-          ...(cliArgs.maxCostUsd !== undefined
-            ? {
-                costTracking: {
-                  model: requireKnownCostModel(resolved),
-                  maxCostUsd: cliArgs.maxCostUsd,
-                },
-              }
-            : {}),
-        });
-        const finalEnd = await printAgentEvents(stream);
-        process.stdout.write("\n");
-        if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
-          process.stderr.write(formatCostReport(finalEnd.cost));
-        }
-      } catch (error) {
-        if (!turnAbortController.signal.aborted) {
-          throw error;
-        }
-        messages.length = messageCountBeforeTurn;
-        process.stdout.write("\n");
-      } finally {
-        if (activeAbortController === turnAbortController) {
-          activeAbortController = null;
-        }
-      }
-    }
-  } finally {
-    process.off("SIGINT", abortActiveTurn);
-    input.close();
-  }
-}
-
 async function main(): Promise<void> {
   const cliArgs = parseCliArgs(process.argv.slice(2));
   if (cliArgs.command === "doctor") {
@@ -734,7 +644,32 @@ async function main(): Promise<void> {
       );
       process.exit(1);
     }
-    await runInteractiveSession(cliArgs);
+    await runInteractiveSession({
+      cliArgs,
+      workspace: process.cwd(),
+      platform: process.platform,
+      input: process.stdin,
+      writeStdout: (text) => {
+        process.stdout.write(text);
+      },
+      writeStderr: (text) => {
+        process.stderr.write(text);
+      },
+      onSigint: (handler) => {
+        process.on("SIGINT", handler);
+      },
+      offSigint: (handler) => {
+        process.off("SIGINT", handler);
+      },
+      setExitCode: (code) => {
+        process.exitCode = code;
+      },
+      forceExit: (code) => process.exit(code),
+      resolveProvider: resolveInteractiveProvider,
+      requireKnownCostModel,
+      printAgentEvents,
+      formatCostReport,
+    });
     return;
   }
 
