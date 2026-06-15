@@ -303,6 +303,48 @@ describe("Kimi Provider", () => {
           return;
         }
 
+        if (userMessage === "negative-usage") {
+          writeSseResponse(res, [
+            sseText("metered"),
+            `${sseData({
+              choices: [{ delta: {}, finish_reason: "stop" }],
+              usage: { prompt_tokens: 7, completion_tokens: -1 },
+            })}data: [DONE]\n\n`,
+          ]);
+          return;
+        }
+
+        if (userMessage === "inconsistent-cache-usage") {
+          writeSseResponse(res, [
+            sseText("metered"),
+            `${sseData({
+              choices: [{ delta: {}, finish_reason: "stop" }],
+              usage: {
+                prompt_tokens: 10,
+                completion_tokens: 3,
+                prompt_cache_hit_tokens: 4,
+                prompt_cache_miss_tokens: 5,
+              },
+            })}data: [DONE]\n\n`,
+          ]);
+          return;
+        }
+
+        if (userMessage === "miss-only-usage") {
+          writeSseResponse(res, [
+            sseText("metered"),
+            `${sseData({
+              choices: [{ delta: {}, finish_reason: "stop" }],
+              usage: {
+                prompt_tokens: 12,
+                completion_tokens: 2,
+                prompt_cache_miss_tokens: 7,
+              },
+            })}data: [DONE]\n\n`,
+          ]);
+          return;
+        }
+
         if (userMessage === "missing-finish-reason") {
           writeSseResponse(res, [
             sseText("partial"),
@@ -902,6 +944,27 @@ describe("Kimi Provider", () => {
     ]);
   });
 
+  test(`Given Kimi streams only cache miss tokens,
+    When the provider reads the usage,
+    Then it derives cached input tokens from the prompt total`, async () => {
+    // When
+    const events = await streamFor("miss-only-usage");
+
+    // Then
+    expect(events).toEqual([
+      { type: "text", text: "metered" },
+      {
+        type: "stop",
+        usage: {
+          inputTokens: 12,
+          cachedInputTokens: 5,
+          uncachedInputTokens: 7,
+          outputTokens: 2,
+        },
+      },
+    ]);
+  });
+
   test(`Given Kimi sends DONE without a trailing newline,
     When the provider drains the stream,
     Then it still completes the response`, async () => {
@@ -1148,6 +1211,11 @@ describe("Kimi Provider", () => {
     await expectProviderError("invalid-json", "provider_protocol_error");
     await expectProviderError("empty-schema-chunk", "provider_protocol_error");
     await expectProviderError("invalid-usage", "provider_protocol_error");
+    await expectProviderError("negative-usage", "provider_protocol_error");
+    await expectProviderError(
+      "inconsistent-cache-usage",
+      "provider_protocol_error",
+    );
     await expectProviderError(
       "missing-finish-reason",
       "provider_protocol_error",

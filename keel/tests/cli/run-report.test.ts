@@ -214,4 +214,38 @@ describe("CLI Run Report", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test(`Given Kimi is configured with an unsupported cost model,
+    When the CLI is asked to write a run report,
+    Then it rejects the run before writing misleading cost data`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-kimi-report-cost-model-"),
+    );
+    const reportPath = join(workspace, "report.json");
+
+    try {
+      // When
+      const result = await runCli(["--report", reportPath, "hello"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "kimi",
+          KIMI_API_KEY: "test-key",
+          KIMI_MODEL: "kimi-k2.5",
+        },
+      });
+
+      // Then
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(
+        'Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="kimi-k2.5".\n',
+      );
+      await expect(readFile(reportPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 });

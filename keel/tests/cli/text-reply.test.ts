@@ -359,6 +359,27 @@ describe("CLI Text Reply", () => {
     );
   });
 
+  test(`Given Kimi is configured with an unsupported cost model,
+    When user runs the CLI with a max cost,
+    Then the CLI rejects cost tracking before contacting the provider`, async () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "kimi",
+      KIMI_API_KEY: "test-key",
+      KIMI_MODEL: "kimi-k2.5",
+    };
+
+    // When
+    const result = await runCli(["--max-cost", "1", "hello"], env);
+
+    // Then
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      'Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="kimi-k2.5".\n',
+    );
+  });
+
   test(`Given an unknown provider is configured,
     When user runs the CLI,
     Then the CLI exits with a provider configuration error`, async () => {

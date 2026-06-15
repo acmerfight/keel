@@ -18,16 +18,45 @@ export const KIMI_K2_6_COST_MODEL: CostModel = {
 
 const kimiUsageSchema = z
   .object({
-    prompt_tokens: z.number(),
-    completion_tokens: z.number(),
-    prompt_cache_hit_tokens: z.number().optional(),
-    prompt_cache_miss_tokens: z.number().optional(),
+    prompt_tokens: z.number().int().nonnegative(),
+    completion_tokens: z.number().int().nonnegative(),
+    prompt_cache_hit_tokens: z.number().int().nonnegative().optional(),
+    prompt_cache_miss_tokens: z.number().int().nonnegative().optional(),
     prompt_tokens_details: z
       .object({
-        cached_tokens: z.number().optional(),
+        cached_tokens: z.number().int().nonnegative().optional(),
       })
       .passthrough()
       .optional(),
+  })
+  .refine((usage) => {
+    const cacheHitTokens = usage.prompt_cache_hit_tokens;
+    const cacheMissTokens = usage.prompt_cache_miss_tokens;
+    const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
+
+    if (cacheHitTokens !== undefined && cacheHitTokens > usage.prompt_tokens) {
+      return false;
+    }
+    if (
+      cacheMissTokens !== undefined &&
+      cacheMissTokens > usage.prompt_tokens
+    ) {
+      return false;
+    }
+    if (cachedTokens !== undefined && cachedTokens > usage.prompt_tokens) {
+      return false;
+    }
+    if (
+      cacheHitTokens !== undefined &&
+      cachedTokens !== undefined &&
+      cacheHitTokens !== cachedTokens
+    ) {
+      return false;
+    }
+    if (cacheHitTokens !== undefined && cacheMissTokens !== undefined) {
+      return cacheHitTokens + cacheMissTokens === usage.prompt_tokens;
+    }
+    return true;
   })
   .passthrough();
 
@@ -101,6 +130,9 @@ function usageFromKimiUsage(usage: KimiUsage): Usage {
   const cachedInputTokens =
     usage.prompt_cache_hit_tokens ??
     usage.prompt_tokens_details?.cached_tokens ??
+    (usage.prompt_cache_miss_tokens !== undefined
+      ? usage.prompt_tokens - usage.prompt_cache_miss_tokens
+      : undefined) ??
     0;
   const uncachedInputTokens =
     usage.prompt_cache_miss_tokens ?? usage.prompt_tokens - cachedInputTokens;

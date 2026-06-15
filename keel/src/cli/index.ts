@@ -474,7 +474,7 @@ function createInteractiveFakeProvider(): LLMProvider {
 interface ResolvedProvider {
   readonly provider: LLMProvider;
   readonly model: string;
-  readonly costModel: CostModel;
+  readonly costModel: CostModel | null;
 }
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
@@ -485,18 +485,17 @@ const ZERO_COST_MODEL: CostModel = {
   outputPerMillionTokens: 0,
 };
 
-function resolveProvider(
-  userMessage: string,
-  options: { readonly interactive?: boolean } = {},
-): ResolvedProvider {
+function kimiCostModel(model: string): CostModel | null {
+  if (model === "kimi-k2.6") return KIMI_K2_6_COST_MODEL;
+  return null;
+}
+
+function resolveProvider(userMessage: string): ResolvedProvider {
   const providerId = env("KEEL_PROVIDER") ?? "deepseek";
 
   if (providerId === "fake") {
     return {
-      provider:
-        options.interactive === true
-          ? createInteractiveFakeProvider()
-          : createCliFakeProvider(userMessage),
+      provider: createCliFakeProvider(userMessage),
       model: "fake",
       costModel: ZERO_COST_MODEL,
     };
@@ -538,11 +537,40 @@ function resolveProvider(
         model,
       }),
       model,
-      costModel: KIMI_K2_6_COST_MODEL,
+      costModel: kimiCostModel(model),
     };
   }
 
   process.stderr.write(`Error: unknown provider "${providerId}"\n`);
+  process.exit(1);
+}
+
+function resolveInteractiveProvider(userMessage: string): ResolvedProvider {
+  const providerId = env("KEEL_PROVIDER") ?? "deepseek";
+  if (providerId === "fake") {
+    return {
+      provider: createInteractiveFakeProvider(),
+      model: "fake",
+      costModel: ZERO_COST_MODEL,
+    };
+  }
+
+  return resolveProvider(userMessage);
+}
+
+function requireKnownCostModel(resolved: ResolvedProvider): CostModel {
+  if (resolved.costModel !== null) return resolved.costModel;
+
+  if (resolved.provider.id === "kimi") {
+    process.stderr.write(
+      `Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="${resolved.model}".\n`,
+    );
+    process.exit(1);
+  }
+
+  process.stderr.write(
+    `Error: cost tracking is not supported for provider "${resolved.provider.id}" model "${resolved.model}".\n`,
+  );
   process.exit(1);
 }
 
@@ -588,7 +616,7 @@ async function runInteractiveSession(
     for await (const rawLine of input) {
       const userMessage = rawLine.trim();
       if (userMessage === "") continue;
-      resolved ??= resolveProvider(userMessage, { interactive: true });
+      resolved ??= resolveInteractiveProvider(userMessage);
       messages.push({ role: "user", content: userMessage });
       const stream = runAgentTurn({
         workspace,
@@ -600,7 +628,7 @@ async function runInteractiveSession(
         ...(cliArgs.maxCostUsd !== undefined
           ? {
               costTracking: {
-                model: resolved.costModel,
+                model: requireKnownCostModel(resolved),
                 maxCostUsd: cliArgs.maxCostUsd,
               },
             }
@@ -687,7 +715,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { provider, model, costModel } = resolveProvider(userMessage);
+  const resolved = resolveProvider(userMessage);
   const abortController = new AbortController();
   const abort = () => {
     abortController.abort();
@@ -699,7 +727,7 @@ async function main(): Promise<void> {
     const startedAt = Date.now();
     const stream = runAgent({
       workspace,
-      provider,
+      provider: resolved.provider,
       userMessage,
       systemPrompt: buildAgentSystemPrompt({
         workspace,
@@ -710,7 +738,7 @@ async function main(): Promise<void> {
       ...(cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
         ? {
             costTracking: {
-              model: costModel,
+              model: requireKnownCostModel(resolved),
               ...(cliArgs.maxCostUsd !== undefined
                 ? { maxCostUsd: cliArgs.maxCostUsd }
                 : {}),
@@ -726,8 +754,8 @@ async function main(): Promise<void> {
     }
     if (cliArgs.reportFile !== undefined && finalEnd !== undefined) {
       writeRunReport(cliArgs.reportFile, {
-        provider: provider.id,
-        model,
+        provider: resolved.provider.id,
+        model: resolved.model,
         end: finalEnd,
         durationMs: Date.now() - startedAt,
       });
