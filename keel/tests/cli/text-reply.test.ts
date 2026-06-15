@@ -200,6 +200,54 @@ describe("CLI Text Reply", () => {
     }
   });
 
+  test(`Given an active interactive turn has already been interrupted,
+    When user interrupts the still-running turn again,
+    Then the CLI exits as interrupted`, async () => {
+    // Given
+    let stdout = "";
+    let receiveHangingReply: () => void = () => {};
+    const hangingReplyReceived = new Promise<void>((resolve) => {
+      receiveHangingReply = resolve;
+    });
+    const { child, result } = runCliProcess(
+      [],
+      { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
+      { stdin: "pipe" },
+    );
+    child.stdin?.on("error", () => {});
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+      if (stdout.includes("Hanging")) {
+        receiveHangingReply();
+      }
+    });
+
+    try {
+      // When
+      child.stdin?.write("hang ignoring abort\n");
+      await withTimeout(
+        hangingReplyReceived,
+        5000,
+        "interactive CLI did not start the hanging turn",
+      );
+      child.kill("SIGINT");
+      child.kill("SIGINT");
+
+      // Then
+      const exit = await withTimeout(
+        result,
+        5000,
+        "interactive CLI did not exit after the second active SIGINT",
+      );
+      expect(exit.exitCode).toBe(130);
+      expect(exit.signal).toBeNull();
+      expect(exit.stdout).toBe("Hanging\n");
+      expect(exit.stderr).toBe("");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
   test(`Given an interactive provider request is interrupted,
     When user sends another prompt in the same session,
     Then the next turn uses a fresh abort signal and completes`, async () => {

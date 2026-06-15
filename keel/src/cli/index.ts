@@ -462,6 +462,10 @@ function createInteractiveFakeProvider(): LLMProvider {
       );
       const latest = userMessages.at(-1)?.content ?? "";
       const previous = userMessages.at(-2)?.content;
+      if (latest === "hang ignoring abort") {
+        yield { type: "text", text: "Hanging" };
+        await new Promise<never>(() => {});
+      }
       const text =
         previous !== undefined && latest.endsWith("remember?")
           ? `Earlier you said: ${previous}`
@@ -607,6 +611,10 @@ async function runInteractiveSession(
   let activeAbortController: AbortController | null = null;
   const abortActiveTurn = () => {
     if (activeAbortController !== null) {
+      if (activeAbortController.signal.aborted) {
+        process.stdout.write("\n");
+        process.exit(130);
+      }
       activeAbortController.abort();
       return;
     }
