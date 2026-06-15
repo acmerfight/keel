@@ -288,6 +288,11 @@ type RetryDelay =
   | { readonly type: "delay"; readonly ms: number }
   | { readonly type: "skip" };
 
+type ProviderRetryEvent = Extract<
+  LLMEvent,
+  { readonly type: "provider_retry" }
+>;
+
 const DEFAULT_PROVIDER_RETRY_CONFIG: ResolvedProviderRetryConfig = {
   maxRetries: 4,
   initialDelayMs: 500,
@@ -448,25 +453,46 @@ async function discardResponseBody(response: Response): Promise<void> {
   }
 }
 
-async function retryResponseIfAllowed(
+interface RetryResponseDecision {
+  readonly reason: Exclude<KeelErrorCode, RecoverableToolErrorCode>;
+  readonly delayMs: number;
+}
+
+function retryResponseDecision(
   response: Response,
   attempt: number,
   retry: ResolvedProviderRetryConfig,
-  signal: AbortSignal,
-  providerName: string,
-): Promise<boolean> {
+): RetryResponseDecision | null {
   if (attempt >= retry.maxRetries || !isRetryableStatus(response.status)) {
-    return false;
+    return null;
   }
 
   const delay = retryDelayMs(attempt, response.headers, retry);
   if (delay.type === "skip") {
-    return false;
+    return null;
   }
 
-  await discardResponseBody(response);
-  await sleepWithAbort(delay.ms, signal, providerName);
-  return true;
+  return {
+    reason: httpErrorCode(response.status),
+    delayMs: delay.ms,
+  };
+}
+
+function providerRetryEvent(
+  providerName: string,
+  reason: KeelErrorCode,
+  attempt: number,
+  maxRetries: number,
+  delayMs: number,
+): ProviderRetryEvent {
+  return {
+    type: "provider_retry",
+    provider: providerName,
+    reason,
+    attempt: attempt + 1,
+    maxRetries,
+    delayMs,
+  };
 }
 
 function createChatCompletionsBody(
@@ -554,12 +580,12 @@ function toOpenAICompatibleMessage(message: Message): Record<string, unknown> {
   }
 }
 
-async function requestChatCompletions(
+async function* requestChatCompletions(
   config: ProviderConfig,
   body: string,
   signal: AbortSignal,
   providerName: string,
-): Promise<Response> {
+): AsyncGenerator<LLMEvent, Response> {
   const retry = resolveRetryConfig(config.retry);
   for (let attempt = 0; ; attempt++) {
     let response: Response;
@@ -586,11 +612,15 @@ async function requestChatCompletions(
       ) {
         throw keelError;
       }
-      await sleepWithAbort(
-        exponentialRetryDelayMs(attempt, retry),
-        signal,
+      const delayMs = exponentialRetryDelayMs(attempt, retry);
+      yield providerRetryEvent(
         providerName,
+        keelError.code,
+        attempt,
+        retry.maxRetries,
+        delayMs,
       );
+      await sleepWithAbort(delayMs, signal, providerName);
       continue;
     }
 
@@ -598,15 +628,17 @@ async function requestChatCompletions(
       return response;
     }
 
-    if (
-      await retryResponseIfAllowed(
-        response,
-        attempt,
-        retry,
-        signal,
+    const retryDecision = retryResponseDecision(response, attempt, retry);
+    if (retryDecision !== null) {
+      yield providerRetryEvent(
         providerName,
-      )
-    ) {
+        retryDecision.reason,
+        attempt,
+        retry.maxRetries,
+        retryDecision.delayMs,
+      );
+      await discardResponseBody(response);
+      await sleepWithAbort(retryDecision.delayMs, signal, providerName);
       continue;
     }
 
@@ -961,7 +993,7 @@ export function createOpenAICompatibleProvider(
         providerConfig.config.model,
         options,
       );
-      const response = await requestChatCompletions(
+      const response = yield* requestChatCompletions(
         providerConfig.config,
         body,
         options.signal,

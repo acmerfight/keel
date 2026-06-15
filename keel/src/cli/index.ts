@@ -672,6 +672,10 @@ async function printAgentEvents(
   for await (const event of stream) {
     if (event.type === "text") {
       runtime.writeStdout(sanitizeAssistantText(event.text));
+    } else if (event.type === "provider_retry") {
+      runtime.writeStderr(
+        `Provider retry: ${sanitizeToolLabel(event.provider)} ${event.reason} attempt ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)}ms\n`,
+      );
     } else if (event.type === "tool_start") {
       runtime.writeStderr(`Tool: ${toolCallLabel(event.toolCall)}\n`);
     } else if (event.type === "tool_end") {

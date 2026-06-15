@@ -29,6 +29,14 @@ interface CostTrackingOptions {
 // "repeated_tool_call", "turn_limit").
 export type AgentEvent =
   | { readonly type: "text"; readonly text: string }
+  | {
+      readonly type: "provider_retry";
+      readonly provider: string;
+      readonly reason: string;
+      readonly attempt: number;
+      readonly maxRetries: number;
+      readonly delayMs: number;
+    }
   | { readonly type: "tool_start"; readonly toolCall: ToolCall }
   | {
       readonly type: "tool_end";
@@ -208,6 +216,9 @@ async function* streamAgentTurn(
         pendingToolCalls.push(toolCall);
         break;
       }
+      case "provider_retry":
+        yield event;
+        break;
       case "stop":
         usage = event.usage;
         break;

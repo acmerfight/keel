@@ -1901,6 +1901,14 @@ describe("DeepSeek Provider", () => {
 
     // Then
     expect(transientRateLimitRequests).toBe(2);
+    expect(events[0]).toEqual({
+      type: "provider_retry",
+      provider: "DeepSeek",
+      reason: "provider_rate_limited",
+      attempt: 1,
+      maxRetries: 1,
+      delayMs: 0,
+    });
     const textEvents = events.filter((e) => e.type === "text");
     expect(textEvents.map((e) => e.text).join("")).toBe("Hello world");
   });

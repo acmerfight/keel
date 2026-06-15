@@ -544,6 +544,61 @@ describe("CLI Main", () => {
     }
   });
 
+  test(`Given the provider rate limits before succeeding,
+    When the CLI main runs in-process,
+    Then it reports the retry before printing the final answer`, async () => {
+    // Given
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        requestCount++;
+        if (requestCount === 1) {
+          res.writeHead(429, {
+            "Content-Type": "application/json",
+            "Retry-After": "0",
+          });
+          res.end(JSON.stringify({ error: { message: "Rate limited" } }));
+          return;
+        }
+
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Recovered."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["hello"], {
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(requestCount).toBe(2);
+      expect(fixture.stdout()).toBe("Recovered.\n");
+      expect(fixture.stderr()).toBe(
+        "Provider retry: DeepSeek provider_rate_limited attempt 1/4 in 0ms\n",
+      );
+    } finally {
+      await close(server);
+    }
+  });
+
   test(`Given the configured provider reads a workspace file,
     When the CLI main runs in-process,
     Then it reports the read tool and sends the content back to the provider`, async () => {
