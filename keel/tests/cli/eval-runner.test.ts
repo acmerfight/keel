@@ -20,6 +20,8 @@ interface TaskFixture {
   readonly solution?: string;
   readonly timeoutMs?: number;
   readonly scriptTimeoutMs?: number;
+  readonly allowBash?: boolean;
+  readonly maxCostUsd?: number;
 }
 
 async function createEvalDir(): Promise<{
@@ -50,6 +52,12 @@ async function createTask(
       ...(fixture.scriptTimeoutMs !== undefined
         ? { scriptTimeoutMs: fixture.scriptTimeoutMs }
         : {}),
+      ...(fixture.allowBash !== undefined
+        ? { allowBash: fixture.allowBash }
+        : {}),
+      ...(fixture.maxCostUsd !== undefined
+        ? { maxCostUsd: fixture.maxCostUsd }
+        : {}),
     }),
     "utf8",
   );
@@ -76,6 +84,7 @@ async function readResultLines(
 
 const CLI_ENTRY = join(process.cwd(), "src/cli/index.ts");
 const KEEL_PROVIDER_ENV = "KEEL_PROVIDER";
+const REPORT_CONTENT_ENV = "REPORT_CONTENT";
 const FIX_NOTE_TASK: TaskFixture = {
   prompt: "replace old with new in note.txt",
   files: { "note.txt": "hello old world\n" },
@@ -274,6 +283,92 @@ describe("Eval Runner", () => {
     }
   });
 
+  test.each([
+    {
+      name: "invalid JSON",
+      reportContent: "{not-json",
+    },
+    {
+      name: "wrong schema",
+      reportContent: JSON.stringify({ schemaVersion: 1 }),
+    },
+  ])(`Given the agent writes a $name report,
+    When the eval runner reads the report,
+    Then it records a crashed result`, async ({ reportContent }) => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    await createTask(suiteDir, "bad-report", FIX_NOTE_TASK);
+    const cliEntry = join(root, "bad-report-cli.js");
+    await writeFile(
+      cliEntry,
+      [
+        "import { writeFileSync } from 'node:fs';",
+        "const reportIndex = process.argv.indexOf('--report');",
+        "writeFileSync(process.argv[reportIndex + 1], process.env.REPORT_CONTENT ?? '', 'utf8');",
+      ].join("\n"),
+      "utf8",
+    );
+    const previousReportContent = process.env[REPORT_CONTENT_ENV];
+    process.env[REPORT_CONTENT_ENV] = reportContent;
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(await readResultLines(outFile)).toMatchObject([
+        { taskId: "bad-report", pass: false, outcome: "crashed" },
+      ]);
+    } finally {
+      if (previousReportContent === undefined) {
+        delete process.env[REPORT_CONTENT_ENV];
+      } else {
+        process.env[REPORT_CONTENT_ENV] = previousReportContent;
+      }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a task enables bash and a max cost budget,
+    When the eval runner executes the task,
+    Then it passes those task options into the CLI run`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    await createTask(suiteDir, "task-options", {
+      ...FIX_NOTE_TASK,
+      solution: "printf 'hello new world\\n' > note.txt\n",
+      verify: 'grep -q "hello new world" note.txt\n',
+      maxCostUsd: 1,
+      allowBash: true,
+    });
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry: CLI_ENTRY,
+      });
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(await readResultLines(outFile)).toMatchObject([
+        { taskId: "task-options", pass: true, outcome: "verified" },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given each task has a reference solution,
     When the eval runner checks the suite,
     Then it returns success only when verifiers accept their solutions`, async () => {
@@ -293,6 +388,33 @@ describe("Eval Runner", () => {
 
       // Then
       expect(exitCode).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a reference solution exits with failure,
+    When the eval runner checks the suite,
+    Then it returns a broken verifier result`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    await createTask(suiteDir, "failing-solution", {
+      ...FIX_NOTE_TASK,
+      solution: "exit 1\n",
+    });
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: true,
+        cliEntry: CLI_ENTRY,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

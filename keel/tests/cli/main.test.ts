@@ -17,6 +17,22 @@ const runReportSchema = z.object({
   costUsd: z.number(),
 });
 
+const requestWithMessagesSchema = z
+  .object({
+    messages: z
+      .array(
+        z
+          .object({
+            role: z.string().optional(),
+            tool_call_id: z.string().optional(),
+            content: z.string().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
 interface RuntimeFixture {
   readonly runtime: CliRuntime;
   readonly stdout: () => string;
@@ -93,7 +109,57 @@ function close(server: Server): Promise<void> {
   });
 }
 
-function sseTextReplyWithUsage(text: string): string {
+function sseData(payload: unknown): string {
+  return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
+function sseToolCall(
+  id: string,
+  name: string,
+  args: Record<string, unknown>,
+): string {
+  return sseData({
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id,
+              type: "function",
+              function: {
+                name,
+                arguments: JSON.stringify(args),
+              },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+    usage: null,
+  });
+}
+
+function sseToolFinish(): string {
+  return sseData({
+    choices: [{ delta: {}, finish_reason: "tool_calls" }],
+    usage: {
+      prompt_tokens: 10,
+      prompt_cache_hit_tokens: 0,
+      prompt_cache_miss_tokens: 10,
+      completion_tokens: 3,
+    },
+  });
+}
+
+function sseTextReplyWithUsage(
+  text: string,
+  usage: {
+    readonly prompt_tokens: number;
+    readonly completion_tokens: number;
+  } = { prompt_tokens: 10, completion_tokens: 3 },
+): string {
   return [
     `data: ${JSON.stringify({
       choices: [{ delta: { content: text } }],
@@ -101,10 +167,10 @@ function sseTextReplyWithUsage(text: string): string {
     `data: ${JSON.stringify({
       choices: [{ delta: {}, finish_reason: "stop" }],
       usage: {
-        prompt_tokens: 10,
+        prompt_tokens: usage.prompt_tokens,
         prompt_cache_hit_tokens: 0,
-        prompt_cache_miss_tokens: 10,
-        completion_tokens: 3,
+        prompt_cache_miss_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
       },
     })}\n\n`,
     "data: [DONE]\n\n",
@@ -478,6 +544,343 @@ describe("CLI Main", () => {
     }
   });
 
+  test(`Given the configured provider reads a workspace file,
+    When the CLI main runs in-process,
+    Then it reports the read tool and sends the content back to the provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-read-"));
+    await writeFile(join(workspace, "note.txt"), "hello from note\n", "utf8");
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(sseToolCall("call_read", "read", { path: "note.txt" }));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Read done."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["read note.txt"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Read done.\n");
+      expect(fixture.stderr()).toBe("Tool: read note.txt\n");
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_read",
+        content: "hello from note\n",
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the configured provider searches the workspace,
+    When the CLI main runs in-process,
+    Then it reports the grep tool and sends matches back to the provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-grep-"));
+    await writeFile(
+      join(workspace, "app.ts"),
+      "export function handleSubmit() {}\n",
+      "utf8",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_grep", "grep", { pattern: "handleSubmit" }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Grep done."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["find handleSubmit"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Grep done.\n");
+      expect(fixture.stderr()).toBe("Tool: grep handleSubmit\n");
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_grep",
+        content: "app.ts:1:export function handleSubmit() {}",
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a tool label contains terminal control characters,
+    When the CLI main reports tool progress,
+    Then it escapes the label before writing stderr`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-label-"));
+    const unsafePattern = "needle\t\r\n\u202e";
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_grep", "grep", { pattern: unsafePattern }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Escaped."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["search unsafe label"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Escaped.\n");
+      expect(fixture.stderr()).toBe(
+        "Tool: grep needle\\t\\r\\n\\u{202e}\nTool failed: grep needle\\t\\r\\n\\u{202e}\n",
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a tool label is too long and includes a path,
+    When the CLI main reports tool progress,
+    Then it truncates the single stderr line`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-main-label-long-"),
+    );
+    const pattern = "needle".repeat(40);
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_grep", "grep", {
+              pattern,
+              path: "missing.txt",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Truncated."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["search long label"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Truncated.\n");
+      const stderrLines = fixture.stderr().trimEnd().split("\n");
+      expect(stderrLines).toHaveLength(2);
+      expect(stderrLines[0]).toMatch(/^Tool: grep needle/);
+      expect(stderrLines[0]).toContain("...");
+      expect(stderrLines[0]).toHaveLength("Tool: ".length + 163);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given trusted shell mode is enabled for the configured provider,
+    When the CLI main runs in-process,
+    Then it reports the bash tool and sends shell output back to the provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-bash-"));
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_bash", "bash", { command: "printf shell-ok" }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Bash done."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["--allow-bash", "run shell"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Bash done.\n");
+      expect(fixture.stderr()).toBe("Tool: bash printf shell-ok\n");
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_bash",
+          content: expect.stringContaining("stdout:\nshell-ok"),
+        }),
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a one-shot provider request is interrupted,
     When the CLI main receives SIGINT,
     Then it aborts the request and returns the interrupted exit code`, async () => {
@@ -594,6 +997,52 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("Cost: $0.000000 (budget $1.0000)\n");
   });
 
+  test(`Given the configured provider exceeds the max cost,
+    When the CLI main finishes a one-shot request,
+    Then it marks the cost budget as exceeded`, async () => {
+    // Given
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(
+          sseTextReplyWithUsage("Expensive.", {
+            prompt_tokens: 1_000_000_000,
+            completion_tokens: 1_000_000_000,
+          }),
+        );
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["--max-cost", "0.0001", "hello"], {
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Expensive.\n");
+      expect(fixture.stderr()).toContain("exceeded");
+    } finally {
+      await close(server);
+    }
+  });
+
   test.each([
     {
       provider: "kimi",
@@ -653,6 +1102,30 @@ describe("CLI Main", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  test.each([
+    ["replace old new"],
+    ["replace old with new"],
+    ["replace  with new in note.txt"],
+    ["replace old with  in note.txt"],
+    ["replace old with new in "],
+    ["create "],
+  ])(`Given the fake provider receives unsupported demo input "%s",
+    When the CLI main runs the request,
+    Then it falls back to a plain fake reply`, async (message) => {
+    // Given
+    const fixture = createRuntime([message], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toBe("Hello from fake provider.\n");
+    expect(fixture.stderr()).toBe("");
   });
 
   test(`Given the fake provider runs interactively,

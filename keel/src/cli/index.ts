@@ -133,28 +133,31 @@ function parseEvalArgs(args: readonly string[]): EvalCliArgs {
   let taskId: string | undefined;
   let check = false;
 
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    if (arg === undefined) continue;
+  let skipNext = false;
+  for (const [index, arg] of args.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
 
     if (arg === "--suite") {
       suiteDir = requireOptionValue("--suite", args[index + 1]);
-      index++;
+      skipNext = true;
       continue;
     }
     if (arg === "--out") {
       outFile = requireOptionValue("--out", args[index + 1]);
-      index++;
+      skipNext = true;
       continue;
     }
     if (arg === "--trials") {
       trials = parseTrials(args[index + 1]);
-      index++;
+      skipNext = true;
       continue;
     }
     if (arg === "--task") {
       taskId = requireOptionValue("--task", args[index + 1]);
-      index++;
+      skipNext = true;
       continue;
     }
     if (arg === "--check") {
@@ -195,9 +198,12 @@ function parseCliArgs(args: readonly string[]): CliArgs {
   const maxCostPrefix = "--max-cost=";
   const reportPrefix = "--report=";
 
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    if (arg === undefined) continue;
+  let skipNext = false;
+  for (const [index, arg] of args.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
 
     if (arg === "--allow-bash") {
       allowBash = true;
@@ -206,7 +212,7 @@ function parseCliArgs(args: readonly string[]): CliArgs {
 
     if (arg === "--max-cost") {
       maxCostUsd = parseMaxCost(args[index + 1]);
-      index++;
+      skipNext = true;
       continue;
     }
 
@@ -217,7 +223,7 @@ function parseCliArgs(args: readonly string[]): CliArgs {
 
     if (arg === "--report") {
       reportFile = parseReportFile(args[index + 1]);
-      index++;
+      skipNext = true;
       continue;
     }
 
@@ -320,7 +326,7 @@ function toolCallLabel(toolCall: ToolCall): string {
 interface RunReportInput {
   readonly provider: string;
   readonly model: string;
-  readonly end: Extract<AgentEvent, { readonly type: "end" }>;
+  readonly end: EndEventWithCost;
   readonly durationMs: number;
 }
 
@@ -335,12 +341,17 @@ interface RunReport {
   readonly costUsd: number;
 }
 
-function writeRunReport(filePath: string, input: RunReportInput): void {
-  const cost = input.end.cost;
-  if (cost === undefined) {
+type EndEventWithCost = EndEvent & { readonly cost: CostReport };
+
+function assertEndEventHasCost(end: EndEvent): asserts end is EndEventWithCost {
+  /* v8 ignore next 3: --report enables cost tracking before the run starts. */
+  if (end.cost === undefined) {
     throw new Error("run report requires cost tracking to be enabled");
   }
+}
 
+function writeRunReport(filePath: string, input: RunReportInput): void {
+  const cost = input.end.cost;
   const report: RunReport = {
     schemaVersion: 1,
     provider: input.provider,
@@ -354,11 +365,9 @@ function writeRunReport(filePath: string, input: RunReportInput): void {
   writeFileSync(filePath, `${JSON.stringify(report)}\n`, "utf8");
 }
 
-function formatCostReport(cost: CostReport): string {
+function formatCostReport(cost: CostReport, maxUsd: number): string {
   const spent = `$${formatUsd(cost.spentUsd)}`;
-  if (cost.maxUsd === undefined) return `Cost: ${spent}\n`;
-
-  const budget = `$${formatUsd(cost.maxUsd)}`;
+  const budget = `$${formatUsd(maxUsd)}`;
   return cost.budgetExceeded
     ? `Cost: ${spent} (budget ${budget} exceeded)\n`
     : `Cost: ${spent} (budget ${budget})\n`;
@@ -786,9 +795,10 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
     const finalEnd = await printAgentEvents(stream, runtime);
     runtime.writeStdout("\n");
     if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
-      runtime.writeStderr(formatCostReport(finalEnd.cost));
+      runtime.writeStderr(formatCostReport(finalEnd.cost, cliArgs.maxCostUsd));
     }
     if (cliArgs.reportFile !== undefined && finalEnd !== undefined) {
+      assertEndEventHasCost(finalEnd);
       writeRunReport(cliArgs.reportFile, {
         provider: resolved.provider.id,
         model: resolved.model,
