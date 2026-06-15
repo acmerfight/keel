@@ -833,7 +833,21 @@ describe("Kimi Provider", () => {
     message: string,
     code: string,
   ): Promise<void> {
-    await expect(streamFor(message)).rejects.toMatchObject({ code });
+    const provider = createKimiProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "kimi-k2.6",
+      retry: { maxRetries: 0 },
+    });
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [{ role: "user", content: message }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({ code });
   }
 
   test(`Given a Kimi provider,

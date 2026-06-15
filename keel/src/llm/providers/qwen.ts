@@ -6,6 +6,7 @@ import {
   createOpenAICompatibleProvider,
   type OpenAICompatibleChunk,
   type OpenAICompatibleStreamState,
+  type ProviderRetryConfig,
 } from "./openai-compatible.ts";
 
 const QWEN_3_7_MAX_COST_MODEL: CostModel = {
@@ -76,6 +77,7 @@ export interface QwenConfig {
   readonly apiKey: string;
   readonly baseUrl: string;
   readonly model: string;
+  readonly retry?: ProviderRetryConfig;
 }
 
 function parseQwenChunk(data: string): OpenAICompatibleChunk {

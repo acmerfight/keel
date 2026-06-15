@@ -61,6 +61,14 @@ export type Message = UserMessage | AssistantMessage | ToolMessage;
 export type LLMEvent =
   | { readonly type: "text"; readonly text: string }
   | ({ readonly type: "tool_call" } & ToolCall)
+  | {
+      readonly type: "provider_retry";
+      readonly provider: string;
+      readonly reason: string;
+      readonly attempt: number;
+      readonly maxRetries: number;
+      readonly delayMs: number;
+    }
   | { readonly type: "stop"; readonly usage: Usage };
 
 export interface StreamOptions {
