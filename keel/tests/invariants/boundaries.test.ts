@@ -73,4 +73,15 @@ describe("module boundaries", () => {
       }
     });
   }
+
+  test(`src/cli/index.ts delegates provider configuration to a dedicated module`, () => {
+    const source = readFileSync("src/cli/index.ts", "utf8");
+    const forbidden = importSpecifiers(source).filter(
+      (specifier) =>
+        specifier.includes("/llm/providers/") ||
+        specifier === "../core/cost.ts",
+    );
+
+    expect(forbidden).toEqual([]);
+  });
 });
