@@ -45,7 +45,8 @@ What a user can do today:
 - `keel --bash-policy ask` — expose bash while requiring per-command
   approval in interactive sessions, with exact command + cwd approval
   remembered for the process-local session. One-shot runs fail closed
-  because there is no approval UI.
+  because there is no approval UI; forced non-TTY interactive runs also
+  reject `ask` so approvals cannot be read from piped input.
 - `keel --max-cost <usd>` — cost tracking with budget stop.
 - `keel --report <file>` — write a machine-readable run report with turns,
   stop reason, token usage, duration, provider/model, and cost when tracked.
@@ -103,7 +104,8 @@ Known limits that shape the priorities below:
 5. **Per-command bash approval.** ✅ Partial (2026-06):
    `--bash-policy ask` prompts before each new bash command in
    interactive sessions, supports one-shot and session-scoped approval,
-   and fails closed for one-shot runs that cannot ask the user.
+   and fails closed for one-shot or non-TTY runs that cannot ask the user
+   through a real terminal prompt.
    `--allow-bash` remains the explicit trusted compatibility mode. The
    remaining work is richer command parsing/risk classification, safer
    prefix approvals beyond exact command + cwd, persistent rules, and

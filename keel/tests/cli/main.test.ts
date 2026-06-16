@@ -581,6 +581,25 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("");
   });
 
+  test(`Given ask bash policy is forced through non-TTY input,
+    When the CLI main starts an interactive session,
+    Then it rejects the unsafe approval channel`, async () => {
+    // Given
+    const fixture = createRuntime(["--bash-policy", "ask"], {
+      env: { KEEL_FORCE_INTERACTIVE: "1" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --bash-policy ask requires a real TTY so approvals cannot be read from piped input. Use --bash-policy deny or --bash-policy trusted for non-TTY runs.\n",
+    );
+  });
+
   test(`Given the default provider is configured against a local protocol server,
     When the CLI main runs a one-shot text request,
     Then it streams the provider reply through the process boundary`, async () => {
