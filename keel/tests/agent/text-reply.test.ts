@@ -5,6 +5,7 @@ import {
   runAgentTurn,
 } from "../../src/agent/loop.ts";
 import type { CostModel } from "../../src/core/cost.ts";
+import { KeelError } from "../../src/core/error.ts";
 import {
   createFakeProvider,
   fakeResponse,
@@ -383,6 +384,52 @@ describe("Text Reply", () => {
     expect(textEvents[1]?.text).toBe("i");
   });
 
+  test(`Given the model request needs a retry before answering,
+    When agent streams the response,
+    Then the retry notice is forwarded before the reply`, async () => {
+    // Given
+    const provider: LLMProvider = {
+      id: "retrying-model",
+      async *stream() {
+        yield {
+          type: "provider_retry",
+          provider: "TestProvider",
+          reason: "provider_rate_limited",
+          attempt: 1,
+          maxRetries: 2,
+          delayMs: 0,
+        };
+        yield { type: "text", text: "Recovered." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgent({
+        workspace: workspace(),
+        provider,
+        userMessage: "answer after retry",
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events.slice(0, 2)).toEqual([
+      {
+        type: "provider_retry",
+        provider: "TestProvider",
+        reason: "provider_rate_limited",
+        attempt: 1,
+        maxRetries: 2,
+        delayMs: 0,
+      },
+      { type: "text", text: "Recovered." },
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "end" });
+  });
+
   test(`Given user asks a question,
     When agent finishes replying,
     Then the session reports token usage`, async () => {
@@ -477,6 +524,46 @@ describe("Text Reply", () => {
         }),
       ),
     ).rejects.toThrow("LLM stream ended without stop event");
+  });
+
+  test(`Given the model connection fails after partial text,
+    When agent handles the turn,
+    Then the partial turn is not committed`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "start reply" }];
+    const events: AgentEvent[] = [];
+    const brokenProvider: LLMProvider = {
+      id: "stream-failure",
+      async *stream() {
+        yield { type: "text", text: "partial reply" };
+        throw new KeelError(
+          "provider_network_error",
+          "TestProvider stream failed",
+        );
+      },
+    };
+
+    // When
+    const run = async () => {
+      for await (const event of runAgentTurn({
+        workspace: workspace(),
+        provider: brokenProvider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+      })) {
+        events.push(event);
+      }
+    };
+
+    // Then
+    await expect(run()).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_network_error",
+      message: "TestProvider stream failed",
+    });
+    expect(events).toEqual([{ type: "text", text: "partial reply" }]);
+    expect(messages).toEqual([{ role: "user", content: "start reply" }]);
   });
 
   test(`Given a task needs more than eight tool rounds,
