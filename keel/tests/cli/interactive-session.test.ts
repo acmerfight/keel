@@ -174,6 +174,103 @@ describe("Interactive Session", () => {
     expect(sigintHandlers.size).toBe(0);
   });
 
+  test(`Given an interactive assistant turn is still working,
+    When user sends a follow-up before it finishes,
+    Then the follow-up runs next with previous context`, async () => {
+    // Given
+    let finishFirstTurn: () => void = () => {};
+    let receiveFirstText: () => void = () => {};
+    const firstTurnCanFinish = new Promise<void>((resolve) => {
+      finishFirstTurn = resolve;
+    });
+    const firstTextReceived = new Promise<void>((resolve) => {
+      receiveFirstText = resolve;
+    });
+    const observedContexts: Array<
+      Array<{ readonly role: Message["role"]; readonly content: string }>
+    > = [];
+    let turn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        turn++;
+        observedContexts.push(
+          options.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+        );
+
+        if (turn === 1) {
+          yield { type: "text", text: "First answer" };
+          receiveFirstText();
+          await firstTurnCanFinish;
+        } else {
+          yield { type: "text", text: "Second saw prior context" };
+        }
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {
+        throw new Error("follow-up input should not be treated as approval");
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTextReceived, 5000, "first turn did not start");
+    input.write("second prompt\n");
+    input.end();
+    finishFirstTurn();
+
+    // Then
+    await session;
+    expect(stdout).toBe("First answer\nSecond saw prior context\n");
+    expect(observedContexts).toEqual([
+      [{ role: "user", content: "first prompt" }],
+      [
+        { role: "user", content: "first prompt" },
+        { role: "assistant", content: "First answer" },
+        { role: "user", content: "second prompt" },
+      ],
+    ]);
+  });
+
   test(`Given an interactive session asks for bash permission,
     When the user approves the command for the session,
     Then repeated matching commands run without asking again`, async () => {
