@@ -14,7 +14,7 @@ type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 
 interface InteractiveSessionArgs {
   readonly allowBash: boolean;
-  readonly bashPolicy?: BashPolicy;
+  readonly bashPolicy: BashPolicy;
   readonly maxCostUsd?: number;
 }
 
@@ -187,7 +187,7 @@ function escapeApprovalText(text: string): string {
 }
 
 function interactiveBashPermissionPolicy(
-  policy: BashPolicy | undefined,
+  policy: BashPolicy,
   lineReader: LineReader,
   writeStderr: (text: string) => void,
 ): BashPermissionPolicy | undefined {
@@ -203,7 +203,7 @@ function interactiveBashPermissionPolicy(
           "Approve bash command?",
           `cwd: ${escapeApprovalText(request.cwd)}`,
           `$ ${escapeApprovalText(request.command)}`,
-          "[y] allow once, [s] allow for session, [n] deny: ",
+          "[y] allow once, [s] allow for session, [n] deny; any other input denies: ",
         ].join("\n"),
       );
       const rawAnswer = await lineReader.readLineAfter(
@@ -217,13 +217,19 @@ function interactiveBashPermissionPolicy(
         };
       }
       const answer = rawAnswer.trim().toLowerCase();
+      if (answer === "") {
+        return {
+          type: "deny",
+          message: "No approval response provided.",
+        };
+      }
       if (answer === "y" || answer === "yes") {
         return { type: "allow", scope: "once" };
       }
       if (answer === "s" || answer === "session" || answer === "a") {
         return { type: "allow", scope: "session" };
       }
-      return { type: "deny", message: "User denied this command." };
+      return { type: "deny", message: "User did not approve this command." };
     },
   });
 }

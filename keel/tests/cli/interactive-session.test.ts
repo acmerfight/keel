@@ -6,7 +6,7 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runInteractiveSession } from "../../src/cli/interactive-session.ts";
 import type { CostModel } from "../../src/core/cost.ts";
-import type { LLMProvider, Usage } from "../../src/llm/types.ts";
+import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
   fakeBashResponse,
@@ -68,7 +68,7 @@ describe("Interactive Session", () => {
     let stdout = "";
     let exitCode: number | undefined;
     const session = runInteractiveSession({
-      cliArgs: { allowBash: false },
+      cliArgs: { allowBash: false, bashPolicy: "deny" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -123,7 +123,7 @@ describe("Interactive Session", () => {
     let stderr = "";
     let resolvedProviders = 0;
     const session = runInteractiveSession({
-      cliArgs: { allowBash: true, maxCostUsd: 1 },
+      cliArgs: { allowBash: true, bashPolicy: "trusted", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -310,6 +310,95 @@ describe("Interactive Session", () => {
       await session;
       expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
       expect(stderr.match(/Approve bash command/g)).toHaveLength(2);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive bash approval receives an empty answer,
+    When the command is denied,
+    Then the model receives a no-response denial`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command =
+      "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.messages.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "empty_approval_bash",
+            tool: "bash",
+            command,
+          };
+        } else {
+          secondTurnMessages = options.messages;
+          yield { type: "text", text: "No approval." };
+        }
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let answered = false;
+    const session = runInteractiveSession({
+      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        if (text.includes("Approve bash command") && !answered) {
+          answered = true;
+          input.write("\n");
+          input.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("run shell\n");
+
+      // Then
+      await session;
+      await expect(
+        readFile(join(workspace, "created.txt"), "utf8"),
+      ).rejects.toThrow("ENOENT");
+      expect(stdout).toBe("No approval.\n");
+      expect(secondTurnMessages).toContainEqual({
+        role: "tool",
+        toolCallId: "empty_approval_bash",
+        content: expect.stringContaining("No approval response provided."),
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -649,7 +738,7 @@ describe("Interactive Session", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { allowBash: false },
+      cliArgs: { allowBash: false, bashPolicy: "deny" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -735,7 +824,7 @@ describe("Interactive Session", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { allowBash: false },
+      cliArgs: { allowBash: false, bashPolicy: "deny" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -804,7 +893,7 @@ describe("Interactive Session", () => {
     };
     const input = new PassThrough();
     const session = runInteractiveSession({
-      cliArgs: { allowBash: false },
+      cliArgs: { allowBash: false, bashPolicy: "deny" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -901,7 +990,7 @@ describe("Interactive Session", () => {
       return finalEnd;
     };
     const session = runInteractiveSession({
-      cliArgs: { allowBash: false },
+      cliArgs: { allowBash: false, bashPolicy: "deny" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
