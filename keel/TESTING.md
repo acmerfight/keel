@@ -65,10 +65,15 @@ Use `pnpm test:coverage` for final verification before pushing or merging. `pnpm
 
 Coverage gaps require triage, not automatic tests.
 
+Tests must verify reachable product behavior through real CLI, API, config, or external entrypoints. Do not manufacture impossible internal states just to satisfy coverage.
+
 If a branch is reachable through a supported boundary, cover its observable behavior with BDD.
 If it is unreachable under current invariants, remove or refactor it.
 If it is a necessary guard, document the invariant it protects.
-Never mock impossible states just to satisfy coverage.
+
+When a coverage gap exposes duplicated state, prefer one source of truth plus derived state over tests for inconsistent combinations.
+
+For safety boundaries, prefer one authoritative execution path. Parallel allow/deny paths drift over time and can leave dead code that only looks protective.
 
 ## Choosing A Test Boundary
 
