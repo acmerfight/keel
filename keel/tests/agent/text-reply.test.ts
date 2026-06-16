@@ -360,6 +360,163 @@ describe("Text Reply", () => {
     ]);
   });
 
+  test(`Given user steers while a tool turn is continuing,
+    When the tool result has been added,
+    Then the next model request includes the steering after the tool result`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "inspect package" }];
+    let turn = 0;
+    let drained = false;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "steerable-session",
+      async *stream(options) {
+        turn++;
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_package_for_steering",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        secondTurnMessages = [...options.messages];
+        yield { type: "text", text: "Adjusted after steering." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        drainSteeringMessages: () => {
+          if (drained) {
+            return [];
+          }
+          drained = true;
+          return [{ role: "user", content: "focus on the scripts" }];
+        },
+      }),
+    );
+
+    // Then
+    expect(secondTurnMessages).toEqual([
+      { role: "user", content: "inspect package" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_package_for_steering",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          },
+        ],
+      },
+      expect.objectContaining({
+        role: "tool",
+        toolCallId: "read_package_for_steering",
+      }),
+      { role: "user", content: "focus on the scripts" },
+    ]);
+  });
+
+  test(`Given user steers while a batch of tools is continuing,
+    When all tool results have been added,
+    Then the next model request includes the steering after every tool result`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "inspect project" }];
+    let turn = 0;
+    let drained = false;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "batched-tools-session",
+      async *stream(options) {
+        turn++;
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_package_for_batch",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          };
+          yield {
+            type: "tool_call",
+            id: "read_agents_for_batch",
+            tool: "read",
+            path: "AGENTS.md",
+            limit: 1,
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        secondTurnMessages = [...options.messages];
+        yield { type: "text", text: "Adjusted after batch steering." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        drainSteeringMessages: () => {
+          if (drained) {
+            return [];
+          }
+          drained = true;
+          return [{ role: "user", content: "compare both files" }];
+        },
+      }),
+    );
+
+    // Then
+    expect(secondTurnMessages).toEqual([
+      { role: "user", content: "inspect project" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_package_for_batch",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          },
+          {
+            id: "read_agents_for_batch",
+            tool: "read",
+            path: "AGENTS.md",
+            limit: 1,
+          },
+        ],
+      },
+      expect.objectContaining({
+        role: "tool",
+        toolCallId: "read_package_for_batch",
+      }),
+      expect.objectContaining({
+        role: "tool",
+        toolCallId: "read_agents_for_batch",
+      }),
+      { role: "user", content: "compare both files" },
+    ]);
+  });
+
   test(`Given a short assistant reply,
     When agent responds,
     Then the reply is emitted incrementally`, async () => {
