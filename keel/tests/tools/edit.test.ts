@@ -332,6 +332,54 @@ describe("Edit Tool", () => {
     }
   });
 
+  test(`Given an edit request targets a text-named PDF,
+    When the edit tool sniffs the target bytes,
+    Then it rejects the file by magic bytes without rewriting bytes`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const filePath = join(workspace, "document.txt");
+    const original = Buffer.from("%PDF-1.7\nold text\n");
+    await writeFile(filePath, original);
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "document.txt", "old", "new"),
+        "tool_binary_file",
+        "binary file",
+        "cannot be edited as text",
+      );
+      expect(await readFile(filePath)).toEqual(original);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit request targets a text-named WebP file,
+    When the edit tool sniffs the target bytes,
+    Then it rejects the RIFF WebP file by magic bytes without rewriting bytes`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const filePath = join(workspace, "image.txt");
+    const original = Buffer.from([
+      0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+    ]);
+    await writeFile(filePath, original);
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "image.txt", "RIFF", "text"),
+        "tool_binary_file",
+        "binary file",
+        "cannot be edited as text",
+      );
+      expect(await readFile(filePath)).toEqual(original);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an edit request targets invalid UTF-8,
     When the edit tool decodes the target,
     Then it rejects the file without rewriting bytes`, async () => {
