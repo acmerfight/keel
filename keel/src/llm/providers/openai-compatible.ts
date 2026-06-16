@@ -15,7 +15,6 @@ import {
 
 export type { ProviderRetryConfig } from "./openai-compatible-retry.ts";
 export type {
-  OpenAICompatibleChoice,
   OpenAICompatibleChunk,
   OpenAICompatibleStreamState,
 } from "./openai-compatible-sse.ts";

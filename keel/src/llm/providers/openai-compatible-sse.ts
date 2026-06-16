@@ -17,7 +17,7 @@ interface OpenAICompatibleToolCallDelta {
     | undefined;
 }
 
-export interface OpenAICompatibleChoice {
+interface OpenAICompatibleChoice {
   readonly delta?:
     | {
         readonly content?: string | null | undefined;
