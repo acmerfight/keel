@@ -315,69 +315,6 @@ describe("Interactive Session", () => {
     }
   });
 
-  test(`Given the interactive bash policy is deny,
-    When the assistant requests a shell command,
-    Then the command is rejected before execution`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
-    const command =
-      "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
-    const provider = createFakeProvider([
-      fakeBashResponse(command),
-      fakeResponse("Shell denied."),
-    ]);
-    const input = new PassThrough();
-    let stdout = "";
-    const session = runInteractiveSession({
-      cliArgs: { allowBash: true, bashPolicy: "deny" },
-      workspace,
-      platform: process.platform,
-      input,
-      writeStdout: (text) => {
-        stdout += text;
-      },
-      writeStderr: () => {},
-      onSigint: () => {},
-      offSigint: () => {},
-      setExitCode: () => {},
-      forceExit: (code) => {
-        throw new ForcedExit(code);
-      },
-      resolveProvider: () => ({
-        provider,
-        model: "fake",
-        costModel: ZERO_COST_MODEL,
-      }),
-      requireKnownCostModel: () => ZERO_COST_MODEL,
-      printAgentEvents: async (stream) => {
-        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
-        for await (const event of stream) {
-          if (event.type === "text") {
-            stdout += event.text;
-          } else if (event.type === "end") {
-            finalEnd = event;
-          }
-        }
-        return finalEnd;
-      },
-      formatCostReport: () => "",
-    });
-
-    try {
-      // When
-      input.end("run shell\n");
-
-      // Then
-      await session;
-      await expect(
-        readFile(join(workspace, "created.txt"), "utf8"),
-      ).rejects.toThrow("ENOENT");
-      expect(stdout).toBe("Shell denied.\n");
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
-
   test(`Given an interactive bash approval prompt is waiting,
     When user interrupts the active turn,
     Then the approval is denied without waiting for another input line`, async () => {

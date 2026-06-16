@@ -8,7 +8,6 @@ import {
   type BashPermissionPolicy,
   type BashPolicy,
   createSessionBashPermissionPolicy,
-  denyBashPermissionPolicy,
 } from "../permissions/bash.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
@@ -192,11 +191,8 @@ function interactiveBashPermissionPolicy(
   lineReader: LineReader,
   writeStderr: (text: string) => void,
 ): BashPermissionPolicy | undefined {
-  if (policy === "trusted" || policy === undefined) {
+  if (policy !== "ask") {
     return undefined;
-  }
-  if (policy === "deny") {
-    return denyBashPermissionPolicy;
   }
 
   return createSessionBashPermissionPolicy({

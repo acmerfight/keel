@@ -22,13 +22,6 @@ export interface BashPermissionPolicy {
   ) => BashPermissionDecision | Promise<BashPermissionDecision>;
 }
 
-export const denyBashPermissionPolicy: BashPermissionPolicy = {
-  review: () => ({
-    type: "deny",
-    message: "Shell commands are disabled by the active bash policy.",
-  }),
-};
-
 function sessionKey(request: BashPermissionRequest): string {
   return JSON.stringify([request.cwd, request.command]);
 }
