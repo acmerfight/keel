@@ -551,6 +551,52 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "negative-usage") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(sseChunk("metered output"));
+            res.write(
+              sseData({
+                choices: [{ delta: {}, finish_reason: "stop" }],
+                usage: {
+                  prompt_tokens: 10,
+                  prompt_cache_hit_tokens: 11,
+                  prompt_cache_miss_tokens: -1,
+                  completion_tokens: 3,
+                },
+              }),
+            );
+            res.write("data: [DONE]\n\n");
+            res.end();
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "fractional-usage") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(sseChunk("metered output"));
+            res.write(
+              sseData({
+                choices: [{ delta: {}, finish_reason: "stop" }],
+                usage: {
+                  prompt_tokens: 10.5,
+                  prompt_cache_hit_tokens: 4.5,
+                  prompt_cache_miss_tokens: 6,
+                  completion_tokens: 3,
+                },
+              }),
+            );
+            res.write("data: [DONE]\n\n");
+            res.end();
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "inconsistent-cache-usage") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -988,6 +1034,62 @@ describe("DeepSeek Provider", () => {
                     delta: {
                       tool_calls: [
                         {
+                          id: "call_read_0",
+                          type: "function",
+                          function: {
+                            name: "read",
+                            arguments: JSON.stringify({ path: "note.txt" }),
+                          },
+                        },
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseFinish(1, 1, "tool_calls"),
+            ]);
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "negative-tool-call-index") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          index: -1,
+                          id: "call_read_0",
+                          type: "function",
+                          function: {
+                            name: "read",
+                            arguments: JSON.stringify({ path: "note.txt" }),
+                          },
+                        },
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseFinish(1, 1, "tool_calls"),
+            ]);
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "fractional-tool-call-index") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          index: 0.5,
                           id: "call_read_0",
                           type: "function",
                           function: {
@@ -2474,6 +2576,35 @@ describe("DeepSeek Provider", () => {
     });
   });
 
+  test.each([
+    "negative-usage",
+    "fractional-usage",
+  ])(`Given a stream chunk has %s tokens,
+    When provider reads the chunk,
+    Then it throws a protocol error before reporting usage`, async (message) => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: message }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream chunk has invalid schema",
+    });
+  });
+
   test(`Given a stream chunk has inconsistent cache usage totals,
     When provider reads the chunk,
     Then it throws a protocol error before reporting usage`, async () => {
@@ -2975,6 +3106,35 @@ describe("DeepSeek Provider", () => {
       name: "KeelError",
       code: "provider_protocol_error",
       message: "DeepSeek tool call is missing index",
+    });
+  });
+
+  test.each([
+    "negative-tool-call-index",
+    "fractional-tool-call-index",
+  ])(`Given a tool call delta has an invalid numeric index,
+    When provider validates the stream chunk,
+    Then it throws a protocol error before accumulating the tool call`, async (message) => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: message }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream chunk has invalid schema",
     });
   });
 

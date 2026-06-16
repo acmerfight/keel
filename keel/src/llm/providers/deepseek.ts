@@ -20,7 +20,7 @@ export const DEEPSEEK_V4_FLASH_COST_MODEL: CostModel = {
 const deepseekToolCallSchema = z
   .object({
     id: z.string().optional(),
-    index: z.number().optional(),
+    index: z.number().int().nonnegative().optional(),
     function: z
       .object({
         name: z.string().optional(),
@@ -47,10 +47,10 @@ const deepseekChoiceSchema = z
 
 const deepseekUsageSchema = z
   .object({
-    prompt_tokens: z.number(),
-    prompt_cache_hit_tokens: z.number(),
-    prompt_cache_miss_tokens: z.number(),
-    completion_tokens: z.number(),
+    prompt_tokens: z.number().int().nonnegative(),
+    prompt_cache_hit_tokens: z.number().int().nonnegative(),
+    prompt_cache_miss_tokens: z.number().int().nonnegative(),
+    completion_tokens: z.number().int().nonnegative(),
   })
   .refine(
     (usage) =>
