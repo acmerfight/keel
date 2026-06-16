@@ -5,6 +5,7 @@ import {
   type RecoverableToolErrorCode,
 } from "../core/error.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
+import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeBash } from "../tools/bash.ts";
 import { executeEdit } from "../tools/edit.ts";
 import { executeGrep } from "../tools/grep.ts";
@@ -59,6 +60,7 @@ export interface RunAgentOptions {
   readonly signal: AbortSignal;
   readonly costTracking?: CostTrackingOptions;
   readonly allowBash?: boolean;
+  readonly bashPermission?: BashPermissionPolicy;
   readonly stopPolicy?: AgentStopPolicy;
 }
 
@@ -72,6 +74,7 @@ export interface RunAgentTurnOptions {
   readonly signal: AbortSignal;
   readonly costTracking?: CostTrackingOptions;
   readonly allowBash?: boolean;
+  readonly bashPermission?: BashPermissionPolicy;
   readonly stopPolicy?: AgentStopPolicy;
 }
 
@@ -86,6 +89,7 @@ interface ExecuteToolCallOptions {
   readonly toolCall: ToolCall;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
+  readonly bashPermission?: BashPermissionPolicy;
 }
 
 interface RecoverableToolError extends KeelError {
@@ -113,6 +117,10 @@ function isRecoverableToolError(error: unknown): error is RecoverableToolError {
 
 function toolFailureMessage(error: RecoverableToolError): string {
   return `Tool failed: ${error.message}\nRecovery: ${error.recovery}`;
+}
+
+function deniedBashMessage(message: string): string {
+  return `Tool failed: bash permission denied: ${message}\nRecovery: Ask the user for permission or choose a non-shell approach.`;
 }
 
 function priorToolCallsFromMessages(messages: readonly Message[]): ToolCall[] {
@@ -231,7 +239,7 @@ async function* streamAgentTurn(
 async function executeToolCall(
   options: ExecuteToolCallOptions,
 ): Promise<ToolExecution> {
-  const { workspace, toolCall, signal, allowBash } = options;
+  const { workspace, toolCall, signal, allowBash, bashPermission } = options;
   switch (toolCall.tool) {
     case "grep": {
       try {
@@ -268,6 +276,20 @@ async function executeToolCall(
             "Tool failed: bash failed: shell commands are disabled. Re-run with --allow-bash to enable them.",
           ok: false,
         };
+      }
+
+      if (bashPermission !== undefined) {
+        const decision = await bashPermission.review({
+          command: toolCall.command,
+          cwd: workspace,
+          toolCallId: toolCall.id,
+        });
+        if (decision.type === "deny") {
+          return {
+            content: deniedBashMessage(decision.message),
+            ok: false,
+          };
+        }
       }
 
       try {
@@ -326,6 +348,7 @@ export async function* runAgentTurn(
     signal,
     costTracking,
     allowBash = false,
+    bashPermission,
     stopPolicy = defaultStopPolicy(),
   } = options;
   const priorToolCalls = priorToolCallsFromMessages(messages);
@@ -442,6 +465,7 @@ export async function* runAgentTurn(
         toolCall,
         signal,
         allowBash,
+        ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
       yield { type: "tool_end", toolCall, ok: execution.ok };
       messages.push({
@@ -468,6 +492,9 @@ export async function* runAgent(
       : {}),
     ...(options.allowBash !== undefined
       ? { allowBash: options.allowBash }
+      : {}),
+    ...(options.bashPermission !== undefined
+      ? { bashPermission: options.bashPermission }
       : {}),
     ...(options.stopPolicy !== undefined
       ? { stopPolicy: options.stopPolicy }

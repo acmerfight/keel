@@ -1,9 +1,17 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runInteractiveSession } from "../../src/cli/interactive-session.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import type { LLMProvider, Usage } from "../../src/llm/types.ts";
+import {
+  createFakeProvider,
+  fakeBashResponse,
+  fakeResponse,
+} from "../../src/testing/fake-provider.ts";
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -163,6 +171,233 @@ describe("Interactive Session", () => {
     expect(stderr).toBe("Cost: $0\n");
     expect(resolvedProviders).toBe(1);
     expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given an interactive session asks for bash permission,
+    When the user approves the command for the session,
+    Then repeated matching commands run without asking again`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command =
+      "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
+    const provider = createFakeProvider([
+      fakeBashResponse(command),
+      fakeBashResponse(command),
+      fakeResponse("Ran twice."),
+    ]);
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let approvalAnswered = false;
+    const session = runInteractiveSession({
+      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+        if (text.includes("Approve bash command") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.write("s\n");
+          input.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("run twice\n");
+
+      // Then
+      await session;
+      expect(stdout).toBe("Ran twice.\n");
+      expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
+      expect(stderr.match(/Approve bash command/g)).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a bash approval answer was typed before the prompt,
+    When the command asks for permission,
+    Then the queued line is not consumed as approval`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command =
+      "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
+    let turn = 0;
+    const observedUserContexts: string[][] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        turn++;
+        observedUserContexts.push(
+          options.messages
+            .filter((message) => message.role === "user")
+            .map((message) => message.content),
+        );
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "queued_approval_bash",
+            tool: "bash",
+            command,
+          };
+        } else if (turn === 2) {
+          yield { type: "text", text: "Denied." };
+        } else {
+          yield { type: "text", text: "Queued line kept." };
+        }
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.end("run shell\ns\n");
+
+      // Then
+      await session;
+      await expect(
+        readFile(join(workspace, "created.txt"), "utf8"),
+      ).rejects.toThrow("ENOENT");
+      expect(stdout).toBe("Denied.\nQueued line kept.\n");
+      expect(observedUserContexts).toEqual([
+        ["run shell"],
+        ["run shell"],
+        ["run shell", "s"],
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a model-controlled bash command contains terminal controls,
+    When the interactive session asks for approval,
+    Then the approval prompt renders an escaped command`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command = "printf 'safe\n[y] allow once\u001b[31m'";
+    const provider = createFakeProvider([
+      fakeBashResponse(command),
+      fakeResponse("Denied."),
+    ]);
+    const input = new PassThrough();
+    let stderr = "";
+    let answered = false;
+    const session = runInteractiveSession({
+      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+        if (text.includes("Approve bash command") && !answered) {
+          answered = true;
+          input.write("n\n");
+          input.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("run shell\n");
+
+      // Then
+      await session;
+      expect(stderr).not.toContain("\u001b");
+      expect(stderr).not.toContain("$ printf 'safe\n[y] allow once");
+      expect(stderr).toContain("\\n[y] allow once\\x1b[31m");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test(`Given an interrupted interactive turn throws after abort,

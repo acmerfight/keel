@@ -6,6 +6,7 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgent } from "../../src/agent/loop.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import { createSessionBashPermissionPolicy } from "../../src/permissions/bash.ts";
 import {
   createFakeProvider,
   fakeBashResponse,
@@ -321,6 +322,100 @@ describe("Bash Commands", () => {
       expect(events).toContainEqual({
         type: "text",
         text: "Created the file.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given shell commands require permission,
+    When the policy denies the command,
+    Then the command is rejected before it changes the workspace`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const command =
+      "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
+    const provider = createFakeProvider([
+      fakeBashResponse(command),
+      fakeResponse("I will avoid the shell."),
+    ]);
+    let reviewedCommand = "";
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "create a file",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+          bashPermission: {
+            review: (request) => {
+              reviewedCommand = request.command;
+              return {
+                type: "deny",
+                message: "User denied this command.",
+              };
+            },
+          },
+        }),
+      );
+
+      // Then
+      expect(reviewedCommand).toBe(command);
+      expect(existsSync(join(workspace, "created.txt"))).toBe(false);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "I will avoid the shell.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a shell command is approved for the session,
+    When the assistant repeats the same command in the same workspace,
+    Then the repeated command runs without asking again`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const command =
+      "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
+    const provider = createFakeProvider([
+      fakeBashResponse(command),
+      fakeBashResponse(command),
+      fakeResponse("Ran twice."),
+    ]);
+    let promptCount = 0;
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        promptCount++;
+        expect(request.command).toBe(command);
+        return { type: "allow", scope: "session" };
+      },
+    });
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "run the command twice",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+          bashPermission,
+        }),
+      );
+
+      // Then
+      expect(promptCount).toBe(1);
+      expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Ran twice.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
