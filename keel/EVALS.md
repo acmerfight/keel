@@ -1,8 +1,9 @@
 # Harness Evals
 
 `keel eval` measures keel's harness execution quality on real coding tasks
-(ROADMAP P0-6). It exists to make the north-star claim falsifiable: a
-change to the harness is good if and only if the numbers say so.
+(ROADMAP **Harness eval measurement loop**). It exists to make the
+north-star claim falsifiable: a change to the harness is good if and only
+if the numbers say so.
 
 ## How to run
 
@@ -160,9 +161,11 @@ and treat prior scores for that task version as invalid.
 
 ## What this is not (yet)
 
-- No cross-agent comparison until a second provider lands (P0-2); the
-  JSONL schema already records provider/model so old results stay usable.
+- No cross-agent comparison until the **General provider/model configuration
+  and same-model comparisons** roadmap slice provides a same-model
+  comparison path; the JSONL schema already records provider/model so old
+  results stay usable.
 - No LLM-graded rubrics; deterministic outcome checks only.
 - No transcript persistence per trial; the runner keeps only metrics.
-- `interventions` (human steering count) becomes meaningful with the
-  interactive session (P0-1) and will be added to the schema then.
+- `interventions` (human steering count) becomes meaningful with
+  **Interactive session with steering** and will be added to the schema then.
