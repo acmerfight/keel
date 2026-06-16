@@ -522,6 +522,25 @@ describe("CLI Main", () => {
     );
   });
 
+  test(`Given bash policy is missing its value,
+    When the CLI main parses the request,
+    Then it returns a bash policy validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["--bash-policy"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --bash-policy must be one of: ask, deny, trusted.\n",
+    );
+  });
+
   test.each([
     ["--allow-bash", "--bash-policy", "ask", "hello"],
     ["--allow-bash", "--bash-policy=ask", "hello"],
