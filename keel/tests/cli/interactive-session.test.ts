@@ -662,6 +662,116 @@ describe("Interactive Session", () => {
     }
   });
 
+  test(`Given stdin closes before bash approval can be answered,
+    When the command asks for permission,
+    Then the command is denied as interrupted input`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command =
+      "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
+    let startFirstTurn: () => void = () => {};
+    let allowToolCall: () => void = () => {};
+    const firstTurnStarted = new Promise<void>((resolve) => {
+      startFirstTurn = resolve;
+    });
+    const toolCallAllowed = new Promise<void>((resolve) => {
+      allowToolCall = resolve;
+    });
+    const input = new PassThrough();
+    const inputEnded = new Promise<void>((resolve) => {
+      input.once("end", () => {
+        resolve();
+      });
+    });
+    let secondTurnMessages: readonly Message[] = [];
+    let turn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        turn++;
+        if (turn === 1) {
+          startFirstTurn();
+          await toolCallAllowed;
+          yield {
+            type: "tool_call",
+            id: "closed_approval_bash",
+            tool: "bash",
+            command,
+          };
+        } else {
+          secondTurnMessages = options.messages;
+          yield { type: "text", text: "Closed approval." };
+        }
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("run shell\n");
+      await withTimeout(firstTurnStarted, 5000, "first turn did not start");
+      input.end();
+      await withTimeout(inputEnded, 5000, "stdin did not close");
+      allowToolCall();
+
+      // Then
+      await session;
+      await expect(
+        readFile(join(workspace, "created.txt"), "utf8"),
+      ).rejects.toThrow("ENOENT");
+      expect(stdout).toBe("Closed approval.\n");
+      expect(stderr).toContain("Approve bash command");
+      expect(secondTurnMessages).toContainEqual({
+        role: "tool",
+        toolCallId: "closed_approval_bash",
+        content: expect.stringContaining(
+          "Command approval was interrupted or input closed.",
+        ),
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a bash approval answer was typed before the prompt,
     When the command asks for permission,
     Then the queued line is not consumed as approval`, async () => {
