@@ -6,7 +6,10 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgent } from "../../src/agent/loop.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
-import { createSessionBashPermissionPolicy } from "../../src/permissions/bash.ts";
+import {
+  createSessionBashPermissionPolicy,
+  denyBashPermissionPolicy,
+} from "../../src/permissions/bash.ts";
 import {
   createFakeProvider,
   fakeBashResponse,
@@ -370,6 +373,68 @@ describe("Bash Commands", () => {
         type: "text",
         text: "I will avoid the shell.",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the deny bash policy is used,
+    When a command is reviewed,
+    Then it returns a denial decision`, () => {
+    // Given
+    const request = {
+      command: "printf denied",
+      cwd: process.cwd(),
+      toolCallId: "deny_policy",
+    };
+
+    // When
+    const decision = denyBashPermissionPolicy.review(request);
+
+    // Then
+    expect(decision).toEqual({
+      type: "deny",
+      message: "Shell commands are disabled by the active bash policy.",
+    });
+  });
+
+  test(`Given a shell command is approved once,
+    When the assistant repeats the same command,
+    Then the repeated command asks for permission again`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const command =
+      "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
+    const provider = createFakeProvider([
+      fakeBashResponse(command),
+      fakeBashResponse(command),
+      fakeResponse("Ran twice."),
+    ]);
+    let promptCount = 0;
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: () => {
+        promptCount++;
+        return { type: "allow", scope: "once" };
+      },
+    });
+
+    try {
+      // When
+      await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "run the command twice",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+          bashPermission,
+        }),
+      );
+
+      // Then
+      expect(promptCount).toBe(2);
+      expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

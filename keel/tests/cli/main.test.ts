@@ -522,6 +522,23 @@ describe("CLI Main", () => {
     );
   });
 
+  test(`Given bash policy is configured with equals syntax,
+    When the CLI main runs a text request,
+    Then it accepts the policy option`, async () => {
+    // Given
+    const fixture = createRuntime(["--bash-policy=trusted", "hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toBe("Hello from fake provider.\n");
+    expect(fixture.stderr()).toBe("");
+  });
+
   test(`Given the default provider is configured against a local protocol server,
     When the CLI main runs a one-shot text request,
     Then it streams the provider reply through the process boundary`, async () => {

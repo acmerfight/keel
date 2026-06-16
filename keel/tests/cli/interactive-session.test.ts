@@ -340,7 +340,7 @@ describe("Interactive Session", () => {
     Then the approval prompt renders an escaped command`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
-    const command = "printf 'safe\n[y] allow once\u001b[31m'";
+    const command = "printf 'safe\n[y] allow once\r\t\u001b[31m\u202e'";
     const provider = createFakeProvider([
       fakeBashResponse(command),
       fakeResponse("Denied."),
@@ -394,7 +394,7 @@ describe("Interactive Session", () => {
       await session;
       expect(stderr).not.toContain("\u001b");
       expect(stderr).not.toContain("$ printf 'safe\n[y] allow once");
-      expect(stderr).toContain("\\n[y] allow once\\x1b[31m");
+      expect(stderr).toContain("\\n[y] allow once\\r\\t\\x1b[31m\\u{202e}");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
