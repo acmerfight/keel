@@ -68,7 +68,7 @@ describe("Interactive Session", () => {
     let stdout = "";
     let exitCode: number | undefined;
     const session = runInteractiveSession({
-      cliArgs: { allowBash: false, bashPolicy: "deny" },
+      cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -123,7 +123,7 @@ describe("Interactive Session", () => {
     let stderr = "";
     let resolvedProviders = 0;
     const session = runInteractiveSession({
-      cliArgs: { allowBash: true, bashPolicy: "trusted", maxCostUsd: 1 },
+      cliArgs: { bashMode: "trusted", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -190,7 +190,7 @@ describe("Interactive Session", () => {
     let stderr = "";
     let approvalAnswered = false;
     const session = runInteractiveSession({
-      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
       input,
@@ -261,7 +261,7 @@ describe("Interactive Session", () => {
     let stderr = "";
     let approvalPrompts = 0;
     const session = runInteractiveSession({
-      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
       input,
@@ -344,7 +344,7 @@ describe("Interactive Session", () => {
     let stdout = "";
     let answered = false;
     const session = runInteractiveSession({
-      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
       input,
@@ -420,7 +420,7 @@ describe("Interactive Session", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
       input,
@@ -499,7 +499,7 @@ describe("Interactive Session", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
       input,
@@ -595,7 +595,7 @@ describe("Interactive Session", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
       input,
@@ -663,7 +663,7 @@ describe("Interactive Session", () => {
     let stderr = "";
     let answered = false;
     const session = runInteractiveSession({
-      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
       input,
@@ -738,7 +738,7 @@ describe("Interactive Session", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { allowBash: false, bashPolicy: "deny" },
+      cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -824,7 +824,7 @@ describe("Interactive Session", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { allowBash: false, bashPolicy: "deny" },
+      cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -893,7 +893,7 @@ describe("Interactive Session", () => {
     };
     const input = new PassThrough();
     const session = runInteractiveSession({
-      cliArgs: { allowBash: false, bashPolicy: "deny" },
+      cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -990,7 +990,7 @@ describe("Interactive Session", () => {
       return finalEnd;
     };
     const session = runInteractiveSession({
-      cliArgs: { allowBash: false, bashPolicy: "deny" },
+      cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
       input,

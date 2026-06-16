@@ -1,5 +1,17 @@
 export type BashPolicy = "ask" | "deny" | "trusted";
 
+// BashPolicy is the user-facing CLI vocabulary; BashMode is the internal state
+// used to derive tool exposure and approval behavior.
+export type BashMode = "disabled" | "ask" | "trusted";
+
+export function bashModeFromPolicy(policy: BashPolicy): BashMode {
+  return policy === "deny" ? "disabled" : policy;
+}
+
+export function bashModeExposesTool(mode: BashMode): boolean {
+  return mode !== "disabled";
+}
+
 export interface BashPermissionRequest {
   readonly command: string;
   readonly cwd: string;

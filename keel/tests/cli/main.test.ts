@@ -33,6 +33,20 @@ const requestWithMessagesSchema = z
   })
   .passthrough();
 
+const requestWithToolsSchema = z
+  .object({
+    tools: z
+      .array(
+        z
+          .object({
+            function: z.object({ name: z.string() }).optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
 interface RuntimeFixture {
   readonly runtime: CliRuntime;
   readonly stdout: () => string;
@@ -579,6 +593,57 @@ describe("CLI Main", () => {
     expect(exitCode).toBe(0);
     expect(fixture.stdout()).toBe("Hello from fake provider.\n");
     expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given bash policy is explicitly denied,
+    When the CLI main sends a one-shot provider request,
+    Then the bash tool is not exposed to the model`, async () => {
+    // Given
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("No shell."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["--bash-policy", "deny", "hello"], {
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("No shell.\n");
+      expect(fixture.stderr()).toBe("");
+      const request = requestWithToolsSchema.parse(capturedBodies[0]);
+      expect(
+        request.tools?.map((tool) => tool.function?.name).filter(Boolean),
+      ).not.toContain("bash");
+    } finally {
+      await close(server);
+    }
   });
 
   test(`Given ask bash policy is forced through non-TTY input,
