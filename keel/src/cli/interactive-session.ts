@@ -5,16 +5,16 @@ import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import type { CostModel } from "../core/cost.ts";
 import type { LLMProvider, Message } from "../llm/types.ts";
 import {
+  type BashMode,
   type BashPermissionPolicy,
-  type BashPolicy,
+  bashModeExposesTool,
   createSessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 
 interface InteractiveSessionArgs {
-  readonly allowBash: boolean;
-  readonly bashPolicy: BashPolicy;
+  readonly bashMode: BashMode;
   readonly maxCostUsd?: number;
 }
 
@@ -187,11 +187,11 @@ function escapeApprovalText(text: string): string {
 }
 
 function interactiveBashPermissionPolicy(
-  policy: BashPolicy,
+  mode: BashMode,
   lineReader: LineReader,
   writeStderr: (text: string) => void,
 ): BashPermissionPolicy | undefined {
-  if (policy !== "ask") {
+  if (mode !== "ask") {
     return undefined;
   }
 
@@ -249,7 +249,7 @@ export async function runInteractiveSession(
   });
   const lineReader = createLineReader(input);
   const bashPermission = interactiveBashPermissionPolicy(
-    options.cliArgs.bashPolicy,
+    options.cliArgs.bashMode,
     lineReader,
     options.writeStderr,
   );
@@ -288,7 +288,9 @@ export async function runInteractiveSession(
           messages,
           systemPrompt,
           signal: turnAbortController.signal,
-          ...(options.cliArgs.allowBash ? { allowBash: true } : {}),
+          ...(bashModeExposesTool(options.cliArgs.bashMode)
+            ? { allowBash: true }
+            : {}),
           ...(bashPermission !== undefined ? { bashPermission } : {}),
           ...(options.cliArgs.maxCostUsd !== undefined
             ? {

@@ -18,7 +18,13 @@ import {
 } from "../llm/providers/kimi.ts";
 import { createQwenProvider, qwenCostModel } from "../llm/providers/qwen.ts";
 import type { LLMProvider, ToolCall } from "../llm/types.ts";
-import type { BashPermissionPolicy, BashPolicy } from "../permissions/bash.ts";
+import {
+  type BashMode,
+  type BashPermissionPolicy,
+  type BashPolicy,
+  bashModeExposesTool,
+  bashModeFromPolicy,
+} from "../permissions/bash.ts";
 import { createFakeProvider, fakeResponse } from "../testing/fake-provider.ts";
 import {
   type InteractiveResolvedProvider,
@@ -51,8 +57,7 @@ type CliArgs =
   | EvalCliArgs
   | {
       readonly command: "run";
-      readonly allowBash: boolean;
-      readonly bashPolicy: BashPolicy;
+      readonly bashMode: BashMode;
       readonly userMessage?: string;
       readonly maxCostUsd?: number;
       readonly reportFile?: string;
@@ -228,8 +233,7 @@ function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
     return parseEvalArgs(args.slice(1));
   }
 
-  let allowBash = false;
-  let bashPolicy: BashPolicy = "deny";
+  let bashMode: BashMode = "disabled";
   let allowBashOptionSeen = false;
   let bashPolicyOptionSeen = false;
   let maxCostUsd: number | undefined;
@@ -253,8 +257,7 @@ function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
         );
       }
       allowBashOptionSeen = true;
-      allowBash = true;
-      bashPolicy = "trusted";
+      bashMode = "trusted";
       continue;
     }
 
@@ -267,8 +270,7 @@ function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
       const parsed = parseBashPolicy(args[index + 1]);
       if (!parsed.ok) return parsed;
       bashPolicyOptionSeen = true;
-      bashPolicy = parsed.value;
-      allowBash = parsed.value !== "deny";
+      bashMode = bashModeFromPolicy(parsed.value);
       skipNext = true;
       continue;
     }
@@ -282,8 +284,7 @@ function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
       const parsed = parseBashPolicy(arg.slice(bashPolicyPrefix.length));
       if (!parsed.ok) return parsed;
       bashPolicyOptionSeen = true;
-      bashPolicy = parsed.value;
-      allowBash = parsed.value !== "deny";
+      bashMode = bashModeFromPolicy(parsed.value);
       continue;
     }
 
@@ -323,8 +324,7 @@ function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
 
   return parseOk({
     command: "run",
-    allowBash,
-    bashPolicy,
+    bashMode,
     ...(userMessage !== undefined ? { userMessage } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(reportFile !== undefined ? { reportFile } : {}),
@@ -731,9 +731,9 @@ function requireKnownCostModel(resolved: ResolvedProvider): CostModel {
 }
 
 function oneShotBashPermissionPolicy(
-  bashPolicy: BashPolicy,
+  bashMode: BashMode,
 ): BashPermissionPolicy | undefined {
-  if (bashPolicy === "ask") {
+  if (bashMode === "ask") {
     return {
       review: () => ({
         type: "deny",
@@ -832,7 +832,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
       );
       return 1;
     }
-    if (cliArgs.bashPolicy === "ask" && runtime.input.isTTY !== true) {
+    if (cliArgs.bashMode === "ask" && runtime.input.isTTY !== true) {
       runtime.writeStderr(
         "Error: --bash-policy ask requires a real TTY so approvals cannot be read from piped input. Use --bash-policy deny or --bash-policy trusted for non-TTY runs.\n",
       );
@@ -887,7 +887,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
 
     const workspace = runtime.cwd();
     const startedAt = runtime.now();
-    const bashPermission = oneShotBashPermissionPolicy(cliArgs.bashPolicy);
+    const bashPermission = oneShotBashPermissionPolicy(cliArgs.bashMode);
     const stream = runAgent({
       workspace,
       provider: resolved.provider,
@@ -897,7 +897,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         platform: runtime.platform,
       }),
       signal: abortController.signal,
-      ...(cliArgs.allowBash ? { allowBash: true } : {}),
+      ...(bashModeExposesTool(cliArgs.bashMode) ? { allowBash: true } : {}),
       ...(bashPermission !== undefined ? { bashPermission } : {}),
       ...(cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
         ? {
