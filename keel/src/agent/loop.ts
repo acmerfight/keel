@@ -1,16 +1,8 @@
 import { type CostModel, calculateCostUsd } from "../core/cost.ts";
-import {
-  isRecoverableToolErrorCode,
-  KeelError,
-  type RecoverableToolErrorCode,
-} from "../core/error.ts";
+import { KeelError } from "../core/error.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
-import { executeBash } from "../tools/bash.ts";
-import { executeEdit } from "../tools/edit.ts";
-import { executeGrep } from "../tools/grep.ts";
-import { executeRead } from "../tools/read.ts";
-import { executeWrite } from "../tools/write.ts";
+import { executeToolCall } from "../tools/execution.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
 import { defaultStopPolicy } from "./stop-policy.ts";
 
@@ -84,24 +76,6 @@ interface AgentTurn {
   readonly usage: Usage;
 }
 
-interface ExecuteToolCallOptions {
-  readonly workspace: string;
-  readonly toolCall: ToolCall;
-  readonly signal: AbortSignal;
-  readonly allowBash: boolean;
-  readonly bashPermission?: BashPermissionPolicy;
-}
-
-interface RecoverableToolError extends KeelError {
-  readonly code: RecoverableToolErrorCode;
-  readonly recovery: string;
-}
-
-interface ToolExecution {
-  readonly content: string;
-  readonly ok: boolean;
-}
-
 function addUsage(left: Usage, right: Usage): Usage {
   return {
     inputTokens: left.inputTokens + right.inputTokens,
@@ -109,18 +83,6 @@ function addUsage(left: Usage, right: Usage): Usage {
     uncachedInputTokens: left.uncachedInputTokens + right.uncachedInputTokens,
     outputTokens: left.outputTokens + right.outputTokens,
   };
-}
-
-function isRecoverableToolError(error: unknown): error is RecoverableToolError {
-  return error instanceof KeelError && isRecoverableToolErrorCode(error.code);
-}
-
-function toolFailureMessage(error: RecoverableToolError): string {
-  return `Tool failed: ${error.message}\nRecovery: ${error.recovery}`;
-}
-
-function deniedBashMessage(message: string): string {
-  return `Tool failed: bash permission denied: ${message}\nRecovery: Ask the user for permission or choose a non-shell approach.`;
 }
 
 function priorToolCallsFromMessages(messages: readonly Message[]): ToolCall[] {
@@ -234,107 +196,6 @@ async function* streamAgentTurn(
   }
 
   return finishAgentTurn(assistantText, pendingToolCalls, usage);
-}
-
-async function executeToolCall(
-  options: ExecuteToolCallOptions,
-): Promise<ToolExecution> {
-  const { workspace, toolCall, signal, allowBash, bashPermission } = options;
-  switch (toolCall.tool) {
-    case "grep": {
-      try {
-        const result = await executeGrep(workspace, toolCall.pattern, {
-          ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
-          signal,
-        });
-        return { content: result.content, ok: true };
-      } catch (error) {
-        if (!isRecoverableToolError(error)) {
-          throw error;
-        }
-        return { content: toolFailureMessage(error), ok: false };
-      }
-    }
-    case "read": {
-      try {
-        const result = executeRead(workspace, toolCall.path, {
-          offset: toolCall.offset,
-          limit: toolCall.limit,
-        });
-        return { content: result.content, ok: true };
-      } catch (error) {
-        if (!isRecoverableToolError(error)) {
-          throw error;
-        }
-        return { content: toolFailureMessage(error), ok: false };
-      }
-    }
-    case "bash": {
-      if (!allowBash) {
-        return {
-          content:
-            "Tool failed: bash failed: shell commands are disabled. Re-run with --bash-policy ask, --bash-policy trusted, or --allow-bash to enable them.",
-          ok: false,
-        };
-      }
-
-      if (bashPermission !== undefined) {
-        const decision = await bashPermission.review({
-          command: toolCall.command,
-          cwd: workspace,
-          signal,
-        });
-        if (decision.type === "deny") {
-          return {
-            content: deniedBashMessage(decision.message),
-            ok: false,
-          };
-        }
-      }
-
-      try {
-        const result = await executeBash(workspace, toolCall.command, {
-          signal,
-          ...(toolCall.timeoutMs !== undefined
-            ? { timeoutMs: toolCall.timeoutMs }
-            : {}),
-        });
-        return { content: result.content, ok: true };
-      } catch (error) {
-        if (!isRecoverableToolError(error)) {
-          throw error;
-        }
-        return { content: toolFailureMessage(error), ok: false };
-      }
-    }
-    case "edit": {
-      try {
-        const result = executeEdit(
-          workspace,
-          toolCall.path,
-          toolCall.oldString,
-          toolCall.newString,
-        );
-        return { content: result.content, ok: true };
-      } catch (error) {
-        if (!isRecoverableToolError(error)) {
-          throw error;
-        }
-        return { content: toolFailureMessage(error), ok: false };
-      }
-    }
-    case "write": {
-      try {
-        const result = executeWrite(workspace, toolCall.path, toolCall.content);
-        return { content: result.content, ok: true };
-      } catch (error) {
-        if (!isRecoverableToolError(error)) {
-          throw error;
-        }
-        return { content: toolFailureMessage(error), ok: false };
-      }
-    }
-  }
 }
 
 export async function* runAgentTurn(
