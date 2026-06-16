@@ -91,6 +91,21 @@ const FIX_NOTE_TASK: TaskFixture = {
   verify: 'grep -q "hello new world" note.txt\n',
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
+const VALID_REPORT = {
+  schemaVersion: 1,
+  provider: "fake",
+  model: "fake",
+  turns: 1,
+  stopReason: "completed",
+  usage: {
+    inputTokens: 1,
+    cachedInputTokens: 0,
+    uncachedInputTokens: 1,
+    outputTokens: 1,
+  },
+  durationMs: 1,
+  costUsd: 0,
+};
 
 let previousKeelProvider: string | undefined;
 
@@ -291,6 +306,20 @@ describe("Eval Runner", () => {
     {
       name: "wrong schema",
       reportContent: JSON.stringify({ schemaVersion: 1 }),
+    },
+    {
+      name: "negative usage",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        usage: { ...VALID_REPORT.usage, outputTokens: -1 },
+      }),
+    },
+    {
+      name: "fractional usage",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        usage: { ...VALID_REPORT.usage, inputTokens: 1.5 },
+      }),
     },
   ])(`Given the agent writes a $name report,
     When the eval runner reads the report,
