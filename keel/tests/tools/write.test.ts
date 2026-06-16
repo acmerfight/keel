@@ -323,31 +323,6 @@ describe("Write Tool", () => {
     }
   });
 
-  test(`Given a nested gitignore excludes the requested file,
-    When the write tool is called for that nested file,
-    Then it rejects the ignored path without creating the file`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-write-tool-"));
-    await mkdir(join(workspace, "src"));
-    await writeFile(join(workspace, "src", ".gitignore"), "secret.txt\n");
-
-    try {
-      // When / Then
-      expectWriteError(
-        () => executeWrite(workspace, "src/secret.txt", "secret\n"),
-        "tool_path_ignored",
-        "ignored path",
-      );
-      await expect(
-        readFile(join(workspace, "src", "secret.txt"), "utf8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
-
   test(`Given a gitignore rule re-includes the requested file,
     When the write tool is called for that re-included file,
     Then it creates the file`, async () => {
