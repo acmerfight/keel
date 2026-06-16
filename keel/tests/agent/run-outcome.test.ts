@@ -6,13 +6,13 @@ import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgent } from "../../src/agent/loop.ts";
 import { maxTurnFallbackPolicy } from "../../src/agent/stop-policy.ts";
 import type { CostModel } from "../../src/core/cost.ts";
-import type { LLMProvider } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
   fakeEditResponse,
   fakeReadResponse,
   fakeResponse,
-} from "../../src/testing/fake-provider.ts";
+} from "../../src/llm/providers/fake.ts";
+import type { LLMProvider } from "../../src/llm/types.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 

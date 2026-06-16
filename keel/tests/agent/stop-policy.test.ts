@@ -12,14 +12,14 @@ import {
   repeatedToolCallPolicy,
 } from "../../src/agent/stop-policy.ts";
 import type { CostModel } from "../../src/core/cost.ts";
-import type { LLMProvider, Message } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
   fakeEditResponse,
   fakeGrepResponse,
   fakeReadResponse,
   fakeResponse,
-} from "../../src/testing/fake-provider.ts";
+} from "../../src/llm/providers/fake.ts";
+import type { LLMProvider, Message } from "../../src/llm/types.ts";
 
 async function collect(
   source: AsyncIterable<AgentEvent>,
