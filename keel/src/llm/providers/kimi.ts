@@ -4,8 +4,6 @@ import { KeelError } from "../../core/error.ts";
 import type { Usage } from "../types.ts";
 import {
   createOpenAICompatibleProvider,
-  type OpenAICompatibleChoice,
-  type OpenAICompatibleChunk,
   type OpenAICompatibleStreamState,
   type ProviderRetryConfig,
 } from "./openai-compatible.ts";
@@ -99,6 +97,8 @@ const kimiStreamChunkSchema = z
   .refine((chunk) => chunk.choices !== undefined || chunk.usage !== undefined);
 
 type KimiUsage = z.infer<typeof kimiUsageSchema>;
+type KimiChoice = z.infer<typeof kimiChoiceSchema>;
+type KimiStreamChunk = z.infer<typeof kimiStreamChunkSchema>;
 
 export interface KimiConfig {
   readonly apiKey: string;
@@ -107,7 +107,7 @@ export interface KimiConfig {
   readonly retry?: ProviderRetryConfig;
 }
 
-function parseKimiChunk(data: string): OpenAICompatibleChunk {
+function parseKimiChunk(data: string): KimiStreamChunk {
   let parsed: unknown;
   try {
     parsed = JSON.parse(data);
@@ -148,21 +148,14 @@ function usageFromKimiUsage(usage: KimiUsage): Usage {
 
 function captureKimiUsage(
   state: OpenAICompatibleStreamState,
-  chunk: OpenAICompatibleChunk,
-  choice: OpenAICompatibleChoice | undefined,
+  chunk: KimiStreamChunk,
+  choice: KimiChoice | undefined,
 ): void {
-  const usageResult = kimiUsageSchema
-    .nullable()
-    .optional()
-    .safeParse(choice?.usage ?? chunk.usage);
-  if (
-    !usageResult.success ||
-    usageResult.data === undefined ||
-    usageResult.data === null
-  ) {
+  const usage = choice?.usage ?? chunk.usage;
+  if (usage === undefined || usage === null) {
     return;
   }
-  state.usage = usageFromKimiUsage(usageResult.data);
+  state.usage = usageFromKimiUsage(usage);
 }
 
 export function createKimiProvider(config: KimiConfig) {
