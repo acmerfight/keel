@@ -144,5 +144,5 @@ See [TESTING.md](TESTING.md). Summary:
 5. Tool behavior that changes agent control flow needs at least one `tests/agent/` case.
 6. Agent tests cover control-flow classes, not every tool sequence. Keep tool/provider/state risks at their owning boundary.
 7. `agent/` and `cli/` titles must read as product behavior; `tools/`, `providers/`, and `invariants/` titles should read as tool, protocol, or architecture contracts. Keep fixture/protocol words out of `agent/` and `cli/` test titles.
-8. Coverage gaps require triage, not automatic tests: cover reachable behavior, remove unreachable branches, document necessary guards, and never mock impossible states just to satisfy coverage.
+8. Coverage gaps require triage, not automatic tests: cover reachable behavior, remove unreachable branches, document necessary guards, and never mock impossible states just to satisfy coverage. See [TESTING.md Coverage Triage](TESTING.md#coverage-triage) for entrypoint, state, and safety-boundary rules.
 9. Control-flow tests must include uncooperative callees when the caller owns user-visible recovery, retry, timeout, cleanup, or exit behavior. Feature flags and environment switches are acceptable only when they represent documented runtime behavior; test-only pathological behavior must be injected through test boundaries, not hidden in production CLI/provider code.
