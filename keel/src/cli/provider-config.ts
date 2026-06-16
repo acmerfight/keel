@@ -237,7 +237,7 @@ export function resolveProvider(
         "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
       );
     }
-    const model = runtime.env("QWEN_MODEL") ?? "qwen3.7-plus";
+    const model = runtime.env("QWEN_MODEL") ?? "qwen3.7-max";
     return {
       provider: createQwenProvider({
         apiKey,
@@ -281,7 +281,7 @@ export function requireKnownCostModel(resolved: ResolvedProvider): CostModel {
 
   if (resolved.provider.id === "qwen") {
     providerConfigError(
-      `Error: cost tracking is not supported for Qwen model "${resolved.model}" because its official pricing is tiered by per-request input tokens.`,
+      `Error: cost tracking is only supported for Qwen model "qwen3.7-max"; configured QWEN_MODEL="${resolved.model}".`,
     );
   }
 

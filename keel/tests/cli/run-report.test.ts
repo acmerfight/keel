@@ -215,7 +215,7 @@ describe("CLI Run Report", () => {
     }
   });
 
-  test(`Given Qwen Max is selected with single-tier pricing,
+  test(`Given Qwen is selected with its default cost-supported model,
     When the CLI writes a run report,
     Then the report records the Qwen provider, model, and cost`, async () => {
     // Given
@@ -249,7 +249,6 @@ describe("CLI Run Report", () => {
           KEEL_PROVIDER: "qwen",
           DASHSCOPE_API_KEY: "test-key",
           QWEN_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-          QWEN_MODEL: "qwen3.7-max",
         },
       });
 
@@ -268,7 +267,7 @@ describe("CLI Run Report", () => {
     }
   });
 
-  test(`Given Qwen's default model uses tiered pricing,
+  test(`Given Qwen is configured with an unsupported cost model,
     When the CLI is asked to write a run report,
     Then it rejects the run before writing misleading cost data`, async () => {
     // Given
@@ -282,6 +281,7 @@ describe("CLI Run Report", () => {
         env: {
           KEEL_PROVIDER: "qwen",
           DASHSCOPE_API_KEY: "test-key",
+          QWEN_MODEL: "qwen3.7-plus",
         },
       });
 
@@ -289,7 +289,7 @@ describe("CLI Run Report", () => {
       expect(result.exitCode).not.toBe(0);
       expect(result.stdout).toBe("");
       expect(result.stderr).toBe(
-        'Error: cost tracking is not supported for Qwen model "qwen3.7-plus" because its official pricing is tiered by per-request input tokens.\n',
+        'Error: cost tracking is only supported for Qwen model "qwen3.7-max"; configured QWEN_MODEL="qwen3.7-plus".\n',
       );
       await expect(readFile(reportPath, "utf8")).rejects.toMatchObject({
         code: "ENOENT",
