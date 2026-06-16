@@ -245,6 +245,139 @@ describe("Interactive Session", () => {
     }
   });
 
+  test(`Given an interactive user approves bash once,
+    When the assistant repeats the same command,
+    Then the session asks for approval again`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command =
+      "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
+    const provider = createFakeProvider([
+      fakeBashResponse(command),
+      fakeBashResponse(command),
+      fakeResponse("Ran twice."),
+    ]);
+    const input = new PassThrough();
+    let stderr = "";
+    let approvalPrompts = 0;
+    const session = runInteractiveSession({
+      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+        if (text.includes("Approve bash command")) {
+          approvalPrompts++;
+          queueMicrotask(() => {
+            input.write("y\n");
+            if (approvalPrompts === 2) {
+              input.end();
+            }
+          });
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("run twice\n");
+
+      // Then
+      await session;
+      expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
+      expect(stderr.match(/Approve bash command/g)).toHaveLength(2);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the interactive bash policy is deny,
+    When the assistant requests a shell command,
+    Then the command is rejected before execution`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command =
+      "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
+    const provider = createFakeProvider([
+      fakeBashResponse(command),
+      fakeResponse("Shell denied."),
+    ]);
+    const input = new PassThrough();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { allowBash: true, bashPolicy: "deny" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.end("run shell\n");
+
+      // Then
+      await session;
+      await expect(
+        readFile(join(workspace, "created.txt"), "utf8"),
+      ).rejects.toThrow("ENOENT");
+      expect(stdout).toBe("Shell denied.\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a bash approval answer was typed before the prompt,
     When the command asks for permission,
     Then the queued line is not consumed as approval`, async () => {
