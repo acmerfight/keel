@@ -56,6 +56,8 @@ export interface RunAgentOptions {
   readonly stopPolicy?: AgentStopPolicy;
 }
 
+type SteeringMessage = Extract<Message, { readonly role: "user" }>;
+
 export interface RunAgentTurnOptions {
   readonly workspace: string;
   readonly provider: LLMProvider;
@@ -68,6 +70,9 @@ export interface RunAgentTurnOptions {
   readonly allowBash?: boolean;
   readonly bashPermission?: BashPermissionPolicy;
   readonly stopPolicy?: AgentStopPolicy;
+  readonly drainSteeringMessages?: () =>
+    | readonly SteeringMessage[]
+    | Promise<readonly SteeringMessage[]>;
 }
 
 interface AgentTurn {
@@ -211,6 +216,7 @@ export async function* runAgentTurn(
     allowBash = false,
     bashPermission,
     stopPolicy = defaultStopPolicy(),
+    drainSteeringMessages,
   } = options;
   const priorToolCalls = priorToolCallsFromMessages(messages);
   let totalUsage: Usage = {
@@ -334,6 +340,10 @@ export async function* runAgentTurn(
         toolCallId: toolCall.id,
         content: execution.content,
       });
+    }
+
+    if (drainSteeringMessages !== undefined && !signal.aborted) {
+      messages.push(...(await drainSteeringMessages()));
     }
   }
 }

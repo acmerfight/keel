@@ -71,6 +71,7 @@ interface LineReader {
     sequence: number,
     signal: AbortSignal,
   ) => Promise<string | null>;
+  readonly drainLinesAfter: (sequence: number) => readonly string[];
   readonly sequence: () => number;
 }
 
@@ -177,6 +178,19 @@ function createLineReader(
         freshWaiters.push(waiter);
       });
     },
+    drainLinesAfter: (sequence) => {
+      const drained: string[] = [];
+      for (let index = 0; index < queued.length; ) {
+        const queuedLine = queued[index];
+        if (queuedLine !== undefined && queuedLine.sequence > sequence) {
+          queued.splice(index, 1);
+          drained.push(queuedLine.line);
+          continue;
+        }
+        index++;
+      }
+      return drained;
+    },
     sequence: () => currentSequence,
   };
 }
@@ -272,6 +286,14 @@ export async function runInteractiveSession(
     options.writeStderr,
   );
   let activeAbortController: AbortController | null = null;
+  const restoredInputLines: string[] = [];
+  const restoreDrainedInput = (lines: string[]) => {
+    if (lines.length === 0) {
+      return;
+    }
+    restoredInputLines.push(...lines);
+    lines.length = 0;
+  };
   const abortActiveTurn = () => {
     if (activeAbortController !== null) {
       if (activeAbortController.signal.aborted) {
@@ -289,12 +311,16 @@ export async function runInteractiveSession(
   options.onSigint(abortActiveTurn);
   try {
     for (;;) {
-      const rawLine = await lineReader.readLine();
+      const restoredLine = restoredInputLines.shift();
+      const rawLine =
+        restoredLine === undefined ? await lineReader.readLine() : restoredLine;
       if (rawLine === null) break;
       const userMessage = rawLine.trim();
       if (userMessage === "") continue;
       resolved ??= options.resolveProvider(userMessage);
       const messageCountBeforeTurn = messages.length;
+      const turnStartSequence = lineReader.sequence();
+      const drainedSteeringLines: string[] = [];
       const turnAbortController = new AbortController();
       activeAbortController = turnAbortController;
       messages.push({ role: "user", content: userMessage });
@@ -318,10 +344,19 @@ export async function runInteractiveSession(
                 },
               }
             : {}),
+          drainSteeringMessages: () => {
+            const steeringLines = lineReader
+              .drainLinesAfter(turnStartSequence)
+              .map((line) => line.trim())
+              .filter((line) => line !== "");
+            drainedSteeringLines.push(...steeringLines);
+            return steeringLines.map((content) => ({ role: "user", content }));
+          },
         });
         const finalEnd = await options.printAgentEvents(stream);
         if (turnAbortController.signal.aborted) {
           messages.length = messageCountBeforeTurn;
+          restoreDrainedInput(drainedSteeringLines);
           options.writeStdout("\n");
           continue;
         }
@@ -339,6 +374,7 @@ export async function runInteractiveSession(
           throw error;
         }
         messages.length = messageCountBeforeTurn;
+        restoreDrainedInput(drainedSteeringLines);
         options.writeStdout("\n");
       } finally {
         activeAbortController = null;
