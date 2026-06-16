@@ -139,6 +139,15 @@ function formatGrepResult(
     readonly partial: boolean;
   },
 ): ToolResult {
+  if (matches.length === 0) {
+    return {
+      content: [
+        `No matches found for "${pattern}"`,
+        ...(options.partial ? [RIPGREP_INACCESSIBLE_WARNING] : []),
+      ].join("\n"),
+    };
+  }
+
   const output = [...matches];
 
   if (options.truncated) {
@@ -148,15 +157,6 @@ function formatGrepResult(
   }
   if (options.partial) {
     output.push(RIPGREP_INACCESSIBLE_WARNING);
-  }
-
-  if (output.length === 0 || (matches.length === 0 && options.partial)) {
-    return {
-      content: [
-        `No matches found for "${pattern}"`,
-        ...(options.partial ? [RIPGREP_INACCESSIBLE_WARNING] : []),
-      ].join("\n"),
-    };
   }
 
   return { content: output.join("\n") };
@@ -208,19 +208,6 @@ async function runRipgrepProcess(
       stdio: ["ignore", "pipe", "pipe"],
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
-
-    if (child.stdout === null || child.stderr === null) {
-      child.kill();
-      settle(() => {
-        rejectResult(
-          new KeelError(
-            "tool_unavailable",
-            "grep failed: ripgrep streams are unavailable",
-          ),
-        );
-      });
-      return;
-    }
 
     const stdout = createInterface({ input: child.stdout });
     let timeout: NodeJS.Timeout | undefined;
