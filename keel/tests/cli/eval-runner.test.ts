@@ -321,6 +321,13 @@ describe("Eval Runner", () => {
         usage: { ...VALID_REPORT.usage, inputTokens: 1.5 },
       }),
     },
+    {
+      name: "negative cost",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        costUsd: -0.01,
+      }),
+    },
   ])(`Given the agent writes a $name report,
     When the eval runner reads the report,
     Then it records a crashed result`, async ({ reportContent }) => {
