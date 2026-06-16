@@ -318,7 +318,7 @@ function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
       continue;
     }
 
-    userMessage = arg;
+    userMessage = args.slice(index).join(" ");
     break;
   }
 

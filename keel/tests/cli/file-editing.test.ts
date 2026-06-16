@@ -340,6 +340,35 @@ describe("CLI File Editing", () => {
     }
   });
 
+  test(`Given an unquoted multi-word one-shot request,
+    When user runs the CLI with separate prompt words,
+    Then the full request is sent to the agent`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-edit-"));
+    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+
+    try {
+      // When
+      const result = await runCli(
+        ["replace", "old", "with", "new", "in", "note.txt"],
+        {
+          cwd: workspace,
+          env: { KEEL_PROVIDER: "fake" },
+        },
+      );
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello new world\n",
+      );
+      expect(result.stdout).toBe("Edited note.txt\n");
+      expect(result.stderr).toBe("Tool: edit note.txt\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the configured provider requests a file edit,
     When user asks the CLI to replace text in a workspace file,
     Then the file is updated on disk`, async () => {
