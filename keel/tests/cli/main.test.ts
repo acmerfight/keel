@@ -522,6 +522,28 @@ describe("CLI Main", () => {
     );
   });
 
+  test.each([
+    ["--allow-bash", "--bash-policy", "ask", "hello"],
+    ["--bash-policy=ask", "--allow-bash", "hello"],
+  ])(`Given conflicting bash policy options %s %s,
+    When the CLI main parses the request,
+    Then it returns a conflict validation error`, async (...args) => {
+    // Given
+    const fixture = createRuntime(args, {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.\n",
+    );
+  });
+
   test(`Given bash policy is configured with equals syntax,
     When the CLI main runs a text request,
     Then it accepts the policy option`, async () => {

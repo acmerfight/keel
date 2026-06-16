@@ -1,7 +1,9 @@
+export type BashPolicy = "ask" | "deny" | "trusted";
+
 export interface BashPermissionRequest {
   readonly command: string;
   readonly cwd: string;
-  readonly toolCallId: string;
+  readonly signal: AbortSignal;
 }
 
 export type BashPermissionDecision =

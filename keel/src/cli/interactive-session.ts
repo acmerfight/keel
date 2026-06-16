@@ -6,11 +6,10 @@ import type { CostModel } from "../core/cost.ts";
 import type { LLMProvider, Message } from "../llm/types.ts";
 import {
   type BashPermissionPolicy,
+  type BashPolicy,
   createSessionBashPermissionPolicy,
   denyBashPermissionPolicy,
 } from "../permissions/bash.ts";
-
-type BashPolicy = "ask" | "deny" | "trusted";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 
@@ -51,7 +50,10 @@ export interface InteractiveSessionOptions {
 
 interface LineReader {
   readonly readLine: () => Promise<string | null>;
-  readonly readLineAfter: (sequence: number) => Promise<string | null>;
+  readonly readLineAfter: (
+    sequence: number,
+    signal: AbortSignal,
+  ) => Promise<string | null>;
   readonly sequence: () => number;
 }
 
@@ -74,6 +76,8 @@ function createLineReader(
   let closed = false;
   let currentSequence = 0;
 
+  // Approval answers must be typed after the approval prompt appears. The
+  // sequence lets approval waits ignore already-queued user messages.
   input.on("line", (line) => {
     currentSequence++;
     const queuedLine = { sequence: currentSequence, line };
@@ -122,7 +126,7 @@ function createLineReader(
         waiters.push(resolve);
       });
     },
-    readLineAfter: (sequence) => {
+    readLineAfter: (sequence, signal) => {
       const queuedIndex = queued.findIndex((line) => line.sequence > sequence);
       if (queuedIndex >= 0) {
         const queuedLine = queued[queuedIndex];
@@ -133,7 +137,27 @@ function createLineReader(
         return Promise.resolve(null);
       }
       return new Promise((resolve) => {
-        freshWaiters.push({ after: sequence, resolve });
+        if (signal.aborted) {
+          resolve(null);
+          return;
+        }
+        let waiter: LineWaiter;
+        const onAbort = () => {
+          const index = freshWaiters.indexOf(waiter);
+          if (index >= 0) {
+            freshWaiters.splice(index, 1);
+          }
+          resolve(null);
+        };
+        waiter = {
+          after: sequence,
+          resolve: (line) => {
+            signal.removeEventListener("abort", onAbort);
+            resolve(line);
+          },
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        freshWaiters.push(waiter);
       });
     },
     sequence: () => currentSequence,
@@ -186,11 +210,14 @@ function interactiveBashPermissionPolicy(
           "[y] allow once, [s] allow for session, [n] deny: ",
         ].join("\n"),
       );
-      const rawAnswer = await lineReader.readLineAfter(promptSequence);
+      const rawAnswer = await lineReader.readLineAfter(
+        promptSequence,
+        request.signal,
+      );
       if (rawAnswer === null) {
         return {
           type: "deny",
-          message: "Input closed before the command was approved.",
+          message: "Command approval was interrupted or input closed.",
         };
       }
       const answer = rawAnswer.trim().toLowerCase();

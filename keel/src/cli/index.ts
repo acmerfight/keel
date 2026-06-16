@@ -18,10 +18,7 @@ import {
 } from "../llm/providers/kimi.ts";
 import { createQwenProvider, qwenCostModel } from "../llm/providers/qwen.ts";
 import type { LLMProvider, ToolCall } from "../llm/types.ts";
-import {
-  type BashPermissionPolicy,
-  denyBashPermissionPolicy,
-} from "../permissions/bash.ts";
+import type { BashPermissionPolicy, BashPolicy } from "../permissions/bash.ts";
 import { createFakeProvider, fakeResponse } from "../testing/fake-provider.ts";
 import {
   type InteractiveResolvedProvider,
@@ -47,8 +44,6 @@ interface EvalCliArgs {
   readonly taskId?: string;
   readonly check: boolean;
 }
-
-type BashPolicy = "ask" | "deny" | "trusted";
 
 type CliArgs =
   | { readonly command: "doctor" }
@@ -106,7 +101,7 @@ const USAGE = [
   "       keel /undo",
   "",
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
-  "--bash-policy controls shell command approval: ask requires interactive approval, deny disables bash, trusted runs commands without per-command approval.",
+  "--bash-policy controls shell command approval: ask requires interactive approval, deny disables bash, trusted runs commands without per-command approval. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
   "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
   "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY, optional *_BASE_URL and *_MODEL.",
   "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
@@ -235,6 +230,8 @@ function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
 
   let allowBash = false;
   let bashPolicy: BashPolicy = "deny";
+  let allowBashOptionSeen = false;
+  let bashPolicyOptionSeen = false;
   let maxCostUsd: number | undefined;
   let reportFile: string | undefined;
   let userMessage: string | undefined;
@@ -250,14 +247,26 @@ function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
     }
 
     if (arg === "--allow-bash") {
+      if (bashPolicyOptionSeen) {
+        return parseError(
+          "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.",
+        );
+      }
+      allowBashOptionSeen = true;
       allowBash = true;
       bashPolicy = "trusted";
       continue;
     }
 
     if (arg === "--bash-policy") {
+      if (allowBashOptionSeen) {
+        return parseError(
+          "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.",
+        );
+      }
       const parsed = parseBashPolicy(args[index + 1]);
       if (!parsed.ok) return parsed;
+      bashPolicyOptionSeen = true;
       bashPolicy = parsed.value;
       allowBash = parsed.value !== "deny";
       skipNext = true;
@@ -265,8 +274,14 @@ function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
     }
 
     if (arg.startsWith(bashPolicyPrefix)) {
+      if (allowBashOptionSeen) {
+        return parseError(
+          "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.",
+        );
+      }
       const parsed = parseBashPolicy(arg.slice(bashPolicyPrefix.length));
       if (!parsed.ok) return parsed;
+      bashPolicyOptionSeen = true;
       bashPolicy = parsed.value;
       allowBash = parsed.value !== "deny";
       continue;
@@ -728,7 +743,7 @@ function oneShotBashPermissionPolicy(
     };
   }
   if (bashPolicy === "deny") {
-    return denyBashPermissionPolicy;
+    return undefined;
   }
   return undefined;
 }

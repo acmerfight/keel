@@ -273,7 +273,7 @@ async function executeToolCall(
       if (!allowBash) {
         return {
           content:
-            "Tool failed: bash failed: shell commands are disabled. Re-run with --allow-bash to enable them.",
+            "Tool failed: bash failed: shell commands are disabled. Re-run with --bash-policy ask, --bash-policy trusted, or --allow-bash to enable them.",
           ok: false,
         };
       }
@@ -282,7 +282,7 @@ async function executeToolCall(
         const decision = await bashPermission.review({
           command: toolCall.command,
           cwd: workspace,
-          toolCallId: toolCall.id,
+          signal,
         });
         if (decision.type === "deny") {
           return {

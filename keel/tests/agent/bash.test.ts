@@ -87,7 +87,7 @@ describe("Bash Commands", () => {
         role: "tool",
         toolCallId: "write_file",
         content:
-          "Tool failed: bash failed: shell commands are disabled. Re-run with --allow-bash to enable them.",
+          "Tool failed: bash failed: shell commands are disabled. Re-run with --bash-policy ask, --bash-policy trusted, or --allow-bash to enable them.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -385,7 +385,7 @@ describe("Bash Commands", () => {
     const request = {
       command: "printf denied",
       cwd: process.cwd(),
-      toolCallId: "deny_policy",
+      signal: freshSignal(),
     };
 
     // When
