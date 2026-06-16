@@ -404,10 +404,12 @@ describe("Interactive Session", () => {
       writeStderr: (text) => {
         stderr += text;
         if (text.includes("Approve bash command")) {
-          for (const handler of [...sigintHandlers]) {
-            handler();
-          }
-          input.end();
+          queueMicrotask(() => {
+            for (const handler of [...sigintHandlers]) {
+              handler();
+            }
+            input.end();
+          });
         }
       },
       onSigint: (handler) => {

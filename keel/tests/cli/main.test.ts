@@ -524,6 +524,7 @@ describe("CLI Main", () => {
 
   test.each([
     ["--allow-bash", "--bash-policy", "ask", "hello"],
+    ["--allow-bash", "--bash-policy=ask", "hello"],
     ["--bash-policy=ask", "--allow-bash", "hello"],
   ])(`Given conflicting bash policy options %s %s,
     When the CLI main parses the request,
