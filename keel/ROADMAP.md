@@ -112,7 +112,8 @@ Known limits that shape the priorities below:
    recovery, repeated-string disambiguation, test-preserving bug fixes,
    and pattern-following feature additions. The next work is corpus growth
    from real daily-use failures, transcript review tooling, and cross-agent
-   same-model comparison after P0-2.
+   same-model comparison after **General provider/model configuration and
+   same-model comparisons**.
 5. **Completed P0 foundations.** ✅ Done/partial (2026-06): provider retry
    with backoff now handles request setup failures and pre-stream HTTP
    408 / 409 / 429 / 5xx, honors `retry-after-ms` / `Retry-After`, emits a
@@ -159,8 +160,8 @@ Not needed to switch; revisit once P0/P1 are done.
 - Plan mode
 - IDE integration
 - OS-level sandboxing for bash (Seatbelt on macOS, bubblewrap on Linux —
-  the codex pattern), upgrading P0-5's approval flow from trust to
-  enforcement
+  the codex pattern), upgrading **Bash approval hardening** from approval
+  to enforcement
 - Prompt-cache-aware context layout (inject dynamic state at turn
   boundaries, keep the prefix stable — the codex/kimi pattern; shows up
   directly in the token eval metric)
@@ -186,7 +187,7 @@ sanity-check any slice design against prior art.
 | Eval infra | Internal to Anthropic; none shipped | Mock-API integration suite + rollout traces | Deterministic harness tests | Faux-provider suite | HTTP-cassette VCR tests |
 
 None of the five ships a user-facing per-task quality eval suite of the
-kind P0-6 describes. That is keel's open lane.
+kind **Harness eval measurement loop** describes. That is keel's open lane.
 
 ## Non-Goals
 
