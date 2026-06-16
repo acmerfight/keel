@@ -61,14 +61,19 @@ Known limits that shape the priorities below:
 - Interactive sessions are process-local only: no mid-run steering, no
   resume/persistence, no TUI, no session-level report, and cost limits apply
   to each submitted turn rather than the whole interactive session.
-- Provider selection supports DeepSeek (`deepseek-v4-flash`) and Kimi
-  (`kimi-k2.6`) through environment configuration; broader provider/model
-  configuration is still missing.
-- No provider retry: the first 429 or 5xx kills the run.
+- Provider selection supports DeepSeek (`deepseek-v4-flash`), Kimi
+  (`kimi-k2.6`), and Qwen (`qwen3.7-plus` by default) through environment
+  configuration; broader provider/model configuration is still missing.
+- Provider retry/backoff is in place for request setup failures and
+  pre-stream HTTP 408 / 409 / 429 / 5xx responses, including retry notices,
+  `retry-after-ms`, `Retry-After`, per-wait ceilings, and a total retry
+  delay budget. Mid-stream failures and context overflow still fail the
+  turn; overflow recovery belongs to compaction, not provider retry.
 - Tool calls execute strictly sequentially.
 - Exact-match single-string edit only.
 - Eval results compare keel across versions; cross-agent same-model
-  comparisons still wait on P0-2's frontier/multi-provider work.
+  comparisons still wait on a general provider/model configuration surface
+  and a larger real-task corpus.
 
 ## P0 — Blocks daily use or makes the quality goal unfalsifiable
 
@@ -76,69 +81,62 @@ Known limits that shape the priorities below:
    now starts a process-local interactive session; a user can send two
    related messages, and the second answer uses context from the first.
    Remaining work: mid-run steering (every surveyed harness buffers
-   mid-run user input and injects it at a turn boundary), persistence /
-   resume, and clearer interactive UX. Real coding is conversational:
+   mid-run user input and injects it at a turn boundary) and clearer
+   interactive UX. Real coding is conversational:
    follow-ups, corrections, "now also fix the tests" — including while a
    run is in progress. Daily use also generates the real-task corpus the
-   eval suite (P0-6) needs.
-2. **Frontier-model provider.** ✅ Partial (2026-06): Kimi's
-   OpenAI-compatible API is wired through `KEEL_PROVIDER=kimi`, with
-   `KIMI_API_KEY`, `KIMI_BASE_URL`, and `KIMI_MODEL` selecting
-   `kimi-k2.6` by default. Remaining work is a general provider/model
-   configuration surface and additional frontier providers. This carries
-   double weight: daily use needs frontier models, and proving harness
-   superiority requires running the **same model** as Claude Code / Codex /
-   Kimi Code in an A/B comparison. Slice test: *a user sets a different
-   provider key and the same prompt runs end-to-end.*
-3. **Provider retry with backoff.** A transient 429/5xx currently kills
-   the whole run; keel already classifies these errors but never retries.
-   Every reference harness retries with exponential backoff (opencode
-   also honors `Retry-After`). Context overflow must be excluded from
-   retry — it needs compaction, not repetition. Slice test: *a run that
-   hits one 429 completes anyway; the user sees a retry notice, not a
-   crash.*
-4. **Survive medium tasks.** ✅ Done (2026-06): the turn cap is 64, and
-   reaching it triggers a final summary turn ("what was done / what
-   remains") instead of a thrown error. Full compaction is P1; this
-   slice was the bridge.
-5. **Per-command bash approval.** ✅ Partial (2026-06):
-   `--bash-policy ask` prompts before each new bash command in
-   interactive sessions, supports one-shot and session-scoped approval,
-   and fails closed for one-shot or non-TTY runs that cannot ask the user
-   through a real terminal prompt.
-   `--allow-bash` remains the explicit trusted compatibility mode. The
-   remaining work is richer command parsing/risk classification, safer
-   prefix approvals beyond exact command + cwd, persistent rules, and
-   eventually an OS sandbox (P2). Slice test: *the agent proposes
-   `pnpm test`, the user approves that command for the session, and a
-   disallowed command stays blocked.*
-6. **Harness eval baseline.** ✅ Baseline done (2026-06): `keel eval`
+   eval suite needs.
+2. **General provider/model configuration and same-model comparisons.**
+   ✅ Partial (2026-06): DeepSeek, Kimi, and Qwen are wired through
+   `KEEL_PROVIDER`, provider-specific API keys, base URLs, and model env
+   vars. Remaining work is a general provider/model configuration surface,
+   additional frontier providers when needed, and a reproducible way to run
+   the **same model** as Claude Code / Codex / Kimi Code in A/B evals. This
+   carries double weight: daily use needs frontier models, and the harness
+   quality goal is unfalsifiable without same-model comparisons. Slice test:
+   *a user selects a provider/model outside the built-in defaults and the
+   same prompt runs end-to-end with a report that identifies that model.*
+3. **Context compaction and overflow recovery.** Standard equipment in all
+   five reference harnesses, not a differentiator: token-threshold trigger,
+   summarize old turns, never cut inside a tool-call/result pair, recover
+   from provider overflow errors by compacting and retrying once. Directly
+   drives long-task success rate and is now the correct home for the
+   "context overflow must not be blindly retried" work that provider retry
+   intentionally excludes.
+4. **Harness eval measurement loop.** ✅ Baseline done (2026-06): `keel eval`
    runs deterministic outcome-graded task directories from `evals/tasks`,
    appends per-trial JSONL results, supports multi-trial runs, and
    validates each task's reference solution via `--check`. The current
    seed suite covers exact edits, search/edit, multi-file rename, new file
    creation, bash-driven test fixing, long-file editing, stale edit
    recovery, repeated-string disambiguation, test-preserving bug fixes,
-   and pattern-following feature additions. The next work here is corpus
-   growth from real daily-use failures, transcript review tooling, and
-   cross-agent same-model comparison after P0-2.
+   and pattern-following feature additions. The next work is corpus growth
+   from real daily-use failures, transcript review tooling, and cross-agent
+   same-model comparison after P0-2.
+5. **Completed P0 foundations.** ✅ Done/partial (2026-06): provider retry
+   with backoff now handles request setup failures and pre-stream HTTP
+   408 / 409 / 429 / 5xx, honors `retry-after-ms` / `Retry-After`, emits a
+   user-visible retry notice, respects retry budgets, and leaves mid-stream
+   replay and overflow recovery out of scope. The 64-turn cap now ends with
+   a summary instead of a thrown error. `--bash-policy ask` supports
+   per-command approval in interactive sessions and fails closed when no
+   approval UI is available. These should inform future slices but no longer
+   determine the next P0 pick.
 
 ## P1 — Daily friction and the harness-quality competitive surface
 
 Usable without these, but each removes a reason to fall back to
 Codex/Claude Code — or directly moves the eval numbers.
 
-- **Context compaction.** Standard equipment in all five reference
-  harnesses, not a differentiator: token-threshold trigger, summarize
-  old turns, never cut inside a tool-call/result pair, recover from
-  provider overflow errors by compacting and retrying once. Directly
-  drives long-task success rate.
 - **Edit reliability.** Exact-match single edit fails on whitespace and
   staleness. References use tiered fallback matching (opencode: 9
   replacer levels; pi: Unicode/whitespace-normalized fuzzy match),
   multi-edit per file, and enforced read-before-edit (Claude Code
   rejects edits to files the agent has not read this session). Edit
   success rate is a tracked eval sub-metric.
+- **Project context injection** — read the project's AGENTS.md (or
+  equivalent) into the system prompt.
+- **File discovery tools** — `glob`/`ls`; today the model can only grep.
 - **Parallel tool execution.** Keel runs tool calls strictly
   sequentially. References parallelize reads while serializing writes
   via resource conflict rules (kimi's scheduler, codex's read/write
@@ -146,9 +144,9 @@ Codex/Claude Code — or directly moves the eval numbers.
 - **Session persistence / resume.** All references persist sessions as
   append-only logs (JSONL / event sourcing) and rebuild state on resume.
   Also the foundation for whole-task undo and future sub-agents.
-- **Project context injection** — read the project's AGENTS.md (or
-  equivalent) into the system prompt.
-- **File discovery tools** — `glob`/`ls`; today the model can only grep.
+- **Bash approval hardening** — richer command parsing/risk
+  classification, safer prefix approvals beyond exact command + cwd,
+  and persistent approval rules. OS sandboxing remains P2.
 - **Whole-task undo** — `/undo` restores only the last edit checkpoint;
   a failed task should roll back as a unit.
 
