@@ -6,12 +6,12 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runInteractiveSession } from "../../src/cli/interactive-session.ts";
 import type { CostModel } from "../../src/core/cost.ts";
-import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 import {
   createFakeProvider,
   fakeBashResponse,
   fakeResponse,
-} from "../../src/testing/fake-provider.ts";
+} from "../../src/llm/providers/fake.ts";
+import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,

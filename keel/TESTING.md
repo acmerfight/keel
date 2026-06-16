@@ -54,7 +54,7 @@ tests/
 
 ## Test Infrastructure
 
-Test support code, such as fake providers and fixture factories, lives in `src/testing/`.
+Test support code, such as CLI harnesses and fixture factories, lives in `src/testing/`.
 This directory is excluded from coverage reports.
 
 ## Verification

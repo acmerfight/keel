@@ -3,13 +3,13 @@ import {
   createDeepseekProvider,
   DEEPSEEK_V4_FLASH_COST_MODEL,
 } from "../llm/providers/deepseek.ts";
+import { createFakeProvider, fakeResponse } from "../llm/providers/fake.ts";
 import {
   createKimiProvider,
   KIMI_K2_6_COST_MODEL,
 } from "../llm/providers/kimi.ts";
 import { createQwenProvider, qwenCostModel } from "../llm/providers/qwen.ts";
 import type { LLMProvider } from "../llm/types.ts";
-import { createFakeProvider, fakeResponse } from "../testing/fake-provider.ts";
 import type { InteractiveResolvedProvider } from "./interactive-session.ts";
 
 interface CliEditRequest {

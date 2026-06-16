@@ -1,4 +1,4 @@
-import type { LLMProvider, Usage } from "../llm/types.ts";
+import type { LLMProvider, Usage } from "../types.ts";
 
 interface FakeTextResponse {
   readonly type: "text";

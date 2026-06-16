@@ -8,7 +8,7 @@ import {
   createFakeProvider,
   fakeEditResponse,
   fakeResponse,
-} from "../../src/testing/fake-provider.ts";
+} from "../../src/llm/providers/fake.ts";
 
 async function collect(
   source: AsyncIterable<AgentEvent>,
