@@ -12,17 +12,35 @@ import {
 } from "../permissions/bash.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
+export type ProviderId = "fake" | "deepseek" | "kimi" | "qwen";
 
 interface InteractiveSessionArgs {
   readonly bashMode: BashMode;
   readonly maxCostUsd?: number;
 }
 
-export interface InteractiveResolvedProvider {
+interface InteractiveResolvedProviderBase {
   readonly provider: LLMProvider;
   readonly model: string;
-  readonly costModel: CostModel | null;
 }
+
+export type InteractiveResolvedProvider =
+  | (InteractiveResolvedProviderBase & {
+      readonly providerId: "fake";
+      readonly costModel: CostModel;
+    })
+  | (InteractiveResolvedProviderBase & {
+      readonly providerId: "deepseek";
+      readonly costModel: CostModel;
+    })
+  | (InteractiveResolvedProviderBase & {
+      readonly providerId: "kimi";
+      readonly costModel: CostModel | null;
+    })
+  | (InteractiveResolvedProviderBase & {
+      readonly providerId: "qwen";
+      readonly costModel: CostModel | null;
+    });
 
 export interface InteractiveSessionOptions {
   readonly cliArgs: InteractiveSessionArgs;

@@ -145,6 +145,7 @@ describe("Interactive Session", () => {
         resolvedProviders++;
         return {
           provider,
+          providerId: "fake",
           model: "fake",
           costModel: ZERO_COST_MODEL,
         };
@@ -213,6 +214,7 @@ describe("Interactive Session", () => {
       },
       resolveProvider: () => ({
         provider,
+        providerId: "fake",
         model: "fake",
         costModel: ZERO_COST_MODEL,
       }),
@@ -286,6 +288,7 @@ describe("Interactive Session", () => {
       },
       resolveProvider: () => ({
         provider,
+        providerId: "fake",
         model: "fake",
         costModel: ZERO_COST_MODEL,
       }),
@@ -366,6 +369,7 @@ describe("Interactive Session", () => {
       },
       resolveProvider: () => ({
         provider,
+        providerId: "fake",
         model: "fake",
         costModel: ZERO_COST_MODEL,
       }),
@@ -450,6 +454,7 @@ describe("Interactive Session", () => {
       },
       resolveProvider: () => ({
         provider,
+        providerId: "fake",
         model: "fake",
         costModel: ZERO_COST_MODEL,
       }),
@@ -526,6 +531,7 @@ describe("Interactive Session", () => {
       },
       resolveProvider: () => ({
         provider,
+        providerId: "fake",
         model: "fake",
         costModel: ZERO_COST_MODEL,
       }),
@@ -611,6 +617,7 @@ describe("Interactive Session", () => {
       },
       resolveProvider: () => ({
         provider,
+        providerId: "fake",
         model: "fake",
         costModel: ZERO_COST_MODEL,
       }),
@@ -684,6 +691,7 @@ describe("Interactive Session", () => {
       },
       resolveProvider: () => ({
         provider,
+        providerId: "fake",
         model: "fake",
         costModel: ZERO_COST_MODEL,
       }),
@@ -758,6 +766,7 @@ describe("Interactive Session", () => {
       },
       resolveProvider: () => ({
         provider,
+        providerId: "fake",
         model: "fake",
         costModel: ZERO_COST_MODEL,
       }),
@@ -844,6 +853,7 @@ describe("Interactive Session", () => {
       },
       resolveProvider: () => ({
         provider,
+        providerId: "fake",
         model: "fake",
         costModel: ZERO_COST_MODEL,
       }),
@@ -907,6 +917,7 @@ describe("Interactive Session", () => {
       },
       resolveProvider: () => ({
         provider,
+        providerId: "fake",
         model: "fake",
         costModel: ZERO_COST_MODEL,
       }),
@@ -1014,6 +1025,7 @@ describe("Interactive Session", () => {
       },
       resolveProvider: () => ({
         provider,
+        providerId: "fake",
         model: "fake",
         costModel: ZERO_COST_MODEL,
       }),
