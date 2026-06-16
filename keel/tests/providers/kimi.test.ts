@@ -692,6 +692,60 @@ describe("Kimi Provider", () => {
           return;
         }
 
+        if (userMessage === "negative-tool-call-index") {
+          writeSseResponse(res, [
+            sseData({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        ...toolCallDelta(
+                          "read",
+                          JSON.stringify({ path: "note.txt" }),
+                        ),
+                        index: -1,
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            `${sseData({
+              choices: [{ delta: {}, finish_reason: "tool_calls" }],
+              usage: { prompt_tokens: 20, completion_tokens: 6 },
+            })}data: [DONE]\n\n`,
+          ]);
+          return;
+        }
+
+        if (userMessage === "fractional-tool-call-index") {
+          writeSseResponse(res, [
+            sseData({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        ...toolCallDelta(
+                          "read",
+                          JSON.stringify({ path: "note.txt" }),
+                        ),
+                        index: 0.5,
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            `${sseData({
+              choices: [{ delta: {}, finish_reason: "tool_calls" }],
+              usage: { prompt_tokens: 20, completion_tokens: 6 },
+            })}data: [DONE]\n\n`,
+          ]);
+          return;
+        }
+
         if (userMessage === "tool-call-without-id") {
           writeSseResponse(res, [
             sseData({
@@ -1456,6 +1510,14 @@ describe("Kimi Provider", () => {
     );
     await expectProviderError(
       "tool-call-without-index",
+      "provider_protocol_error",
+    );
+    await expectProviderError(
+      "negative-tool-call-index",
+      "provider_protocol_error",
+    );
+    await expectProviderError(
+      "fractional-tool-call-index",
       "provider_protocol_error",
     );
     await expectProviderError(
