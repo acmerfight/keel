@@ -1074,6 +1074,100 @@ describe("Interactive Session", () => {
     ]);
   });
 
+  test(`Given an interactive steering message is queued before steering can be drained,
+    When the tool turn is cancelled,
+    Then the queued message becomes the next prompt`, async () => {
+    // Given
+    let turn = 0;
+    let abortQueued = false;
+    const observedUserContexts: string[][] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        turn++;
+        observedUserContexts.push(
+          options.messages
+            .filter((message) => message.role === "user")
+            .map((message) => message.content),
+        );
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "abort_before_drain_bash",
+            tool: "bash",
+            command: 'node -e "setTimeout(() => {}, 10000)"',
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "Queued prompt restored." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "trusted" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "tool_start" && !abortQueued) {
+            abortQueued = true;
+            input.write("queued after abort\n");
+            for (const handler of [...sigintHandlers]) {
+              handler();
+            }
+          } else if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (turn >= 2) {
+              input.end();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("run then abort\n");
+
+    // Then
+    await withTimeout(session, 5000, "queued prompt was not replayed");
+    expect(stdout).toBe("\nQueued prompt restored.\n");
+    expect(observedUserContexts).toEqual([
+      ["run then abort"],
+      ["queued after abort"],
+    ]);
+  });
+
   test(`Given multiple interrupted steering batches are restored,
     When later prompts continue,
     Then pending prompts keep their original order`, async () => {
