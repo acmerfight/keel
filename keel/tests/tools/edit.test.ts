@@ -16,6 +16,7 @@ function expectEditError(
   action: () => unknown,
   code: KeelErrorCode,
   message: string,
+  recovery?: string,
 ): void {
   try {
     action();
@@ -25,6 +26,9 @@ function expectEditError(
       name: "KeelError",
       code,
       message: expect.stringContaining(message),
+      ...(recovery !== undefined
+        ? { recovery: expect.stringContaining(recovery) }
+        : {}),
     });
   }
 }
@@ -280,6 +284,123 @@ describe("Edit Tool", () => {
       expect(await readFile(join(workspace, "keep.txt"), "utf8")).toBe(
         "new visible\n",
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit request targets a directory,
+    When the edit tool validates the target,
+    Then it rejects the path as a recoverable tool error`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await mkdir(join(workspace, "notes"));
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "notes", "old", "new"),
+        "tool_not_file",
+        "not a file",
+        "directory, not a file",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit request targets a binary file,
+    When the edit tool validates the target,
+    Then it rejects the file without rewriting bytes`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const filePath = join(workspace, "image.png");
+    const original = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]);
+    await writeFile(filePath, original);
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "image.png", "PNG", "text"),
+        "tool_binary_file",
+        "binary file",
+        "cannot be edited as text",
+      );
+      expect(await readFile(filePath)).toEqual(original);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit request targets a text-named PDF,
+    When the edit tool sniffs the target bytes,
+    Then it rejects the file by magic bytes without rewriting bytes`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const filePath = join(workspace, "document.txt");
+    const original = Buffer.from("%PDF-1.7\nold text\n");
+    await writeFile(filePath, original);
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "document.txt", "old", "new"),
+        "tool_binary_file",
+        "binary file",
+        "cannot be edited as text",
+      );
+      expect(await readFile(filePath)).toEqual(original);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit request targets a text-named WebP file,
+    When the edit tool sniffs the target bytes,
+    Then it rejects the RIFF WebP file by magic bytes without rewriting bytes`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const filePath = join(workspace, "image.txt");
+    const original = Buffer.from([
+      0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+    ]);
+    await writeFile(filePath, original);
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "image.txt", "RIFF", "text"),
+        "tool_binary_file",
+        "binary file",
+        "cannot be edited as text",
+      );
+      expect(await readFile(filePath)).toEqual(original);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit request targets invalid UTF-8,
+    When the edit tool decodes the target,
+    Then it rejects the file without rewriting bytes`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const filePath = join(workspace, "invalid.txt");
+    const original = Buffer.concat([
+      Buffer.from("old text\n"),
+      Buffer.from([0xff]),
+    ]);
+    await writeFile(filePath, original);
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "invalid.txt", "old", "new"),
+        "tool_binary_file",
+        "binary file",
+        "cannot be edited as text",
+      );
+      expect(await readFile(filePath)).toEqual(original);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

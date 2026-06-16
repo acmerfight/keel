@@ -1,90 +1,20 @@
 import { closeSync, openSync, readSync, statSync } from "node:fs";
-import { extname } from "node:path";
 import { KeelError } from "../core/error.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
+import {
+  BINARY_SAMPLE_BYTES,
+  binaryFileError,
+  decodeUtf8,
+  hasBinaryControlBytes,
+  isBinarySample,
+} from "./text-file.ts";
 import type { ToolResult } from "./types.ts";
 import { resolveWorkspaceTarget } from "./workspace-path.ts";
 
 const MAX_READ_LINES = 2000;
 const MAX_READ_BYTES = 50 * 1024;
 
-const BINARY_SAMPLE_BYTES = 4096;
 const READ_CHUNK_BYTES = 8192;
-const BINARY_EXTENSIONS = new Set([
-  ".7z",
-  ".a",
-  ".aac",
-  ".apk",
-  ".avif",
-  ".avi",
-  ".bin",
-  ".bmp",
-  ".bz2",
-  ".class",
-  ".dat",
-  ".db",
-  ".dll",
-  ".dmg",
-  ".doc",
-  ".docx",
-  ".dylib",
-  ".eot",
-  ".exe",
-  ".flac",
-  ".gif",
-  ".gz",
-  ".heic",
-  ".heif",
-  ".ico",
-  ".iso",
-  ".jar",
-  ".jpeg",
-  ".jpg",
-  ".lib",
-  ".m4a",
-  ".m4v",
-  ".mkv",
-  ".mov",
-  ".mp3",
-  ".mp4",
-  ".mpeg",
-  ".mpg",
-  ".o",
-  ".obj",
-  ".odt",
-  ".ods",
-  ".odp",
-  ".ogg",
-  ".ogv",
-  ".otf",
-  ".pdf",
-  ".png",
-  ".ppt",
-  ".pptx",
-  ".pyc",
-  ".pyo",
-  ".rar",
-  ".so",
-  ".sqlite",
-  ".sqlite3",
-  ".tar",
-  ".tgz",
-  ".tif",
-  ".tiff",
-  ".ttf",
-  ".war",
-  ".wasm",
-  ".wav",
-  ".webm",
-  ".webp",
-  ".woff",
-  ".woff2",
-  ".xls",
-  ".xlsx",
-  ".xz",
-  ".zip",
-  ".zst",
-]);
 
 export interface ReadOptions {
   readonly offset?: number | undefined;
@@ -100,14 +30,6 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`;
   return `${Math.round(bytes / (1024 * 1024))}MB`;
-}
-
-function binaryFileError(filePath: string): KeelError {
-  return new KeelError(
-    "tool_binary_file",
-    `read failed: binary file is not supported: ${filePath}`,
-    "This is a binary file and cannot be read as text. Use grep to search for text in nearby source files instead.",
-  );
 }
 
 function normalizeReadOptions(
@@ -134,68 +56,6 @@ function normalizeReadOptions(
     offset,
     limit: Math.min(requestedLimit, MAX_READ_LINES),
   };
-}
-
-function startsWithBytes(
-  bytes: Uint8Array,
-  expected: readonly number[],
-): boolean {
-  if (bytes.length < expected.length) return false;
-  return expected.every((byte, index) => bytes[index] === byte);
-}
-
-function hasMagicBinaryHeader(bytes: Uint8Array): boolean {
-  return (
-    startsWithBytes(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d]) ||
-    startsWithBytes(bytes, [0x89, 0x50, 0x4e, 0x47]) ||
-    startsWithBytes(bytes, [0xff, 0xd8, 0xff]) ||
-    startsWithBytes(bytes, [0x47, 0x49, 0x46, 0x38]) ||
-    startsWithBytes(bytes, [0x42, 0x4d]) ||
-    startsWithBytes(bytes, [0x50, 0x4b, 0x03, 0x04]) ||
-    startsWithBytes(bytes, [0x1f, 0x8b]) ||
-    startsWithBytes(bytes, [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]) ||
-    startsWithBytes(bytes, [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07]) ||
-    startsWithBytes(bytes, [0x7f, 0x45, 0x4c, 0x46]) ||
-    (bytes.length >= 12 &&
-      startsWithBytes(bytes.subarray(0, 4), [0x52, 0x49, 0x46, 0x46]) &&
-      startsWithBytes(bytes.subarray(8, 12), [0x57, 0x45, 0x42, 0x50])) ||
-    (bytes.length >= 12 &&
-      startsWithBytes(bytes.subarray(4, 8), [0x66, 0x74, 0x79, 0x70]))
-  );
-}
-
-function hasBinaryControlBytes(bytes: Uint8Array): boolean {
-  if (bytes.length === 0) return false;
-  let nonPrintable = 0;
-  for (const byte of bytes) {
-    if (byte === 0) return true;
-    if (byte < 9 || (byte > 13 && byte < 32)) {
-      nonPrintable++;
-    }
-  }
-
-  return nonPrintable / bytes.length > 0.3;
-}
-
-function isBinarySample(filePath: string, sample: Uint8Array): boolean {
-  return (
-    BINARY_EXTENSIONS.has(extname(filePath).toLowerCase()) ||
-    hasMagicBinaryHeader(sample) ||
-    hasBinaryControlBytes(sample)
-  );
-}
-
-function decodeUtf8(
-  filePath: string,
-  decoder: TextDecoder,
-  input?: Uint8Array,
-  options?: TextDecodeOptions,
-): string {
-  try {
-    return decoder.decode(input, options);
-  } catch {
-    throw binaryFileError(filePath);
-  }
 }
 
 function readSample(fd: number, fileSize: number): Uint8Array {
@@ -324,14 +184,14 @@ function readTextWindow(
 
     const bytes = chunk.subarray(0, bytesRead);
     if (hasBinaryControlBytes(bytes)) {
-      throw binaryFileError(filePath);
+      throw binaryFileError("read", filePath);
     }
 
-    consumeText(decodeUtf8(filePath, decoder, bytes, { stream: true }));
+    consumeText(decodeUtf8("read", filePath, decoder, bytes, { stream: true }));
   }
 
   if (keepReading) {
-    const remaining = decodeUtf8(filePath, decoder);
+    const remaining = decodeUtf8("read", filePath, decoder);
     if (remaining !== "") {
       consumeText(remaining);
     }
@@ -404,7 +264,7 @@ export function executeRead(
   try {
     const sample = readSample(fd, stat.size);
     if (isBinarySample(targetPath, sample)) {
-      throw binaryFileError(filePath);
+      throw binaryFileError("read", filePath);
     }
 
     return { content: readTextWindow(fd, filePath, normalizedOptions) };
