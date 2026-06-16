@@ -1,7 +1,8 @@
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { statSync, writeFileSync } from "node:fs";
 import { KeelError } from "../core/error.ts";
 import { recordLastEditCheckpoint } from "../core/git.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
+import { readEditableTextFile } from "./text-file.ts";
 import type { ToolResult } from "./types.ts";
 import { resolveWorkspaceTarget } from "./workspace-path.ts";
 
@@ -59,8 +60,15 @@ export function executeEdit(
       "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
     );
   }
+  if (!targetStat.isFile()) {
+    throw new KeelError(
+      "tool_not_file",
+      `edit failed: not a file: ${filePath}`,
+      "The path is a directory, not a file. Specify a file path inside it.",
+    );
+  }
 
-  const content = readFileSync(targetPath, "utf8");
+  const content = readEditableTextFile(targetPath, filePath);
   const firstMatch = content.indexOf(oldString);
   if (firstMatch < 0) {
     const lineCount = countLines(content);
