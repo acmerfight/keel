@@ -40,7 +40,13 @@ What a user can do today:
   a progress summary when the 64-turn limit is exhausted.
 - `keel` — interactive in-process session: sequential follow-up messages
   reuse prior user / assistant / tool context from the same terminal run.
-- `keel --allow-bash` — trusted shell mode (all-or-nothing).
+- `keel --allow-bash` / `keel --bash-policy trusted` — trusted shell
+  mode (all-or-nothing).
+- `keel --bash-policy ask` — expose bash while requiring per-command
+  approval in interactive sessions, with exact command + cwd approval
+  remembered for the process-local session. One-shot runs fail closed
+  because there is no approval UI; forced non-TTY interactive runs also
+  reject `ask` so approvals cannot be read from piped input.
 - `keel --max-cost <usd>` — cost tracking with budget stop.
 - `keel --report <file>` — write a machine-readable run report with turns,
   stop reason, token usage, duration, provider/model, and cost when tracked.
@@ -95,12 +101,17 @@ Known limits that shape the priorities below:
    reaching it triggers a final summary turn ("what was done / what
    remains") instead of a thrown error. Full compaction is P1; this
    slice was the bridge.
-5. **Per-command bash approval.** `--allow-bash` is all-or-nothing trust.
-   Daily coding needs to run tests/builds without granting blanket shell
-   access: prompt per command with a session-scoped "always allow"
-   memory (the codex/opencode/kimi pattern), plus a non-interactive
-   fallback. Slice test: *the agent proposes `pnpm test`, the user
-   approves that one command, and a disallowed command stays blocked.*
+5. **Per-command bash approval.** ✅ Partial (2026-06):
+   `--bash-policy ask` prompts before each new bash command in
+   interactive sessions, supports one-shot and session-scoped approval,
+   and fails closed for one-shot or non-TTY runs that cannot ask the user
+   through a real terminal prompt.
+   `--allow-bash` remains the explicit trusted compatibility mode. The
+   remaining work is richer command parsing/risk classification, safer
+   prefix approvals beyond exact command + cwd, persistent rules, and
+   eventually an OS sandbox (P2). Slice test: *the agent proposes
+   `pnpm test`, the user approves that command for the session, and a
+   disallowed command stays blocked.*
 6. **Harness eval baseline.** ✅ Baseline done (2026-06): `keel eval`
    runs deterministic outcome-graded task directories from `evals/tasks`,
    appends per-trial JSONL results, supports multi-trial runs, and

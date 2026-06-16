@@ -503,6 +503,103 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("");
   });
 
+  test(`Given an unknown bash policy is configured,
+    When the CLI main parses the request,
+    Then it returns a bash policy validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["--bash-policy", "sometimes", "hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --bash-policy must be one of: ask, deny, trusted.\n",
+    );
+  });
+
+  test(`Given bash policy is missing its value,
+    When the CLI main parses the request,
+    Then it returns a bash policy validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["--bash-policy"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --bash-policy must be one of: ask, deny, trusted.\n",
+    );
+  });
+
+  test.each([
+    ["--allow-bash", "--bash-policy", "ask", "hello"],
+    ["--allow-bash", "--bash-policy=ask", "hello"],
+    ["--bash-policy=ask", "--allow-bash", "hello"],
+  ])(`Given conflicting bash policy options %s %s,
+    When the CLI main parses the request,
+    Then it returns a conflict validation error`, async (...args) => {
+    // Given
+    const fixture = createRuntime(args, {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.\n",
+    );
+  });
+
+  test(`Given bash policy is configured with equals syntax,
+    When the CLI main runs a text request,
+    Then it accepts the policy option`, async () => {
+    // Given
+    const fixture = createRuntime(["--bash-policy=trusted", "hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toBe("Hello from fake provider.\n");
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given ask bash policy is forced through non-TTY input,
+    When the CLI main starts an interactive session,
+    Then it rejects the unsafe approval channel`, async () => {
+    // Given
+    const fixture = createRuntime(["--bash-policy", "ask"], {
+      env: { KEEL_FORCE_INTERACTIVE: "1" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --bash-policy ask requires a real TTY so approvals cannot be read from piped input. Use --bash-policy deny or --bash-policy trusted for non-TTY runs.\n",
+    );
+  });
+
   test(`Given the default provider is configured against a local protocol server,
     When the CLI main runs a one-shot text request,
     Then it streams the provider reply through the process boundary`, async () => {
@@ -928,6 +1025,79 @@ describe("CLI Main", () => {
           role: "tool",
           tool_call_id: "call_bash",
           content: expect.stringContaining("stdout:\nshell-ok"),
+        }),
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given ask bash policy is enabled for a one-shot run,
+    When the provider requests a shell command,
+    Then the command is denied without changing the workspace`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-bash-ask-"));
+    const capturedBodies: unknown[] = [];
+    const command =
+      "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(sseToolCall("call_bash", "bash", { command }));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Shell denied."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["--bash-policy", "ask", "run shell"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Shell denied.\n");
+      expect(fixture.stderr()).toBe(
+        `Tool: bash ${command}\nTool failed: bash ${command}\n`,
+      );
+      await expect(
+        readFile(join(workspace, "created.txt"), "utf8"),
+      ).rejects.toThrow("ENOENT");
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_bash",
+          content: expect.stringContaining("bash permission denied"),
         }),
       );
     } finally {

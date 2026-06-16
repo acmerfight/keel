@@ -25,6 +25,7 @@ src/
   core/        → error, logger, git, cost
   agent/       → Agent loop, prompt
   llm/         → Provider abstraction (DeepSeek, Kimi, OpenAI-compatible shared runtime)
+  permissions/ → Tool permission policies
   testing/     → Test support code (fake providers, fixture factories)
   tools/       → bash, edit, grep, read, write
 ```
@@ -52,7 +53,7 @@ Validate both the requested representation and the resolved representation befor
 
 ### Shell Safety Semantics
 
-Keel's project ignore policy is enforced by the built-in file tools: `read`, `edit`, and `grep`. `bash` is disabled by default. When enabled with `--allow-bash`, it is trusted shell mode: commands run with the current OS user's permissions and may read or modify gitignored files. Do not describe `--allow-bash` as preserving the file-tool ignore boundary unless a real permission or sandbox layer exists.
+Keel's project ignore policy is enforced by the built-in file tools: `read`, `edit`, and `grep`. `bash` is disabled by default. When enabled with `--allow-bash` or `--bash-policy trusted`, it is trusted shell mode: commands run with the current OS user's permissions and may read or modify gitignored files. `--bash-policy ask` adds per-command user approval in interactive sessions, but it is still approval, not an OS sandbox. Do not describe bash approval as preserving the file-tool ignore boundary unless a real permission or sandbox layer exists.
 
 ### Abstraction Discipline
 
