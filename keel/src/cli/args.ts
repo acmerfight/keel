@@ -6,7 +6,7 @@ import {
   bashModeFromPolicy,
 } from "../permissions/bash.ts";
 
-export interface EvalCliArgs {
+interface EvalCliArgs {
   readonly command: "eval";
   readonly suiteDir: string;
   readonly outFile: string;
