@@ -1,3 +1,5 @@
+import type { ToolCall } from "../tools/registry.ts";
+
 export interface Usage {
   readonly inputTokens: number;
   readonly cachedInputTokens: number;
@@ -10,39 +12,7 @@ interface UserMessage {
   readonly content: string;
 }
 
-export type ToolCall =
-  | {
-      readonly id: string;
-      readonly tool: "read";
-      readonly path: string;
-      readonly offset?: number;
-      readonly limit?: number;
-    }
-  | {
-      readonly id: string;
-      readonly tool: "grep";
-      readonly pattern: string;
-      readonly path?: string;
-    }
-  | {
-      readonly id: string;
-      readonly tool: "edit";
-      readonly path: string;
-      readonly oldString: string;
-      readonly newString: string;
-    }
-  | {
-      readonly id: string;
-      readonly tool: "write";
-      readonly path: string;
-      readonly content: string;
-    }
-  | {
-      readonly id: string;
-      readonly tool: "bash";
-      readonly command: string;
-      readonly timeoutMs?: number;
-    };
+export type { ToolCall } from "../tools/registry.ts";
 
 interface AssistantMessage {
   readonly role: "assistant";
