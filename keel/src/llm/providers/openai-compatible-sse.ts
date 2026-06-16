@@ -281,14 +281,7 @@ export function finalStreamEvents(
     );
   }
 
-  if (state.finishReason === "tool_calls") {
-    if (state.pendingToolCalls.length === 0) {
-      throw new KeelError(
-        "provider_protocol_error",
-        `${providerName} stream finished with tool_calls but no tool call`,
-      );
-    }
-  } else if (state.finishReason !== "stop") {
+  if (state.finishReason !== "tool_calls" && state.finishReason !== "stop") {
     throw new KeelError(
       "provider_protocol_error",
       `${providerName} stream finished with reason: ${

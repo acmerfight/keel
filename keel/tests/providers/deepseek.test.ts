@@ -663,6 +663,22 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (
+            parsed.messages?.[1]?.content === "text-event-without-final-newline"
+          ) {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.end(
+              `data: ${JSON.stringify({
+                choices: [{ delta: { content: "unterminated" } }],
+              })}`,
+            );
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "missing-finish-reason") {
             writeSseResponse(res, [
               sseChunk("partial output"),
@@ -2698,6 +2714,34 @@ describe("DeepSeek Provider", () => {
         uncachedInputTokens: 7,
         outputTokens: 3,
       },
+    });
+  });
+
+  test(`Given the final text event has no trailing newline or DONE signal,
+    When provider finishes reading,
+    Then it processes the event and still rejects the incomplete stream`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [
+            { role: "user", content: "text-event-without-final-newline" },
+          ],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream ended without [DONE] signal",
     });
   });
 
