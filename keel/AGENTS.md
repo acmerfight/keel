@@ -24,15 +24,16 @@ src/
   cli/         → Entry point
   core/        → error, logger, git, cost
   agent/       → Agent loop, prompt
-  llm/         → Provider abstraction (DeepSeek, Kimi, OpenAI-compatible shared runtime)
+  llm/         → Provider abstraction (DeepSeek, Kimi, Qwen, fake, OpenAI-compatible shared runtime)
   permissions/ → Tool permission policies
-  testing/     → Test support code (fake providers, fixture factories)
+  testing/     → Test support code (CLI harnesses, fixture factories)
   tools/       → bash, edit, grep, read, write
 ```
 
 Layer rules (enforced by `tests/invariants/boundaries.test.ts`):
 - `agent/` does not import `fs`, `child_process`, or `cli/`
 - `llm/` does not import `cli/` or `agent/`
+- `cli/` does not import `testing/`
 
 ## Code Style
 

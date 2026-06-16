@@ -24,6 +24,11 @@ const layerRules: readonly LayerRule[] = [
     forbidden: [/\/cli\//, /\/agent\//],
   },
   {
+    layer: "src/cli",
+    contract: "does not import testing/",
+    forbidden: [/\/testing\//],
+  },
+  {
     // The eval runner must measure keel through the same CLI surface a user
     // runs (spawned subprocess), never by importing harness internals.
     layer: "src/eval",
