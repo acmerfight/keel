@@ -64,7 +64,7 @@ const kimiUsageSchema = z
 const kimiToolCallSchema = z
   .object({
     id: z.string().optional(),
-    index: z.number().optional(),
+    index: z.number().int().nonnegative().optional(),
     function: z
       .object({
         name: z.string().optional(),
