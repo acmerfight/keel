@@ -4,8 +4,6 @@ import { KeelError } from "../../core/error.ts";
 import type { Usage } from "../types.ts";
 import {
   createOpenAICompatibleProvider,
-  type OpenAICompatibleChoice,
-  type OpenAICompatibleChunk,
   type OpenAICompatibleStreamState,
   type ProviderRetryConfig,
 } from "./openai-compatible.ts";
@@ -70,6 +68,7 @@ const deepseekStreamChunkSchema = z
   .refine((chunk) => chunk.choices !== undefined || chunk.usage !== undefined);
 
 type DeepseekUsage = z.infer<typeof deepseekUsageSchema>;
+type DeepseekStreamChunk = z.infer<typeof deepseekStreamChunkSchema>;
 
 export interface DeepseekConfig {
   readonly apiKey: string;
@@ -78,7 +77,7 @@ export interface DeepseekConfig {
   readonly retry?: ProviderRetryConfig;
 }
 
-function parseDeepseekChunk(data: string): OpenAICompatibleChunk {
+function parseDeepseekChunk(data: string): DeepseekStreamChunk {
   let parsed: unknown;
   try {
     parsed = JSON.parse(data);
@@ -110,17 +109,13 @@ function usageFromDeepseekUsage(usage: DeepseekUsage): Usage {
 
 function captureDeepseekUsage(
   state: OpenAICompatibleStreamState,
-  chunk: OpenAICompatibleChunk,
-  _choice: OpenAICompatibleChoice | undefined,
+  chunk: DeepseekStreamChunk,
 ): void {
-  const result = deepseekUsageSchema
-    .nullable()
-    .optional()
-    .safeParse(chunk.usage);
-  if (!result.success || result.data === undefined || result.data === null) {
+  const usage = chunk.usage;
+  if (usage === undefined || usage === null) {
     return;
   }
-  state.usage = usageFromDeepseekUsage(result.data);
+  state.usage = usageFromDeepseekUsage(usage);
 }
 
 export function createDeepseekProvider(config: DeepseekConfig) {

@@ -30,10 +30,15 @@ export interface OpenAICompatibleChoice {
   readonly usage?: unknown;
 }
 
-export interface OpenAICompatibleChunk {
-  readonly choices?: readonly OpenAICompatibleChoice[] | undefined;
+export interface OpenAICompatibleChunk<
+  Choice extends OpenAICompatibleChoice = OpenAICompatibleChoice,
+> {
+  readonly choices?: readonly Choice[] | undefined;
   readonly usage?: unknown;
 }
+
+type OpenAICompatibleChunkChoice<Chunk extends OpenAICompatibleChunk> =
+  NonNullable<Chunk["choices"]>[number];
 
 interface PendingToolCall {
   readonly id: string | null;
@@ -49,13 +54,15 @@ export interface OpenAICompatibleStreamState {
   pendingToolCalls: readonly ToolCallEvent[];
 }
 
-export interface OpenAICompatibleStreamConfig {
+export interface OpenAICompatibleStreamConfig<
+  Chunk extends OpenAICompatibleChunk = OpenAICompatibleChunk,
+> {
   readonly providerName: string;
-  readonly parseChunk: (data: string) => OpenAICompatibleChunk;
+  readonly parseChunk: (data: string) => Chunk;
   readonly captureUsage: (
     state: OpenAICompatibleStreamState,
-    chunk: OpenAICompatibleChunk,
-    choice: OpenAICompatibleChoice | undefined,
+    chunk: Chunk,
+    choice: OpenAICompatibleChunkChoice<Chunk> | undefined,
   ) => void;
 }
 
@@ -189,10 +196,10 @@ function completePendingToolCall(
     .map(([, toolCall]) => parseToolCall(toolCall, providerName));
 }
 
-function* parseSseLine(
+function* parseSseLine<Chunk extends OpenAICompatibleChunk>(
   line: string,
   state: OpenAICompatibleStreamState,
-  config: OpenAICompatibleStreamConfig,
+  config: OpenAICompatibleStreamConfig<Chunk>,
 ): Generator<LLMEvent> {
   const trimmed = line.trim();
   if (!trimmed.startsWith("data: ")) return;
@@ -227,11 +234,11 @@ function* parseSseLine(
   config.captureUsage(state, chunk, choice);
 }
 
-export async function* readSseEvents(
+export async function* readSseEvents<Chunk extends OpenAICompatibleChunk>(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   signal: AbortSignal,
   state: OpenAICompatibleStreamState,
-  config: OpenAICompatibleStreamConfig,
+  config: OpenAICompatibleStreamConfig<Chunk>,
 ): AsyncGenerator<LLMEvent> {
   const decoder = new TextDecoder();
   let buffer = "";

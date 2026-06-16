@@ -8,6 +8,7 @@ import {
   createStreamState,
   finalStreamEvents,
   getResponseReader,
+  type OpenAICompatibleChunk,
   type OpenAICompatibleStreamConfig,
   readSseEvents,
 } from "./openai-compatible-sse.ts";
@@ -19,14 +20,15 @@ export type {
   OpenAICompatibleStreamState,
 } from "./openai-compatible-sse.ts";
 
-interface OpenAICompatibleProviderConfig extends OpenAICompatibleStreamConfig {
+interface OpenAICompatibleProviderConfig<Chunk extends OpenAICompatibleChunk>
+  extends OpenAICompatibleStreamConfig<Chunk> {
   readonly id: string;
   readonly config: ProviderConfig;
 }
 
-export function createOpenAICompatibleProvider(
-  providerConfig: OpenAICompatibleProviderConfig,
-): LLMProvider {
+export function createOpenAICompatibleProvider<
+  Chunk extends OpenAICompatibleChunk,
+>(providerConfig: OpenAICompatibleProviderConfig<Chunk>): LLMProvider {
   return {
     id: providerConfig.id,
     async *stream(options): AsyncIterable<LLMEvent> {

@@ -4,7 +4,6 @@ import { KeelError } from "../../core/error.ts";
 import type { Usage } from "../types.ts";
 import {
   createOpenAICompatibleProvider,
-  type OpenAICompatibleChunk,
   type OpenAICompatibleStreamState,
   type ProviderRetryConfig,
 } from "./openai-compatible.ts";
@@ -72,6 +71,7 @@ const qwenStreamChunkSchema = z
   .refine((chunk) => chunk.choices !== undefined || chunk.usage !== undefined);
 
 type QwenUsage = z.infer<typeof qwenUsageSchema>;
+type QwenStreamChunk = z.infer<typeof qwenStreamChunkSchema>;
 
 export interface QwenConfig {
   readonly apiKey: string;
@@ -80,7 +80,7 @@ export interface QwenConfig {
   readonly retry?: ProviderRetryConfig;
 }
 
-function parseQwenChunk(data: string): OpenAICompatibleChunk {
+function parseQwenChunk(data: string): QwenStreamChunk {
   let parsed: unknown;
   try {
     parsed = JSON.parse(data);
@@ -113,20 +113,13 @@ function usageFromQwenUsage(usage: QwenUsage): Usage {
 
 function captureQwenUsage(
   state: OpenAICompatibleStreamState,
-  chunk: OpenAICompatibleChunk,
+  chunk: QwenStreamChunk,
 ): void {
-  const usageResult = qwenUsageSchema
-    .nullable()
-    .optional()
-    .safeParse(chunk.usage);
-  if (
-    !usageResult.success ||
-    usageResult.data === undefined ||
-    usageResult.data === null
-  ) {
+  const usage = chunk.usage;
+  if (usage === undefined || usage === null) {
     return;
   }
-  state.usage = usageFromQwenUsage(usageResult.data);
+  state.usage = usageFromQwenUsage(usage);
 }
 
 export function qwenCostModel(model: string): CostModel | null {
