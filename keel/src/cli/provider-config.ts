@@ -10,7 +10,10 @@ import {
 } from "../llm/providers/kimi.ts";
 import { createQwenProvider, qwenCostModel } from "../llm/providers/qwen.ts";
 import type { LLMProvider } from "../llm/types.ts";
-import type { InteractiveResolvedProvider } from "./interactive-session.ts";
+import type {
+  InteractiveResolvedProvider,
+  ProviderId,
+} from "./interactive-session.ts";
 
 interface CliEditRequest {
   readonly path: string;
@@ -27,11 +30,19 @@ export interface ProviderConfigRuntime {
   readonly env: (key: string) => string | undefined;
 }
 
-export interface ResolvedProvider extends InteractiveResolvedProvider {
-  readonly provider: LLMProvider;
-  readonly model: string;
-  readonly costModel: CostModel | null;
-}
+type ResolvedProviderBase<
+  Id extends ProviderId,
+  Cost extends CostModel | null,
+> = InteractiveResolvedProvider & {
+  readonly providerId: Id;
+  readonly costModel: Cost;
+};
+
+export type ResolvedProvider =
+  | ResolvedProviderBase<"fake", CostModel>
+  | ResolvedProviderBase<"deepseek", CostModel>
+  | ResolvedProviderBase<"kimi", CostModel | null>
+  | ResolvedProviderBase<"qwen", CostModel | null>;
 
 export class ProviderConfigError extends Error {}
 
@@ -185,6 +196,7 @@ export function resolveProvider(
 
   if (providerId === "fake") {
     return {
+      providerId: "fake",
       provider: createCliFakeProvider(userMessage),
       model: "fake",
       costModel: ZERO_COST_MODEL,
@@ -200,6 +212,7 @@ export function resolveProvider(
     }
     const model = "deepseek-v4-flash";
     return {
+      providerId: "deepseek",
       provider: createDeepseekProvider({
         apiKey,
         baseUrl: runtime.env("DEEPSEEK_BASE_URL") ?? "https://api.deepseek.com",
@@ -219,6 +232,7 @@ export function resolveProvider(
     }
     const model = runtime.env("KIMI_MODEL") ?? "kimi-k2.6";
     return {
+      providerId: "kimi",
       provider: createKimiProvider({
         apiKey,
         baseUrl: runtime.env("KIMI_BASE_URL") ?? "https://api.moonshot.cn/v1",
@@ -239,6 +253,7 @@ export function resolveProvider(
     }
     const model = runtime.env("QWEN_MODEL") ?? "qwen3.7-max";
     return {
+      providerId: "qwen",
       provider: createQwenProvider({
         apiKey,
         baseUrl:
@@ -261,6 +276,7 @@ export function resolveInteractiveProvider(
   const providerId = runtime.env("KEEL_PROVIDER") ?? "deepseek";
   if (providerId === "fake") {
     return {
+      providerId: "fake",
       provider: createInteractiveFakeProvider(),
       model: "fake",
       costModel: ZERO_COST_MODEL,
@@ -271,22 +287,19 @@ export function resolveInteractiveProvider(
 }
 
 export function requireKnownCostModel(resolved: ResolvedProvider): CostModel {
-  if (resolved.costModel !== null) return resolved.costModel;
-
-  if (resolved.provider.id === "kimi") {
-    providerConfigError(
-      `Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="${resolved.model}".`,
-    );
+  switch (resolved.providerId) {
+    case "fake":
+    case "deepseek":
+      return resolved.costModel;
+    case "kimi":
+      if (resolved.costModel !== null) return resolved.costModel;
+      return providerConfigError(
+        `Error: cost tracking is only supported for Kimi model "kimi-k2.6"; configured KIMI_MODEL="${resolved.model}".`,
+      );
+    case "qwen":
+      if (resolved.costModel !== null) return resolved.costModel;
+      return providerConfigError(
+        `Error: cost tracking is only supported for Qwen model "qwen3.7-max"; configured QWEN_MODEL="${resolved.model}".`,
+      );
   }
-
-  if (resolved.provider.id === "qwen") {
-    providerConfigError(
-      `Error: cost tracking is only supported for Qwen model "qwen3.7-max"; configured QWEN_MODEL="${resolved.model}".`,
-    );
-  }
-
-  /* v8 ignore next 3: defensive guard for future providers with unknown pricing. */
-  providerConfigError(
-    `Error: cost tracking is not supported for provider "${resolved.provider.id}" model "${resolved.model}".`,
-  );
 }
