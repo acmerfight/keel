@@ -140,6 +140,72 @@ describe("Qwen Provider", () => {
           return;
         }
 
+        if (userMessage === "negative-tool-call-index") {
+          writeSseResponse(res, [
+            sseData({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: -1,
+                        id: "call_qwen_read",
+                        type: "function",
+                        function: {
+                          name: "read",
+                          arguments: '{"path":"README.md"}',
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            sseData({
+              choices: [{ delta: {}, finish_reason: "tool_calls" }],
+              usage: {
+                prompt_tokens: 100,
+                completion_tokens: 20,
+              },
+            }),
+            "data: [DONE]\n\n",
+          ]);
+          return;
+        }
+
+        if (userMessage === "fractional-tool-call-index") {
+          writeSseResponse(res, [
+            sseData({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0.5,
+                        id: "call_qwen_read",
+                        type: "function",
+                        function: {
+                          name: "read",
+                          arguments: '{"path":"README.md"}',
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            sseData({
+              choices: [{ delta: {}, finish_reason: "tool_calls" }],
+              usage: {
+                prompt_tokens: 100,
+                completion_tokens: 20,
+              },
+            }),
+            "data: [DONE]\n\n",
+          ]);
+          return;
+        }
+
         if (userMessage === "use tool") {
           writeSseResponse(res, [
             sseData({
@@ -293,6 +359,35 @@ describe("Qwen Provider", () => {
         },
       },
     ]);
+  });
+
+  test.each([
+    "negative-tool-call-index",
+    "fractional-tool-call-index",
+  ])(`Given Qwen emits a tool call delta with an invalid numeric index,
+    When Keel validates the stream chunk,
+    Then it throws a provider protocol error before accumulating the tool call`, async (message) => {
+    // Given
+    const provider = createQwenProvider({
+      apiKey: "test-qwen-key",
+      baseUrl,
+      model: "qwen3.7-plus",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [{ role: "user", content: message }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "Qwen stream chunk has invalid schema",
+    });
   });
 
   test(`Given prior assistant tool call history includes text,
