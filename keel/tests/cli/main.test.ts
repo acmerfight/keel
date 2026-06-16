@@ -1635,4 +1635,143 @@ describe("CLI Main", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test(`Given the fake provider requests a write that cannot apply,
+    When the CLI main runs the tool call,
+    Then it reports the failed write result without crashing`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-main-write-fail-"),
+    );
+    await writeFile(join(workspace, "note.txt"), "already exists\n", "utf8");
+    const fixture = createRuntime(["create note.txt"], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "already exists\n",
+      );
+      expect(fixture.stdout()).toContain("Tool failed:");
+      expect(fixture.stderr()).toBe(
+        "Tool: write note.txt\nTool failed: write note.txt\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive turn uses the default provider without an API key,
+    When the CLI main runs in-process,
+    Then it reports the provider configuration error`, async () => {
+    // Given
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      env: { KEEL_FORCE_INTERACTIVE: "1" },
+      input,
+    });
+
+    // When
+    const run = runCliMain(fixture.runtime);
+    input.write("hello\n");
+    input.end();
+    const exitCode = await run;
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.\n",
+    );
+  });
+
+  test(`Given Qwen is configured with only QWEN_API_KEY,
+    When the CLI main runs in-process,
+    Then the provider key fallback is used`, async () => {
+    // Given
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Qwen fallback."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["hello"], {
+      env: {
+        KEEL_PROVIDER: "qwen",
+        QWEN_API_KEY: "test-key",
+        QWEN_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Qwen fallback.\n");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await close(server);
+    }
+  });
+
+  test(`Given Kimi is configured without a model override,
+    When the CLI main runs in-process,
+    Then the default Kimi model configuration is used`, async () => {
+    // Given
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Kimi default."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["hello"], {
+      env: {
+        KEEL_PROVIDER: "kimi",
+        KIMI_API_KEY: "test-key",
+        KIMI_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Kimi default.\n");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await close(server);
+    }
+  });
 });
