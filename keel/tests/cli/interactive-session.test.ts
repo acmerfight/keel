@@ -458,6 +458,81 @@ describe("Interactive Session", () => {
     }
   });
 
+  test(`Given a bash approval signal is already aborted,
+    When the approval reader starts waiting,
+    Then the command is denied without consuming another input line`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command =
+      "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
+    const provider = createFakeProvider([
+      fakeBashResponse(command),
+      fakeResponse("Approval already aborted."),
+    ]);
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { allowBash: true, bashPolicy: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        if (text.includes("Approve bash command")) {
+          for (const handler of [...sigintHandlers]) {
+            handler();
+          }
+          input.end();
+        }
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("run shell\n");
+
+      // Then
+      await withTimeout(session, 5000, "approval did not stop after abort");
+      await expect(
+        readFile(join(workspace, "created.txt"), "utf8"),
+      ).rejects.toThrow("ENOENT");
+      expect(stdout).toBe("Approval already aborted.\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a bash approval answer was typed before the prompt,
     When the command asks for permission,
     Then the queued line is not consumed as approval`, async () => {
