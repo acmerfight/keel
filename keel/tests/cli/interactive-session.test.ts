@@ -1521,6 +1521,136 @@ describe("Interactive Session", () => {
     expect(observedUserContexts).toEqual([["first prompt"], ["second prompt"]]);
   });
 
+  test(`Given an interactive turn compacts context before it is interrupted,
+    When user sends another prompt,
+    Then the session restores the pre-turn history and drops the cancelled prompt`, async () => {
+    // Given
+    let receiveCancelText: () => void = () => {};
+    const cancelTextReceived = new Promise<void>((resolve) => {
+      receiveCancelText = resolve;
+    });
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    const cancelledPrompt = `cancelled prompt ${"x".repeat(50_000)}`;
+    const observedRequestContexts: Message[][] = [];
+    const compactionPrompts: string[] = [];
+    let requestTurn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          const [prompt] = options.messages;
+          if (prompt?.role === "user") {
+            compactionPrompts.push(prompt.content);
+          }
+          yield { type: "text", text: "Summary of first turn." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        requestTurn++;
+        observedRequestContexts.push(structuredClone([...options.messages]));
+        if (requestTurn === 1) {
+          yield { type: "text", text: "First done" };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (requestTurn === 2) {
+          yield { type: "text", text: "Cancel me" };
+          if (!options.signal.aborted) {
+            await new Promise<void>((resolve) => {
+              options.signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+          }
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "Third done" };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: {
+          contextWindowTokens: 10_000,
+          reserveTokens: 0,
+          keepRecentTokens: 1,
+        },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+            if (event.text === "Cancel me") {
+              receiveCancelText();
+            }
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (requestTurn === 1) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.write(`${cancelledPrompt}\n`);
+    await withTimeout(cancelTextReceived, 5000, "second turn did not start");
+    for (const handler of [...sigintHandlers]) {
+      handler();
+    }
+    input.write("third prompt\n");
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toBe("First done\nCancel me\nThird done\n");
+    expect(compactionPrompts).toHaveLength(1);
+    expect(compactionPrompts[0]).toContain("first prompt");
+    expect(compactionPrompts[0]).toContain("First done");
+    expect(observedRequestContexts[2]).toEqual([
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "First done" },
+      { role: "user", content: "third prompt" },
+    ]);
+  });
+
   test(`Given an active interactive turn fails without abort,
     When the provider error reaches the session,
     Then the error is rethrown`, async () => {

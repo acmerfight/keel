@@ -320,7 +320,7 @@ export async function runInteractiveSession(
       const userMessage = rawLine.trim();
       if (userMessage === "") continue;
       resolved ??= options.resolveProvider(userMessage);
-      const messageCountBeforeTurn = messages.length;
+      const messagesBeforeTurn = messages.slice();
       const turnStartSequence = lineReader.sequence();
       const drainedSteeringLines: string[] = [];
       const turnAbortController = new AbortController();
@@ -360,7 +360,7 @@ export async function runInteractiveSession(
         });
         const finalEnd = await options.printAgentEvents(stream);
         if (turnAbortController.signal.aborted) {
-          messages.length = messageCountBeforeTurn;
+          messages.splice(0, messages.length, ...messagesBeforeTurn);
           restoreDrainedInput(drainedSteeringLines);
           options.writeStdout("\n");
           continue;
@@ -378,7 +378,7 @@ export async function runInteractiveSession(
         if (!turnAbortController.signal.aborted) {
           throw error;
         }
-        messages.length = messageCountBeforeTurn;
+        messages.splice(0, messages.length, ...messagesBeforeTurn);
         restoreDrainedInput(drainedSteeringLines);
         options.writeStdout("\n");
       } finally {
