@@ -76,6 +76,7 @@ interface CompactMessagesOptions {
   readonly contextCompaction?: ContextCompactionOptions;
   readonly contextAccounting?: ContextCompactionAccountingSnapshot;
   readonly requestMetadata?: ContextCompactionRequestMetadata;
+  readonly focusInstruction?: string;
 }
 
 export interface CompactMessagesResult {
@@ -852,7 +853,10 @@ function buildSummaryPrompt(
   messages: readonly Message[],
   options: ResolvedContextCompactionOptions,
   summaryInputMaxChars = options.summaryInputMaxChars,
+  focusInstruction?: string,
 ): string {
+  const normalizedFocusInstruction =
+    normalizeFocusInstruction(focusInstruction);
   const selected = selectSummaryInput(
     messages.map((message) =>
       serializeMessage(message, options.toolOutputMaxChars),
@@ -863,6 +867,9 @@ function buildSummaryPrompt(
     "Create a compact checkpoint summary for an ongoing coding-agent conversation.",
     "Do not call tools. Output concise Markdown only.",
     "Preserve exact file paths, commands, errors, user constraints, current task state, decisions, and next steps.",
+    normalizedFocusInstruction === undefined
+      ? ""
+      : `User manual compaction focus instruction:\n${normalizedFocusInstruction}`,
     "Use these sections in order: Current Task, Constraints, Completed, In Progress, Relevant Files, Commands and Tests, Errors and Fixes, Next Steps.",
     "<conversation>",
     selected.omittedCount > 0
@@ -873,6 +880,13 @@ function buildSummaryPrompt(
   ]
     .filter((part) => part !== "")
     .join("\n\n");
+}
+
+function normalizeFocusInstruction(
+  focusInstruction: string | undefined,
+): string | undefined {
+  const trimmed = focusInstruction?.trim();
+  return trimmed === "" ? undefined : trimmed;
 }
 
 function selectSummaryInput(
@@ -983,6 +997,7 @@ async function collectCompactionSummary(options: {
   readonly messagesToSummarize: readonly Message[];
   readonly signal: AbortSignal;
   readonly contextCompaction: ResolvedContextCompactionOptions;
+  readonly focusInstruction?: string;
 }): Promise<TextOnlyTurn> {
   let summaryInputMaxChars = options.contextCompaction.summaryInputMaxChars;
 
@@ -992,6 +1007,7 @@ async function collectCompactionSummary(options: {
       options.messagesToSummarize,
       options.contextCompaction,
       summaryInputMaxChars,
+      options.focusInstruction,
     );
     try {
       return await collectTextOnlyTurn({
@@ -1050,6 +1066,9 @@ export async function compactMessages(
     messagesToSummarize: plan.messagesToSummarize,
     signal: options.signal,
     contextCompaction: resolved,
+    ...(options.focusInstruction !== undefined
+      ? { focusInstruction: options.focusInstruction }
+      : {}),
   });
   const compacted = buildCompactedMessages(
     options.messages,

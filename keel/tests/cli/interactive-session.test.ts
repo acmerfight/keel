@@ -964,6 +964,268 @@ describe("Interactive Session", () => {
     ]);
   });
 
+  test(`Given user enters /compact while an interactive tool turn is running,
+    When the assistant continues after the tool result,
+    Then the compact command is deferred instead of injected as steering`, async () => {
+    // Given
+    const focusInstruction = "keep the tool result and next action";
+    let turn = 0;
+    let compactWritten = false;
+    const observedContexts: Message[][] = [];
+    let summaryPrompt = "";
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryPrompt = options.messages[0]?.content ?? "";
+          yield { type: "text", text: "Deferred compact summary." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        turn++;
+        observedContexts.push(structuredClone([...options.messages]));
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "deferred_compact_read",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          };
+        } else if (turn === 2) {
+          yield { type: "text", text: "Tool turn done." };
+        } else {
+          yield { type: "text", text: "After compact done." };
+        }
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "tool_start" && !compactWritten) {
+            compactWritten = true;
+            input.write(`/compact ${focusInstruction}\n`);
+            input.end("after compact\n");
+          } else if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("inspect package\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe("Tool turn done.\nAfter compact done.\n");
+    expect(stderr).toContain("Context compacted: manual");
+    expect(summaryPrompt).toContain(focusInstruction);
+    expect(summaryPrompt).not.toContain("/compact");
+    expect(observedContexts[1]).toEqual([
+      { role: "user", content: "inspect package" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "deferred_compact_read",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          },
+        ],
+      },
+      expect.objectContaining({
+        role: "tool",
+        toolCallId: "deferred_compact_read",
+      }),
+    ]);
+    expect(JSON.stringify(observedContexts[1])).not.toContain("/compact");
+    expect(observedContexts[2]).toEqual([
+      {
+        role: "user",
+        content: expect.stringContaining("<conversation-checkpoint>"),
+      },
+      { role: "assistant", content: "Tool turn done." },
+      { role: "user", content: "after compact" },
+    ]);
+    expect(JSON.stringify(observedContexts[2])).not.toContain("/compact");
+  });
+
+  test(`Given queued input exists before a deferred compact command,
+    When more input arrives before a later steering drain,
+    Then all deferred lines are replayed in original order`, async () => {
+    // Given
+    const focusInstruction = "keep queued order and tool results";
+    let turn = 0;
+    let firstCompactWritten = false;
+    let laterInputWritten = false;
+    const observedContexts: Message[][] = [];
+    let summaryPrompt = "";
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryPrompt = options.messages[0]?.content ?? "";
+          yield { type: "text", text: "Ordered deferred compact summary." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        turn++;
+        observedContexts.push(structuredClone([...options.messages]));
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "ordered_deferred_first_read",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          };
+        } else if (turn === 2) {
+          yield {
+            type: "tool_call",
+            id: "ordered_deferred_second_read",
+            tool: "read",
+            path: "tsconfig.json",
+            limit: 1,
+          };
+        } else if (turn === 3) {
+          yield { type: "text", text: "Tool turn done." };
+        } else {
+          const lastUserMessage = options.messages.findLast(
+            (message) => message.role === "user",
+          );
+          yield {
+            type: "text",
+            text:
+              lastUserMessage?.content === "queued before compact"
+                ? "Queued before compact done."
+                : "After compact done.",
+          };
+        }
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    input.write("inspect package\nqueued before compact\n");
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (
+            event.type === "tool_start" &&
+            event.toolCall.id === "ordered_deferred_first_read" &&
+            !firstCompactWritten
+          ) {
+            firstCompactWritten = true;
+            input.write(`/compact ${focusInstruction}\n`);
+          } else if (
+            event.type === "tool_start" &&
+            event.toolCall.id === "ordered_deferred_second_read" &&
+            !laterInputWritten
+          ) {
+            laterInputWritten = true;
+            input.end("after compact\n");
+          } else if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When the queued input and active-turn compact command are processed
+
+    // Then
+    await session;
+    expect(stdout).toBe(
+      "Tool turn done.\nQueued before compact done.\nAfter compact done.\n",
+    );
+    expect(stderr).toContain("Context compacted: manual");
+    expect(summaryPrompt).toContain(focusInstruction);
+    expect(summaryPrompt).not.toContain("/compact");
+    expect(summaryPrompt).not.toContain("after compact");
+    expect(JSON.stringify(observedContexts[2])).not.toContain("/compact");
+    expect(JSON.stringify(observedContexts[2])).not.toContain("after compact");
+    expect(JSON.stringify(observedContexts[2])).not.toContain(
+      "queued before compact",
+    );
+    expect(observedContexts[3]?.at(-1)).toEqual({
+      role: "user",
+      content: "queued before compact",
+    });
+    expect(observedContexts[4]?.at(-1)).toEqual({
+      role: "user",
+      content: "after compact",
+    });
+    expect(JSON.stringify(observedContexts[4])).not.toContain("/compact");
+  });
+
   test(`Given an interactive steering message was injected into an interrupted turn,
     When the turn is cancelled,
     Then the steering message becomes the next prompt`, async () => {
@@ -1648,6 +1910,853 @@ describe("Interactive Session", () => {
       { role: "user", content: "first prompt" },
       { role: "assistant", content: "First done" },
       { role: "user", content: "third prompt" },
+    ]);
+  });
+
+  test(`Given an interactive session has prior history,
+    When user enters /compact,
+    Then the session continues from a manual checkpoint`, async () => {
+    // Given
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    const observedRequestContexts: Message[][] = [];
+    let summaryPrompt = "";
+    let requestTurn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryPrompt = options.messages[0]?.content ?? "";
+          yield { type: "text", text: "Manual checkpoint summary." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        requestTurn++;
+        observedRequestContexts.push(structuredClone([...options.messages]));
+        yield {
+          type: "text",
+          text: requestTurn === 1 ? "First done" : "Second done",
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (requestTurn === 1) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.write("/compact\n");
+    input.write("second prompt\n");
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toBe("First done\nSecond done\n");
+    expect(stderr).toContain("Context compacted: manual");
+    expect(summaryPrompt).toContain("first prompt");
+    expect(summaryPrompt).toContain("First done");
+    expect(observedRequestContexts[1]).toEqual([
+      {
+        role: "user",
+        content: expect.stringContaining("<conversation-checkpoint>"),
+      },
+      { role: "user", content: "second prompt" },
+    ]);
+    expect(observedRequestContexts[1]?.[0]?.content).toContain(
+      "Manual checkpoint summary.",
+    );
+    expect(JSON.stringify(observedRequestContexts[1])).not.toContain(
+      "/compact",
+    );
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given manual compaction has cost tracking enabled,
+    When user enters /compact,
+    Then the session prints the compaction cost report`, async () => {
+    // Given
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    let requestTurn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Costed checkpoint summary." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 30,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 30,
+              outputTokens: 10,
+            },
+          };
+          return;
+        }
+
+        requestTurn++;
+        yield { type: "text", text: "First done" };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled", maxCostUsd: 0.01 },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: {
+          uncachedInputPerMillionTokens: 100,
+          cachedInputPerMillionTokens: 0,
+          outputPerMillionTokens: 200,
+        },
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ({
+        uncachedInputPerMillionTokens: 100,
+        cachedInputPerMillionTokens: 0,
+        outputPerMillionTokens: 200,
+      }),
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (requestTurn === 1) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: (cost, maxUsd) =>
+        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(2)} exceeded=${cost.budgetExceeded}\n`,
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.write("/compact\n");
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toBe("First done\n");
+    expect(stderr).toContain("Context compacted: manual");
+    expect(stderr).toContain("Cost: 0.005000 / 0.01 exceeded=false\n");
+  });
+
+  test(`Given an interactive session has prior history,
+    When user enters /compact with a focus instruction,
+    Then the instruction is included in the summary prompt but not appended as a task`, async () => {
+    // Given
+    const focusInstruction =
+      "keep the root cause, files changed, failed tests, and next steps";
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    const observedRequestContexts: Message[][] = [];
+    let summaryPrompt = "";
+    let requestTurn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryPrompt = options.messages[0]?.content ?? "";
+          yield { type: "text", text: "Focused checkpoint summary." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        requestTurn++;
+        observedRequestContexts.push(structuredClone([...options.messages]));
+        yield {
+          type: "text",
+          text: requestTurn === 1 ? "First done" : "Second done",
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (requestTurn === 1) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.write(`/compact ${focusInstruction}\n`);
+    input.write("second prompt\n");
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toBe("First done\nSecond done\n");
+    expect(summaryPrompt).toContain(focusInstruction);
+    expect(JSON.stringify(observedRequestContexts[1])).not.toContain(
+      `/compact ${focusInstruction}`,
+    );
+    expect(observedRequestContexts[1]).toEqual([
+      {
+        role: "user",
+        content: expect.stringContaining("<conversation-checkpoint>"),
+      },
+      { role: "user", content: "second prompt" },
+    ]);
+  });
+
+  test(`Given an interactive session has no prior history,
+    When user enters /compact,
+    Then compaction is skipped without corrupting the next prompt`, async () => {
+    // Given
+    const observedRequestContexts: Message[][] = [];
+    let resolvedProviders = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        observedRequestContexts.push(structuredClone([...options.messages]));
+        yield { type: "text", text: "Hello done" };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        resolvedProviders++;
+        return {
+          provider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+          contextCompaction: { keepRecentTokens: 1 },
+        };
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("/compact\n");
+    input.write("hello\n");
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toBe("Hello done\n");
+    expect(stderr).toContain("Context compaction skipped");
+    expect(resolvedProviders).toBe(1);
+    expect(observedRequestContexts).toEqual([
+      [{ role: "user", content: "hello" }],
+    ]);
+  });
+
+  test(`Given an interactive session has only an unsplittable prior prompt,
+    When user enters /compact,
+    Then compaction is skipped without changing the history`, async () => {
+    // Given
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    const observedRequestContexts: Message[][] = [];
+    let requestTurn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        requestTurn++;
+        observedRequestContexts.push(structuredClone([...options.messages]));
+        if (requestTurn === 1) {
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "Second done" };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (requestTurn === 1) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.write("/compact\n");
+    input.write("second prompt\n");
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toBe("\nSecond done\n");
+    expect(stderr).toContain("Context compaction skipped");
+    expect(observedRequestContexts).toEqual([
+      [{ role: "user", content: "first prompt" }],
+      [
+        { role: "user", content: "first prompt" },
+        { role: "user", content: "second prompt" },
+      ],
+    ]);
+  });
+
+  test(`Given manual compaction summary fails,
+    When user sends another prompt,
+    Then the session reports failure and keeps the original history`, async () => {
+    // Given
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    const observedRequestContexts: Message[][] = [];
+    let requestTurn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          throw new Error("summary\n\u001b[31m exploded");
+        }
+
+        requestTurn++;
+        observedRequestContexts.push(structuredClone([...options.messages]));
+        yield {
+          type: "text",
+          text: requestTurn === 1 ? "First done" : "Second done",
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (requestTurn === 1) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.write("/compact\n");
+    input.write("second prompt\n");
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toBe("First done\nSecond done\n");
+    expect(stderr).toContain(
+      "Context compaction failed: summary\\n\\x1b[31m exploded",
+    );
+    expect(observedRequestContexts[1]).toEqual([
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "First done" },
+      { role: "user", content: "second prompt" },
+    ]);
+  });
+
+  test(`Given manual compaction is interrupted,
+    When user sends another prompt,
+    Then the session restores original history and drops the cancelled checkpoint`, async () => {
+    // Given
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    let receiveSummaryRequest: () => void = () => {};
+    const summaryRequested = new Promise<void>((resolve) => {
+      receiveSummaryRequest = resolve;
+    });
+    const observedRequestContexts: Message[][] = [];
+    const compactionPrompts: string[] = [];
+    let requestTurn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          compactionPrompts.push(options.messages[0]?.content ?? "");
+          receiveSummaryRequest();
+          if (!options.signal.aborted) {
+            await new Promise<void>((resolve) => {
+              options.signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+          }
+          yield { type: "text", text: "Cancelled manual summary." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        requestTurn++;
+        observedRequestContexts.push(structuredClone([...options.messages]));
+        yield {
+          type: "text",
+          text: requestTurn === 1 ? "First done" : "Second done",
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (requestTurn === 1) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.write("/compact\n");
+    await withTimeout(summaryRequested, 5000, "manual summary did not start");
+    for (const handler of [...sigintHandlers]) {
+      handler();
+    }
+    input.write("second prompt\n");
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toBe("First done\n\nSecond done\n");
+    expect(compactionPrompts).toHaveLength(1);
+    expect(observedRequestContexts[1]).toEqual([
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "First done" },
+      { role: "user", content: "second prompt" },
+    ]);
+    expect(JSON.stringify(observedRequestContexts[1])).not.toContain(
+      "<conversation-checkpoint>",
+    );
+    expect(JSON.stringify(observedRequestContexts[1])).not.toContain(
+      "/compact",
+    );
+  });
+
+  test(`Given manual compaction summary fails after interruption,
+    When user sends another prompt,
+    Then the session treats the failure as an abort and restores history`, async () => {
+    // Given
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    let receiveSummaryRequest: () => void = () => {};
+    const summaryRequested = new Promise<void>((resolve) => {
+      receiveSummaryRequest = resolve;
+    });
+    const observedRequestContexts: Message[][] = [];
+    let requestTurn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          receiveSummaryRequest();
+          if (!options.signal.aborted) {
+            await new Promise<void>((resolve) => {
+              options.signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+          }
+          throw new Error("summary aborted");
+        }
+
+        requestTurn++;
+        observedRequestContexts.push(structuredClone([...options.messages]));
+        yield {
+          type: "text",
+          text: requestTurn === 1 ? "First done" : "Second done",
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (requestTurn === 1) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.write("/compact\n");
+    await withTimeout(summaryRequested, 5000, "manual summary did not start");
+    for (const handler of [...sigintHandlers]) {
+      handler();
+    }
+    input.write("second prompt\n");
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toBe("First done\n\nSecond done\n");
+    expect(stderr).toBe("");
+    expect(observedRequestContexts[1]).toEqual([
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "First done" },
+      { role: "user", content: "second prompt" },
+    ]);
+  });
+
+  test(`Given a prompt only starts with the compact command name,
+    When user enters the prompt,
+    Then it is sent as a normal task message`, async () => {
+    // Given
+    const observedRequestContexts: Message[][] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        observedRequestContexts.push(structuredClone([...options.messages]));
+        yield { type: "text", text: "Normal answer" };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("/compactfoo\n");
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toBe("Normal answer\n");
+    expect(observedRequestContexts).toEqual([
+      [{ role: "user", content: "/compactfoo" }],
     ]);
   });
 
