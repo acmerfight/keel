@@ -1,3 +1,4 @@
+import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
 import type { CostModel } from "../core/cost.ts";
 import {
   createDeepseekProvider,
@@ -36,6 +37,7 @@ type ResolvedProviderBase<
 > = InteractiveResolvedProvider & {
   readonly providerId: Id;
   readonly costModel: Cost;
+  readonly contextCompaction?: ContextCompactionOptions;
 };
 
 export type ResolvedProvider =
@@ -48,6 +50,46 @@ export class ProviderConfigError extends Error {}
 
 function providerConfigError(message: string): never {
   throw new ProviderConfigError(message);
+}
+
+function positiveIntegerEnv(
+  runtime: ProviderConfigRuntime,
+  key: string,
+): number | undefined {
+  const value = runtime.env(key);
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (
+    !Number.isSafeInteger(parsed) ||
+    parsed <= 0 ||
+    String(parsed) !== value
+  ) {
+    providerConfigError(`Error: ${key} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function defaultContextWindowTokens(
+  providerId: ProviderId,
+): number | undefined {
+  if (providerId === "fake") {
+    return undefined;
+  }
+  return 256_000;
+}
+
+function contextCompactionOptions(
+  providerId: ProviderId,
+  runtime: ProviderConfigRuntime,
+): ContextCompactionOptions | undefined {
+  const contextWindowTokens =
+    positiveIntegerEnv(runtime, "KEEL_CONTEXT_WINDOW_TOKENS") ??
+    defaultContextWindowTokens(providerId);
+  return contextWindowTokens === undefined
+    ? undefined
+    : { contextWindowTokens };
 }
 
 function parseCliEditDemo(message: string): CliEditRequest | null {
@@ -195,11 +237,13 @@ export function resolveProvider(
   const providerId = runtime.env("KEEL_PROVIDER") ?? "deepseek";
 
   if (providerId === "fake") {
+    const contextCompaction = contextCompactionOptions("fake", runtime);
     return {
       providerId: "fake",
       provider: createCliFakeProvider(userMessage),
       model: "fake",
       costModel: ZERO_COST_MODEL,
+      ...(contextCompaction !== undefined ? { contextCompaction } : {}),
     };
   }
 
@@ -211,6 +255,7 @@ export function resolveProvider(
       );
     }
     const model = "deepseek-v4-flash";
+    const contextCompaction = contextCompactionOptions("deepseek", runtime);
     return {
       providerId: "deepseek",
       provider: createDeepseekProvider({
@@ -220,6 +265,7 @@ export function resolveProvider(
       }),
       model,
       costModel: DEEPSEEK_V4_FLASH_COST_MODEL,
+      ...(contextCompaction !== undefined ? { contextCompaction } : {}),
     };
   }
 
@@ -231,6 +277,7 @@ export function resolveProvider(
       );
     }
     const model = runtime.env("KIMI_MODEL") ?? "kimi-k2.6";
+    const contextCompaction = contextCompactionOptions("kimi", runtime);
     return {
       providerId: "kimi",
       provider: createKimiProvider({
@@ -240,6 +287,7 @@ export function resolveProvider(
       }),
       model,
       costModel: kimiCostModel(model),
+      ...(contextCompaction !== undefined ? { contextCompaction } : {}),
     };
   }
 
@@ -252,6 +300,7 @@ export function resolveProvider(
       );
     }
     const model = runtime.env("QWEN_MODEL") ?? "qwen3.7-max";
+    const contextCompaction = contextCompactionOptions("qwen", runtime);
     return {
       providerId: "qwen",
       provider: createQwenProvider({
@@ -263,6 +312,7 @@ export function resolveProvider(
       }),
       model,
       costModel: qwenCostModel(model),
+      ...(contextCompaction !== undefined ? { contextCompaction } : {}),
     };
   }
 
@@ -275,11 +325,13 @@ export function resolveInteractiveProvider(
 ): ResolvedProvider {
   const providerId = runtime.env("KEEL_PROVIDER") ?? "deepseek";
   if (providerId === "fake") {
+    const contextCompaction = contextCompactionOptions("fake", runtime);
     return {
       providerId: "fake",
       provider: createInteractiveFakeProvider(),
       model: "fake",
       costModel: ZERO_COST_MODEL,
+      ...(contextCompaction !== undefined ? { contextCompaction } : {}),
     };
   }
 

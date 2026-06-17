@@ -191,6 +191,9 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
             },
           }
         : {}),
+      ...(resolved.contextCompaction !== undefined
+        ? { contextCompaction: resolved.contextCompaction }
+        : {}),
     });
 
     const finalEnd = await printAgentEvents(stream, runtime);
