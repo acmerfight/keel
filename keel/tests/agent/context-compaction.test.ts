@@ -934,6 +934,586 @@ describe("Context Compaction", () => {
     });
   });
 
+  test(`Given retained recent context contains a stale large tool output,
+    When overflow recovery compacts the conversation,
+    Then the retry shrinks the stale tool output while keeping the latest instruction`, async () => {
+    // Given
+    const largeToolOutput = [
+      "REPORT_START",
+      "old report line ".repeat(500),
+      "REPORT_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered." },
+      { role: "user", content: "Read the old report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_old_report",
+            tool: "read",
+            path: "old-report.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_old_report",
+        content: largeToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The old report was inspected; alpha is the key finding.",
+      },
+      { role: "user", content: "Continue with the latest instruction." },
+    ];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "stale-tool-output-overflow-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Earlier setup summary." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 30,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 30,
+              outputTokens: 4,
+            },
+          };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        const retainedToolOutput =
+          retriedMessages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.toolCallId === "read_old_report",
+          )?.content ?? "";
+        if (retainedToolOutput.includes("REPORT_END")) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Retry still includes the full stale tool output",
+          );
+        }
+
+        yield {
+          type: "text",
+          text: "Continued after shrinking stale tool output.",
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 10,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 10,
+            outputTokens: 5,
+          },
+        };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        contextCompaction: {
+          keepRecentTokens: 20_000,
+          toolOutputMaxChars: 128,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Continue with the latest instruction.",
+    });
+    const toolCallIndex = retriedMessages.findIndex(
+      (message) =>
+        message.role === "assistant" &&
+        (message.toolCalls ?? []).some(
+          (toolCall) => toolCall.id === "read_old_report",
+        ),
+    );
+    const toolResultIndex = retriedMessages.findIndex(
+      (message) =>
+        message.role === "tool" && message.toolCallId === "read_old_report",
+    );
+    expect(toolCallIndex).toBeGreaterThan(-1);
+    expect(toolResultIndex).toBe(toolCallIndex + 1);
+    expect(retriedMessages[toolResultIndex]).toEqual({
+      role: "tool",
+      toolCallId: "read_old_report",
+      content: expect.stringContaining(
+        "[stale tool output compacted: approximately omitted",
+      ),
+    });
+    expect(retriedMessages[toolResultIndex]?.content).not.toContain(
+      "REPORT_END",
+    );
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued after shrinking stale tool output.",
+    });
+    expect(endEvent(events).usage).toEqual({
+      inputTokens: 40,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 40,
+      outputTokens: 9,
+    });
+  });
+
+  test(`Given a consumed large tool output appears after the latest user,
+    When overflow recovery compacts the conversation,
+    Then the retry shrinks the consumed tool output`, async () => {
+    // Given
+    const largeToolOutput = [
+      "SINGLE_USER_LOG_START",
+      "single user log line ".repeat(500),
+      "SINGLE_USER_LOG_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered." },
+      { role: "user", content: "Analyze the current log." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_single_user_log",
+            tool: "read",
+            path: "current.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_single_user_log",
+        content: largeToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The current log was inspected; beta is the key finding.",
+      },
+    ];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "single-user-consumed-tool-overflow-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Earlier setup summary." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        const retainedToolOutput =
+          retriedMessages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.toolCallId === "read_single_user_log",
+          )?.content ?? "";
+        if (retainedToolOutput.includes("SINGLE_USER_LOG_END")) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Retry still includes the full consumed tool output",
+          );
+        }
+
+        yield {
+          type: "text",
+          text: "Continued after shrinking consumed tool output.",
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        contextCompaction: {
+          keepRecentTokens: 20_000,
+          toolOutputMaxChars: 128,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Analyze the current log.",
+    });
+    expect(
+      retriedMessages.find(
+        (message) =>
+          message.role === "tool" &&
+          message.toolCallId === "read_single_user_log",
+      ),
+    ).toEqual({
+      role: "tool",
+      toolCallId: "read_single_user_log",
+      content: expect.stringContaining(
+        "[stale tool output compacted: approximately omitted",
+      ),
+    });
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued after shrinking consumed tool output.",
+    });
+  });
+
+  test(`Given retained recent context contains an unconsumed large tool output before a steering user,
+    When overflow recovery compacts the conversation,
+    Then the retry keeps the current tool output intact`, async () => {
+    // Given
+    const currentToolOutput = [
+      "CURRENT_LOG_START",
+      "current log line ".repeat(500),
+      "CURRENT_LOG_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered." },
+      { role: "user", content: "Read the current log." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_current_log",
+            tool: "read",
+            path: "current.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_current_log",
+        content: currentToolOutput,
+      },
+      {
+        role: "user",
+        content: "Steering update: answer only after using the current log.",
+      },
+    ];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "current-tool-output-overflow-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Earlier setup summary." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        const retainedToolOutput =
+          retriedMessages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.toolCallId === "read_current_log",
+          )?.content ?? "";
+        if (!retainedToolOutput.includes("CURRENT_LOG_END")) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Retry lost the unconsumed current tool output",
+          );
+        }
+
+        yield {
+          type: "text",
+          text: "Continued with the current tool output intact.",
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        contextCompaction: {
+          keepRecentTokens: 20_000,
+          toolOutputMaxChars: 128,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Steering update: answer only after using the current log.",
+    });
+    const retainedTool = retriedMessages.find(
+      (message) =>
+        message.role === "tool" && message.toolCallId === "read_current_log",
+    );
+    expect(retainedTool).toEqual({
+      role: "tool",
+      toolCallId: "read_current_log",
+      content: currentToolOutput,
+    });
+    expect(retainedTool?.content).not.toContain(
+      "[stale tool output compacted:",
+    );
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued with the current tool output intact.",
+    });
+  });
+
+  test(`Given retained recent context already contains a compacted stale tool output,
+    When compaction runs again,
+    Then the stale tool output marker is not compacted again`, async () => {
+    // Given
+    const compactedToolOutput = `${"old report line ".repeat(
+      8,
+    )}\n[stale tool output compacted: approximately omitted 8000 chars]`;
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered." },
+      { role: "user", content: "Read the old report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_compacted_report",
+            tool: "read",
+            path: "old-report.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_compacted_report",
+        content: compactedToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The compacted old report was already inspected.",
+      },
+      { role: "user", content: "Continue with the latest instruction." },
+    ];
+    const provider: LLMProvider = {
+      id: "already-compacted-tool-provider",
+      async *stream() {
+        yield { type: "text", text: "Earlier setup summary." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 20_000,
+        toolOutputMaxChars: 128,
+      },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    expect(
+      messages.find(
+        (message) =>
+          message.role === "tool" &&
+          message.toolCallId === "read_compacted_report",
+      )?.content,
+    ).toBe(compactedToolOutput);
+  });
+
+  test(`Given stale tool output ends with text matching the compaction marker,
+    When compaction runs,
+    Then the original large tool output is still compacted`, async () => {
+    // Given
+    const largeToolOutput = [
+      "MARKER_SUFFIX_LOG_START",
+      "ordinary log line ".repeat(500),
+      "[stale tool output compacted: approximately omitted 8000 chars]",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered." },
+      { role: "user", content: "Read the old report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_marker_suffix_log",
+            tool: "read",
+            path: "marker-suffix.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_marker_suffix_log",
+        content: largeToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The marker suffix log was already inspected.",
+      },
+      { role: "user", content: "Continue with the latest instruction." },
+    ];
+    const provider: LLMProvider = {
+      id: "marker-suffix-tool-provider",
+      async *stream() {
+        yield { type: "text", text: "Earlier setup summary." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 20_000,
+        toolOutputMaxChars: 128,
+      },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    const retainedToolOutput =
+      messages.find(
+        (message) =>
+          message.role === "tool" &&
+          message.toolCallId === "read_marker_suffix_log",
+      )?.content ?? "";
+    expect(retainedToolOutput).toContain(
+      "[stale tool output compacted: approximately omitted",
+    );
+    expect(retainedToolOutput.length).toBeLessThan(largeToolOutput.length);
+  });
+
+  test(`Given stale tool output contains compaction marker text as ordinary content,
+    When compaction runs,
+    Then the stale tool output is still compacted`, async () => {
+    // Given
+    const largeToolOutput = [
+      "MARKER_LOG_START",
+      "ordinary log line ".repeat(20),
+      "[stale tool output compacted: this text came from the log]",
+      "ordinary log line ".repeat(500),
+      "MARKER_LOG_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered." },
+      { role: "user", content: "Read the old report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_marker_log",
+            tool: "read",
+            path: "marker.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_marker_log",
+        content: largeToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The marker log was already inspected.",
+      },
+      { role: "user", content: "Continue with the latest instruction." },
+    ];
+    const provider: LLMProvider = {
+      id: "marker-text-tool-provider",
+      async *stream() {
+        yield { type: "text", text: "Earlier setup summary." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 20_000,
+        toolOutputMaxChars: 128,
+      },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    const retainedToolOutput =
+      messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "read_marker_log",
+      )?.content ?? "";
+    expect(retainedToolOutput).toContain(
+      "[stale tool output compacted: approximately omitted",
+    );
+    expect(retainedToolOutput).not.toContain("MARKER_LOG_END");
+  });
+
   test(`Given a tool result is the final message when the provider reports context overflow,
     When compaction succeeds,
     Then overflow recovery retries with a checkpoint for the completed tool round`, async () => {
