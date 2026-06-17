@@ -113,4 +113,53 @@ describe("CLI Output", () => {
     );
     expect(finalEnd?.stopReason).toBe("completed");
   });
+
+  test(`Given context compaction shrinks one stale tool output,
+    When the CLI prints agent events,
+    Then the compaction report uses the singular tool-output label`, async () => {
+    // Given
+    let stdout = "";
+    let stderr = "";
+
+    // When
+    const finalEnd = await printAgentEvents(
+      agentEvents([
+        {
+          type: "context_compacted",
+          reason: "overflow_recovery",
+          beforeMessageCount: 7,
+          afterMessageCount: 4,
+          beforeEstimatedTokens: 1200,
+          afterEstimatedTokens: 300,
+          toolOutputsCompacted: 1,
+          toolOutputCharsBefore: 8000,
+          toolOutputCharsAfter: 160,
+          toolOutputEstimatedTokensBefore: 2000,
+          toolOutputEstimatedTokensAfter: 40,
+        },
+        { type: "text", text: "Done." },
+        {
+          type: "end",
+          usage: ZERO_USAGE,
+          turns: 1,
+          stopReason: "completed",
+        },
+      ]),
+      {
+        writeStdout: (text) => {
+          stdout += text;
+        },
+        writeStderr: (text) => {
+          stderr += text;
+        },
+      },
+    );
+
+    // Then
+    expect(stdout).toBe("Done.");
+    expect(stderr).toBe(
+      "Context compacted: overflow recovery (7 -> 4 messages, ~1200 -> ~300 tokens, stale tool output 1 (8000 -> 160 chars, ~2000 -> ~40 tokens))\n",
+    );
+    expect(finalEnd?.stopReason).toBe("completed");
+  });
 });
