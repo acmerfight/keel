@@ -16,7 +16,6 @@ const ZERO_USAGE: Usage = {
 };
 
 export interface ContextCompactionOptions {
-  readonly enabled?: boolean;
   readonly contextWindowTokens?: number;
   readonly reserveTokens?: number;
   readonly keepRecentTokens?: number;
@@ -25,7 +24,6 @@ export interface ContextCompactionOptions {
 }
 
 interface ResolvedContextCompactionOptions {
-  readonly enabled: boolean;
   readonly contextWindowTokens?: number;
   readonly reserveTokens: number;
   readonly keepRecentTokens: number;
@@ -59,7 +57,6 @@ function resolveContextCompactionOptions(
   options: ContextCompactionOptions | undefined,
 ): ResolvedContextCompactionOptions {
   const base = {
-    enabled: options?.enabled ?? true,
     reserveTokens: options?.reserveTokens ?? DEFAULT_RESERVE_TOKENS,
     keepRecentTokens: options?.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS,
     toolOutputMaxChars:
@@ -119,7 +116,7 @@ export function shouldCompactBeforeRequest(
   options: ContextCompactionOptions | undefined,
 ): boolean {
   const resolved = resolveContextCompactionOptions(options);
-  if (!resolved.enabled || resolved.contextWindowTokens === undefined) {
+  if (resolved.contextWindowTokens === undefined) {
     return false;
   }
   return (
@@ -180,7 +177,7 @@ function selectCompactionSplit(
   const indexedMessages = Array.from(messages.entries()).reverse();
   for (const [previousIndex, previousMessage] of indexedMessages) {
     const firstRecentIndex = previousIndex + 1;
-    if (firstRecentIndex >= target || firstRecentIndex < 1) {
+    if (firstRecentIndex >= target) {
       continue;
     }
     if (canSplitAfter(previousMessage, messages[firstRecentIndex])) {
@@ -389,14 +386,11 @@ export async function compactMessages(
   options: CompactMessagesOptions,
 ): Promise<CompactMessagesResult> {
   const resolved = resolveContextCompactionOptions(options.contextCompaction);
-  if (!resolved.enabled) {
-    return { compacted: false, usage: ZERO_USAGE };
-  }
 
   const split = selectCompactionSplit(options.messages, {
     keepRecentTokens: resolved.keepRecentTokens,
   });
-  if (split === null || split.firstRecentIndex <= 0) {
+  if (split === null) {
     return { compacted: false, usage: ZERO_USAGE };
   }
 

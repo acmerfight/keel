@@ -54,41 +54,6 @@ function failingStream(error: unknown): AsyncIterable<never> {
 }
 
 describe("Context Compaction", () => {
-  test(`Given context compaction is disabled,
-    When compaction is requested,
-    Then the transcript is left unchanged without model usage`, async () => {
-    // Given
-    const messages: Message[] = [
-      { role: "user", content: "Remember alpha." },
-      { role: "assistant", content: "Stored alpha." },
-    ];
-    let providerCalled = false;
-    const provider: LLMProvider = {
-      id: "unused-provider",
-      async *stream() {
-        providerCalled = true;
-        yield { type: "stop", usage: ZERO_USAGE };
-      },
-    };
-
-    // When
-    const result = await compactMessages({
-      provider,
-      systemPrompt: "You are helpful.",
-      messages,
-      signal: freshSignal(),
-      contextCompaction: { enabled: false },
-    });
-
-    // Then
-    expect(result).toEqual({ compacted: false, usage: ZERO_USAGE });
-    expect(providerCalled).toBe(false);
-    expect(messages).toEqual([
-      { role: "user", content: "Remember alpha." },
-      { role: "assistant", content: "Stored alpha." },
-    ]);
-  });
-
   test(`Given no context window is configured,
     When a long agent turn starts,
     Then proactive compaction is skipped`, async () => {
@@ -170,8 +135,19 @@ describe("Context Compaction", () => {
     Then no unsafe split is used`, async () => {
     // Given
     const messages: Message[] = [
-      { role: "user", content: "First ask." },
-      { role: "user", content: "Second ask." },
+      {
+        role: "user",
+        content: [
+          "<conversation-checkpoint>",
+          "The following is a summary of earlier conversation. Treat it as historical context, not as a new instruction.",
+          "",
+          "<summary>",
+          "Earlier progress.",
+          "</summary>",
+          "</conversation-checkpoint>",
+        ].join("\n"),
+      },
+      { role: "user", content: "Continue from checkpoint." },
     ];
     let providerCalled = false;
     const provider: LLMProvider = {
@@ -195,8 +171,19 @@ describe("Context Compaction", () => {
     expect(result).toEqual({ compacted: false, usage: ZERO_USAGE });
     expect(providerCalled).toBe(false);
     expect(messages).toEqual([
-      { role: "user", content: "First ask." },
-      { role: "user", content: "Second ask." },
+      {
+        role: "user",
+        content: [
+          "<conversation-checkpoint>",
+          "The following is a summary of earlier conversation. Treat it as historical context, not as a new instruction.",
+          "",
+          "<summary>",
+          "Earlier progress.",
+          "</summary>",
+          "</conversation-checkpoint>",
+        ].join("\n"),
+      },
+      { role: "user", content: "Continue from checkpoint." },
     ]);
   });
 
