@@ -7,6 +7,16 @@ const DEFAULT_TOOL_OUTPUT_MAX_CHARS = 2_000;
 const DEFAULT_SUMMARY_INPUT_MAX_CHARS = 96_000;
 const MIN_SUMMARY_INPUT_MAX_CHARS = 1_000;
 const MAX_SUMMARY_OVERFLOW_RETRIES = 3;
+const STALE_TOOL_OUTPUT_COMPACTED_PREFIX =
+  "[stale tool output compacted: approximately omitted ";
+const STALE_TOOL_OUTPUT_COMPACTED_SUFFIX = " chars]";
+const STALE_TOOL_OUTPUT_COMPACTED_SUFFIX_PATTERN =
+  /\n\[stale tool output compacted: approximately omitted [0-9]+ chars\]$/;
+const STALE_TOOL_OUTPUT_COMPACTED_OVERHEAD_CHARS =
+  "\n".length +
+  STALE_TOOL_OUTPUT_COMPACTED_PREFIX.length +
+  String(Number.MAX_SAFE_INTEGER).length +
+  STALE_TOOL_OUTPUT_COMPACTED_SUFFIX.length;
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -219,6 +229,76 @@ function truncateText(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars)}\n[truncated ${text.length - maxChars} chars]`;
 }
 
+function staleToolOutputCompactedMarker(omittedChars: number): string {
+  return `${STALE_TOOL_OUTPUT_COMPACTED_PREFIX}${omittedChars}${STALE_TOOL_OUTPUT_COMPACTED_SUFFIX}`;
+}
+
+function isAlreadyCompactedStaleToolOutput(
+  text: string,
+  maxChars: number,
+): boolean {
+  return (
+    STALE_TOOL_OUTPUT_COMPACTED_SUFFIX_PATTERN.test(text) &&
+    text.length <= maxChars + STALE_TOOL_OUTPUT_COMPACTED_OVERHEAD_CHARS
+  );
+}
+
+function compactStaleToolOutput(text: string, maxChars: number): string {
+  return `${text.slice(0, maxChars)}\n${staleToolOutputCompactedMarker(
+    text.length - maxChars,
+  )}`;
+}
+
+function shouldCompactStaleToolOutput(
+  message: Message,
+  messageIndex: number,
+  lastAssistantIndex: number,
+  toolOutputMaxChars: number,
+): boolean {
+  return (
+    message.role === "tool" &&
+    messageIndex < lastAssistantIndex &&
+    message.content.length > toolOutputMaxChars &&
+    !isAlreadyCompactedStaleToolOutput(message.content, toolOutputMaxChars)
+  );
+}
+
+function compactStaleToolOutputs(
+  messages: readonly Message[],
+  toolOutputMaxChars: number,
+): readonly Message[] {
+  const lastAssistantIndex = messages.findLastIndex(
+    (message) => message.role === "assistant",
+  );
+  const needsCompaction = messages.some((message, index) =>
+    shouldCompactStaleToolOutput(
+      message,
+      index,
+      lastAssistantIndex,
+      toolOutputMaxChars,
+    ),
+  );
+  if (!needsCompaction) {
+    return messages;
+  }
+  return messages.map((message, index) => {
+    if (
+      !shouldCompactStaleToolOutput(
+        message,
+        index,
+        lastAssistantIndex,
+        toolOutputMaxChars,
+      )
+    ) {
+      return message;
+    }
+    return {
+      ...message,
+      content: compactStaleToolOutput(message.content, toolOutputMaxChars),
+    };
+  });
+}
+
 function serializeMessage(
   message: Message,
   toolOutputMaxChars: number,
@@ -304,8 +384,12 @@ function buildCompactedMessages(
   messages: readonly Message[],
   split: CompactionSplit,
   summary: string,
+  options: ResolvedContextCompactionOptions,
 ): Message[] {
-  const recentMessages = messages.slice(split.firstRecentIndex);
+  const recentMessages = compactStaleToolOutputs(
+    messages.slice(split.firstRecentIndex),
+    options.toolOutputMaxChars,
+  );
   return [
     {
       role: "user",
@@ -442,6 +526,7 @@ export async function compactMessages(
     options.messages,
     split,
     summaryTurn.text,
+    resolved,
   );
   options.messages.splice(0, options.messages.length, ...compacted);
   return {
