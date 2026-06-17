@@ -89,6 +89,11 @@ interface StaleToolOutputCompactionResult {
   readonly stats: StaleToolOutputCompactionStats;
 }
 
+interface StaleToolOutputCompactionEntry {
+  readonly message: Message;
+  readonly stats: StaleToolOutputCompactionStats;
+}
+
 interface BuildCompactedMessagesResult {
   readonly messages: readonly Message[];
   readonly staleToolOutputStats: StaleToolOutputCompactionStats;
@@ -102,6 +107,39 @@ const EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS: StaleToolOutputCompactionStats =
     toolOutputEstimatedTokensBefore: 0,
     toolOutputEstimatedTokensAfter: 0,
   };
+
+function staleToolOutputCompactionStats(
+  originalContent: string,
+  compactedContent: string,
+): StaleToolOutputCompactionStats {
+  return {
+    toolOutputsCompacted: 1,
+    toolOutputCharsBefore: originalContent.length,
+    toolOutputCharsAfter: compactedContent.length,
+    toolOutputEstimatedTokensBefore: estimateTextTokens(originalContent),
+    toolOutputEstimatedTokensAfter: estimateTextTokens(compactedContent),
+  };
+}
+
+function mergeStaleToolOutputCompactionStats(
+  left: StaleToolOutputCompactionStats,
+  right: StaleToolOutputCompactionStats,
+): StaleToolOutputCompactionStats {
+  return {
+    toolOutputsCompacted:
+      left.toolOutputsCompacted + right.toolOutputsCompacted,
+    toolOutputCharsBefore:
+      left.toolOutputCharsBefore + right.toolOutputCharsBefore,
+    toolOutputCharsAfter:
+      left.toolOutputCharsAfter + right.toolOutputCharsAfter,
+    toolOutputEstimatedTokensBefore:
+      left.toolOutputEstimatedTokensBefore +
+      right.toolOutputEstimatedTokensBefore,
+    toolOutputEstimatedTokensAfter:
+      left.toolOutputEstimatedTokensAfter +
+      right.toolOutputEstimatedTokensAfter,
+  };
+}
 
 function resolveContextCompactionOptions(
   options: ContextCompactionOptions | undefined,
@@ -316,35 +354,42 @@ function compactStaleToolOutputs(
       stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
     };
   }
-  const stats = { ...EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS };
-  const compactedMessages = messages.map((message, index) => {
-    if (
-      !shouldCompactStaleToolOutput(
-        message,
-        index,
-        lastAssistantIndex,
+  const compactedEntries = messages.map(
+    (message, index): StaleToolOutputCompactionEntry => {
+      if (
+        !shouldCompactStaleToolOutput(
+          message,
+          index,
+          lastAssistantIndex,
+          toolOutputMaxChars,
+        )
+      ) {
+        return {
+          message,
+          stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+        };
+      }
+      const compactedContent = compactStaleToolOutput(
+        message.content,
         toolOutputMaxChars,
-      )
-    ) {
-      return message;
-    }
-    const compactedContent = compactStaleToolOutput(
-      message.content,
-      toolOutputMaxChars,
-    );
-    stats.toolOutputsCompacted += 1;
-    stats.toolOutputCharsBefore += message.content.length;
-    stats.toolOutputCharsAfter += compactedContent.length;
-    stats.toolOutputEstimatedTokensBefore += estimateTextTokens(
-      message.content,
-    );
-    stats.toolOutputEstimatedTokensAfter +=
-      estimateTextTokens(compactedContent);
-    return {
-      ...message,
-      content: compactedContent,
-    };
-  });
+      );
+      return {
+        message: {
+          ...message,
+          content: compactedContent,
+        },
+        stats: staleToolOutputCompactionStats(
+          message.content,
+          compactedContent,
+        ),
+      };
+    },
+  );
+  const stats = compactedEntries.reduce(
+    (total, entry) => mergeStaleToolOutputCompactionStats(total, entry.stats),
+    EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+  );
+  const compactedMessages = compactedEntries.map((entry) => entry.message);
   return {
     messages: compactedMessages,
     stats,
