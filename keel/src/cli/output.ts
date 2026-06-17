@@ -105,6 +105,17 @@ function contextCompactionReasonLabel(
   }
 }
 
+function formatToolOutputCompactionDetails(
+  event: Extract<AgentEvent, { readonly type: "context_compacted" }>,
+): string {
+  if (event.toolOutputsCompacted === 0) {
+    return "";
+  }
+  const outputLabel =
+    event.toolOutputsCompacted === 1 ? "tool output" : "tool outputs";
+  return `, stale ${outputLabel} ${event.toolOutputsCompacted} (${event.toolOutputCharsBefore} -> ${event.toolOutputCharsAfter} chars, ~${event.toolOutputEstimatedTokensBefore} -> ~${event.toolOutputEstimatedTokensAfter} tokens)`;
+}
+
 export function formatCostReport(cost: CostReport, maxUsd: number): string {
   const spent = `$${formatUsd(cost.spentUsd)}`;
   const budget = `$${formatUsd(maxUsd)}`;
@@ -123,7 +134,7 @@ export async function printAgentEvents(
       runtime.writeStdout(sanitizeAssistantText(event.text));
     } else if (event.type === "context_compacted") {
       runtime.writeStderr(
-        `Context compacted: ${contextCompactionReasonLabel(event.reason)} (${event.beforeMessageCount} -> ${event.afterMessageCount} messages, ~${event.beforeEstimatedTokens} -> ~${event.afterEstimatedTokens} tokens)\n`,
+        `Context compacted: ${contextCompactionReasonLabel(event.reason)} (${event.beforeMessageCount} -> ${event.afterMessageCount} messages, ~${event.beforeEstimatedTokens} -> ~${event.afterEstimatedTokens} tokens${formatToolOutputCompactionDetails(event)})\n`,
       );
     } else if (event.type === "provider_retry") {
       runtime.writeStderr(
