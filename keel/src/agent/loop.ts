@@ -5,8 +5,10 @@ import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeToolCall } from "../tools/execution.ts";
 import {
   type CompactMessagesResult,
+  type ContextCompactionAccountingSnapshot,
   type ContextCompactionOptions,
   type ContextCompactionStats,
+  captureContextCompactionAccountingSnapshot,
   compactMessages,
   shouldCompactBeforeRequest,
 } from "./context-compaction.ts";
@@ -269,6 +271,7 @@ export async function* runAgentTurn(
     uncachedInputTokens: 0,
     outputTokens: 0,
   };
+  let contextAccounting: ContextCompactionAccountingSnapshot | undefined;
 
   function reportCost(usage: Usage): CostReport | undefined {
     if (costTracking === undefined) {
@@ -289,6 +292,7 @@ export async function* runAgentTurn(
 
   async function compactContextIfPossible(
     targetMessages: Message[],
+    streamOptions: StreamTurnOptions,
   ): Promise<CompactMessagesResult> {
     const result = await compactMessages({
       provider,
@@ -296,7 +300,14 @@ export async function* runAgentTurn(
       messages: targetMessages,
       signal,
       ...(contextCompaction !== undefined ? { contextCompaction } : {}),
+      ...(contextAccounting !== undefined ? { contextAccounting } : {}),
+      ...(streamOptions.toolChoice !== undefined
+        ? { requestMetadata: { toolChoice: streamOptions.toolChoice } }
+        : {}),
     });
+    if (result.compacted) {
+      contextAccounting = undefined;
+    }
     totalUsage = addUsage(totalUsage, result.usage);
     return result;
   }
@@ -315,10 +326,17 @@ export async function* runAgentTurn(
           systemPrompt,
           requestMessages,
           contextCompaction,
+          contextAccounting,
+          streamOptions.toolChoice !== undefined
+            ? { toolChoice: streamOptions.toolChoice }
+            : undefined,
         )
       ) {
         compactedBeforeRequest = true;
-        const compaction = await compactContextIfPossible(requestMessages);
+        const compaction = await compactContextIfPossible(
+          requestMessages,
+          streamOptions,
+        );
         if (compaction.stats !== undefined) {
           yield {
             type: "context_compacted",
@@ -328,12 +346,29 @@ export async function* runAgentTurn(
         }
       }
       try {
-        return yield* streamAgentTurn(streamOptions);
+        const turn = yield* streamAgentTurn(streamOptions);
+        contextAccounting =
+          contextCompaction === undefined
+            ? undefined
+            : captureContextCompactionAccountingSnapshot({
+                systemPrompt,
+                messages: requestMessages,
+                usage: turn.usage,
+                ...(streamOptions.toolChoice !== undefined
+                  ? {
+                      requestMetadata: { toolChoice: streamOptions.toolChoice },
+                    }
+                  : {}),
+              });
+        return turn;
       } catch (error) {
         if (error instanceof ContextOverflowBeforeAssistantError) {
           if (!overflowRecoveryAttempted) {
             overflowRecoveryAttempted = true;
-            const compaction = await compactContextIfPossible(requestMessages);
+            const compaction = await compactContextIfPossible(
+              requestMessages,
+              streamOptions,
+            );
             if (compaction.compacted) {
               if (compaction.stats !== undefined) {
                 yield {

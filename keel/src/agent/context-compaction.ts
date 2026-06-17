@@ -74,6 +74,8 @@ interface CompactMessagesOptions {
   readonly messages: Message[];
   readonly signal: AbortSignal;
   readonly contextCompaction?: ContextCompactionOptions;
+  readonly contextAccounting?: ContextCompactionAccountingSnapshot;
+  readonly requestMetadata?: ContextCompactionRequestMetadata;
 }
 
 export interface CompactMessagesResult {
@@ -92,6 +94,21 @@ export interface ContextCompactionStats {
   readonly toolOutputCharsAfter: number;
   readonly toolOutputEstimatedTokensBefore: number;
   readonly toolOutputEstimatedTokensAfter: number;
+}
+
+export interface ContextCompactionAccountingSnapshot {
+  readonly systemPrompt: string;
+  readonly messageFingerprints: readonly string[];
+  readonly requestMetadata: ResolvedContextCompactionRequestMetadata;
+  readonly inputTokens: number;
+}
+
+export interface ContextCompactionRequestMetadata {
+  readonly toolChoice?: "none";
+}
+
+interface ResolvedContextCompactionRequestMetadata {
+  readonly toolChoice: "auto" | "none";
 }
 
 interface TextOnlyTurn {
@@ -322,24 +339,167 @@ function estimateMessagesTokens(messages: readonly Message[]): number {
   );
 }
 
+function resolvedRequestMetadata(
+  metadata: ContextCompactionRequestMetadata | undefined,
+): ResolvedContextCompactionRequestMetadata {
+  return {
+    toolChoice: metadata?.toolChoice ?? "auto",
+  };
+}
+
+function toolCallFingerprint(toolCall: ToolCall): string {
+  switch (toolCall.tool) {
+    case "read":
+      return JSON.stringify([
+        toolCall.id,
+        toolCall.tool,
+        toolCall.path,
+        toolCall.offset ?? null,
+        toolCall.limit ?? null,
+      ]);
+    case "grep":
+      return JSON.stringify([
+        toolCall.id,
+        toolCall.tool,
+        toolCall.pattern,
+        toolCall.path ?? null,
+      ]);
+    case "edit":
+      return JSON.stringify([
+        toolCall.id,
+        toolCall.tool,
+        toolCall.path,
+        toolCall.oldString,
+        toolCall.newString,
+      ]);
+    case "write":
+      return JSON.stringify([
+        toolCall.id,
+        toolCall.tool,
+        toolCall.path,
+        toolCall.content,
+      ]);
+    case "bash":
+      return JSON.stringify([
+        toolCall.id,
+        toolCall.tool,
+        toolCall.command,
+        toolCall.timeoutMs ?? null,
+      ]);
+  }
+}
+
+function messageFingerprint(message: Message): string {
+  switch (message.role) {
+    case "user":
+      return JSON.stringify([message.role, message.content]);
+    case "assistant":
+      return JSON.stringify([
+        message.role,
+        message.content,
+        (message.toolCalls ?? []).map(toolCallFingerprint),
+      ]);
+    case "tool":
+      return JSON.stringify([
+        message.role,
+        message.toolCallId,
+        message.content,
+      ]);
+  }
+}
+
 function estimateRequestTokens(
   systemPrompt: string,
   messages: readonly Message[],
+  accounting?: ContextCompactionAccountingSnapshot,
+  metadata?: ContextCompactionRequestMetadata,
 ): number {
+  const accountedTokens = estimateRequestTokensFromAccounting(
+    systemPrompt,
+    messages,
+    accounting,
+    metadata,
+  );
+  if (accountedTokens !== null) {
+    return accountedTokens;
+  }
   return estimateTextTokens(systemPrompt) + estimateMessagesTokens(messages);
+}
+
+function estimateRequestTokensFromAccounting(
+  systemPrompt: string,
+  messages: readonly Message[],
+  accounting: ContextCompactionAccountingSnapshot | undefined,
+  metadata: ContextCompactionRequestMetadata | undefined,
+): number | null {
+  const currentMetadata = resolvedRequestMetadata(metadata);
+  if (
+    accounting === undefined ||
+    accounting.systemPrompt !== systemPrompt ||
+    accounting.requestMetadata.toolChoice !== currentMetadata.toolChoice ||
+    accounting.messageFingerprints.length > messages.length
+  ) {
+    return null;
+  }
+
+  for (const [
+    index,
+    accountedFingerprint,
+  ] of accounting.messageFingerprints.entries()) {
+    const message = messages[index];
+    if (
+      message === undefined ||
+      messageFingerprint(message) !== accountedFingerprint
+    ) {
+      return null;
+    }
+  }
+
+  return (
+    accounting.inputTokens +
+    estimateMessagesTokens(
+      messages.slice(accounting.messageFingerprints.length),
+    )
+  );
+}
+
+function isUsableInputTokenCount(inputTokens: number): boolean {
+  return Number.isSafeInteger(inputTokens) && inputTokens >= 0;
+}
+
+export function captureContextCompactionAccountingSnapshot(options: {
+  readonly systemPrompt: string;
+  readonly messages: readonly Message[];
+  readonly usage: Usage;
+  readonly requestMetadata?: ContextCompactionRequestMetadata;
+}): ContextCompactionAccountingSnapshot | undefined {
+  if (!isUsableInputTokenCount(options.usage.inputTokens)) {
+    return undefined;
+  }
+  return {
+    systemPrompt: options.systemPrompt,
+    // Provider usage only maps clearly to the exact completed request shape.
+    // Store stable message fingerprints so later checks fall back if earlier
+    // content, tool calls, ordering, system prompt, or tool mode changed.
+    messageFingerprints: options.messages.map(messageFingerprint),
+    requestMetadata: resolvedRequestMetadata(options.requestMetadata),
+    inputTokens: options.usage.inputTokens,
+  };
 }
 
 export function shouldCompactBeforeRequest(
   systemPrompt: string,
   messages: readonly Message[],
   options: ContextCompactionOptions | undefined,
+  accounting?: ContextCompactionAccountingSnapshot,
+  metadata?: ContextCompactionRequestMetadata,
 ): boolean {
   const resolved = resolveContextCompactionOptions(options);
   if (resolved.contextWindowTokens === undefined) {
     return false;
   }
   return (
-    estimateRequestTokens(systemPrompt, messages) >
+    estimateRequestTokens(systemPrompt, messages, accounting, metadata) >
     resolved.contextWindowTokens - resolved.reserveTokens
   );
 }
@@ -861,6 +1021,8 @@ export async function compactMessages(
   const beforeEstimatedTokens = estimateRequestTokens(
     options.systemPrompt,
     options.messages,
+    options.contextAccounting,
+    options.requestMetadata,
   );
 
   const split = selectCompactionSplit(options.messages, {
