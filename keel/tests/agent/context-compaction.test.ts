@@ -7,6 +7,10 @@ import { KeelError } from "../../src/core/error.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
+type ContextCompactedEvent = Extract<
+  AgentEvent,
+  { readonly type: "context_compacted" }
+>;
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -37,6 +41,25 @@ function endEvent(events: readonly AgentEvent[]): EndEvent {
   const event = events.at(-1);
   if (event === undefined || event.type !== "end") {
     throw new Error("run did not finish with an end event");
+  }
+  return event;
+}
+
+function contextCompactedEvents(
+  events: readonly AgentEvent[],
+): ContextCompactedEvent[] {
+  return events.filter(
+    (event): event is ContextCompactedEvent =>
+      event.type === "context_compacted",
+  );
+}
+
+function onlyContextCompactedEvent(
+  events: readonly AgentEvent[],
+): ContextCompactedEvent {
+  const [event] = contextCompactedEvents(events);
+  if (event === undefined) {
+    throw new Error("run did not emit a context_compacted event");
   }
   return event;
 }
@@ -625,6 +648,15 @@ describe("Context Compaction", () => {
     );
 
     // Then
+    const compactionEvent = onlyContextCompactedEvent(events);
+    expect(compactionEvent).toMatchObject({
+      reason: "proactive",
+      beforeMessageCount: 3,
+      afterMessageCount: 2,
+    });
+    expect(compactionEvent.beforeEstimatedTokens).toBeGreaterThan(
+      compactionEvent.afterEstimatedTokens,
+    );
     expect(mutableProviderRequests).toHaveLength(2);
     expect(mutableProviderRequests[0]).toEqual([
       expect.objectContaining({
@@ -827,6 +859,15 @@ describe("Context Compaction", () => {
     );
 
     // Then
+    const compactionEvent = onlyContextCompactedEvent(events);
+    expect(compactionEvent).toMatchObject({
+      reason: "overflow_recovery",
+      beforeMessageCount: 3,
+      afterMessageCount: 2,
+    });
+    expect(compactionEvent.beforeEstimatedTokens).toBeGreaterThan(
+      compactionEvent.afterEstimatedTokens,
+    );
     expect(requestCount).toBe(3);
     expect(retriedMessages).toEqual([
       {

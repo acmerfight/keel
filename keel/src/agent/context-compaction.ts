@@ -46,6 +46,14 @@ interface CompactMessagesOptions {
 export interface CompactMessagesResult {
   readonly compacted: boolean;
   readonly usage: Usage;
+  readonly stats?: ContextCompactionStats;
+}
+
+export interface ContextCompactionStats {
+  readonly beforeMessageCount: number;
+  readonly afterMessageCount: number;
+  readonly beforeEstimatedTokens: number;
+  readonly afterEstimatedTokens: number;
 }
 
 interface TextOnlyTurn {
@@ -386,6 +394,11 @@ export async function compactMessages(
   options: CompactMessagesOptions,
 ): Promise<CompactMessagesResult> {
   const resolved = resolveContextCompactionOptions(options.contextCompaction);
+  const beforeMessageCount = options.messages.length;
+  const beforeEstimatedTokens = estimateRequestTokens(
+    options.systemPrompt,
+    options.messages,
+  );
 
   const split = selectCompactionSplit(options.messages, {
     keepRecentTokens: resolved.keepRecentTokens,
@@ -408,5 +421,17 @@ export async function compactMessages(
     summaryTurn.text,
   );
   options.messages.splice(0, options.messages.length, ...compacted);
-  return { compacted: true, usage: summaryTurn.usage };
+  return {
+    compacted: true,
+    usage: summaryTurn.usage,
+    stats: {
+      beforeMessageCount,
+      afterMessageCount: options.messages.length,
+      beforeEstimatedTokens,
+      afterEstimatedTokens: estimateRequestTokens(
+        options.systemPrompt,
+        options.messages,
+      ),
+    },
+  };
 }

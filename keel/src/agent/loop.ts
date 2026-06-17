@@ -4,7 +4,9 @@ import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeToolCall } from "../tools/execution.ts";
 import {
+  type CompactMessagesResult,
   type ContextCompactionOptions,
+  type ContextCompactionStats,
   compactMessages,
   shouldCompactBeforeRequest,
 } from "./context-compaction.ts";
@@ -25,8 +27,14 @@ interface CostTrackingOptions {
 // stopReason is "completed" when the assistant finished with a plain answer;
 // otherwise it is the stop policy's reason label (e.g. "cost_budget",
 // "repeated_tool_call", "turn_limit").
+type ContextCompactionReason = "proactive" | "overflow_recovery";
+
 export type AgentEvent =
   | { readonly type: "text"; readonly text: string }
+  | ({
+      readonly type: "context_compacted";
+      readonly reason: ContextCompactionReason;
+    } & ContextCompactionStats)
   | {
       readonly type: "provider_retry";
       readonly provider: string;
@@ -281,7 +289,7 @@ export async function* runAgentTurn(
 
   async function compactContextIfPossible(
     targetMessages: Message[],
-  ): Promise<boolean> {
+  ): Promise<CompactMessagesResult> {
     const result = await compactMessages({
       provider,
       systemPrompt,
@@ -290,7 +298,7 @@ export async function* runAgentTurn(
       ...(contextCompaction !== undefined ? { contextCompaction } : {}),
     });
     totalUsage = addUsage(totalUsage, result.usage);
-    return result.compacted;
+    return result;
   }
 
   async function* streamRecoverableAgentTurn(
@@ -310,7 +318,14 @@ export async function* runAgentTurn(
         )
       ) {
         compactedBeforeRequest = true;
-        await compactContextIfPossible(requestMessages);
+        const compaction = await compactContextIfPossible(requestMessages);
+        if (compaction.stats !== undefined) {
+          yield {
+            type: "context_compacted",
+            reason: "proactive",
+            ...compaction.stats,
+          };
+        }
       }
       try {
         return yield* streamAgentTurn(streamOptions);
@@ -318,7 +333,15 @@ export async function* runAgentTurn(
         if (error instanceof ContextOverflowBeforeAssistantError) {
           if (!overflowRecoveryAttempted) {
             overflowRecoveryAttempted = true;
-            if (await compactContextIfPossible(requestMessages)) {
+            const compaction = await compactContextIfPossible(requestMessages);
+            if (compaction.compacted) {
+              if (compaction.stats !== undefined) {
+                yield {
+                  type: "context_compacted",
+                  reason: "overflow_recovery",
+                  ...compaction.stats,
+                };
+              }
               compactedBeforeRequest = true;
               continue;
             }
