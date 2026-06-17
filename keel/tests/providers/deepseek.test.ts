@@ -475,6 +475,24 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "context-too-long") {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                error: { message: "context_length_exceeded: prompt too long" },
+              }),
+            );
+            return;
+          }
+
+          if (parsed.messages?.[1]?.content === "request-too-large") {
+            res.writeHead(413, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({ error: { message: "Request too large" } }),
+            );
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "no-body") {
             res.writeHead(204);
             res.end();
@@ -2381,6 +2399,58 @@ describe("DeepSeek Provider", () => {
       name: "KeelError",
       code: "provider_http_error",
       message: expect.stringMatching(/DeepSeek API error \(400\)/),
+    });
+  });
+
+  test(`Given the API says the prompt exceeds the model context,
+    When provider attempts to stream,
+    Then it throws a provider context overflow error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "context-too-long" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_context_overflow",
+      message: expect.stringMatching(/context_length_exceeded/),
+    });
+  });
+
+  test(`Given the API rejects the request as too large,
+    When provider attempts to stream,
+    Then it throws a provider context overflow error`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "request-too-large" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_context_overflow",
+      message: expect.stringMatching(/DeepSeek API error \(413\)/),
     });
   });
 

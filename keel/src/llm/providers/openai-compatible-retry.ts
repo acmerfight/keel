@@ -82,6 +82,34 @@ function httpErrorCode(
   return "provider_http_error";
 }
 
+function isContextOverflowHttpError(status: number, body: string): boolean {
+  if (status === 413) {
+    return true;
+  }
+  if (status !== 400) {
+    return false;
+  }
+  return [
+    /prompt is too long/i,
+    /input is too long for requested model/i,
+    /exceeds the context window/i,
+    /input token count.*exceeds the maximum/i,
+    /maximum prompt length is \d+/i,
+    /reduce the length of the messages/i,
+    /maximum context length is \d+ tokens/i,
+    /exceeds the available context size/i,
+    /greater than the context length/i,
+    /context window exceeds limit/i,
+    /exceeded model token limit/i,
+    /context[_ ]length[_ ]exceeded/i,
+    /request entity too large/i,
+    /input length.*exceeds.*context length/i,
+    /prompt too long; exceeded (?:max )?context length/i,
+    /too large for model with \d+ maximum context length/i,
+    /model_context_window_exceeded/i,
+  ].some((pattern) => pattern.test(body));
+}
+
 function isAbortError(error: unknown, signal: AbortSignal): boolean {
   if (signal.aborted) return true;
   return error instanceof Error && error.name === "AbortError";
@@ -335,7 +363,9 @@ export async function* requestChatCompletions(
 
     const text = await response.text();
     throw new KeelError(
-      httpErrorCode(response.status),
+      isContextOverflowHttpError(response.status, text)
+        ? "provider_context_overflow"
+        : httpErrorCode(response.status),
       `${providerName} API error (${response.status}): ${text}`,
     );
   }

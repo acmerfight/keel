@@ -94,6 +94,17 @@ function providerRetryReasonLabel(reason: string): string {
   return providerRetryReasonLabels[reason] ?? "provider error";
 }
 
+function contextCompactionReasonLabel(
+  reason: Extract<AgentEvent, { readonly type: "context_compacted" }>["reason"],
+): string {
+  switch (reason) {
+    case "proactive":
+      return "proactive";
+    case "overflow_recovery":
+      return "overflow recovery";
+  }
+}
+
 export function formatCostReport(cost: CostReport, maxUsd: number): string {
   const spent = `$${formatUsd(cost.spentUsd)}`;
   const budget = `$${formatUsd(maxUsd)}`;
@@ -110,6 +121,10 @@ export async function printAgentEvents(
   for await (const event of stream) {
     if (event.type === "text") {
       runtime.writeStdout(sanitizeAssistantText(event.text));
+    } else if (event.type === "context_compacted") {
+      runtime.writeStderr(
+        `Context compacted: ${contextCompactionReasonLabel(event.reason)} (${event.beforeMessageCount} -> ${event.afterMessageCount} messages, ~${event.beforeEstimatedTokens} -> ~${event.afterEstimatedTokens} tokens)\n`,
+      );
     } else if (event.type === "provider_retry") {
       runtime.writeStderr(
         `Provider retry: ${sanitizeToolLabel(event.provider)} ${providerRetryReasonLabel(event.reason)} (attempt ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)}ms)\n`,
