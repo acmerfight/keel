@@ -28,6 +28,7 @@ export type KeelErrorCode =
   | "provider_auth_failed"
   | "provider_rate_limited"
   | "provider_server_error"
+  | "provider_context_overflow"
   | "provider_http_error"
   | "provider_protocol_error"
   | "provider_aborted"

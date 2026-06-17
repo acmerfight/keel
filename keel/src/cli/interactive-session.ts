@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline/promises";
+import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
 import { runAgentTurn } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
@@ -22,6 +23,7 @@ interface InteractiveSessionArgs {
 interface InteractiveResolvedProviderBase {
   readonly provider: LLMProvider;
   readonly model: string;
+  readonly contextCompaction?: ContextCompactionOptions;
 }
 
 export type InteractiveResolvedProvider =
@@ -343,6 +345,9 @@ export async function runInteractiveSession(
                   maxCostUsd: options.cliArgs.maxCostUsd,
                 },
               }
+            : {}),
+          ...(resolved.contextCompaction !== undefined
+            ? { contextCompaction: resolved.contextCompaction }
             : {}),
           drainSteeringMessages: () => {
             const steeringLines = lineReader

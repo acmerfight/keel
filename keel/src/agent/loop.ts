@@ -3,6 +3,11 @@ import { KeelError } from "../core/error.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeToolCall } from "../tools/execution.ts";
+import {
+  type ContextCompactionOptions,
+  compactMessages,
+  shouldCompactBeforeRequest,
+} from "./context-compaction.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
 import { defaultStopPolicy } from "./stop-policy.ts";
 
@@ -54,6 +59,7 @@ export interface RunAgentOptions {
   readonly allowBash?: boolean;
   readonly bashPermission?: BashPermissionPolicy;
   readonly stopPolicy?: AgentStopPolicy;
+  readonly contextCompaction?: ContextCompactionOptions;
 }
 
 type SteeringMessage = Extract<Message, { readonly role: "user" }>;
@@ -70,9 +76,26 @@ export interface RunAgentTurnOptions {
   readonly allowBash?: boolean;
   readonly bashPermission?: BashPermissionPolicy;
   readonly stopPolicy?: AgentStopPolicy;
+  readonly contextCompaction?: ContextCompactionOptions;
   readonly drainSteeringMessages?: () =>
     | readonly SteeringMessage[]
     | Promise<readonly SteeringMessage[]>;
+}
+
+class ContextOverflowBeforeAssistantError extends Error {
+  readonly error: unknown;
+
+  constructor(error: unknown) {
+    super("Provider context overflowed before assistant output started");
+    this.name = "ContextOverflowBeforeAssistantError";
+    this.error = error;
+  }
+}
+
+function isProviderContextOverflow(error: unknown): boolean {
+  return (
+    error instanceof KeelError && error.code === "provider_context_overflow"
+  );
 }
 
 interface AgentTurn {
@@ -172,32 +195,44 @@ async function* streamAgentTurn(
   let usage: Usage | null = null;
   const assistantText: string[] = [];
   const pendingToolCalls: ToolCall[] = [];
+  let assistantStarted = false;
 
-  for await (const event of stream) {
-    switch (event.type) {
-      case "text":
-        if (event.text !== "" && textPrefix !== "") {
-          if (!event.text.startsWith("\n")) {
-            assistantText.push(textPrefix);
-            yield { type: "text", text: textPrefix };
+  try {
+    for await (const event of stream) {
+      switch (event.type) {
+        case "text":
+          if (event.text !== "") {
+            assistantStarted = true;
           }
-          textPrefix = "";
+          if (event.text !== "" && textPrefix !== "") {
+            if (!event.text.startsWith("\n")) {
+              assistantText.push(textPrefix);
+              yield { type: "text", text: textPrefix };
+            }
+            textPrefix = "";
+          }
+          assistantText.push(event.text);
+          yield { type: "text", text: event.text };
+          break;
+        case "tool_call": {
+          assistantStarted = true;
+          const { type: _llmEventType, ...toolCall } = event;
+          pendingToolCalls.push(toolCall);
+          break;
         }
-        assistantText.push(event.text);
-        yield { type: "text", text: event.text };
-        break;
-      case "tool_call": {
-        const { type: _llmEventType, ...toolCall } = event;
-        pendingToolCalls.push(toolCall);
-        break;
+        case "provider_retry":
+          yield event;
+          break;
+        case "stop":
+          usage = event.usage;
+          break;
       }
-      case "provider_retry":
-        yield event;
-        break;
-      case "stop":
-        usage = event.usage;
-        break;
     }
+  } catch (error) {
+    if (isProviderContextOverflow(error) && !assistantStarted) {
+      throw new ContextOverflowBeforeAssistantError(error);
+    }
+    throw error;
   }
 
   return finishAgentTurn(assistantText, pendingToolCalls, usage);
@@ -219,6 +254,7 @@ export async function* runAgentTurn(
     drainSteeringMessages,
   } = options;
   const priorToolCalls = priorToolCallsFromMessages(messages);
+  const { contextCompaction } = options;
   let totalUsage: Usage = {
     inputTokens: 0,
     cachedInputTokens: 0,
@@ -243,8 +279,59 @@ export async function* runAgentTurn(
     };
   }
 
+  async function compactContextIfPossible(
+    targetMessages: Message[],
+  ): Promise<boolean> {
+    const result = await compactMessages({
+      provider,
+      systemPrompt,
+      messages: targetMessages,
+      signal,
+      ...(contextCompaction !== undefined ? { contextCompaction } : {}),
+    });
+    totalUsage = addUsage(totalUsage, result.usage);
+    return result.compacted;
+  }
+
+  async function* streamRecoverableAgentTurn(
+    streamOptions: StreamTurnOptions & { readonly messages: Message[] },
+  ): AsyncGenerator<AgentEvent, AgentTurn> {
+    let overflowRecoveryAttempted = false;
+    let compactedBeforeRequest = false;
+    const requestMessages = streamOptions.messages;
+
+    for (;;) {
+      if (
+        !compactedBeforeRequest &&
+        shouldCompactBeforeRequest(
+          systemPrompt,
+          requestMessages,
+          contextCompaction,
+        )
+      ) {
+        compactedBeforeRequest = true;
+        await compactContextIfPossible(requestMessages);
+      }
+      try {
+        return yield* streamAgentTurn(streamOptions);
+      } catch (error) {
+        if (error instanceof ContextOverflowBeforeAssistantError) {
+          if (!overflowRecoveryAttempted) {
+            overflowRecoveryAttempted = true;
+            if (await compactContextIfPossible(requestMessages)) {
+              compactedBeforeRequest = true;
+              continue;
+            }
+          }
+          throw error.error;
+        }
+        throw error;
+      }
+    }
+  }
+
   for (let completedTurns = 1; ; completedTurns++) {
-    const turnResult = yield* streamAgentTurn({
+    const turnResult = yield* streamRecoverableAgentTurn({
       provider,
       systemPrompt,
       messages,
@@ -275,14 +362,15 @@ export async function* runAgentTurn(
 
     if (decision.type === "summarize") {
       const interimReply = finalReplyMessage(turnResult.text);
-      const wrapUpTurn = yield* streamAgentTurn({
+      const wrapUpMessages: Message[] = [
+        ...messages,
+        ...(interimReply === null ? [] : [interimReply]),
+        { role: "user", content: WRAP_UP_INSTRUCTION },
+      ];
+      const wrapUpTurn = yield* streamRecoverableAgentTurn({
         provider,
         systemPrompt,
-        messages: [
-          ...messages,
-          ...(interimReply === null ? [] : [interimReply]),
-          { role: "user", content: WRAP_UP_INSTRUCTION },
-        ],
+        messages: wrapUpMessages,
         signal,
         allowBash,
         toolChoice: "none",
@@ -369,6 +457,9 @@ export async function* runAgent(
       : {}),
     ...(options.stopPolicy !== undefined
       ? { stopPolicy: options.stopPolicy }
+      : {}),
+    ...(options.contextCompaction !== undefined
+      ? { contextCompaction: options.contextCompaction }
       : {}),
   });
 }
