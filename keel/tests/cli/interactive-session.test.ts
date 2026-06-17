@@ -2119,6 +2119,92 @@ describe("Interactive Session", () => {
     expect(stderr).toContain("Cost: 0.005000 / 0.01 exceeded=false\n");
   });
 
+  test(`Given manual compaction cost model resolution fails,
+    When user enters /compact,
+    Then the configuration error is not reported as compaction failure`, async () => {
+    // Given
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    let summaryRequests = 0;
+    let costModelRequests = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          yield { type: "text", text: "Unexpected checkpoint summary." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        yield { type: "text", text: "First done" };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled", maxCostUsd: 1 },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => {
+        costModelRequests++;
+        if (costModelRequests === 1) {
+          return ZERO_COST_MODEL;
+        }
+        throw new Error("known cost model missing");
+      },
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            receiveFirstEnd();
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.write("/compact\n");
+    input.end();
+
+    // Then
+    await expect(session).rejects.toThrow("known cost model missing");
+    expect(stdout).toBe("First done\n");
+    expect(stderr).not.toContain("Context compaction failed");
+    expect(summaryRequests).toBe(0);
+  });
+
   test(`Given an interactive session has prior history,
     When user enters /compact with a focus instruction,
     Then the instruction is included in the summary prompt but not appended as a task`, async () => {

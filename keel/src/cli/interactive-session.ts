@@ -372,14 +372,14 @@ export async function runInteractiveSession(
           continue;
         }
 
+        const manualCostModel =
+          options.cliArgs.maxCostUsd === undefined
+            ? undefined
+            : options.requireKnownCostModel(resolved);
         const messagesBeforeCompact = messages.slice();
         const compactAbortController = new AbortController();
         activeAbortController = compactAbortController;
         try {
-          const manualCostModel =
-            options.cliArgs.maxCostUsd === undefined
-              ? undefined
-              : options.requireKnownCostModel(resolved);
           const result = await compactMessages({
             provider: resolved.provider,
             systemPrompt,
@@ -425,6 +425,8 @@ export async function runInteractiveSession(
             );
           }
         } catch (error) {
+          // Keep rollback unconditional so abort/failure races cannot preserve a
+          // partially installed checkpoint.
           messages.splice(0, messages.length, ...messagesBeforeCompact);
           if (compactAbortController.signal.aborted) {
             options.writeStdout("\n");
