@@ -1953,6 +1953,82 @@ describe("Context Compaction", () => {
     ]);
   });
 
+  test(`Given only an older user boundary is safe before pending work,
+    When split-turn compaction runs,
+    Then it falls back to that boundary and keeps the pending work`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Older setup ".repeat(100) },
+      { role: "assistant", content: "Older setup remembered." },
+      {
+        role: "user",
+        content: "Older steering note before pending work ".repeat(80),
+      },
+      { role: "user", content: "Read the pending diagnostics report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_pending_diagnostics",
+            tool: "read",
+            path: "pending-diagnostics.log",
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: "Latest instruction: wait for diagnostics before answering.",
+      },
+    ];
+    let summaryPrompt = "";
+    const provider: LLMProvider = {
+      id: "split-turn-older-user-boundary-provider",
+      async *stream(options) {
+        summaryPrompt = options.messages[0]?.content ?? "";
+        yield { type: "text", text: "Older pending-work summary." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 30,
+      },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    expect(summaryPrompt).toContain("Older steering note before pending work");
+    expect(messages).toEqual([
+      {
+        role: "user",
+        content: expect.stringContaining("<conversation-checkpoint>"),
+      },
+      { role: "user", content: "Read the pending diagnostics report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_pending_diagnostics",
+            tool: "read",
+            path: "pending-diagnostics.log",
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: "Latest instruction: wait for diagnostics before answering.",
+      },
+    ]);
+  });
+
   test(`Given oversized recent context contains a malformed stray tool message,
     When split-turn compaction searches for a safe boundary,
     Then it keeps the malformed tool adjacency instead of splitting through it`, async () => {
