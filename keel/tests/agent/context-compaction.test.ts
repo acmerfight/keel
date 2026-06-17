@@ -27,6 +27,10 @@ function workspace(): string {
   return process.cwd();
 }
 
+function estimatedTextTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
 async function collect(
   source: AsyncIterable<AgentEvent>,
 ): Promise<AgentEvent[]> {
@@ -910,6 +914,11 @@ describe("Context Compaction", () => {
       reason: "overflow_recovery",
       beforeMessageCount: 3,
       afterMessageCount: 2,
+      toolOutputsCompacted: 0,
+      toolOutputCharsBefore: 0,
+      toolOutputCharsAfter: 0,
+      toolOutputEstimatedTokensBefore: 0,
+      toolOutputEstimatedTokensAfter: 0,
     });
     expect(compactionEvent.beforeEstimatedTokens).toBeGreaterThan(
       compactionEvent.afterEstimatedTokens,
@@ -1042,6 +1051,7 @@ describe("Context Compaction", () => {
     );
 
     // Then
+    const compactionEvent = onlyContextCompactedEvent(events);
     expect(mainRequests).toBe(2);
     expect(retriedMessages).toContainEqual({
       role: "user",
@@ -1060,6 +1070,7 @@ describe("Context Compaction", () => {
     );
     expect(toolCallIndex).toBeGreaterThan(-1);
     expect(toolResultIndex).toBe(toolCallIndex + 1);
+    const retainedToolOutput = retriedMessages[toolResultIndex]?.content ?? "";
     expect(retriedMessages[toolResultIndex]).toEqual({
       role: "tool",
       toolCallId: "read_old_report",
@@ -1070,6 +1081,20 @@ describe("Context Compaction", () => {
     expect(retriedMessages[toolResultIndex]?.content).not.toContain(
       "REPORT_END",
     );
+    expect(compactionEvent).toMatchObject({
+      reason: "overflow_recovery",
+      toolOutputsCompacted: 1,
+      toolOutputCharsBefore: largeToolOutput.length,
+      toolOutputCharsAfter: retainedToolOutput.length,
+      toolOutputEstimatedTokensBefore: estimatedTextTokens(largeToolOutput),
+      toolOutputEstimatedTokensAfter: estimatedTextTokens(retainedToolOutput),
+    });
+    expect(compactionEvent.toolOutputCharsBefore).toBeGreaterThan(
+      compactionEvent.toolOutputCharsAfter,
+    );
+    expect(compactionEvent.toolOutputEstimatedTokensBefore).toBeGreaterThan(
+      compactionEvent.toolOutputEstimatedTokensAfter,
+    );
     expect(events).toContainEqual({
       type: "text",
       text: "Continued after shrinking stale tool output.",
@@ -1079,6 +1104,162 @@ describe("Context Compaction", () => {
       cachedInputTokens: 0,
       uncachedInputTokens: 40,
       outputTokens: 9,
+    });
+  });
+
+  test(`Given retained recent context contains multiple stale large tool outputs,
+    When overflow recovery compacts the conversation,
+    Then the context_compacted event aggregates all stale tool-output reductions`, async () => {
+    // Given
+    const firstToolOutput = [
+      "FIRST_LOG_START",
+      "first log line ".repeat(500),
+      "FIRST_LOG_END",
+    ].join("\n");
+    const secondToolOutput = [
+      "SECOND_LOG_START",
+      "second log line ".repeat(400),
+      "SECOND_LOG_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered." },
+      { role: "user", content: "Read the first log." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "read_first_log", tool: "read", path: "first.log" }],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_first_log",
+        content: firstToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The first log was inspected.",
+      },
+      { role: "user", content: "Read the second log." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          { id: "read_second_log", tool: "read", path: "second.log" },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_second_log",
+        content: secondToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The second log was inspected.",
+      },
+      { role: "user", content: "Continue with the latest instruction." },
+    ];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "multiple-stale-tool-output-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Earlier setup summary." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        yield {
+          type: "text",
+          text: "Continued after shrinking stale tool outputs.",
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        contextCompaction: {
+          keepRecentTokens: 20_000,
+          toolOutputMaxChars: 128,
+        },
+      }),
+    );
+
+    // Then
+    const compactionEvent = onlyContextCompactedEvent(events);
+    const compactedToolOutputs = retriedMessages.filter(
+      (message): message is Extract<Message, { readonly role: "tool" }> =>
+        message.role === "tool",
+    );
+    const toolOutputCharsAfter = compactedToolOutputs.reduce(
+      (total, message) => total + message.content.length,
+      0,
+    );
+    const toolOutputEstimatedTokensAfter = compactedToolOutputs.reduce(
+      (total, message) => total + estimatedTextTokens(message.content),
+      0,
+    );
+    expect(mainRequests).toBe(2);
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Continue with the latest instruction.",
+    });
+    expect(compactedToolOutputs).toHaveLength(2);
+    expect(compactedToolOutputs).toEqual([
+      expect.objectContaining({
+        toolCallId: "read_first_log",
+        content: expect.stringContaining(
+          "[stale tool output compacted: approximately omitted",
+        ),
+      }),
+      expect.objectContaining({
+        toolCallId: "read_second_log",
+        content: expect.stringContaining(
+          "[stale tool output compacted: approximately omitted",
+        ),
+      }),
+    ]);
+    expect(compactionEvent).toMatchObject({
+      reason: "overflow_recovery",
+      toolOutputsCompacted: 2,
+      toolOutputCharsBefore: firstToolOutput.length + secondToolOutput.length,
+      toolOutputCharsAfter,
+      toolOutputEstimatedTokensBefore:
+        estimatedTextTokens(firstToolOutput) +
+        estimatedTextTokens(secondToolOutput),
+      toolOutputEstimatedTokensAfter,
+    });
+    expect(compactionEvent.toolOutputCharsBefore).toBeGreaterThan(
+      compactionEvent.toolOutputCharsAfter,
+    );
+    expect(compactionEvent.toolOutputEstimatedTokensBefore).toBeGreaterThan(
+      compactionEvent.toolOutputEstimatedTokensAfter,
+    );
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued after shrinking stale tool outputs.",
+    });
+    expect(endEvent(events).usage).toEqual({
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 0,
+      outputTokens: 0,
     });
   });
 
