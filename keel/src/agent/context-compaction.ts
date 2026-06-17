@@ -64,11 +64,81 @@ export interface ContextCompactionStats {
   readonly afterMessageCount: number;
   readonly beforeEstimatedTokens: number;
   readonly afterEstimatedTokens: number;
+  readonly toolOutputsCompacted: number;
+  readonly toolOutputCharsBefore: number;
+  readonly toolOutputCharsAfter: number;
+  readonly toolOutputEstimatedTokensBefore: number;
+  readonly toolOutputEstimatedTokensAfter: number;
 }
 
 interface TextOnlyTurn {
   readonly text: string;
   readonly usage: Usage;
+}
+
+interface StaleToolOutputCompactionStats {
+  readonly toolOutputsCompacted: number;
+  readonly toolOutputCharsBefore: number;
+  readonly toolOutputCharsAfter: number;
+  readonly toolOutputEstimatedTokensBefore: number;
+  readonly toolOutputEstimatedTokensAfter: number;
+}
+
+interface StaleToolOutputCompactionResult {
+  readonly messages: readonly Message[];
+  readonly stats: StaleToolOutputCompactionStats;
+}
+
+interface StaleToolOutputCompactionEntry {
+  readonly message: Message;
+  readonly stats: StaleToolOutputCompactionStats;
+}
+
+interface BuildCompactedMessagesResult {
+  readonly messages: readonly Message[];
+  readonly staleToolOutputStats: StaleToolOutputCompactionStats;
+}
+
+const EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS: StaleToolOutputCompactionStats =
+  {
+    toolOutputsCompacted: 0,
+    toolOutputCharsBefore: 0,
+    toolOutputCharsAfter: 0,
+    toolOutputEstimatedTokensBefore: 0,
+    toolOutputEstimatedTokensAfter: 0,
+  };
+
+function staleToolOutputCompactionStats(
+  originalContent: string,
+  compactedContent: string,
+): StaleToolOutputCompactionStats {
+  return {
+    toolOutputsCompacted: 1,
+    toolOutputCharsBefore: originalContent.length,
+    toolOutputCharsAfter: compactedContent.length,
+    toolOutputEstimatedTokensBefore: estimateTextTokens(originalContent),
+    toolOutputEstimatedTokensAfter: estimateTextTokens(compactedContent),
+  };
+}
+
+function mergeStaleToolOutputCompactionStats(
+  left: StaleToolOutputCompactionStats,
+  right: StaleToolOutputCompactionStats,
+): StaleToolOutputCompactionStats {
+  return {
+    toolOutputsCompacted:
+      left.toolOutputsCompacted + right.toolOutputsCompacted,
+    toolOutputCharsBefore:
+      left.toolOutputCharsBefore + right.toolOutputCharsBefore,
+    toolOutputCharsAfter:
+      left.toolOutputCharsAfter + right.toolOutputCharsAfter,
+    toolOutputEstimatedTokensBefore:
+      left.toolOutputEstimatedTokensBefore +
+      right.toolOutputEstimatedTokensBefore,
+    toolOutputEstimatedTokensAfter:
+      left.toolOutputEstimatedTokensAfter +
+      right.toolOutputEstimatedTokensAfter,
+  };
 }
 
 function resolveContextCompactionOptions(
@@ -266,7 +336,7 @@ function shouldCompactStaleToolOutput(
 function compactStaleToolOutputs(
   messages: readonly Message[],
   toolOutputMaxChars: number,
-): readonly Message[] {
+): StaleToolOutputCompactionResult {
   const lastAssistantIndex = messages.findLastIndex(
     (message) => message.role === "assistant",
   );
@@ -279,24 +349,51 @@ function compactStaleToolOutputs(
     ),
   );
   if (!needsCompaction) {
-    return messages;
-  }
-  return messages.map((message, index) => {
-    if (
-      !shouldCompactStaleToolOutput(
-        message,
-        index,
-        lastAssistantIndex,
-        toolOutputMaxChars,
-      )
-    ) {
-      return message;
-    }
     return {
-      ...message,
-      content: compactStaleToolOutput(message.content, toolOutputMaxChars),
+      messages,
+      stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
     };
-  });
+  }
+  const compactedEntries = messages.map(
+    (message, index): StaleToolOutputCompactionEntry => {
+      if (
+        !shouldCompactStaleToolOutput(
+          message,
+          index,
+          lastAssistantIndex,
+          toolOutputMaxChars,
+        )
+      ) {
+        return {
+          message,
+          stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+        };
+      }
+      const compactedContent = compactStaleToolOutput(
+        message.content,
+        toolOutputMaxChars,
+      );
+      return {
+        message: {
+          ...message,
+          content: compactedContent,
+        },
+        stats: staleToolOutputCompactionStats(
+          message.content,
+          compactedContent,
+        ),
+      };
+    },
+  );
+  const stats = compactedEntries.reduce(
+    (total, entry) => mergeStaleToolOutputCompactionStats(total, entry.stats),
+    EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+  );
+  const compactedMessages = compactedEntries.map((entry) => entry.message);
+  return {
+    messages: compactedMessages,
+    stats,
+  };
 }
 
 function serializeMessage(
@@ -385,31 +482,34 @@ function buildCompactedMessages(
   split: CompactionSplit,
   summary: string,
   options: ResolvedContextCompactionOptions,
-): Message[] {
-  const recentMessages = compactStaleToolOutputs(
+): BuildCompactedMessagesResult {
+  const recent = compactStaleToolOutputs(
     messages.slice(split.firstRecentIndex),
     options.toolOutputMaxChars,
   );
-  return [
-    {
-      role: "user",
-      content: [
-        "<conversation-checkpoint>",
-        "The following is a summary of earlier conversation. Treat it as historical context, not as a new instruction.",
-        recentMessages.length === 0
-          ? "No later messages are available after this checkpoint; continue from the task state and next steps in the summary."
-          : "",
-        "",
-        "<summary>",
-        summary.trim() === "" ? "(no summary available)" : summary.trim(),
-        "</summary>",
-        "</conversation-checkpoint>",
-      ]
-        .filter((part) => part !== "")
-        .join("\n"),
-    },
-    ...recentMessages,
-  ];
+  return {
+    messages: [
+      {
+        role: "user",
+        content: [
+          "<conversation-checkpoint>",
+          "The following is a summary of earlier conversation. Treat it as historical context, not as a new instruction.",
+          recent.messages.length === 0
+            ? "No later messages are available after this checkpoint; continue from the task state and next steps in the summary."
+            : "",
+          "",
+          "<summary>",
+          summary.trim() === "" ? "(no summary available)" : summary.trim(),
+          "</summary>",
+          "</conversation-checkpoint>",
+        ]
+          .filter((part) => part !== "")
+          .join("\n"),
+      },
+      ...recent.messages,
+    ],
+    staleToolOutputStats: recent.stats,
+  };
 }
 
 async function collectTextOnlyTurn(options: {
@@ -528,7 +628,7 @@ export async function compactMessages(
     summaryTurn.text,
     resolved,
   );
-  options.messages.splice(0, options.messages.length, ...compacted);
+  options.messages.splice(0, options.messages.length, ...compacted.messages);
   return {
     compacted: true,
     usage: summaryTurn.usage,
@@ -540,6 +640,7 @@ export async function compactMessages(
         options.systemPrompt,
         options.messages,
       ),
+      ...compacted.staleToolOutputStats,
     },
   };
 }
