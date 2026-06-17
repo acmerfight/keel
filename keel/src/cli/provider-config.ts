@@ -325,11 +325,13 @@ export function resolveInteractiveProvider(
 ): ResolvedProvider {
   const providerId = runtime.env("KEEL_PROVIDER") ?? "deepseek";
   if (providerId === "fake") {
+    const contextCompaction = contextCompactionOptions("fake", runtime);
     return {
       providerId: "fake",
       provider: createInteractiveFakeProvider(),
       model: "fake",
       costModel: ZERO_COST_MODEL,
+      ...(contextCompaction !== undefined ? { contextCompaction } : {}),
     };
   }
 

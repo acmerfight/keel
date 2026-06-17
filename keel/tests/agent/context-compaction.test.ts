@@ -450,6 +450,52 @@ describe("Context Compaction", () => {
     );
   });
 
+  test(`Given a small configured context window,
+    When compaction asks for a summary,
+    Then the initial summary input is capped before overflow retries`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Earlier task ".repeat(5_000) },
+      { role: "assistant", content: "Earlier progress ".repeat(5_000) },
+      { role: "user", content: "Finish now." },
+    ];
+    let summaryRequests = 0;
+    let summaryPrompt = "";
+    const provider: LLMProvider = {
+      id: "small-window-summary-provider",
+      async *stream(options) {
+        summaryRequests++;
+        summaryPrompt = options.messages[0]?.content ?? "";
+        if (summaryPrompt.length > 10_000) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Summary request exceeds small window",
+          );
+        }
+        yield { type: "text", text: "Small window summary." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        contextWindowTokens: 2_000,
+        reserveTokens: 0,
+        keepRecentTokens: 1,
+      },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    expect(summaryRequests).toBe(1);
+    expect(summaryPrompt.length).toBeLessThanOrEqual(10_000);
+  });
+
   test(`Given the summary provider returns a tool call,
     When context compaction runs,
     Then the provider protocol error is surfaced`, async () => {

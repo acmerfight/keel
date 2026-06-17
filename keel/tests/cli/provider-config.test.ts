@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { ProviderConfigRuntime } from "../../src/cli/provider-config.ts";
 import {
   ProviderConfigError,
+  resolveInteractiveProvider,
   resolveProvider,
 } from "../../src/cli/provider-config.ts";
 
@@ -58,6 +59,25 @@ describe("Provider Config", () => {
 
     // When
     const resolved = resolveProvider("Hello", runtime(env));
+
+    // Then
+    expect(resolved.providerId).toBe("fake");
+    expect(resolved.contextCompaction).toEqual({
+      contextWindowTokens: 4096,
+    });
+  });
+
+  test(`Given the interactive fake provider has context window env set,
+    When interactive provider config is resolved,
+    Then context compaction uses the configured value`, () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "fake",
+      KEEL_CONTEXT_WINDOW_TOKENS: "4096",
+    };
+
+    // When
+    const resolved = resolveInteractiveProvider("Hello", runtime(env));
 
     // Then
     expect(resolved.providerId).toBe("fake");

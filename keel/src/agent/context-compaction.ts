@@ -72,9 +72,22 @@ function resolveContextCompactionOptions(
     summaryInputMaxChars:
       options?.summaryInputMaxChars ?? DEFAULT_SUMMARY_INPUT_MAX_CHARS,
   };
-  return options?.contextWindowTokens === undefined
-    ? base
-    : { ...base, contextWindowTokens: options.contextWindowTokens };
+  if (options?.contextWindowTokens === undefined) {
+    return base;
+  }
+
+  const summaryContextBudgetChars = Math.max(
+    MIN_SUMMARY_INPUT_MAX_CHARS,
+    Math.max(1, options.contextWindowTokens - base.reserveTokens) * 3,
+  );
+  return {
+    ...base,
+    contextWindowTokens: options.contextWindowTokens,
+    summaryInputMaxChars: Math.min(
+      base.summaryInputMaxChars,
+      summaryContextBudgetChars,
+    ),
+  };
 }
 
 function estimateTextTokens(text: string): number {
