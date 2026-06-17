@@ -410,15 +410,6 @@ function selectCompactionSplit(
   return null;
 }
 
-function hasLaterAssistant(
-  messages: readonly Message[],
-  messageIndex: number,
-): boolean {
-  return messages
-    .slice(messageIndex + 1)
-    .some((message) => message.role === "assistant");
-}
-
 function currentToolOutputSuffixStart(
   messages: readonly Message[],
 ): number | null {
@@ -450,7 +441,7 @@ function currentToolOutputSuffixStart(
 }
 
 function canSplitTurnAfter(
-  messages: readonly Message[],
+  lastAssistantIndex: number,
   messageIndex: number,
   message: Message,
   nextMessage: Message,
@@ -461,7 +452,7 @@ function canSplitTurnAfter(
   if (message.role === "assistant" && (message.toolCalls ?? []).length > 0) {
     return false;
   }
-  if (message.role === "tool" && !hasLaterAssistant(messages, messageIndex)) {
+  if (message.role === "tool" && messageIndex >= lastAssistantIndex) {
     return false;
   }
   return nextMessage.role !== "tool";
@@ -485,6 +476,9 @@ function selectSplitTurnBoundary(
   );
   const protectedSuffixStart = currentToolOutputSuffixStart(messages);
   const maxBoundary = protectedSuffixStart ?? messages.length - 1;
+  const lastAssistantIndex = messages.findLastIndex(
+    (message) => message.role === "assistant",
+  );
   const candidates: SplitTurnCandidate[] = messages.flatMap(
     (message, messageIndex) => {
       const nextMessage = messages[messageIndex + 1];
@@ -499,7 +493,9 @@ function selectSplitTurnBoundary(
     if (boundary > maxBoundary) {
       continue;
     }
-    if (!canSplitTurnAfter(messages, messageIndex, message, nextMessage)) {
+    if (
+      !canSplitTurnAfter(lastAssistantIndex, messageIndex, message, nextMessage)
+    ) {
       continue;
     }
     safeBoundaries.push(boundary);
@@ -535,6 +531,7 @@ function planCompaction(
     recentMessages,
     options.toolOutputMaxChars,
   ).messages;
+  // compactStaleToolOutputs only rewrites message content; count and order stay aligned with recentMessages.
   const splitTurnBoundary =
     estimateMessagesTokens(compactedRecent) > options.keepRecentTokens
       ? selectSplitTurnBoundary(compactedRecent, options.keepRecentTokens)
