@@ -2082,7 +2082,6 @@ describe("Interactive Session", () => {
           cachedInputPerMillionTokens: 0,
           outputPerMillionTokens: 200,
         },
-        contextCompaction: { keepRecentTokens: 1 },
       }),
       requireKnownCostModel: () => ({
         uncachedInputPerMillionTokens: 100,

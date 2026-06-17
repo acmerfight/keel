@@ -110,7 +110,7 @@ function parseManualCompactCommand(
     return null;
   }
   const focusInstruction = userMessage.slice(commandPrefix.length).trim();
-  return focusInstruction === "" ? {} : { focusInstruction };
+  return { focusInstruction };
 }
 
 function formatManualCompactionFailure(error: unknown): string {
@@ -238,9 +238,6 @@ function createLineReader(
       return drained;
     },
     restoreLines: (lines) => {
-      if (lines.length === 0) {
-        return;
-      }
       queued.push(...lines);
       queued.sort((left, right) => left.sequence - right.sequence);
     },
