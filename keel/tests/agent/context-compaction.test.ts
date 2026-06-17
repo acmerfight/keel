@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { compactMessages } from "../../src/agent/context-compaction.ts";
+import {
+  captureContextCompactionAccountingSnapshot,
+  compactMessages,
+  shouldCompactBeforeRequest,
+} from "../../src/agent/context-compaction.ts";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
 import { maxTurnFallbackPolicy } from "../../src/agent/stop-policy.ts";
@@ -147,6 +151,169 @@ describe("Context Compaction", () => {
       type: "text",
       text: "Continued without compaction.",
     });
+  });
+
+  test(`Given a completed request message is mutated in place after usage accounting,
+    When proactive compaction checks the request,
+    Then it falls back to the estimated request size`, () => {
+    // Given
+    const completedMessages: Message[] = [
+      { role: "user", content: "Previously completed request." },
+    ];
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages: completedMessages,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+    });
+    const [completedMessage] = completedMessages;
+    if (completedMessage?.role !== "user") {
+      throw new Error("test setup expected a user message");
+    }
+    Object.assign(completedMessage, {
+      content: "Mutated completed request ".repeat(80),
+    });
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      completedMessages,
+      {
+        contextWindowTokens: 100,
+        reserveTokens: 0,
+      },
+      accounting,
+    );
+
+    // Then
+    expect(shouldCompact).toBe(true);
+  });
+
+  test(`Given completed assistant tool call arguments are mutated in place after usage accounting,
+    When proactive compaction checks the request,
+    Then it falls back to the estimated request size`, () => {
+    // Given
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: "I will update files.",
+        toolCalls: [
+          {
+            id: "edit_note",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "old",
+            newString: "new",
+          },
+          {
+            id: "write_log",
+            tool: "write",
+            path: "log.txt",
+            content: "original",
+          },
+        ],
+      },
+    ];
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+    });
+    const [assistantMessage] = messages;
+    const [editToolCall] =
+      assistantMessage?.role === "assistant"
+        ? (assistantMessage.toolCalls ?? [])
+        : [];
+    if (editToolCall?.tool !== "edit") {
+      throw new Error("test setup expected an edit tool call");
+    }
+    Object.assign(editToolCall, {
+      newString: "mutated ".repeat(80),
+    });
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      messages,
+      {
+        contextWindowTokens: 100,
+        reserveTokens: 0,
+      },
+      accounting,
+    );
+
+    // Then
+    expect(shouldCompact).toBe(true);
+  });
+
+  test(`Given provider usage was captured for a tool-enabled request,
+    When a text-only wrap-up request checks proactive compaction,
+    Then it treats the usage as ambiguous and falls back to the estimate`, () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Previously completed request ".repeat(80) },
+    ];
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+    });
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      messages,
+      {
+        contextWindowTokens: 100,
+        reserveTokens: 0,
+      },
+      accounting,
+      { toolChoice: "none" },
+    );
+
+    // Then
+    expect(shouldCompact).toBe(true);
+  });
+
+  test.each([
+    0,
+    Number.POSITIVE_INFINITY,
+  ])(`Given provider usage contains unusable input token count %s,
+    When compaction accounting is captured,
+    Then no accounting snapshot is recorded`, (inputTokens) => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Completed request." },
+    ];
+
+    // When
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages,
+      usage: {
+        inputTokens,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 0,
+        outputTokens: 1,
+      },
+    });
+
+    // Then
+    expect(accounting).toBeUndefined();
   });
 
   test(`Given there is no safe compaction split,
@@ -1202,6 +1369,228 @@ describe("Context Compaction", () => {
     expect(summaryRequests).toBe(1);
     expect(finalRequestSeen).toBe(true);
     expect(events).toContainEqual({ type: "text", text: "Continued once." });
+  });
+
+  test(`Given provider usage is available for a completed request,
+    When the next tool round would exceed the threshold only by estimate,
+    Then proactive compaction uses real prefix usage and keeps the transcript intact`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "prefix ".repeat(120) },
+    ];
+    let mainRequests = 0;
+    let summaryRequests = 0;
+    let secondRequestMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "usage-accounted-proactive-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          yield { type: "text", text: "Unexpected proactive summary." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          yield {
+            type: "tool_call",
+            id: "accounting_probe",
+            tool: "bash",
+            command: "node -e \"process.stdout.write('tail '.repeat(56))\"",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 20,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 20,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        secondRequestMessages = [...options.messages];
+        yield { type: "text", text: "Finished without compaction." };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 30,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 30,
+            outputTokens: 2,
+          },
+        };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: true,
+        contextCompaction: {
+          contextWindowTokens: 280,
+          reserveTokens: 0,
+          keepRecentTokens: 1,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(summaryRequests).toBe(0);
+    expect(contextCompactedEvents(events)).toEqual([]);
+    expect(secondRequestMessages[0]).toEqual({
+      role: "user",
+      content: "prefix ".repeat(120),
+    });
+    expect(secondRequestMessages[0]?.content).not.toContain(
+      "<conversation-checkpoint>",
+    );
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Finished without compaction.",
+    });
+    expect(endEvent(events).usage).toEqual({
+      inputTokens: 50,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 50,
+      outputTokens: 3,
+    });
+  });
+
+  test(`Given provider usage keeps proactive compaction below the threshold,
+    When the provider still reports context overflow,
+    Then overflow recovery compacts and retries once`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "prior ".repeat(50) },
+      { role: "assistant", content: "answer ".repeat(45) },
+      { role: "user", content: "Run the accounting probe." },
+    ];
+    let mainRequests = 0;
+    let summaryRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "usage-accounted-overflow-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          yield { type: "text", text: "Earlier usage summary." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 15,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 15,
+              outputTokens: 3,
+            },
+          };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          yield {
+            type: "tool_call",
+            id: "accounting_overflow_probe",
+            tool: "bash",
+            command: "node -e \"process.stdout.write('tail '.repeat(56))\"",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 25,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 25,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+        if (mainRequests === 2) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Provider accounting still overflowed",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        yield { type: "text", text: "Recovered after accounted overflow." };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 30,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 30,
+            outputTokens: 2,
+          },
+        };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: true,
+        contextCompaction: {
+          contextWindowTokens: 260,
+          reserveTokens: 0,
+          keepRecentTokens: 1,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(3);
+    expect(summaryRequests).toBe(1);
+    expect(contextCompactedEvents(events).map((event) => event.reason)).toEqual(
+      ["overflow_recovery"],
+    );
+    expect(retriedMessages).toEqual([
+      {
+        role: "user",
+        content: expect.stringContaining("<conversation-checkpoint>"),
+      },
+      { role: "user", content: "Run the accounting probe." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "accounting_overflow_probe",
+            tool: "bash",
+            command: "node -e \"process.stdout.write('tail '.repeat(56))\"",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "accounting_overflow_probe",
+        content: expect.stringContaining("stdout:"),
+      },
+    ]);
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Recovered after accounted overflow.",
+    });
+    expect(endEvent(events).usage).toEqual({
+      inputTokens: 70,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 70,
+      outputTokens: 6,
+    });
   });
 
   test(`Given the provider rejects a request before any assistant output because context is too large,
