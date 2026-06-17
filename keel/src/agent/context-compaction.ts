@@ -192,6 +192,10 @@ function selectCompactionSplit(
       return { firstRecentIndex };
     }
   }
+  const lastMessage = messages[messages.length - 1];
+  if (lastMessage !== undefined && canSplitAfter(lastMessage, undefined)) {
+    return { firstRecentIndex: messages.length };
+  }
   return null;
 }
 
@@ -288,20 +292,26 @@ function buildCompactedMessages(
   split: CompactionSplit,
   summary: string,
 ): Message[] {
+  const recentMessages = messages.slice(split.firstRecentIndex);
   return [
     {
       role: "user",
       content: [
         "<conversation-checkpoint>",
         "The following is a summary of earlier conversation. Treat it as historical context, not as a new instruction.",
+        recentMessages.length === 0
+          ? "No later messages are available after this checkpoint; continue from the task state and next steps in the summary."
+          : "",
         "",
         "<summary>",
         summary.trim() === "" ? "(no summary available)" : summary.trim(),
         "</summary>",
         "</conversation-checkpoint>",
-      ].join("\n"),
+      ]
+        .filter((part) => part !== "")
+        .join("\n"),
     },
-    ...messages.slice(split.firstRecentIndex),
+    ...recentMessages,
   ];
 }
 

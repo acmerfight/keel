@@ -888,6 +888,126 @@ describe("Context Compaction", () => {
     });
   });
 
+  test(`Given a tool result is the final message when the provider reports context overflow,
+    When compaction succeeds,
+    Then overflow recovery retries with a checkpoint for the completed tool round`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Read the large log and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_large_log",
+            tool: "read",
+            path: "large.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_large_log",
+        content: "large log output ".repeat(400),
+      },
+    ];
+    let mainRequests = 0;
+    let summaryRequests = 0;
+    let summaryPrompt = "";
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "tool-tail-overflow-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          summaryPrompt = options.messages[0]?.content ?? "";
+          yield { type: "text", text: "The log was read; continue analysis." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 30,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 30,
+              outputTokens: 5,
+            },
+          };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Tool result made request too large",
+          );
+        }
+        retriedMessages = [...options.messages];
+        yield {
+          type: "text",
+          text: "Continued after summarizing tool output.",
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 8,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 8,
+            outputTokens: 3,
+          },
+        };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        contextCompaction: {
+          keepRecentTokens: 1,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(summaryRequests).toBe(1);
+    expect(summaryPrompt).toContain('tool_call_id="read_large_log"');
+    expect(summaryPrompt).toContain("large log output");
+    expect(retriedMessages).toEqual([
+      {
+        role: "user",
+        content: expect.stringContaining("<conversation-checkpoint>"),
+      },
+    ]);
+    expect(retriedMessages[0]?.content).toContain(
+      "No later messages are available after this checkpoint",
+    );
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued after summarizing tool output.",
+    });
+    expect(messages).toEqual([
+      {
+        role: "user",
+        content: expect.stringContaining("<conversation-checkpoint>"),
+      },
+      {
+        role: "assistant",
+        content: "Continued after summarizing tool output.",
+      },
+    ]);
+    expect(endEvent(events).usage).toEqual({
+      inputTokens: 38,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 38,
+      outputTokens: 8,
+    });
+  });
+
   test(`Given overflow recovery already retried once,
     When the compacted request still overflows,
     Then the agent fails instead of compacting in a loop`, async () => {
