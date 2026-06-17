@@ -77,7 +77,7 @@ function defaultContextWindowTokens(
   if (providerId === "fake") {
     return undefined;
   }
-  return 128_000;
+  return 256_000;
 }
 
 function contextCompactionOptions(

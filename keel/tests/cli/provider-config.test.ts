@@ -43,7 +43,7 @@ describe("Provider Config", () => {
     // Then
     expect(resolved.providerId).toBe("deepseek");
     expect(resolved.contextCompaction).toEqual({
-      contextWindowTokens: 128_000,
+      contextWindowTokens: 256_000,
     });
   });
 

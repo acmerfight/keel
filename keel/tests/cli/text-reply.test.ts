@@ -118,7 +118,7 @@ describe("CLI Text Reply", () => {
         "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
         "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
         "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY, optional *_BASE_URL, *_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
-        "Context compaction uses an estimated 128000-token default window for real providers; set KEEL_CONTEXT_WINDOW_TOKENS for a model-specific window.",
+        "Context compaction uses an estimated 256000-token default window for real providers; set KEEL_CONTEXT_WINDOW_TOKENS for a model-specific window.",
         "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
         "",
       ].join("\n"),
