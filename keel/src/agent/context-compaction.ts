@@ -503,6 +503,10 @@ function selectSplitTurnBoundary(
       return boundary;
     }
   }
+  // Prefer preserving the newest actionable suffix over forcing the retained
+  // suffix under keepRecentTokens. If every safe split is before the budget
+  // target, keep the latest safe suffix verbatim and let overflow recovery
+  // surface the provider overflow if it still cannot fit.
   return safeBoundaries.at(-1) ?? null;
 }
 
@@ -868,6 +872,9 @@ export async function compactMessages(
 
   const plan = planCompaction(options.messages, split, resolved);
   if (plan.messagesToSummarize.length === 0) {
+    // The protected current suffix starts at the beginning of the transcript.
+    // Creating an empty checkpoint would only make the retry larger, so report
+    // no compaction and allow overflow recovery to surface the provider error.
     return { compacted: false, usage: ZERO_USAGE };
   }
 
