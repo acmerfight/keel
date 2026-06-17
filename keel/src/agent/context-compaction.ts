@@ -387,6 +387,10 @@ function toolCallFingerprint(toolCall: ToolCall): string {
         toolCall.timeoutMs ?? null,
       ]);
   }
+  /* v8 ignore start: compile-time exhaustiveness guard for future tools. */
+  const exhaustive: never = toolCall;
+  return exhaustive;
+  /* v8 ignore stop */
 }
 
 function messageFingerprint(message: Message): string {
@@ -464,7 +468,7 @@ function estimateRequestTokensFromAccounting(
 }
 
 function isUsableInputTokenCount(inputTokens: number): boolean {
-  return Number.isSafeInteger(inputTokens) && inputTokens >= 0;
+  return Number.isSafeInteger(inputTokens) && inputTokens > 0;
 }
 
 export function captureContextCompactionAccountingSnapshot(options: {

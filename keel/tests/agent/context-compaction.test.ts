@@ -289,9 +289,12 @@ describe("Context Compaction", () => {
     expect(shouldCompact).toBe(true);
   });
 
-  test(`Given provider usage contains an unusable input token count,
+  test.each([
+    0,
+    Number.POSITIVE_INFINITY,
+  ])(`Given provider usage contains unusable input token count %s,
     When compaction accounting is captured,
-    Then no accounting snapshot is recorded`, () => {
+    Then no accounting snapshot is recorded`, (inputTokens) => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Completed request." },
@@ -302,7 +305,7 @@ describe("Context Compaction", () => {
       systemPrompt: "You are helpful.",
       messages,
       usage: {
-        inputTokens: Number.POSITIVE_INFINITY,
+        inputTokens,
         cachedInputTokens: 0,
         uncachedInputTokens: 0,
         outputTokens: 1,
