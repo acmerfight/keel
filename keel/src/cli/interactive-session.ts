@@ -336,12 +336,11 @@ export async function runInteractiveSession(
     options.writeStderr,
   );
   let activeAbortController: AbortController | null = null;
-  const restoreDrainedInput = (lines: QueuedLine[]) => {
+  const restoreDrainedInput = (lines: readonly QueuedLine[]) => {
     if (lines.length === 0) {
       return;
     }
     lineReader.restoreLines(lines);
-    lines.length = 0;
   };
   const abortActiveTurn = () => {
     if (activeAbortController !== null) {
