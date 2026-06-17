@@ -192,23 +192,50 @@ function estimateTextTokens(text: string): number {
 }
 
 function normalizeCheckpointSummary(summary: string): string {
-  return summary.trim() === "" ? "(no summary available)" : summary.trim();
+  const trimmed = summary.trim();
+  const fallback = trimmed === "" ? "(no summary available)" : trimmed;
+  return escapeCheckpointStructuralTags(fallback);
 }
 
-function renderConversationCheckpoint(
-  checkpoint: ConversationCheckpoint,
-): string {
+function escapeCheckpointStructuralTags(text: string): string {
+  return text
+    .replaceAll("<conversation-checkpoint", "&lt;conversation-checkpoint")
+    .replaceAll(
+      CONVERSATION_CHECKPOINT_CLOSE,
+      "&lt;/conversation-checkpoint&gt;",
+    )
+    .replaceAll(SUMMARY_OPEN, "&lt;summary&gt;")
+    .replaceAll(SUMMARY_CLOSE, "&lt;/summary&gt;");
+}
+
+function renderConversationCheckpointBlock(options: {
+  readonly openTag: string;
+  readonly instruction: string;
+  readonly checkpoint: ConversationCheckpoint;
+}): string {
   return [
-    CONVERSATION_CHECKPOINT_OPEN,
-    CONVERSATION_CHECKPOINT_INSTRUCTION,
-    checkpoint.noLaterMessages ? CONVERSATION_CHECKPOINT_NO_LATER_MESSAGES : "",
+    options.openTag,
+    options.instruction,
+    options.checkpoint.noLaterMessages
+      ? CONVERSATION_CHECKPOINT_NO_LATER_MESSAGES
+      : "",
     SUMMARY_OPEN,
-    checkpoint.summary,
+    options.checkpoint.summary,
     SUMMARY_CLOSE,
     CONVERSATION_CHECKPOINT_CLOSE,
   ]
     .filter((part) => part !== "")
     .join("\n");
+}
+
+function renderConversationCheckpoint(
+  checkpoint: ConversationCheckpoint,
+): string {
+  return renderConversationCheckpointBlock({
+    openTag: CONVERSATION_CHECKPOINT_OPEN,
+    instruction: CONVERSATION_CHECKPOINT_INSTRUCTION,
+    checkpoint,
+  });
 }
 
 function parseConversationCheckpointMessage(
@@ -227,6 +254,8 @@ function parseConversationCheckpointMessage(
 
   const noLaterMessages =
     lines[2] === CONVERSATION_CHECKPOINT_NO_LATER_MESSAGES;
+  // The optional no-later marker is generated only before <summary>, so this
+  // positional check distinguishes exact Keel checkpoints from user XML text.
   const summaryOpenIndex = noLaterMessages ? 3 : 2;
   if (lines[summaryOpenIndex] !== SUMMARY_OPEN) {
     return null;
@@ -245,17 +274,11 @@ function parseConversationCheckpointMessage(
 function serializeCheckpointForSummaryPrompt(
   checkpoint: ConversationCheckpoint,
 ): string {
-  return [
-    CONVERSATION_CHECKPOINT_SUMMARY_PROMPT_OPEN,
-    CONVERSATION_CHECKPOINT_SUMMARY_PROMPT_INSTRUCTION,
-    checkpoint.noLaterMessages ? CONVERSATION_CHECKPOINT_NO_LATER_MESSAGES : "",
-    SUMMARY_OPEN,
-    checkpoint.summary,
-    SUMMARY_CLOSE,
-    CONVERSATION_CHECKPOINT_CLOSE,
-  ]
-    .filter((part) => part !== "")
-    .join("\n");
+  return renderConversationCheckpointBlock({
+    openTag: CONVERSATION_CHECKPOINT_SUMMARY_PROMPT_OPEN,
+    instruction: CONVERSATION_CHECKPOINT_SUMMARY_PROMPT_INSTRUCTION,
+    checkpoint,
+  });
 }
 
 function estimateToolCallTokens(toolCall: ToolCall): number {
