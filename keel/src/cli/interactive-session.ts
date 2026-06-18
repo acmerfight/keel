@@ -1,16 +1,23 @@
 import { createInterface } from "node:readline/promises";
-import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
+import {
+  type ContextCompactionOptions,
+  compactMessages,
+} from "../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
 import { runAgentTurn } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
-import type { CostModel } from "../core/cost.ts";
-import type { LLMProvider, Message } from "../llm/types.ts";
+import { type CostModel, calculateCostUsd } from "../core/cost.ts";
+import type { LLMProvider, Message, Usage } from "../llm/types.ts";
 import {
   type BashMode,
   type BashPermissionPolicy,
   bashModeExposesTool,
   createSessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
+import {
+  formatContextCompactionReport,
+  sanitizeStatusLineText,
+} from "./output.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 export type ProviderId = "fake" | "deepseek" | "kimi" | "qwen";
@@ -73,7 +80,8 @@ interface LineReader {
     sequence: number,
     signal: AbortSignal,
   ) => Promise<string | null>;
-  readonly drainLinesAfter: (sequence: number) => readonly string[];
+  readonly drainLinesAfter: (sequence: number) => readonly QueuedLine[];
+  readonly restoreLines: (lines: readonly QueuedLine[]) => void;
   readonly sequence: () => number;
 }
 
@@ -85,6 +93,42 @@ interface QueuedLine {
 interface LineWaiter {
   readonly after: number;
   readonly resolve: (line: string | null) => void;
+}
+
+interface ManualCompactCommand {
+  readonly focusInstruction?: string;
+}
+
+function parseManualCompactCommand(
+  userMessage: string,
+): ManualCompactCommand | null {
+  const match = /^\/compact(?:\s+(.*))?$/u.exec(userMessage.trim());
+  if (match === null) {
+    return null;
+  }
+  const focusInstruction = match[1]?.trim();
+  if (focusInstruction === undefined || focusInstruction === "") {
+    return {};
+  }
+  return { focusInstruction };
+}
+
+function formatManualCompactionFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return `Context compaction failed: ${sanitizeStatusLineText(message)}\n`;
+}
+
+function manualCompactionCostReport(
+  usage: Usage,
+  model: CostModel,
+  maxCostUsd: number,
+): CostReport {
+  const spentUsd = calculateCostUsd(usage, model);
+  return {
+    spentUsd,
+    maxUsd: maxCostUsd,
+    budgetExceeded: spentUsd > maxCostUsd,
+  };
 }
 
 function createLineReader(
@@ -181,17 +225,21 @@ function createLineReader(
       });
     },
     drainLinesAfter: (sequence) => {
-      const drained: string[] = [];
+      const drained: QueuedLine[] = [];
       for (let index = 0; index < queued.length; ) {
         const queuedLine = queued[index];
         if (queuedLine !== undefined && queuedLine.sequence > sequence) {
           queued.splice(index, 1);
-          drained.push(queuedLine.line);
+          drained.push(queuedLine);
           continue;
         }
         index++;
       }
       return drained;
+    },
+    restoreLines: (lines) => {
+      queued.push(...lines);
+      queued.sort((left, right) => left.sequence - right.sequence);
     },
     sequence: () => currentSequence,
   };
@@ -288,13 +336,11 @@ export async function runInteractiveSession(
     options.writeStderr,
   );
   let activeAbortController: AbortController | null = null;
-  const restoredInputLines: string[] = [];
-  const restoreDrainedInput = (lines: string[]) => {
+  const restoreDrainedInput = (lines: readonly QueuedLine[]) => {
     if (lines.length === 0) {
       return;
     }
-    restoredInputLines.push(...lines);
-    lines.length = 0;
+    lineReader.restoreLines(lines);
   };
   const abortActiveTurn = () => {
     if (activeAbortController !== null) {
@@ -313,19 +359,96 @@ export async function runInteractiveSession(
   options.onSigint(abortActiveTurn);
   try {
     for (;;) {
-      const restoredLine = restoredInputLines.shift();
-      const rawLine =
-        restoredLine === undefined ? await lineReader.readLine() : restoredLine;
+      const rawLine = await lineReader.readLine();
       if (rawLine === null) break;
       const userMessage = rawLine.trim();
       if (userMessage === "") continue;
+      const manualCompactCommand = parseManualCompactCommand(rawLine);
+      if (manualCompactCommand !== null) {
+        if (messages.length === 0 || resolved === null) {
+          options.writeStderr(
+            "Context compaction skipped: no conversation history to compact.\n",
+          );
+          continue;
+        }
+
+        const manualCostModel =
+          options.cliArgs.maxCostUsd === undefined
+            ? undefined
+            : options.requireKnownCostModel(resolved);
+        const messagesBeforeCompact = messages.slice();
+        const compactAbortController = new AbortController();
+        activeAbortController = compactAbortController;
+        try {
+          const result = await compactMessages({
+            provider: resolved.provider,
+            systemPrompt,
+            messages,
+            signal: compactAbortController.signal,
+            ...(resolved.contextCompaction !== undefined
+              ? { contextCompaction: resolved.contextCompaction }
+              : {}),
+            ...(manualCompactCommand.focusInstruction !== undefined
+              ? { focusInstruction: manualCompactCommand.focusInstruction }
+              : {}),
+          });
+          // A summary can finish just as Ctrl-C is delivered; keep manual abort
+          // semantics by rolling back the newly installed checkpoint.
+          if (compactAbortController.signal.aborted) {
+            messages.splice(0, messages.length, ...messagesBeforeCompact);
+            options.writeStdout("\n");
+            continue;
+          }
+          if (result.compacted && result.stats !== undefined) {
+            options.writeStderr(
+              formatContextCompactionReport({
+                ...result.stats,
+                reasonLabel: "manual",
+              }),
+            );
+            if (
+              options.cliArgs.maxCostUsd !== undefined &&
+              manualCostModel !== undefined
+            ) {
+              options.writeStderr(
+                options.formatCostReport(
+                  manualCompactionCostReport(
+                    result.usage,
+                    manualCostModel,
+                    options.cliArgs.maxCostUsd,
+                  ),
+                  options.cliArgs.maxCostUsd,
+                ),
+              );
+            }
+          } else {
+            options.writeStderr(
+              "Context compaction skipped: no safe history to compact.\n",
+            );
+          }
+        } catch (error) {
+          // Keep rollback unconditional so abort/failure races cannot preserve a
+          // partially installed checkpoint.
+          messages.splice(0, messages.length, ...messagesBeforeCompact);
+          if (compactAbortController.signal.aborted) {
+            options.writeStdout("\n");
+            continue;
+          }
+          options.writeStderr(formatManualCompactionFailure(error));
+        } finally {
+          activeAbortController = null;
+        }
+        continue;
+      }
       resolved ??= options.resolveProvider(userMessage);
       const messagesBeforeTurn = messages.slice();
       const turnStartSequence = lineReader.sequence();
-      const drainedSteeringLines: string[] = [];
+      const drainedSteeringLines: QueuedLine[] = [];
+      const deferredInputLines: QueuedLine[] = [];
       const turnAbortController = new AbortController();
       activeAbortController = turnAbortController;
       messages.push({ role: "user", content: userMessage });
+      let deferRemainingSteeringInput = false;
 
       try {
         const stream = runAgentTurn({
@@ -352,19 +475,48 @@ export async function runInteractiveSession(
           drainSteeringMessages: () => {
             const steeringLines = lineReader
               .drainLinesAfter(turnStartSequence)
-              .map((line) => line.trim())
-              .filter((line) => line !== "");
-            drainedSteeringLines.push(...steeringLines);
-            return steeringLines.map((content) => ({ role: "user", content }));
+              .map((queuedLine) => ({
+                sequence: queuedLine.sequence,
+                line: queuedLine.line.trim(),
+              }))
+              .filter((queuedLine) => queuedLine.line !== "");
+            if (deferRemainingSteeringInput) {
+              deferredInputLines.push(...steeringLines);
+              return [];
+            }
+            const firstCommandIndex = steeringLines.findIndex(
+              (queuedLine) =>
+                parseManualCompactCommand(queuedLine.line) !== null,
+            );
+            const activeSteeringLines =
+              firstCommandIndex < 0
+                ? steeringLines
+                : steeringLines.slice(0, firstCommandIndex);
+            drainedSteeringLines.push(...activeSteeringLines);
+            if (firstCommandIndex >= 0) {
+              deferRemainingSteeringInput = true;
+              deferredInputLines.push(
+                ...steeringLines.slice(firstCommandIndex),
+              );
+            }
+            return activeSteeringLines.map((content) => ({
+              role: "user",
+              content: content.line,
+            }));
           },
         });
         const finalEnd = await options.printAgentEvents(stream);
         if (turnAbortController.signal.aborted) {
           messages.splice(0, messages.length, ...messagesBeforeTurn);
-          restoreDrainedInput(drainedSteeringLines);
+          const restoredLines = [
+            ...drainedSteeringLines,
+            ...deferredInputLines,
+          ];
+          restoreDrainedInput(restoredLines);
           options.writeStdout("\n");
           continue;
         }
+        restoreDrainedInput(deferredInputLines);
         options.writeStdout("\n");
         if (
           options.cliArgs.maxCostUsd !== undefined &&
@@ -379,7 +531,8 @@ export async function runInteractiveSession(
           throw error;
         }
         messages.splice(0, messages.length, ...messagesBeforeTurn);
-        restoreDrainedInput(drainedSteeringLines);
+        const restoredLines = [...drainedSteeringLines, ...deferredInputLines];
+        restoreDrainedInput(restoredLines);
         options.writeStdout("\n");
       } finally {
         activeAbortController = null;

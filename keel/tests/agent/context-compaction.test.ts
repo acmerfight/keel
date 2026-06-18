@@ -472,6 +472,92 @@ describe("Context Compaction", () => {
     ]);
   });
 
+  test(`Given manual compaction has a focus instruction,
+    When compaction requests a summary,
+    Then the summary prompt includes the focus instruction`, async () => {
+    // Given
+    const focusInstruction =
+      "Keep the root cause, files changed, failed tests, and next steps.";
+    const messages: Message[] = [
+      { role: "user", content: "Investigate src/config.ts failure." },
+      {
+        role: "assistant",
+        content: "The root cause is stale config normalization.",
+      },
+      { role: "user", content: "Continue." },
+    ];
+    let summaryPrompt = "";
+    const provider: LLMProvider = {
+      id: "manual-focus-provider",
+      async *stream(options) {
+        if (options.toolChoice !== "none") {
+          throw new Error("only summary requests are expected");
+        }
+        summaryPrompt = options.messages[0]?.content ?? "";
+        yield { type: "text", text: "Focused manual summary." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: { keepRecentTokens: 1 },
+      focusInstruction,
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    expect(summaryPrompt).toContain("manual compaction focus");
+    expect(summaryPrompt).toContain(focusInstruction);
+    expect(summaryPrompt).toContain("src/config.ts");
+  });
+
+  test(`Given manual compaction has only blank focus text,
+    When compaction requests a summary,
+    Then the summary prompt omits the focus instruction block`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Investigate src/config.ts failure." },
+      {
+        role: "assistant",
+        content: "The root cause is stale config normalization.",
+      },
+      { role: "user", content: "Continue." },
+    ];
+    let summaryPrompt = "";
+    const provider: LLMProvider = {
+      id: "manual-blank-focus-provider",
+      async *stream(options) {
+        if (options.toolChoice !== "none") {
+          throw new Error("only summary requests are expected");
+        }
+        summaryPrompt = options.messages[0]?.content ?? "";
+        yield { type: "text", text: "Manual summary without focus." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: { keepRecentTokens: 1 },
+      focusInstruction: "   ",
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    expect(summaryPrompt).not.toContain("manual compaction focus");
+    expect(summaryPrompt).not.toContain("\n\n\n\n");
+    expect(summaryPrompt).toContain("src/config.ts");
+  });
+
   test(`Given the summary text is empty,
     When compaction runs,
     Then the checkpoint records that no summary is available`, async () => {

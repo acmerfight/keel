@@ -76,6 +76,7 @@ interface CompactMessagesOptions {
   readonly contextCompaction?: ContextCompactionOptions;
   readonly contextAccounting?: ContextCompactionAccountingSnapshot;
   readonly requestMetadata?: ContextCompactionRequestMetadata;
+  readonly focusInstruction?: string;
 }
 
 export interface CompactMessagesResult {
@@ -852,27 +853,47 @@ function buildSummaryPrompt(
   messages: readonly Message[],
   options: ResolvedContextCompactionOptions,
   summaryInputMaxChars = options.summaryInputMaxChars,
+  focusInstruction?: string,
 ): string {
+  const normalizedFocusInstruction =
+    normalizeFocusInstruction(focusInstruction);
   const selected = selectSummaryInput(
     messages.map((message) =>
       serializeMessage(message, options.toolOutputMaxChars),
     ),
     summaryInputMaxChars,
   );
-  return [
+  const promptParts = [
     "Create a compact checkpoint summary for an ongoing coding-agent conversation.",
     "Do not call tools. Output concise Markdown only.",
     "Preserve exact file paths, commands, errors, user constraints, current task state, decisions, and next steps.",
+  ];
+  if (normalizedFocusInstruction !== undefined) {
+    promptParts.push(
+      `User manual compaction focus instruction:\n${normalizedFocusInstruction}`,
+    );
+  }
+  promptParts.push(
     "Use these sections in order: Current Task, Constraints, Completed, In Progress, Relevant Files, Commands and Tests, Errors and Fixes, Next Steps.",
     "<conversation>",
-    selected.omittedCount > 0
-      ? `[${selected.omittedCount} older message(s) omitted to fit the compaction request]`
-      : "",
-    selected.context,
-    "</conversation>",
-  ]
-    .filter((part) => part !== "")
-    .join("\n\n");
+  );
+  if (selected.omittedCount > 0) {
+    promptParts.push(
+      `[${selected.omittedCount} older message(s) omitted to fit the compaction request]`,
+    );
+  }
+  promptParts.push(selected.context, "</conversation>");
+  return promptParts.join("\n\n");
+}
+
+function normalizeFocusInstruction(
+  focusInstruction: string | undefined,
+): string | undefined {
+  const trimmed = focusInstruction?.trim();
+  if (trimmed === undefined || trimmed === "") {
+    return undefined;
+  }
+  return trimmed;
 }
 
 function selectSummaryInput(
@@ -983,6 +1004,7 @@ async function collectCompactionSummary(options: {
   readonly messagesToSummarize: readonly Message[];
   readonly signal: AbortSignal;
   readonly contextCompaction: ResolvedContextCompactionOptions;
+  readonly focusInstruction?: string;
 }): Promise<TextOnlyTurn> {
   let summaryInputMaxChars = options.contextCompaction.summaryInputMaxChars;
 
@@ -992,6 +1014,7 @@ async function collectCompactionSummary(options: {
       options.messagesToSummarize,
       options.contextCompaction,
       summaryInputMaxChars,
+      options.focusInstruction,
     );
     try {
       return await collectTextOnlyTurn({
@@ -1050,6 +1073,9 @@ export async function compactMessages(
     messagesToSummarize: plan.messagesToSummarize,
     signal: options.signal,
     contextCompaction: resolved,
+    ...(options.focusInstruction !== undefined
+      ? { focusInstruction: options.focusInstruction }
+      : {}),
   });
   const compacted = buildCompactedMessages(
     options.messages,
