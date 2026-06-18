@@ -2206,7 +2206,7 @@ describe("Interactive Session", () => {
   });
 
   test(`Given an interactive session has prior history,
-    When user enters /compact with a focus instruction,
+    When user enters /compact with a whitespace-separated focus instruction,
     Then the instruction is included in the summary prompt but not appended as a task`, async () => {
     // Given
     const focusInstruction =
@@ -2282,7 +2282,7 @@ describe("Interactive Session", () => {
     // When
     input.write("first prompt\n");
     await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
-    input.write(`/compact ${focusInstruction}\n`);
+    input.write(`/compact\t${focusInstruction}\n`);
     input.write("second prompt\n");
     input.end();
 
@@ -2291,8 +2291,100 @@ describe("Interactive Session", () => {
     expect(stdout).toBe("First done\nSecond done\n");
     expect(summaryPrompt).toContain(focusInstruction);
     expect(JSON.stringify(observedRequestContexts[1])).not.toContain(
-      `/compact ${focusInstruction}`,
+      "/compact",
     );
+    expect(observedRequestContexts[1]).toEqual([
+      {
+        role: "user",
+        content: expect.stringContaining("<conversation-checkpoint>"),
+      },
+      { role: "user", content: "second prompt" },
+    ]);
+  });
+
+  test(`Given an interactive session has prior history,
+    When user enters /compact with only surrounding whitespace,
+    Then compaction runs without a focus instruction`, async () => {
+    // Given
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    const observedRequestContexts: Message[][] = [];
+    let summaryPrompt = "";
+    let requestTurn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryPrompt = options.messages[0]?.content ?? "";
+          yield { type: "text", text: "Whitespace checkpoint summary." };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        requestTurn++;
+        observedRequestContexts.push(structuredClone([...options.messages]));
+        yield {
+          type: "text",
+          text: requestTurn === 1 ? "First done" : "Second done",
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (requestTurn === 1) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.write("   /compact      \n");
+    input.write("second prompt\n");
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toBe("First done\nSecond done\n");
+    expect(summaryPrompt).not.toContain("manual compaction focus");
     expect(observedRequestContexts[1]).toEqual([
       {
         role: "user",

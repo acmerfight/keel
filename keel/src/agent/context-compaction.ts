@@ -886,7 +886,10 @@ function normalizeFocusInstruction(
   focusInstruction: string | undefined,
 ): string | undefined {
   const trimmed = focusInstruction?.trim();
-  return trimmed === "" ? undefined : trimmed;
+  if (trimmed === undefined || trimmed === "") {
+    return undefined;
+  }
+  return trimmed;
 }
 
 function selectSummaryInput(

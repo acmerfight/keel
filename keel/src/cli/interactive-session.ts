@@ -102,14 +102,14 @@ interface ManualCompactCommand {
 function parseManualCompactCommand(
   userMessage: string,
 ): ManualCompactCommand | null {
-  if (userMessage === "/compact") {
-    return {};
-  }
-  const commandPrefix = "/compact ";
-  if (!userMessage.startsWith(commandPrefix)) {
+  const match = /^\/compact(?:\s+(.*))?$/u.exec(userMessage.trim());
+  if (match === null) {
     return null;
   }
-  const focusInstruction = userMessage.slice(commandPrefix.length).trim();
+  const focusInstruction = match[1]?.trim();
+  if (focusInstruction === undefined || focusInstruction === "") {
+    return {};
+  }
   return { focusInstruction };
 }
 
@@ -363,7 +363,7 @@ export async function runInteractiveSession(
       if (rawLine === null) break;
       const userMessage = rawLine.trim();
       if (userMessage === "") continue;
-      const manualCompactCommand = parseManualCompactCommand(userMessage);
+      const manualCompactCommand = parseManualCompactCommand(rawLine);
       if (manualCompactCommand !== null) {
         if (messages.length === 0 || resolved === null) {
           options.writeStderr(
