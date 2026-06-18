@@ -155,20 +155,32 @@ export function decodeUtf8(
   }
 }
 
-export function readEditableTextFile(
+export interface EditableTextFile {
+  readonly content: string;
+  readonly hasUtf8Bom: boolean;
+}
+
+function hasUtf8Bom(bytes: Uint8Array): boolean {
+  return bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+}
+
+export function readEditableTextFileWithMetadata(
   targetPath: string,
   filePath: string,
-): string {
+): EditableTextFile {
   const bytes = readFileSync(targetPath);
   const sample = bytes.subarray(0, BINARY_SAMPLE_BYTES);
   if (isBinarySample(targetPath, sample) || hasBinaryControlBytes(bytes)) {
     throw binaryFileError("edit", filePath);
   }
 
-  return decodeUtf8(
-    "edit",
-    filePath,
-    new TextDecoder("utf-8", { fatal: true }),
-    bytes,
-  );
+  return {
+    content: decodeUtf8(
+      "edit",
+      filePath,
+      new TextDecoder("utf-8", { fatal: true }),
+      bytes,
+    ),
+    hasUtf8Bom: hasUtf8Bom(bytes),
+  };
 }

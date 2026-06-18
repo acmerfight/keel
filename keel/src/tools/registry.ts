@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 interface OpenAICompatibleToolParameter {
-  readonly type: "string" | "integer" | "object";
+  readonly type: "string" | "integer" | "object" | "boolean";
   readonly description?: string;
   readonly minimum?: number;
   readonly maximum?: number;
@@ -43,6 +43,7 @@ export type ToolCall =
       readonly path: string;
       readonly oldString: string;
       readonly newString: string;
+      readonly replaceAll?: boolean;
     }
   | {
       readonly id: string;
@@ -79,6 +80,7 @@ const editToolArgumentsSchema = z
     path: z.string(),
     oldString: z.string(),
     newString: z.string(),
+    replaceAll: z.boolean().optional(),
   })
   .strict();
 
@@ -164,9 +166,10 @@ const editTool: OpenAICompatibleToolDefinition = {
   function: {
     name: "edit",
     description: [
-      "Replace one exact string in an existing workspace file. oldString must match the current file content exactly and appear exactly once.",
+      "Replace text in an existing workspace file. oldString should be copied from the current file content and identify one target unless replaceAll is true.",
       "Use when: changing an existing file after read confirmed the exact target text.",
       "Do not use when: creating a new file (use write), or when you have not read the file and would be guessing oldString from memory.",
+      "Keel can correct harmless line-ending, trailing-space, and common-indentation differences while preserving unrelated file bytes.",
       "On failure: if the string is not found, read the file and retry with the exact current text; if it appears more than once, include more surrounding lines in oldString to make it unique.",
     ].join("\n"),
     parameters: {
@@ -178,11 +181,17 @@ const editTool: OpenAICompatibleToolDefinition = {
         },
         oldString: {
           type: "string",
-          description: "Exact text to replace. Must appear exactly once.",
+          description:
+            "Text to replace. Copy it from read output; by default it must identify one target.",
         },
         newString: {
           type: "string",
           description: "Replacement text.",
+        },
+        replaceAll: {
+          type: "boolean",
+          description:
+            "When true, replace every exact occurrence of oldString. Defaults to false, which requires oldString to identify one target.",
         },
       },
       required: ["path", "oldString", "newString"],
@@ -308,6 +317,9 @@ export function toolCallFromParsedArguments(
         path: result.data.path,
         oldString: result.data.oldString,
         newString: result.data.newString,
+        ...(result.data.replaceAll !== undefined
+          ? { replaceAll: result.data.replaceAll }
+          : {}),
       };
     }
     case "write": {
@@ -353,6 +365,9 @@ export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
         path: toolCall.path,
         oldString: toolCall.oldString,
         newString: toolCall.newString,
+        ...(toolCall.replaceAll !== undefined
+          ? { replaceAll: toolCall.replaceAll }
+          : {}),
       };
     case "write":
       return {
