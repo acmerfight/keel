@@ -13,6 +13,14 @@ import {
   compactMessages,
   shouldCompactBeforeRequest,
 } from "./context-compaction.ts";
+import {
+  appendSessionLedgerMessage,
+  appendSessionLedgerMessages,
+  projectSessionLedgerToProviderMessages,
+  type SessionLedger,
+  sessionLedgerFromMessages,
+  syncMessagesFromSessionLedger,
+} from "./session-ledger.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
 import { defaultStopPolicy } from "./stop-policy.ts";
 
@@ -147,12 +155,6 @@ function finalReplyMessage(text: string): Message | null {
   return text === "" ? null : { role: "assistant", content: text };
 }
 
-function appendMessage(messages: Message[], message: Message | null): void {
-  if (message !== null) {
-    messages.push(message);
-  }
-}
-
 function finishAgentTurn(
   assistantText: readonly string[],
   pendingToolCalls: readonly ToolCall[],
@@ -181,11 +183,19 @@ const MISSING_SUMMARY_NOTICE =
 interface StreamTurnOptions {
   readonly provider: LLMProvider;
   readonly systemPrompt: string;
-  readonly messages: readonly Message[];
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
   readonly toolChoice?: "none";
   readonly textPrefix?: string;
+}
+
+interface LedgerTurnOptions extends StreamTurnOptions {
+  readonly getLedger: () => SessionLedger;
+  readonly setLedger: (ledger: SessionLedger) => void;
+}
+
+interface ProviderTurnOptions extends StreamTurnOptions {
+  readonly messages: readonly Message[];
 }
 
 function requestMetadataForStream(
@@ -200,7 +210,7 @@ function requestMetadataForStream(
 }
 
 async function* streamAgentTurn(
-  options: StreamTurnOptions,
+  options: ProviderTurnOptions,
 ): AsyncGenerator<AgentEvent, AgentTurn> {
   const { provider, systemPrompt, messages, signal, allowBash } = options;
   let textPrefix = options.textPrefix ?? "";
@@ -275,7 +285,17 @@ export async function* runAgentTurn(
     stopPolicy = defaultStopPolicy(),
     drainSteeringMessages,
   } = options;
-  const priorToolCalls = priorToolCallsFromMessages(messages);
+  let sessionLedger = sessionLedgerFromMessages(messages);
+  // During a turn the ledger owns transcript mutations; messages is only the
+  // public compatibility view and is synced after each ledger update. This
+  // full sync is a transition layer until callers accept ledger state directly.
+  const setSessionLedger = (next: SessionLedger) => {
+    sessionLedger = next;
+    syncMessagesFromSessionLedger(messages, sessionLedger);
+  };
+  const priorToolCalls = priorToolCallsFromMessages(
+    projectSessionLedgerToProviderMessages(sessionLedger),
+  );
   const { contextCompaction } = options;
   let totalUsage: Usage = {
     inputTokens: 0,
@@ -303,9 +323,13 @@ export async function* runAgentTurn(
   }
 
   async function compactContextIfPossible(
-    targetMessages: Message[],
-    streamOptions: StreamTurnOptions,
+    streamOptions: LedgerTurnOptions,
   ): Promise<CompactMessagesResult> {
+    // compactMessages still mutates its input array, so adapt the immutable
+    // ledger projection into a mutable request and install the result afterward.
+    const targetMessages = [
+      ...projectSessionLedgerToProviderMessages(streamOptions.getLedger()),
+    ];
     const result = await compactMessages({
       provider,
       systemPrompt,
@@ -317,19 +341,22 @@ export async function* runAgentTurn(
     });
     if (result.compacted) {
       contextAccounting = undefined;
+      streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
     }
     totalUsage = addUsage(totalUsage, result.usage);
     return result;
   }
 
   async function* streamRecoverableAgentTurn(
-    streamOptions: StreamTurnOptions & { readonly messages: Message[] },
+    streamOptions: LedgerTurnOptions,
   ): AsyncGenerator<AgentEvent, AgentTurn> {
     let overflowRecoveryAttempted = false;
     let compactedBeforeRequest = false;
-    const requestMessages = streamOptions.messages;
 
     for (;;) {
+      const requestMessages = projectSessionLedgerToProviderMessages(
+        streamOptions.getLedger(),
+      );
       if (
         !compactedBeforeRequest &&
         shouldCompactBeforeRequest(
@@ -341,10 +368,7 @@ export async function* runAgentTurn(
         )
       ) {
         compactedBeforeRequest = true;
-        const compaction = await compactContextIfPossible(
-          requestMessages,
-          streamOptions,
-        );
+        const compaction = await compactContextIfPossible(streamOptions);
         if (compaction.stats !== undefined) {
           yield {
             type: "context_compacted",
@@ -354,13 +378,28 @@ export async function* runAgentTurn(
         }
       }
       try {
-        const turn = yield* streamAgentTurn(streamOptions);
+        const currentRequestMessages = projectSessionLedgerToProviderMessages(
+          streamOptions.getLedger(),
+        );
+        const turn = yield* streamAgentTurn({
+          provider: streamOptions.provider,
+          systemPrompt: streamOptions.systemPrompt,
+          messages: currentRequestMessages,
+          signal: streamOptions.signal,
+          allowBash: streamOptions.allowBash,
+          ...(streamOptions.toolChoice !== undefined
+            ? { toolChoice: streamOptions.toolChoice }
+            : {}),
+          ...(streamOptions.textPrefix !== undefined
+            ? { textPrefix: streamOptions.textPrefix }
+            : {}),
+        });
         contextAccounting =
           contextCompaction === undefined
             ? undefined
             : captureContextCompactionAccountingSnapshot({
                 systemPrompt,
-                messages: requestMessages,
+                messages: currentRequestMessages,
                 usage: turn.usage,
                 requestMetadata: requestMetadataForStream(streamOptions),
               });
@@ -369,10 +408,7 @@ export async function* runAgentTurn(
         if (error instanceof ContextOverflowBeforeAssistantError) {
           if (!overflowRecoveryAttempted) {
             overflowRecoveryAttempted = true;
-            const compaction = await compactContextIfPossible(
-              requestMessages,
-              streamOptions,
-            );
+            const compaction = await compactContextIfPossible(streamOptions);
             if (compaction.compacted) {
               if (compaction.stats !== undefined) {
                 yield {
@@ -396,7 +432,8 @@ export async function* runAgentTurn(
     const turnResult = yield* streamRecoverableAgentTurn({
       provider,
       systemPrompt,
-      messages,
+      getLedger: () => sessionLedger,
+      setLedger: setSessionLedger,
       signal,
       allowBash,
     });
@@ -411,7 +448,12 @@ export async function* runAgentTurn(
     });
 
     if (decision.type === "stop") {
-      appendMessage(messages, finalReplyMessage(turnResult.text));
+      setSessionLedger(
+        appendSessionLedgerMessage(
+          sessionLedger,
+          finalReplyMessage(turnResult.text),
+        ),
+      );
       yield {
         type: "end",
         usage: totalUsage,
@@ -424,15 +466,24 @@ export async function* runAgentTurn(
 
     if (decision.type === "summarize") {
       const interimReply = finalReplyMessage(turnResult.text);
-      const wrapUpMessages: Message[] = [
-        ...messages,
-        ...(interimReply === null ? [] : [interimReply]),
-        { role: "user", content: WRAP_UP_INSTRUCTION },
-      ];
+      // Wrap-up uses a temporary ledger for the text-only summary request; only
+      // the resulting assistant summary is appended back to the main ledger.
+      let wrapUpLedger = appendSessionLedgerMessage(
+        sessionLedger,
+        interimReply,
+      );
+      wrapUpLedger = appendSessionLedgerMessage(wrapUpLedger, {
+        role: "user",
+        content: WRAP_UP_INSTRUCTION,
+      });
+      const setWrapUpLedger = (next: SessionLedger) => {
+        wrapUpLedger = next;
+      };
       const wrapUpTurn = yield* streamRecoverableAgentTurn({
         provider,
         systemPrompt,
-        messages: wrapUpMessages,
+        getLedger: () => wrapUpLedger,
+        setLedger: setWrapUpLedger,
         signal,
         allowBash,
         toolChoice: "none",
@@ -444,9 +495,11 @@ export async function* runAgentTurn(
       if (wrapUpTurn.text === "") {
         yield { type: "text", text: MISSING_SUMMARY_NOTICE };
       }
-      appendMessage(
-        messages,
-        finalReplyMessage(`${turnResult.text}${summary}`),
+      setSessionLedger(
+        appendSessionLedgerMessage(
+          sessionLedger,
+          finalReplyMessage(`${turnResult.text}${summary}`),
+        ),
       );
       totalUsage = addUsage(totalUsage, wrapUpTurn.usage);
       const finalCost = reportCost(totalUsage);
@@ -461,7 +514,12 @@ export async function* runAgentTurn(
     }
 
     if (turnResult.toolCalls.length === 0) {
-      appendMessage(messages, finalReplyMessage(turnResult.text));
+      setSessionLedger(
+        appendSessionLedgerMessage(
+          sessionLedger,
+          finalReplyMessage(turnResult.text),
+        ),
+      );
       yield {
         type: "end",
         usage: totalUsage,
@@ -472,7 +530,9 @@ export async function* runAgentTurn(
       return;
     }
 
-    messages.push(toolRequestMessage(turnResult));
+    setSessionLedger(
+      appendSessionLedgerMessage(sessionLedger, toolRequestMessage(turnResult)),
+    );
     priorToolCalls.push(...turnResult.toolCalls);
 
     for (const toolCall of turnResult.toolCalls) {
@@ -485,15 +545,22 @@ export async function* runAgentTurn(
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
       yield { type: "tool_end", toolCall, ok: execution.ok };
-      messages.push({
-        role: "tool",
-        toolCallId: toolCall.id,
-        content: execution.content,
-      });
+      setSessionLedger(
+        appendSessionLedgerMessage(sessionLedger, {
+          role: "tool",
+          toolCallId: toolCall.id,
+          content: execution.content,
+        }),
+      );
     }
 
     if (drainSteeringMessages !== undefined && !signal.aborted) {
-      messages.push(...(await drainSteeringMessages()));
+      setSessionLedger(
+        appendSessionLedgerMessages(
+          sessionLedger,
+          await drainSteeringMessages(),
+        ),
+      );
     }
   }
 }
