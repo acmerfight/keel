@@ -7,6 +7,7 @@ import {
   type CompactMessagesResult,
   type ContextCompactionAccountingSnapshot,
   type ContextCompactionOptions,
+  type ContextCompactionRequestMetadata,
   type ContextCompactionStats,
   captureContextCompactionAccountingSnapshot,
   compactMessages,
@@ -187,6 +188,17 @@ interface StreamTurnOptions {
   readonly textPrefix?: string;
 }
 
+function requestMetadataForStream(
+  options: StreamTurnOptions,
+): ContextCompactionRequestMetadata {
+  return {
+    allowBash: options.allowBash,
+    ...(options.toolChoice !== undefined
+      ? { toolChoice: options.toolChoice }
+      : {}),
+  };
+}
+
 async function* streamAgentTurn(
   options: StreamTurnOptions,
 ): AsyncGenerator<AgentEvent, AgentTurn> {
@@ -301,9 +313,7 @@ export async function* runAgentTurn(
       signal,
       ...(contextCompaction !== undefined ? { contextCompaction } : {}),
       ...(contextAccounting !== undefined ? { contextAccounting } : {}),
-      ...(streamOptions.toolChoice !== undefined
-        ? { requestMetadata: { toolChoice: streamOptions.toolChoice } }
-        : {}),
+      requestMetadata: requestMetadataForStream(streamOptions),
     });
     if (result.compacted) {
       contextAccounting = undefined;
@@ -327,9 +337,7 @@ export async function* runAgentTurn(
           requestMessages,
           contextCompaction,
           contextAccounting,
-          streamOptions.toolChoice !== undefined
-            ? { toolChoice: streamOptions.toolChoice }
-            : undefined,
+          requestMetadataForStream(streamOptions),
         )
       ) {
         compactedBeforeRequest = true;
@@ -354,11 +362,7 @@ export async function* runAgentTurn(
                 systemPrompt,
                 messages: requestMessages,
                 usage: turn.usage,
-                ...(streamOptions.toolChoice !== undefined
-                  ? {
-                      requestMetadata: { toolChoice: streamOptions.toolChoice },
-                    }
-                  : {}),
+                requestMetadata: requestMetadataForStream(streamOptions),
               });
         return turn;
       } catch (error) {
