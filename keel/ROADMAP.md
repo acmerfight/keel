@@ -71,9 +71,9 @@ Known limits that shape the priorities below:
   turn; overflow recovery belongs to compaction, not provider retry.
 - Tool calls execute strictly sequentially.
 - Exact-match single-string edit only.
-- Eval results compare keel across versions; cross-agent same-model
-  comparisons still wait on a general provider/model configuration surface
-  and a larger real-task corpus.
+- Eval results compare keel across versions; cross-agent comparisons are
+  intentionally deferred until the core coding loop is more complete and the
+  suite has a larger real-task corpus.
 
 ## P0 — Blocks daily use or makes the quality goal unfalsifiable
 
@@ -86,16 +86,17 @@ Known limits that shape the priorities below:
    follow-ups, corrections, "now also fix the tests" — including while a
    run is in progress. Daily use also generates the real-task corpus the
    eval suite needs.
-2. **General provider/model configuration and same-model comparisons.**
+2. **General provider/model configuration.**
    ✅ Partial (2026-06): DeepSeek, Kimi, and Qwen are wired through
    `KEEL_PROVIDER`, provider-specific API keys, base URLs, and model env
    vars. Remaining work is a general provider/model configuration surface,
-   additional frontier providers when needed, and a reproducible way to run
-   the **same model** as Claude Code / Codex / Kimi Code in A/B evals. This
-   carries double weight: daily use needs frontier models, and the harness
-   quality goal is unfalsifiable without same-model comparisons. Slice test:
-   *a user selects a provider/model outside the built-in defaults and the
-   same prompt runs end-to-end with a report that identifies that model.*
+   additional frontier providers when needed, and clearer reporting for the
+   selected provider/model. This carries daily-use weight because switching
+   frontier models should not require code changes. Slice test: *a user
+   selects a provider/model outside the built-in defaults and the same prompt
+   runs end-to-end with a report that identifies that model.* Cross-agent
+   same-model evals remain useful later, but are not the next slice while the
+   core coding loop still has basic gaps.
 3. **Context compaction and overflow recovery.** Standard equipment in all
    five reference harnesses, not a differentiator: token-threshold trigger,
    summarize old turns, never cut inside a tool-call/result pair, recover
@@ -111,9 +112,10 @@ Known limits that shape the priorities below:
    creation, bash-driven test fixing, long-file editing, stale edit
    recovery, repeated-string disambiguation, test-preserving bug fixes,
    and pattern-following feature additions. The next work is corpus growth
-   from real daily-use failures, transcript review tooling, and cross-agent
-   same-model comparison after **General provider/model configuration and
-   same-model comparisons**.
+   from real daily-use failures and transcript review tooling. External
+   agent runners and cross-agent same-model comparisons should wait until
+   the basic daily-use capabilities below are stronger and `keel eval` has
+   enough real usage to make the comparison meaningful.
 5. **Completed P0 foundations.** ✅ Done/partial (2026-06): provider retry
    with backoff now handles request setup failures and pre-stream HTTP
    408 / 409 / 429 / 5xx, honors `retry-after-ms` / `Retry-After`, emits a
