@@ -554,6 +554,7 @@ describe("Context Compaction", () => {
     // Then
     expect(result.compacted).toBe(true);
     expect(summaryPrompt).not.toContain("manual compaction focus");
+    expect(summaryPrompt).not.toContain("\n\n\n\n");
     expect(summaryPrompt).toContain("src/config.ts");
   });
 

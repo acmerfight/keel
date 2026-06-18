@@ -392,6 +392,8 @@ export async function runInteractiveSession(
               ? { focusInstruction: manualCompactCommand.focusInstruction }
               : {}),
           });
+          // A summary can finish just as Ctrl-C is delivered; keep manual abort
+          // semantics by rolling back the newly installed checkpoint.
           if (compactAbortController.signal.aborted) {
             messages.splice(0, messages.length, ...messagesBeforeCompact);
             options.writeStdout("\n");

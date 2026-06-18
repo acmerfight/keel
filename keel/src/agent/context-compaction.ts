@@ -863,23 +863,27 @@ function buildSummaryPrompt(
     ),
     summaryInputMaxChars,
   );
-  return [
+  const promptParts = [
     "Create a compact checkpoint summary for an ongoing coding-agent conversation.",
     "Do not call tools. Output concise Markdown only.",
     "Preserve exact file paths, commands, errors, user constraints, current task state, decisions, and next steps.",
-    normalizedFocusInstruction === undefined
-      ? ""
-      : `User manual compaction focus instruction:\n${normalizedFocusInstruction}`,
+  ];
+  if (normalizedFocusInstruction !== undefined) {
+    promptParts.push(
+      `User manual compaction focus instruction:\n${normalizedFocusInstruction}`,
+    );
+  }
+  promptParts.push(
     "Use these sections in order: Current Task, Constraints, Completed, In Progress, Relevant Files, Commands and Tests, Errors and Fixes, Next Steps.",
     "<conversation>",
-    selected.omittedCount > 0
-      ? `[${selected.omittedCount} older message(s) omitted to fit the compaction request]`
-      : "",
-    selected.context,
-    "</conversation>",
-  ]
-    .filter((part) => part !== "")
-    .join("\n\n");
+  );
+  if (selected.omittedCount > 0) {
+    promptParts.push(
+      `[${selected.omittedCount} older message(s) omitted to fit the compaction request]`,
+    );
+  }
+  promptParts.push(selected.context, "</conversation>");
+  return promptParts.join("\n\n");
 }
 
 function normalizeFocusInstruction(
