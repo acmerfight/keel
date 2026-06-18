@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
-import { printAgentEvents } from "../../src/cli/output.ts";
+import {
+  printAgentEvents,
+  sanitizeStatusLineText,
+} from "../../src/cli/output.ts";
 
 const ZERO_USAGE = {
   inputTokens: 0,
@@ -16,6 +19,21 @@ async function* agentEvents(
 }
 
 describe("CLI Output", () => {
+  test(`Given status line text contains unsafe terminal bytes,
+    When it is sanitized,
+    Then controls are rendered visibly and the line is capped`, () => {
+    // Given
+    const unsafe = `summary\n\u001b[31m\u202etext ${"x".repeat(300)}`;
+
+    // When
+    const sanitized = sanitizeStatusLineText(unsafe);
+
+    // Then
+    expect(sanitized).toContain("summary\\n\\x1b[31m\\u{202e}text");
+    expect(sanitized).toHaveLength(243);
+    expect(sanitized.endsWith("...")).toBe(true);
+  });
+
   test(`Given context compaction happens during an agent run,
     When the CLI prints agent events,
     Then the compaction report is written to stderr without polluting stdout`, async () => {

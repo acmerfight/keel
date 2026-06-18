@@ -1,3 +1,4 @@
+import type { ContextCompactionStats } from "../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
 import type { ToolCall } from "../llm/types.ts";
 
@@ -13,6 +14,7 @@ function formatUsd(value: number): string {
 }
 
 const TOOL_LABEL_MAX_LENGTH = 160;
+const STATUS_LINE_TEXT_MAX_LENGTH = 240;
 
 // Shared escape style for model-controlled bytes: control characters become
 // visible \xNN (or \n-style) escapes so the terminal never interprets them.
@@ -64,6 +66,22 @@ function sanitizeToolLabel(label: string): string {
     : `${escaped.slice(0, TOOL_LABEL_MAX_LENGTH)}...`;
 }
 
+export function sanitizeStatusLineText(text: string): string {
+  const escaped = text.replace(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: status lines must render untrusted bytes visibly.
+    /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2060\u202a-\u202e\u2066-\u2069\ufeff]/g,
+    (char) => {
+      const code = char.charCodeAt(0);
+      return code <= 0x9f
+        ? escapeControlChar(char)
+        : `\\u{${code.toString(16)}}`;
+    },
+  );
+  return escaped.length <= STATUS_LINE_TEXT_MAX_LENGTH
+    ? escaped
+    : `${escaped.slice(0, STATUS_LINE_TEXT_MAX_LENGTH)}...`;
+}
+
 function toolCallLabel(toolCall: ToolCall): string {
   switch (toolCall.tool) {
     case "read":
@@ -106,7 +124,7 @@ function contextCompactionReasonLabel(
 }
 
 function formatToolOutputCompactionDetails(
-  event: Extract<AgentEvent, { readonly type: "context_compacted" }>,
+  event: ContextCompactionStats,
 ): string {
   if (event.toolOutputsCompacted === 0) {
     return "";
@@ -114,6 +132,12 @@ function formatToolOutputCompactionDetails(
   const outputLabel =
     event.toolOutputsCompacted === 1 ? "tool output" : "tool outputs";
   return `, stale ${outputLabel} ${event.toolOutputsCompacted} (${event.toolOutputCharsBefore} -> ${event.toolOutputCharsAfter} chars, ~${event.toolOutputEstimatedTokensBefore} -> ~${event.toolOutputEstimatedTokensAfter} tokens)`;
+}
+
+export function formatContextCompactionReport(
+  report: ContextCompactionStats & { readonly reasonLabel: string },
+): string {
+  return `Context compacted: ${report.reasonLabel} (${report.beforeMessageCount} -> ${report.afterMessageCount} messages, ~${report.beforeEstimatedTokens} -> ~${report.afterEstimatedTokens} tokens${formatToolOutputCompactionDetails(report)})\n`;
 }
 
 export function formatCostReport(cost: CostReport, maxUsd: number): string {
@@ -134,7 +158,10 @@ export async function printAgentEvents(
       runtime.writeStdout(sanitizeAssistantText(event.text));
     } else if (event.type === "context_compacted") {
       runtime.writeStderr(
-        `Context compacted: ${contextCompactionReasonLabel(event.reason)} (${event.beforeMessageCount} -> ${event.afterMessageCount} messages, ~${event.beforeEstimatedTokens} -> ~${event.afterEstimatedTokens} tokens${formatToolOutputCompactionDetails(event)})\n`,
+        formatContextCompactionReport({
+          ...event,
+          reasonLabel: contextCompactionReasonLabel(event.reason),
+        }),
       );
     } else if (event.type === "provider_retry") {
       runtime.writeStderr(
