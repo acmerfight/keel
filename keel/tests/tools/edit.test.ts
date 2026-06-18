@@ -542,6 +542,97 @@ describe("Edit Tool", () => {
     }
   });
 
+  test(`Given an edit target includes a trailing newline but the final file span does not,
+    When fuzzy matching checks the final candidate span,
+    Then it rejects the edit and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const original = ["  callOld();", "  finish();"].join("\n");
+    await writeFile(join(workspace, "note.ts"), original, "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () =>
+          executeEdit(
+            workspace,
+            "note.ts",
+            ["callOld();", "finish();", ""].join("\n"),
+            ["callNew();", "finish();", ""].join("\n"),
+          ),
+        "tool_old_string_not_found",
+        "old string not found",
+      );
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(original);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a fuzzy edit target includes a trailing newline and the candidate span has one,
+    When the edit tool applies the replacement,
+    Then the matched span includes that trailing newline`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.ts"),
+      ["  callOld();", "  finish();", "next();", ""].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        ["callOld();", "finish();", ""].join("\n"),
+        ["callNew();", "finish();", ""].join("\n"),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        ["callNew();", "finish();", "next();", ""].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit target differs by common indentation and contains a blank line,
+    When the edit tool locates the target,
+    Then it ignores the blank line when comparing indentation`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.ts"),
+      ["if (ready) {", "    callOld();", "", "    finish();", "}", ""].join(
+        "\n",
+      ),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        ["  callOld();", "", "  finish();"].join("\n"),
+        ["    callNew();", "", "    finish();"].join("\n"),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        ["if (ready) {", "    callNew();", "", "    finish();", "}", ""].join(
+          "\n",
+        ),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given trailing-whitespace matching finds multiple candidate spans,
     When the edit tool validates the fuzzy target,
     Then it rejects the edit as ambiguous and leaves the file unchanged`, async () => {

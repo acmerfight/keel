@@ -100,6 +100,7 @@ function commonIndentLength(lines: readonly string[]): number {
     common =
       common === undefined ? indentLength : Math.min(common, indentLength);
   }
+  /* v8 ignore next: blank-only windows match the trailing-whitespace fallback before indentation matching. */
   return common ?? 0;
 }
 
@@ -108,11 +109,10 @@ function stripCommonIndent(lines: readonly string[]): readonly string[] {
   return lines.map((line) => line.slice(Math.min(indentLength, line.length)));
 }
 
-function arraysEqual(
+function sameLengthArraysEqual(
   left: readonly string[],
   right: readonly string[],
 ): boolean {
-  if (left.length !== right.length) return false;
   return left.every((value, index) => value === right[index]);
 }
 
@@ -122,9 +122,14 @@ function candidateSpan(
   lineCount: number,
   endsWithNewline: boolean,
 ): EditMatchSpan | null {
+  // lineBasedMatches only calls this for bounds-checked line windows; the
+  // nullable result is reserved for trailing-newline mismatches.
   const firstLine = lines[startLine];
   const lastLine = lines[startLine + lineCount - 1];
-  if (firstLine === undefined || lastLine === undefined) return null;
+  /* v8 ignore next 3: lineBasedMatches bounds-checks candidate windows before computing spans. */
+  if (firstLine === undefined || lastLine === undefined) {
+    return null;
+  }
   if (endsWithNewline && lastLine.end === lastLine.contentEnd) return null;
   return {
     index: firstLine.start,
@@ -180,7 +185,7 @@ function lineTrimmedMatches(
   candidateLines: readonly string[],
   searchLines: readonly string[],
 ): boolean {
-  return arraysEqual(
+  return sameLengthArraysEqual(
     candidateLines.map(trailingWhitespaceTrimmed),
     searchLines.map(trailingWhitespaceTrimmed),
   );
@@ -190,7 +195,7 @@ function indentationFlexibleMatches(
   candidateLines: readonly string[],
   searchLines: readonly string[],
 ): boolean {
-  return arraysEqual(
+  return sameLengthArraysEqual(
     stripCommonIndent(candidateLines),
     stripCommonIndent(searchLines),
   );
@@ -202,7 +207,10 @@ function uniqueMatchResult(matches: readonly EditMatchSpan[]): EditMatchResult {
     return { status: "not_unique", occurrenceCount: matches.length };
   }
   const [match] = matches;
-  if (match === undefined) return { status: "not_found" };
+  /* v8 ignore next 3: length checks above guarantee the single-match element exists. */
+  if (match === undefined) {
+    return { status: "not_found" };
+  }
   return { status: "matched", match };
 }
 
