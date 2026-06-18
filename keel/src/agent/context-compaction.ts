@@ -100,16 +100,19 @@ export interface ContextCompactionStats {
 export interface ContextCompactionAccountingSnapshot {
   readonly systemPrompt: string;
   readonly messageFingerprints: readonly string[];
+  readonly messageFingerprintCache?: readonly MessageFingerprintCache[];
   readonly requestMetadata: ResolvedContextCompactionRequestMetadata;
   readonly inputTokens: number;
 }
 
 export interface ContextCompactionRequestMetadata {
   readonly toolChoice?: "none";
+  readonly allowBash?: boolean;
 }
 
 interface ResolvedContextCompactionRequestMetadata {
   readonly toolChoice: "auto" | "none";
+  readonly allowBash: boolean;
 }
 
 interface TextOnlyTurn {
@@ -129,6 +132,36 @@ interface StaleToolOutputCompactionStats {
   readonly toolOutputEstimatedTokensBefore: number;
   readonly toolOutputEstimatedTokensAfter: number;
 }
+
+type ToolCallFingerprintPart = string | number | null;
+
+interface ToolCallFingerprintCache {
+  readonly parts: readonly ToolCallFingerprintPart[];
+}
+
+interface CapturedToolCallFingerprint {
+  readonly cache: ToolCallFingerprintCache;
+  readonly fingerprint: string;
+}
+
+type MessageFingerprintCache =
+  | {
+      readonly role: "user";
+      readonly content: string;
+      readonly fingerprint: string;
+    }
+  | {
+      readonly role: "assistant";
+      readonly content: string;
+      readonly toolCalls: readonly ToolCallFingerprintCache[];
+      readonly fingerprint: string;
+    }
+  | {
+      readonly role: "tool";
+      readonly toolCallId: string;
+      readonly content: string;
+      readonly fingerprint: string;
+    };
 
 interface StaleToolOutputCompactionResult {
   readonly messages: readonly Message[];
@@ -343,55 +376,79 @@ function estimateMessagesTokens(messages: readonly Message[]): number {
 function resolvedRequestMetadata(
   metadata: ContextCompactionRequestMetadata | undefined,
 ): ResolvedContextCompactionRequestMetadata {
+  const toolChoice = metadata?.toolChoice ?? "auto";
   return {
-    toolChoice: metadata?.toolChoice ?? "auto",
+    toolChoice,
+    allowBash: toolChoice === "none" ? false : metadata?.allowBash === true,
   };
 }
 
-function toolCallFingerprint(toolCall: ToolCall): string {
+function toolCallFingerprintParts(
+  toolCall: ToolCall,
+): readonly ToolCallFingerprintPart[] {
   switch (toolCall.tool) {
     case "read":
-      return JSON.stringify([
+      return [
         toolCall.id,
         toolCall.tool,
         toolCall.path,
         toolCall.offset ?? null,
         toolCall.limit ?? null,
-      ]);
+      ];
     case "grep":
-      return JSON.stringify([
+      return [
         toolCall.id,
         toolCall.tool,
         toolCall.pattern,
         toolCall.path ?? null,
-      ]);
+      ];
     case "edit":
-      return JSON.stringify([
+      return [
         toolCall.id,
         toolCall.tool,
         toolCall.path,
         toolCall.oldString,
         toolCall.newString,
-      ]);
+      ];
     case "write":
-      return JSON.stringify([
-        toolCall.id,
-        toolCall.tool,
-        toolCall.path,
-        toolCall.content,
-      ]);
+      return [toolCall.id, toolCall.tool, toolCall.path, toolCall.content];
     case "bash":
-      return JSON.stringify([
+      return [
         toolCall.id,
         toolCall.tool,
         toolCall.command,
         toolCall.timeoutMs ?? null,
-      ]);
+      ];
   }
   /* v8 ignore start: compile-time exhaustiveness guard for future tools. */
   const exhaustive: never = toolCall;
   return exhaustive;
   /* v8 ignore stop */
+}
+
+function toolCallFingerprint(toolCall: ToolCall): string {
+  return JSON.stringify(toolCallFingerprintParts(toolCall));
+}
+
+function captureToolCallFingerprint(
+  toolCall: ToolCall,
+): CapturedToolCallFingerprint {
+  const parts = toolCallFingerprintParts(toolCall);
+  return {
+    cache: { parts },
+    fingerprint: JSON.stringify(parts),
+  };
+}
+
+function toolCallMatchesFingerprintCache(
+  toolCall: ToolCall,
+  cache: ToolCallFingerprintCache,
+): boolean {
+  const parts = toolCallFingerprintParts(toolCall);
+  return (
+    parts.length === cache.parts.length &&
+    parts.every((part, index) => part === cache.parts[index])
+  );
 }
 
 function messageFingerprint(message: Message): string {
@@ -410,6 +467,88 @@ function messageFingerprint(message: Message): string {
         message.toolCallId,
         message.content,
       ]);
+  }
+}
+
+function captureMessageFingerprintCache(
+  message: Message,
+): MessageFingerprintCache {
+  switch (message.role) {
+    case "user":
+      return {
+        role: message.role,
+        content: message.content,
+        fingerprint: JSON.stringify([message.role, message.content]),
+      };
+    case "assistant": {
+      const toolCalls = (message.toolCalls ?? []).map(
+        captureToolCallFingerprint,
+      );
+      return {
+        role: message.role,
+        content: message.content,
+        toolCalls: toolCalls.map((toolCall) => toolCall.cache),
+        fingerprint: JSON.stringify([
+          message.role,
+          message.content,
+          toolCalls.map((toolCall) => toolCall.fingerprint),
+        ]),
+      };
+    }
+    case "tool":
+      return {
+        role: message.role,
+        toolCallId: message.toolCallId,
+        content: message.content,
+        fingerprint: JSON.stringify([
+          message.role,
+          message.toolCallId,
+          message.content,
+        ]),
+      };
+  }
+}
+
+function cachedMessageFingerprint(
+  message: Message,
+  cache: MessageFingerprintCache | undefined,
+): string {
+  if (cache === undefined) {
+    return messageFingerprint(message);
+  }
+
+  switch (message.role) {
+    case "user":
+      return cache.role === "user" && cache.content === message.content
+        ? cache.fingerprint
+        : messageFingerprint(message);
+    case "assistant": {
+      if (cache.role !== "assistant") {
+        return messageFingerprint(message);
+      }
+      const toolCalls = message.toolCalls ?? [];
+      const toolCallCaches = cache.toolCalls;
+      if (
+        cache.content === message.content &&
+        toolCalls.length === toolCallCaches.length &&
+        toolCalls.every((toolCall, index) => {
+          const toolCallCache = toolCallCaches[index];
+          return (
+            toolCallCache !== undefined &&
+            toolCallMatchesFingerprintCache(toolCall, toolCallCache)
+          );
+        })
+      ) {
+        return cache.fingerprint;
+      }
+      return messageFingerprint(message);
+    }
+    case "tool":
+      return cache.role === "tool" &&
+        cache.toolCallId === message.toolCallId &&
+        cache.content === message.content
+        ? cache.fingerprint
+        : messageFingerprint(message);
   }
 }
 
@@ -442,6 +581,7 @@ function estimateRequestTokensFromAccounting(
     accounting === undefined ||
     accounting.systemPrompt !== systemPrompt ||
     accounting.requestMetadata.toolChoice !== currentMetadata.toolChoice ||
+    accounting.requestMetadata.allowBash !== currentMetadata.allowBash ||
     accounting.messageFingerprints.length > messages.length
   ) {
     return null;
@@ -454,7 +594,10 @@ function estimateRequestTokensFromAccounting(
     const message = messages[index];
     if (
       message === undefined ||
-      messageFingerprint(message) !== accountedFingerprint
+      cachedMessageFingerprint(
+        message,
+        accounting.messageFingerprintCache?.[index],
+      ) !== accountedFingerprint
     ) {
       return null;
     }
@@ -481,12 +624,18 @@ export function captureContextCompactionAccountingSnapshot(options: {
   if (!isUsableInputTokenCount(options.usage.inputTokens)) {
     return undefined;
   }
+  const messageFingerprintCache = options.messages.map(
+    captureMessageFingerprintCache,
+  );
   return {
     systemPrompt: options.systemPrompt,
     // Provider usage only maps clearly to the exact completed request shape.
-    // Store stable message fingerprints so later checks fall back if earlier
-    // content, tool calls, ordering, system prompt, or tool mode changed.
-    messageFingerprints: options.messages.map(messageFingerprint),
+    // Store stable fingerprints and field-level cache metadata so later checks
+    // detect mutations without rebuilding unchanged historical fingerprints.
+    messageFingerprints: messageFingerprintCache.map(
+      (cache) => cache.fingerprint,
+    ),
+    messageFingerprintCache,
     requestMetadata: resolvedRequestMetadata(options.requestMetadata),
     inputTokens: options.usage.inputTokens,
   };

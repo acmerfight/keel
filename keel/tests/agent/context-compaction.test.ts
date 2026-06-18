@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   captureContextCompactionAccountingSnapshot,
   compactMessages,
@@ -8,13 +8,24 @@ import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
 import { maxTurnFallbackPolicy } from "../../src/agent/stop-policy.ts";
 import { KeelError } from "../../src/core/error.ts";
-import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  Message,
+  ToolCall,
+  Usage,
+} from "../../src/llm/types.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 type ContextCompactedEvent = Extract<
   AgentEvent,
   { readonly type: "context_compacted" }
 >;
+type AccountingSnapshot = NonNullable<
+  ReturnType<typeof captureContextCompactionAccountingSnapshot>
+>;
+type AccountingMessageFingerprintCache = NonNullable<
+  AccountingSnapshot["messageFingerprintCache"]
+>[number];
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -255,6 +266,262 @@ describe("Context Compaction", () => {
     expect(shouldCompact).toBe(true);
   });
 
+  test(`Given a completed tool output is mutated in place after usage accounting,
+    When proactive compaction checks the request,
+    Then it falls back to the estimated request size`, () => {
+    // Given
+    const messages: Message[] = [
+      {
+        role: "tool",
+        toolCallId: "run_tests",
+        content: "short result",
+      },
+    ];
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+    });
+    const [toolMessage] = messages;
+    if (toolMessage?.role !== "tool") {
+      throw new Error("test setup expected a tool message");
+    }
+    Object.assign(toolMessage, {
+      content: "mutated tool output ".repeat(80),
+    });
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      messages,
+      {
+        contextWindowTokens: 100,
+        reserveTokens: 0,
+      },
+      accounting,
+    );
+
+    // Then
+    expect(shouldCompact).toBe(true);
+  });
+
+  test(`Given provider usage accounting captured an unchanged completed prefix,
+    When proactive compaction checks a later request,
+    Then it avoids rebuilding historical message fingerprints`, () => {
+    // Given
+    const toolCalls: ToolCall[] = [
+      {
+        id: "read_package",
+        tool: "read",
+        path: "package.json",
+        offset: 0,
+        limit: 200,
+      },
+      {
+        id: "grep_scripts",
+        tool: "grep",
+        pattern: "scripts",
+        path: "package.json",
+      },
+      {
+        id: "edit_note",
+        tool: "edit",
+        path: "notes.txt",
+        oldString: "todo",
+        newString: "done",
+      },
+      {
+        id: "write_log",
+        tool: "write",
+        path: "log.txt",
+        content: "validated",
+      },
+      {
+        id: "run_test",
+        tool: "bash",
+        command: "pnpm test",
+        timeoutMs: 1_000,
+      },
+    ];
+    const completedMessages: Message[] = [
+      { role: "user", content: "Completed prefix ".repeat(80) },
+      {
+        role: "assistant",
+        content: "I will inspect and update the workspace.",
+        toolCalls,
+      },
+      {
+        role: "tool",
+        toolCallId: "read_package",
+        content: '{ "scripts": { "test": "vitest" } }',
+      },
+    ];
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages: completedMessages,
+      usage: {
+        inputTokens: 20,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 20,
+        outputTokens: 1,
+      },
+    });
+    const requestMessages: Message[] = [
+      ...completedMessages,
+      { role: "user", content: "Continue with the next step." },
+    ];
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      requestMessages,
+      {
+        contextWindowTokens: 200,
+        reserveTokens: 0,
+      },
+      accounting,
+    );
+
+    // Then
+    const stringifyCalls = stringifySpy.mock.calls.length;
+    stringifySpy.mockRestore();
+    expect(shouldCompact).toBe(false);
+    expect(stringifyCalls).toBe(0);
+  });
+
+  test(`Given a legacy accounting snapshot has no fingerprint cache,
+    When proactive compaction checks a matching later request,
+    Then it still accepts the provider usage snapshot`, () => {
+    // Given
+    const completedMessages: Message[] = [
+      { role: "user", content: "Completed request ".repeat(80) },
+    ];
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages: completedMessages,
+      usage: {
+        inputTokens: 20,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 20,
+        outputTokens: 1,
+      },
+    });
+    if (accounting === undefined) {
+      throw new Error("test setup expected accounting");
+    }
+    const { messageFingerprintCache, ...legacyAccounting } = accounting;
+    const requestMessages: Message[] = [
+      ...completedMessages,
+      { role: "user", content: "Continue." },
+    ];
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      requestMessages,
+      {
+        contextWindowTokens: 200,
+        reserveTokens: 0,
+      },
+      legacyAccounting,
+    );
+
+    // Then
+    expect(messageFingerprintCache).toBeDefined();
+    expect(shouldCompact).toBe(false);
+  });
+
+  test.each([
+    {
+      label: "user message",
+      messages: [{ role: "user", content: "Completed request ".repeat(80) }],
+      mismatchedCache: {
+        role: "assistant",
+        content: "stale",
+        toolCalls: [],
+        fingerprint: "stale",
+      },
+    },
+    {
+      label: "assistant message",
+      messages: [
+        {
+          role: "assistant",
+          content: "Completed assistant response ".repeat(80),
+        },
+      ],
+      mismatchedCache: {
+        role: "tool",
+        toolCallId: "stale",
+        content: "stale",
+        fingerprint: "stale",
+      },
+    },
+    {
+      label: "tool message",
+      messages: [
+        {
+          role: "tool",
+          toolCallId: "run_tests",
+          content: "Completed tool output ".repeat(80),
+        },
+      ],
+      mismatchedCache: {
+        role: "user",
+        content: "stale",
+        fingerprint: "stale",
+      },
+    },
+  ] satisfies readonly {
+    readonly label: string;
+    readonly messages: Message[];
+    readonly mismatchedCache: AccountingMessageFingerprintCache;
+  }[])(`Given accounting fingerprint cache metadata has the wrong role for $label,
+    When proactive compaction checks a matching request,
+    Then it falls back to the canonical message fingerprint`, ({
+    messages,
+    mismatchedCache,
+  }) => {
+    // Given
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+    });
+    if (accounting === undefined) {
+      throw new Error("test setup expected accounting");
+    }
+    const corruptedAccounting = {
+      ...accounting,
+      messageFingerprintCache: [mismatchedCache],
+    };
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      messages,
+      {
+        contextWindowTokens: 100,
+        reserveTokens: 0,
+      },
+      corruptedAccounting,
+    );
+
+    // Then
+    expect(shouldCompact).toBe(false);
+  });
+
   test(`Given provider usage was captured for a tool-enabled request,
     When a text-only wrap-up request checks proactive compaction,
     Then it treats the usage as ambiguous and falls back to the estimate`, () => {
@@ -287,6 +554,76 @@ describe("Context Compaction", () => {
 
     // Then
     expect(shouldCompact).toBe(true);
+  });
+
+  test(`Given provider usage was captured with bash tool exposure,
+    When proactive compaction checks a request without bash exposure,
+    Then it treats the request shape as ambiguous and falls back to the estimate`, () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Previously completed request ".repeat(80) },
+    ];
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+      requestMetadata: { allowBash: true },
+    });
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      messages,
+      {
+        contextWindowTokens: 100,
+        reserveTokens: 0,
+      },
+      accounting,
+      { allowBash: false },
+    );
+
+    // Then
+    expect(shouldCompact).toBe(true);
+  });
+
+  test(`Given provider usage was captured for a text-only request with bash enabled,
+    When another text-only request checks proactive compaction without bash enabled,
+    Then it reuses accounting because no tools are exposed`, () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Previously completed request ".repeat(80) },
+    ];
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+      requestMetadata: { allowBash: true, toolChoice: "none" },
+    });
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      messages,
+      {
+        contextWindowTokens: 100,
+        reserveTokens: 0,
+      },
+      accounting,
+      { allowBash: false, toolChoice: "none" },
+    );
+
+    // Then
+    expect(shouldCompact).toBe(false);
   });
 
   test.each([
