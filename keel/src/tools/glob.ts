@@ -1,5 +1,5 @@
 import { statSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { resolve } from "node:path";
 import { KeelError } from "../core/error.ts";
 import {
   displayPath,
@@ -86,10 +86,10 @@ async function runGlob(
     onStdoutLine: (line, stopRipgrep) => {
       if (matches.length >= MAX_GLOB_MATCHES) return;
 
-      const absoluteMatchPath = isAbsolute(line)
-        ? resolve(line)
-        : resolve(workspacePath, line);
+      const absoluteMatchPath = resolve(workspacePath, line);
+      /* v8 ignore next: ripgrep applies project ignores before stdout; this is a symlink/race safety filter. */
       if (projectIgnorePolicy.isIgnored(absoluteMatchPath, false)) return;
+      /* v8 ignore next: built-in ignore globs filter these before stdout; this is a symlink/race safety filter. */
       if (hasIgnoredPathSegment(workspacePath, absoluteMatchPath)) return;
 
       matches.push(normalizeRipgrepPath(workspacePath, line));
@@ -117,11 +117,14 @@ async function runGlob(
     );
   }
 
+  /* v8 ignore next: close normally reports a numeric code; null requires an external signal race. */
+  const exitCode = result.code ?? "unknown";
+  const stderr = result.stderr.trim();
+  /* v8 ignore next: fallback code 2 with stderr is handled above as an invalid pattern. */
+  const stderrSuffix = stderr === "" ? "" : `: ${stderr}`;
   throw new KeelError(
     "tool_unavailable",
-    `glob failed: ripgrep exited with code ${result.code ?? "unknown"}${
-      result.stderr.trim() ? `: ${result.stderr.trim()}` : ""
-    }`,
+    `glob failed: ripgrep exited with code ${exitCode}${stderrSuffix}`,
   );
 }
 

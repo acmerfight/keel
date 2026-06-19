@@ -64,6 +64,7 @@ export async function runRipgrepProcess(
     };
     const stopRipgrep = () => {
       child.kill("SIGTERM");
+      /* v8 ignore next: stopRipgrep has one caller per request path; duplicate calls are defensive. */
       if (forceKillTimeout !== undefined) return;
       /* v8 ignore next 3: SIGKILL fallback only fires if ripgrep ignores SIGTERM. */
       forceKillTimeout = setTimeout(() => {

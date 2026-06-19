@@ -92,6 +92,31 @@ describe("tool registry", () => {
     ).toBeNull();
   });
 
+  test(`Given a provider returns invalid glob arguments,
+    When the registry parses the call,
+    Then it rejects the glob call without constructing a tool call`, () => {
+    expect(
+      toolCallFromParsedArguments("call_glob", "glob", { path: "tests" }),
+    ).toBeNull();
+  });
+
+  test(`Given a provider returns a glob call without a search path,
+    When the registry parses and serializes the call,
+    Then only the required pattern field is preserved`, () => {
+    const parsed = toolCallFromParsedArguments("call_glob", "glob", {
+      pattern: "**/*.test.ts",
+    });
+
+    expect(parsed).toEqual({
+      id: "call_glob",
+      tool: "glob",
+      pattern: "**/*.test.ts",
+    });
+    expect(parsed === null ? null : toolCallArguments(parsed)).toEqual({
+      pattern: "**/*.test.ts",
+    });
+  });
+
   test(`Given a provider returns a glob call,
     When the registry parses and serializes the call,
     Then the pattern and optional search path are preserved for tool execution`, () => {

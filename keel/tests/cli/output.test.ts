@@ -19,6 +19,56 @@ async function* agentEvents(
 }
 
 describe("CLI Output", () => {
+  test(`Given a glob tool call searches the workspace root,
+    When the CLI prints agent events,
+    Then the progress label only includes the pattern`, async () => {
+    // Given
+    let stdout = "";
+    let stderr = "";
+
+    // When
+    const finalEnd = await printAgentEvents(
+      agentEvents([
+        {
+          type: "tool_start",
+          toolCall: {
+            id: "glob_1",
+            tool: "glob",
+            pattern: "**/*.test.ts",
+          },
+        },
+        {
+          type: "tool_end",
+          toolCall: {
+            id: "glob_1",
+            tool: "glob",
+            pattern: "**/*.test.ts",
+          },
+          ok: true,
+        },
+        {
+          type: "end",
+          usage: ZERO_USAGE,
+          turns: 1,
+          stopReason: "completed",
+        },
+      ]),
+      {
+        writeStdout: (text) => {
+          stdout += text;
+        },
+        writeStderr: (text) => {
+          stderr += text;
+        },
+      },
+    );
+
+    // Then
+    expect(stdout).toBe("");
+    expect(stderr).toBe("Tool: glob **/*.test.ts\n");
+    expect(finalEnd?.stopReason).toBe("completed");
+  });
+
   test(`Given a glob tool call has an explicit search path,
     When the CLI prints agent events,
     Then the progress label includes the pattern and path`, async () => {
