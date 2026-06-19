@@ -2,8 +2,8 @@ import { statSync, writeFileSync } from "node:fs";
 import { KeelError } from "../core/error.ts";
 import { recordLastEditCheckpoint } from "../core/git.ts";
 import {
-  countExactOccurrences,
   type EditMatchSpan,
+  locateExactEditSpans,
   locateUniqueEditSpan,
 } from "./edit-match.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
@@ -54,6 +54,11 @@ function lineEndingAdjusted(
   return normalizeLineEndings(text).replaceAll("\n", lineEnding);
 }
 
+function sourceSpanReplacement(text: string, sourceSpan: string): string {
+  if (!text.includes("\r") && !text.includes("\n")) return text;
+  return lineEndingAdjusted(text, detectLineEnding(sourceSpan));
+}
+
 function normalizeWithSourceMap(content: string): NormalizedText {
   const normalized: string[] = [];
   const sourceIndexByNormalizedIndex: number[] = [];
@@ -102,27 +107,28 @@ function withUtf8Bom(content: string, hasUtf8Bom: boolean): string {
   return hasUtf8Bom ? `\uFEFF${content}` : content;
 }
 
-function replaceAllExact(
+function replaceAllNormalized(
   content: string,
-  search: string,
+  normalized: NormalizedText,
+  matches: readonly EditMatchSpan[],
   newString: string,
 ): string {
   const parts: string[] = [];
   let start = 0;
-  while (true) {
-    const index = content.indexOf(search, start);
-    if (index < 0) {
-      parts.push(content.slice(start));
-      return parts.join("");
-    }
-    const sourceSpan = content.slice(index, index + search.length);
-    const replacement = lineEndingAdjusted(
-      newString,
-      detectLineEnding(sourceSpan),
+  for (const match of matches) {
+    const sourceMatch = originalSpan(normalized, match, content.length);
+    const sourceSpan = content.slice(
+      sourceMatch.index,
+      sourceMatch.index + sourceMatch.length,
     );
-    parts.push(content.slice(start, index), replacement);
-    start = index + search.length;
+    parts.push(
+      content.slice(start, sourceMatch.index),
+      sourceSpanReplacement(newString, sourceSpan),
+    );
+    start = sourceMatch.index + sourceMatch.length;
   }
+  parts.push(content.slice(start));
+  return parts.join("");
 }
 
 export function executeEdit(
@@ -139,7 +145,9 @@ export function executeEdit(
       "Provide the exact text to replace. Use read to find the target text first.",
     );
   }
-  if (oldString === newString) {
+  const normalizedOldString = normalizeLineEndings(oldString);
+  const normalizedNewString = normalizeLineEndings(newString);
+  if (normalizedOldString === normalizedNewString) {
     throw new KeelError(
       "tool_edit_no_op",
       "edit failed: old string and new string are identical",
@@ -176,11 +184,15 @@ export function executeEdit(
 
   const file = readEditableTextFileWithMetadata(targetPath, filePath);
   const content = file.content;
+  const normalizedContent = normalizeWithSourceMap(content);
   let updated: string;
 
   if (options.replaceAll === true) {
-    const matchCount = countExactOccurrences(content, oldString);
-    if (matchCount === 0) {
+    const matches = locateExactEditSpans(
+      normalizedContent.text,
+      normalizedOldString,
+    );
+    if (matches.length === 0) {
       const lineCount = countLines(content);
       throw new KeelError(
         "tool_old_string_not_found",
@@ -188,10 +200,13 @@ export function executeEdit(
         `Use read(path: "${filePath}") to view the current file content, then retry edit with the exact text from the file.`,
       );
     }
-    updated = replaceAllExact(content, oldString, newString);
+    updated = replaceAllNormalized(
+      content,
+      normalizedContent,
+      matches,
+      newString,
+    );
   } else {
-    const normalizedContent = normalizeWithSourceMap(content);
-    const normalizedOldString = normalizeLineEndings(oldString);
     const matchResult = locateUniqueEditSpan(
       normalizedContent.text,
       normalizedOldString,
@@ -217,10 +232,7 @@ export function executeEdit(
       content.length,
     );
     const sourceSpan = content.slice(match.index, match.index + match.length);
-    const replacement = lineEndingAdjusted(
-      newString,
-      detectLineEnding(sourceSpan),
-    );
+    const replacement = sourceSpanReplacement(newString, sourceSpan);
     updated =
       content.slice(0, match.index) +
       replacement +

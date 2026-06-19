@@ -311,6 +311,31 @@ describe("Edit Tool", () => {
     }
   });
 
+  test(`Given the matched source span has no line ending and the replacement inserts one,
+    When the edit tool applies the replacement,
+    Then it keeps the replacement's requested line ending`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.ts"),
+      "const value = old;\r\nnext();\r\n",
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(workspace, "note.ts", "old", "new\nwrapped");
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        "const value = new\nwrapped;\r\nnext();\r\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a UTF-8 BOM file and an edit target copied with LF line endings,
     When the edit tool applies the replacement,
     Then it preserves the BOM and the file's line endings`, async () => {
@@ -363,6 +388,51 @@ describe("Edit Tool", () => {
       expect(result.content).toBe("Edited note.txt");
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "new one\nnew two\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a CRLF file has repeated blocks and replaceAll receives an LF target,
+    When replaceAll is enabled,
+    Then every occurrence is replaced while preserving CRLF`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.ts"),
+      [
+        "const first = old;",
+        "next();",
+        "---",
+        "const first = old;",
+        "next();",
+        "",
+      ].join("\r\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        ["const first = old;", "next();", ""].join("\n"),
+        ["const first = new;", "next();", ""].join("\n"),
+        { replaceAll: true },
+      );
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        [
+          "const first = new;",
+          "next();",
+          "---",
+          "const first = new;",
+          "next();",
+          "",
+        ].join("\r\n"),
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -432,6 +502,28 @@ describe("Edit Tool", () => {
       );
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "keep me\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the replacement only differs from the target by line endings,
+    When the edit tool validates the request,
+    Then it rejects the normalized no-op and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, "note.txt"), "keep me\r\n", "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "note.txt", "keep me\r\n", "keep me\n"),
+        "tool_edit_no_op",
+        "old string and new string are identical",
+      );
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "keep me\r\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

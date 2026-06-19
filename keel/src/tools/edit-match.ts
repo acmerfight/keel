@@ -232,6 +232,9 @@ export function locateUniqueEditSpan(
   return uniqueMatchResult(indentationFlexible);
 }
 
-export function countExactOccurrences(content: string, search: string): number {
-  return exactMatches(content, search).length;
+export function locateExactEditSpans(
+  content: string,
+  search: string,
+): readonly EditMatchSpan[] {
+  return exactMatches(content, search);
 }
