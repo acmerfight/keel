@@ -1,6 +1,7 @@
-import { statSync, writeFileSync } from "node:fs";
+import { statSync } from "node:fs";
 import { KeelError } from "../core/error.ts";
 import { recordLastEditCheckpoint } from "../core/git.ts";
+import { writeTextFileAtomically } from "./atomic-write.ts";
 import {
   type EditMatchSpan,
   locateExactEditSpans,
@@ -14,6 +15,8 @@ import { resolveWorkspaceTarget } from "./workspace-path.ts";
 interface ExecuteEditOptions {
   readonly replaceAll?: boolean;
 }
+
+const MAX_EDIT_FILE_BYTES = 10 * 1024 * 1024;
 
 type NormalizedText =
   | {
@@ -34,6 +37,23 @@ function countLines(content: string): number {
     }
   }
   return lineCount;
+}
+
+function formatByteCount(bytes: number): string {
+  return `${bytes.toLocaleString("en-US")} bytes`;
+}
+
+function formatFileSizeLimit(bytes: number): string {
+  const mebibytes = bytes / (1024 * 1024);
+  return `${formatByteCount(bytes)} (${mebibytes.toFixed(0)} MiB)`;
+}
+
+function fileTooLargeError(filePath: string, bytes: number): KeelError {
+  return new KeelError(
+    "tool_file_too_large",
+    `edit failed: file is too large: ${filePath} (${formatByteCount(bytes)}; limit ${formatFileSizeLimit(MAX_EDIT_FILE_BYTES)})`,
+    "Use grep or read a smaller region to inspect the file, then edit a smaller source file, split the file, regenerate it, or use a targeted external command if appropriate.",
+  );
 }
 
 function normalizeLineEndings(text: string): string {
@@ -196,7 +216,11 @@ export function executeEdit(
     );
   }
 
-  const file = readEditableTextFileWithMetadata(targetPath, filePath);
+  const file = readEditableTextFileWithMetadata(targetPath, filePath, {
+    maxBytes: MAX_EDIT_FILE_BYTES,
+    tooLargeError: (observedBytes) =>
+      fileTooLargeError(filePath, observedBytes),
+  });
   const content = file.content;
   const normalizedContent = normalizeWithSourceMap(content);
   let updated: string;
@@ -257,7 +281,9 @@ export function executeEdit(
 
   const beforeContent = withUtf8Bom(content, file.hasUtf8Bom);
   const afterContent = withUtf8Bom(updated, file.hasUtf8Bom);
-  writeFileSync(targetPath, afterContent, "utf8");
+  writeTextFileAtomically(targetPath, afterContent, {
+    mode: targetStat.mode & 0o7777,
+  });
   recordLastEditCheckpoint({
     workspace: workspacePath,
     filePath: targetPath,

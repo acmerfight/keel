@@ -1,16 +1,46 @@
 import {
+  access,
+  chmod,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
+  stat,
   symlink,
+  truncate,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
+import {
+  createGitWorkspace,
+  runGit as git,
+} from "../../src/testing/cli-harness.ts";
 import { executeEdit } from "../../src/tools/edit.ts";
+
+const EDIT_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
+
+async function checkpointPath(workspace: string): Promise<string> {
+  const result = await git(workspace, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "keel/last-edit-checkpoint.json",
+  ]);
+  return result.stdout.trim();
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function expectEditError(
   action: () => unknown,
@@ -34,6 +64,129 @@ function expectEditError(
 }
 
 describe("Edit Tool", () => {
+  test(`Given an edit target is larger than the file safety limit,
+    When the edit tool validates the target,
+    Then it rejects the file before text decoding and leaves it unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const filePath = join(workspace, "large.log");
+    await writeFile(filePath, "");
+    await truncate(filePath, EDIT_FILE_SIZE_LIMIT_BYTES + 1);
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "large.log", "old", "new"),
+        "tool_file_too_large",
+        "10,485,761 bytes; limit 10,485,760 bytes (10 MiB)",
+        "Use grep or read a smaller region",
+      );
+      expect((await readFile(filePath)).byteLength).toBe(
+        EDIT_FILE_SIZE_LIMIT_BYTES + 1,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit cannot create its replacement file in the target directory,
+    When the edit tool writes the update,
+    Then the original file remains unchanged and no edit checkpoint is recorded`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-edit-tool-atomic-");
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "old value\n", "utf8");
+    const checkpoint = await checkpointPath(workspace);
+
+    try {
+      await chmod(workspace, 0o555);
+
+      // When / Then
+      expect(() => executeEdit(workspace, "note.txt", "old", "new")).toThrow();
+      expect(await readFile(filePath, "utf8")).toBe("old value\n");
+      await chmod(workspace, 0o755);
+      expect(await pathExists(checkpoint)).toBe(false);
+    } finally {
+      await chmod(workspace, 0o755).catch(() => undefined);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit target file is read-only in a writable directory,
+    When the edit tool writes the update,
+    Then it preserves the direct-overwrite permission failure and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "old value\n", "utf8");
+    await chmod(filePath, 0o444);
+
+    try {
+      // When / Then
+      expect(() => executeEdit(workspace, "note.txt", "old", "new")).toThrow();
+      expect(await readFile(filePath, "utf8")).toBe("old value\n");
+    } finally {
+      await chmod(filePath, 0o644).catch(() => undefined);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit succeeds through a temporary replacement file,
+    When the edit tool finishes,
+    Then only the target file and successful checkpoint remain`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-edit-tool-atomic-");
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "old value\n", "utf8");
+    const checkpoint = await checkpointPath(workspace);
+
+    try {
+      // When
+      const result = executeEdit(workspace, "note.txt", "old", "new");
+
+      // Then
+      expect(result.content).toBe("Edited note.txt");
+      expect(await readFile(filePath, "utf8")).toBe("new value\n");
+      expect(await readFile(checkpoint, "utf8")).toContain("old value");
+      expect(await readFile(checkpoint, "utf8")).toContain("new value");
+      expect(await readdir(workspace)).toEqual(
+        expect.not.arrayContaining([expect.stringContaining(".keel-edit-")]),
+      );
+      expect(await readdir(dirname(checkpoint))).toContain(
+        "last-edit-checkpoint.json",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an editable file has permissions wider than the process umask,
+    When the edit tool atomically replaces the file,
+    Then it preserves the original file mode`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "old value\n", "utf8");
+    await chmod(filePath, 0o666);
+
+    try {
+      // When
+      const originalUmask = process.umask(0o077);
+      try {
+        executeEdit(workspace, "note.txt", "old", "new");
+      } finally {
+        process.umask(originalUmask);
+      }
+
+      // Then
+      expect(await readFile(filePath, "utf8")).toBe("new value\n");
+      expect((await stat(filePath)).mode & 0o777).toBe(0o666);
+    } finally {
+      await chmod(filePath, 0o644).catch(() => undefined);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an edit request uses an absolute path outside the workspace,
     When the edit tool validates the path,
     Then it rejects the path and leaves the outside file unchanged`, async () => {
@@ -554,6 +707,26 @@ describe("Edit Tool", () => {
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "keep this\n",
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an empty editable file,
+    When the edit tool searches for a non-empty target,
+    Then it reports not found and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, "empty.txt"), "", "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "empty.txt", "missing", "new"),
+        "tool_old_string_not_found",
+        "old string not found",
+      );
+      expect(await readFile(join(workspace, "empty.txt"), "utf8")).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
