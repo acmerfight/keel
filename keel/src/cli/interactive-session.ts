@@ -5,7 +5,10 @@ import {
 } from "../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
 import { runAgentTurn } from "../agent/loop.ts";
-import { buildAgentSystemPrompt } from "../agent/prompt.ts";
+import {
+  buildAgentSystemPrompt,
+  type ProjectInstructions,
+} from "../agent/prompt.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { type CostModel, calculateCostUsd } from "../core/cost.ts";
 import type { LLMProvider, Message, Usage } from "../llm/types.ts";
@@ -56,6 +59,7 @@ export interface InteractiveSessionOptions {
   readonly cliArgs: InteractiveSessionArgs;
   readonly workspace: string;
   readonly platform: NodeJS.Platform;
+  readonly projectInstructions?: ProjectInstructions;
   readonly input: NodeJS.ReadableStream;
   readonly writeStdout: (text: string) => void;
   readonly writeStderr: (text: string) => void;
@@ -323,6 +327,9 @@ export async function runInteractiveSession(
   const systemPrompt = buildAgentSystemPrompt({
     workspace: options.workspace,
     platform: options.platform,
+    ...(options.projectInstructions !== undefined
+      ? { projectInstructions: options.projectInstructions }
+      : {}),
   });
   const messages: Message[] = [];
   let resolved: InteractiveResolvedProvider | null = null;

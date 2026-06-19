@@ -14,6 +14,10 @@ import { parseCliArgs, USAGE } from "./args.ts";
 import { runInteractiveSession } from "./interactive-session.ts";
 import { formatCostReport, printAgentEvents } from "./output.ts";
 import {
+  loadProjectInstructions,
+  ProjectInstructionsError,
+} from "./project-instructions.ts";
+import {
   ProviderConfigError,
   requireKnownCostModel,
   resolveInteractiveProvider,
@@ -122,10 +126,13 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
       return 1;
     }
     try {
+      const workspace = runtime.cwd();
+      const projectInstructions = loadProjectInstructions(workspace);
       await runInteractiveSession({
         cliArgs,
-        workspace: runtime.cwd(),
+        workspace,
         platform: runtime.platform,
+        ...(projectInstructions !== undefined ? { projectInstructions } : {}),
         input: runtime.input,
         writeStdout: (text) => {
           runtime.writeStdout(text);
@@ -154,6 +161,10 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         runtime.writeStderr(`${error.message}\n`);
         return 1;
       }
+      if (error instanceof ProjectInstructionsError) {
+        runtime.writeStderr(`${error.message}\n`);
+        return 1;
+      }
       /* v8 ignore next: unexpected interactive runtime failures are allowed to escape. */
       throw error;
     }
@@ -169,6 +180,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
     runtime.onSigint(abort);
 
     const workspace = runtime.cwd();
+    const projectInstructions = loadProjectInstructions(workspace);
     const startedAt = runtime.now();
     const bashPermission = oneShotBashPermissionPolicy(cliArgs.bashMode);
     const stream = runAgent({
@@ -178,6 +190,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
       systemPrompt: buildAgentSystemPrompt({
         workspace,
         platform: runtime.platform,
+        ...(projectInstructions !== undefined ? { projectInstructions } : {}),
       }),
       signal: abortController.signal,
       allowBash: bashModeExposesTool(cliArgs.bashMode),
@@ -214,6 +227,10 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
     }
   } catch (error) {
     if (error instanceof ProviderConfigError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof ProjectInstructionsError) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
