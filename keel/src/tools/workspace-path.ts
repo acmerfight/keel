@@ -26,9 +26,9 @@ export function isInsideWorkspace(workspace: string, target: string): boolean {
   );
 }
 
-function requestedAbsolutePath(
+function remapRequestedPath(
   workspacePath: string,
-  workspaceInputPath: string,
+  workspaceLogicalPath: string,
   requestedPath: string,
 ): string {
   const rawAbsolutePath = isAbsolute(requestedPath)
@@ -38,11 +38,11 @@ function requestedAbsolutePath(
   if (
     isAbsolute(requestedPath) &&
     !isInsideWorkspace(workspacePath, rawAbsolutePath) &&
-    isInsideWorkspace(workspaceInputPath, rawAbsolutePath)
+    isInsideWorkspace(workspaceLogicalPath, rawAbsolutePath)
   ) {
     return resolve(
       workspacePath,
-      relative(workspaceInputPath, rawAbsolutePath),
+      relative(workspaceLogicalPath, rawAbsolutePath),
     );
   }
 
@@ -132,14 +132,14 @@ export function resolveWorkspaceTarget(
   toolName: FileToolName,
 ): WorkspaceTarget {
   const workspacePath = realpathSync(workspace);
-  const workspaceInputPath = resolve(workspace);
+  const workspaceLogicalPath = resolve(workspace);
   const absoluteRequestedPath = isAbsolute(requestedPath)
     ? resolve(requestedPath)
     : resolve(workspacePath, requestedPath);
 
   if (
     !isInsideWorkspace(workspacePath, absoluteRequestedPath) &&
-    !isInsideWorkspace(workspaceInputPath, absoluteRequestedPath)
+    !isInsideWorkspace(workspaceLogicalPath, absoluteRequestedPath)
   ) {
     throw outsideWorkspaceError(toolName, requestedPath);
   }
@@ -181,16 +181,16 @@ export function resolveWorkspaceCreateTarget(
   toolName: FileToolName,
 ): WorkspaceCreateTarget {
   const workspacePath = realpathSync(workspace);
-  const workspaceInputPath = resolve(workspace);
-  const absoluteRequestedPath = requestedAbsolutePath(
+  const workspaceLogicalPath = resolve(workspace);
+  const absoluteRequestedPath = remapRequestedPath(
     workspacePath,
-    workspaceInputPath,
+    workspaceLogicalPath,
     requestedPath,
   );
 
   if (
     !isInsideWorkspace(workspacePath, absoluteRequestedPath) &&
-    !isInsideWorkspace(workspaceInputPath, absoluteRequestedPath)
+    !isInsideWorkspace(workspaceLogicalPath, absoluteRequestedPath)
   ) {
     throw outsideWorkspaceError(toolName, requestedPath);
   }
