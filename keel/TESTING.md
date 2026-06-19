@@ -112,3 +112,8 @@ Provider history replay must preserve all model-visible context across turns. Do
 - Mock anything except LLM
 - Test private functions
 - Put fixture or protocol language in `agent/` and `cli/` test names
+
+## Permitted Exceptions
+
+- `vi.spyOn(process.stderr, "write")` for capturing process output assertions when the test boundary is an in-process function that writes to stderr/stdout directly. Prefer subprocess when the CLI entrypoint supports it.
+- `vi.doMock("node:fs")` in dedicated `*-race.test.ts` files for deterministic TOCTOU race simulation between synchronous filesystem calls. Must restore with `vi.doUnmock` + `vi.resetModules` in `afterEach`. Not permitted for failures reproducible through real filesystem manipulation (chmod, full disk, concurrent writes).
