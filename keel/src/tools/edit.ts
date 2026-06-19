@@ -46,17 +46,15 @@ function normalizeLineEndings(text: string): string {
   return text.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
 }
 
-function lineEndingAdjusted(
-  text: string,
-  lineEnding: "\r\n" | "\n" | undefined,
-): string {
-  if (lineEnding === undefined) return text;
+function lineEndingAdjusted(text: string, lineEnding: "\r\n" | "\n"): string {
   return normalizeLineEndings(text).replaceAll("\n", lineEnding);
 }
 
 function sourceSpanReplacement(text: string, sourceSpan: string): string {
   if (!text.includes("\r") && !text.includes("\n")) return text;
-  return lineEndingAdjusted(text, detectLineEnding(sourceSpan));
+  const sourceLineEnding = detectLineEnding(sourceSpan);
+  if (sourceLineEnding === undefined) return text;
+  return lineEndingAdjusted(text, sourceLineEnding);
 }
 
 function normalizeWithSourceMap(content: string): NormalizedText {

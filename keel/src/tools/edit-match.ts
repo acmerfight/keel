@@ -106,7 +106,7 @@ function commonIndentLength(lines: readonly string[]): number {
 
 function stripCommonIndent(lines: readonly string[]): readonly string[] {
   const indentLength = commonIndentLength(lines);
-  return lines.map((line) => line.slice(Math.min(indentLength, line.length)));
+  return lines.map((line) => line.slice(indentLength));
 }
 
 function sameLengthArraysEqual(
