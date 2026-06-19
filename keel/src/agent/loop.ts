@@ -290,6 +290,138 @@ async function* streamAgentTurn(
   return finishAgentTurn(assistantText, pendingToolCalls, usage);
 }
 
+interface CompactionConfig {
+  readonly provider: LLMProvider;
+  readonly systemPrompt: string;
+  readonly signal: AbortSignal;
+  readonly contextCompaction: ContextCompactionOptions | undefined;
+}
+
+type CompactionState = {
+  contextAccounting: ContextCompactionAccountingSnapshot | undefined;
+  totalUsage: Usage;
+};
+
+async function compactContextIfPossible(
+  config: CompactionConfig,
+  state: CompactionState,
+  streamOptions: LedgerTurnOptions,
+): Promise<CompactMessagesResult> {
+  const targetMessages = [
+    ...projectSessionLedgerToProviderMessages(streamOptions.getLedger()),
+  ];
+  const result = await compactMessages({
+    provider: config.provider,
+    systemPrompt: config.systemPrompt,
+    messages: targetMessages,
+    signal: config.signal,
+    ...(config.contextCompaction !== undefined
+      ? { contextCompaction: config.contextCompaction }
+      : {}),
+    ...(state.contextAccounting !== undefined
+      ? { contextAccounting: state.contextAccounting }
+      : {}),
+    requestMetadata: requestMetadataForStream(streamOptions),
+  });
+  if (result.compacted) {
+    state.contextAccounting = undefined;
+    streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
+  }
+  state.totalUsage = addUsage(state.totalUsage, result.usage);
+  return result;
+}
+
+async function* streamTurnWithOverflowRecovery(
+  config: CompactionConfig,
+  state: CompactionState,
+  streamOptions: LedgerTurnOptions,
+): AsyncGenerator<AgentEvent, AgentTurn> {
+  let overflowRecoveryAttempted = false;
+  let compactedBeforeRequest = false;
+
+  for (;;) {
+    const requestMessages = projectSessionLedgerToProviderMessages(
+      streamOptions.getLedger(),
+    );
+    if (
+      !compactedBeforeRequest &&
+      shouldCompactBeforeRequest(
+        config.systemPrompt,
+        requestMessages,
+        config.contextCompaction,
+        state.contextAccounting,
+        requestMetadataForStream(streamOptions),
+      )
+    ) {
+      compactedBeforeRequest = true;
+      const compaction = await compactContextIfPossible(
+        config,
+        state,
+        streamOptions,
+      );
+      if (compaction.stats !== undefined) {
+        yield {
+          type: "context_compacted",
+          reason: "proactive",
+          ...compaction.stats,
+        };
+      }
+    }
+    try {
+      const currentRequestMessages = projectSessionLedgerToProviderMessages(
+        streamOptions.getLedger(),
+      );
+      const turn = yield* streamAgentTurn({
+        provider: streamOptions.provider,
+        systemPrompt: streamOptions.systemPrompt,
+        messages: currentRequestMessages,
+        signal: streamOptions.signal,
+        allowBash: streamOptions.allowBash,
+        ...(streamOptions.toolChoice !== undefined
+          ? { toolChoice: streamOptions.toolChoice }
+          : {}),
+        ...(streamOptions.textPrefix !== undefined
+          ? { textPrefix: streamOptions.textPrefix }
+          : {}),
+      });
+      state.contextAccounting =
+        config.contextCompaction === undefined
+          ? undefined
+          : captureContextCompactionAccountingSnapshot({
+              systemPrompt: config.systemPrompt,
+              messages: currentRequestMessages,
+              usage: turn.usage,
+              requestMetadata: requestMetadataForStream(streamOptions),
+            });
+      return turn;
+    } catch (error) {
+      if (error instanceof ContextOverflowBeforeAssistantError) {
+        if (!overflowRecoveryAttempted) {
+          overflowRecoveryAttempted = true;
+          const compaction = await compactContextIfPossible(
+            config,
+            state,
+            streamOptions,
+          );
+          if (compaction.compacted) {
+            if (compaction.stats !== undefined) {
+              yield {
+                type: "context_compacted",
+                reason: "overflow_recovery",
+                ...compaction.stats,
+              };
+            }
+            compactedBeforeRequest = true;
+            continue;
+          }
+        }
+        throw error.error;
+      }
+      throw error;
+    }
+  }
+}
+
 export async function* runAgentTurn(
   options: RunAgentTurnOptions,
 ): AsyncGenerator<AgentEvent> {
@@ -306,9 +438,6 @@ export async function* runAgentTurn(
     drainInjectedUserMessages,
   } = options;
   let sessionLedger = sessionLedgerFromMessages(messages);
-  // During a turn the ledger owns transcript mutations; messages is only the
-  // public compatibility view and is synced after each ledger update. This
-  // full sync is a transition layer until callers accept ledger state directly.
   const setSessionLedger = (next: SessionLedger) => {
     sessionLedger = next;
     syncMessagesFromSessionLedger(messages, sessionLedger);
@@ -316,123 +445,24 @@ export async function* runAgentTurn(
   const priorToolCalls = priorToolCallsFromMessages(
     projectSessionLedgerToProviderMessages(sessionLedger),
   );
-  const { contextCompaction } = options;
-  let totalUsage: Usage = {
-    inputTokens: 0,
-    cachedInputTokens: 0,
-    uncachedInputTokens: 0,
-    outputTokens: 0,
+  const config: CompactionConfig = {
+    provider,
+    systemPrompt,
+    signal,
+    contextCompaction: options.contextCompaction,
   };
-  let contextAccounting: ContextCompactionAccountingSnapshot | undefined;
-
-  async function compactContextIfPossible(
-    streamOptions: LedgerTurnOptions,
-  ): Promise<CompactMessagesResult> {
-    // compactMessages still mutates its input array, so adapt the immutable
-    // ledger projection into a mutable request and install the result afterward.
-    const targetMessages = [
-      ...projectSessionLedgerToProviderMessages(streamOptions.getLedger()),
-    ];
-    const result = await compactMessages({
-      provider,
-      systemPrompt,
-      messages: targetMessages,
-      signal,
-      ...(contextCompaction !== undefined ? { contextCompaction } : {}),
-      ...(contextAccounting !== undefined ? { contextAccounting } : {}),
-      requestMetadata: requestMetadataForStream(streamOptions),
-    });
-    if (result.compacted) {
-      contextAccounting = undefined;
-      streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
-    }
-    totalUsage = addUsage(totalUsage, result.usage);
-    return result;
-  }
-
-  async function* streamRecoverableAgentTurn(
-    streamOptions: LedgerTurnOptions,
-  ): AsyncGenerator<AgentEvent, AgentTurn> {
-    let overflowRecoveryAttempted = false;
-    let compactedBeforeRequest = false;
-
-    for (;;) {
-      const requestMessages = projectSessionLedgerToProviderMessages(
-        streamOptions.getLedger(),
-      );
-      if (
-        !compactedBeforeRequest &&
-        shouldCompactBeforeRequest(
-          systemPrompt,
-          requestMessages,
-          contextCompaction,
-          contextAccounting,
-          requestMetadataForStream(streamOptions),
-        )
-      ) {
-        compactedBeforeRequest = true;
-        const compaction = await compactContextIfPossible(streamOptions);
-        if (compaction.stats !== undefined) {
-          yield {
-            type: "context_compacted",
-            reason: "proactive",
-            ...compaction.stats,
-          };
-        }
-      }
-      try {
-        const currentRequestMessages = projectSessionLedgerToProviderMessages(
-          streamOptions.getLedger(),
-        );
-        const turn = yield* streamAgentTurn({
-          provider: streamOptions.provider,
-          systemPrompt: streamOptions.systemPrompt,
-          messages: currentRequestMessages,
-          signal: streamOptions.signal,
-          allowBash: streamOptions.allowBash,
-          ...(streamOptions.toolChoice !== undefined
-            ? { toolChoice: streamOptions.toolChoice }
-            : {}),
-          ...(streamOptions.textPrefix !== undefined
-            ? { textPrefix: streamOptions.textPrefix }
-            : {}),
-        });
-        contextAccounting =
-          contextCompaction === undefined
-            ? undefined
-            : captureContextCompactionAccountingSnapshot({
-                systemPrompt,
-                messages: currentRequestMessages,
-                usage: turn.usage,
-                requestMetadata: requestMetadataForStream(streamOptions),
-              });
-        return turn;
-      } catch (error) {
-        if (error instanceof ContextOverflowBeforeAssistantError) {
-          if (!overflowRecoveryAttempted) {
-            overflowRecoveryAttempted = true;
-            const compaction = await compactContextIfPossible(streamOptions);
-            if (compaction.compacted) {
-              if (compaction.stats !== undefined) {
-                yield {
-                  type: "context_compacted",
-                  reason: "overflow_recovery",
-                  ...compaction.stats,
-                };
-              }
-              compactedBeforeRequest = true;
-              continue;
-            }
-          }
-          throw error.error;
-        }
-        throw error;
-      }
-    }
-  }
+  const state: CompactionState = {
+    contextAccounting: undefined,
+    totalUsage: {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 0,
+      outputTokens: 0,
+    },
+  };
 
   for (let completedTurns = 1; ; completedTurns++) {
-    const turnResult = yield* streamRecoverableAgentTurn({
+    const turnResult = yield* streamTurnWithOverflowRecovery(config, state, {
       provider,
       systemPrompt,
       getLedger: () => sessionLedger,
@@ -440,8 +470,8 @@ export async function* runAgentTurn(
       signal,
       allowBash,
     });
-    totalUsage = addUsage(totalUsage, turnResult.usage);
-    const cost = buildCostReport(totalUsage, costTracking);
+    state.totalUsage = addUsage(state.totalUsage, turnResult.usage);
+    const cost = buildCostReport(state.totalUsage, costTracking);
 
     const decision = stopPolicy.shouldStopAfterTurn({
       completedTurns,
@@ -459,7 +489,7 @@ export async function* runAgentTurn(
       );
       yield {
         type: "end",
-        usage: totalUsage,
+        usage: state.totalUsage,
         turns: completedTurns,
         stopReason: decision.reason,
         ...(cost !== undefined ? { cost } : {}),
@@ -469,8 +499,6 @@ export async function* runAgentTurn(
 
     if (decision.type === "summarize") {
       const interimReply = finalReplyMessage(turnResult.text);
-      // Wrap-up uses a temporary ledger for the text-only summary request; only
-      // the resulting assistant summary is appended back to the main ledger.
       let wrapUpLedger = appendSessionLedgerMessage(
         sessionLedger,
         interimReply,
@@ -482,7 +510,7 @@ export async function* runAgentTurn(
       const setWrapUpLedger = (next: SessionLedger) => {
         wrapUpLedger = next;
       };
-      const wrapUpTurn = yield* streamRecoverableAgentTurn({
+      const wrapUpTurn = yield* streamTurnWithOverflowRecovery(config, state, {
         provider,
         systemPrompt,
         getLedger: () => wrapUpLedger,
@@ -504,11 +532,11 @@ export async function* runAgentTurn(
           finalReplyMessage(`${turnResult.text}${summary}`),
         ),
       );
-      totalUsage = addUsage(totalUsage, wrapUpTurn.usage);
-      const finalCost = buildCostReport(totalUsage, costTracking);
+      state.totalUsage = addUsage(state.totalUsage, wrapUpTurn.usage);
+      const finalCost = buildCostReport(state.totalUsage, costTracking);
       yield {
         type: "end",
-        usage: totalUsage,
+        usage: state.totalUsage,
         turns: completedTurns + 1,
         stopReason: decision.reason,
         ...(finalCost !== undefined ? { cost: finalCost } : {}),
@@ -525,7 +553,7 @@ export async function* runAgentTurn(
       );
       yield {
         type: "end",
-        usage: totalUsage,
+        usage: state.totalUsage,
         turns: completedTurns,
         stopReason: "completed",
         ...(cost !== undefined ? { cost } : {}),
