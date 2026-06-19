@@ -110,9 +110,9 @@ When `?` IS correct:
 
 Litmus test: if you would write `?? defaultValue` every time you read this field, it is required — the default belongs in a factory, not in the type.
 
-Corollary: trust correct types. Do not handle states the type system excludes — in source or tests. A guard whose removal still compiles is dead code.
+Corollary: trust correct types. Do not guard against states an already-trusted internal type excludes — in source or tests. Runtime checks that enforce domain predicates the type system cannot encode (workspace safety, range constraints, protocol validity) are not redundant.
 
-Decision: "Does the type permit this state?" No → delete the check. Yes → narrow the type.
+Decision: "Does the type permit this state?" No → delete the check. Yes → either narrow the type or keep the guard if the predicate is beyond the type system's reach.
 
 ## Development
 
