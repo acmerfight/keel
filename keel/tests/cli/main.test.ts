@@ -1,4 +1,5 @@
 import {
+  access,
   mkdir,
   mkdtemp,
   readFile,
@@ -245,6 +246,102 @@ describe("CLI Main", () => {
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe(
       "Error: --max-cost must be a positive number.\n",
+    );
+  });
+
+  test(`Given resume is passed without a session id,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--resume="]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --resume requires a value.\n");
+  });
+
+  test(`Given session is passed without a session id,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--session"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --session requires a value.\n");
+  });
+
+  test(`Given session is passed with an empty equals value,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--session="]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --session requires a value.\n");
+  });
+
+  test(`Given resume is passed without a following value,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--resume"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --resume requires a value.\n");
+  });
+
+  test(`Given session and resume flags are combined,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--session", "demo", "--resume", "demo"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --session cannot be combined with --resume.\n",
+    );
+  });
+
+  test(`Given a session flag is used with a one-shot prompt,
+    When the CLI main parses the request,
+    Then it returns a validation error because sessions are interactive-only`, async () => {
+    // Given
+    const fixture = createRuntime(["--session=demo", "hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --session and --resume are only supported for interactive sessions.\n",
     );
   });
 
@@ -1616,6 +1713,194 @@ describe("CLI Main", () => {
     }
   });
 
+  test(`Given the user starts and resumes a named interactive session,
+    When a follow-up prompt is sent after process restart,
+    Then the provider receives the prior transcript as context`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const firstInput = new PassThrough();
+    firstInput.end("remember alpha\n");
+    const firstRun = createRuntime(["--session", "demo"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: firstInput,
+    });
+
+    try {
+      const firstExitCode = await runCliMain(firstRun.runtime);
+      const secondInput = new PassThrough();
+      secondInput.end("what did I ask you to remember?\n");
+      const secondRun = createRuntime(["--resume=demo"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input: secondInput,
+      });
+
+      // When
+      const secondExitCode = await runCliMain(secondRun.runtime);
+
+      // Then
+      expect(firstExitCode).toBe(0);
+      expect(firstRun.stdout()).toBe("Remembered: remember alpha\n");
+      expect(secondExitCode).toBe(0);
+      expect(secondRun.stdout()).toBe("Earlier you said: remember alpha\n");
+      expect(firstRun.stderr()).toBe("");
+      expect(secondRun.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named interactive session receives multiple prompts,
+    When the prompts complete in one process,
+    Then all completed turns are persisted to the same ledger`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const input = new PassThrough();
+    input.end("remember beta\nwhat did I ask you to remember?\n");
+    const fixture = createRuntime(["--session", "multi-turn"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("Remembered: remember beta\n");
+      expect(fixture.stdout()).toContain("Earlier you said: remember beta\n");
+      const ledger = await readFile(
+        join(home, "sessions", "multi-turn", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(ledger.trimEnd().split("\n")).toHaveLength(3);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user resumes a malformed session,
+    When the CLI main starts,
+    Then it fails closed before reading an interactive prompt`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await mkdir(join(home, "sessions", "broken"), { recursive: true });
+    await writeFile(
+      join(home, "sessions", "broken", "ledger.jsonl"),
+      [
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "session",
+          id: "broken",
+          createdAt: "1970-01-01T00:00:00.000Z",
+          workspace,
+        }),
+        "{not-json",
+      ].join("\n"),
+      "utf8",
+    );
+    const input = new PassThrough();
+    input.end("this should not run\n");
+    const fixture = createRuntime(["--resume", "broken"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain(
+        'Error: cannot resume session "broken"',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user runs interactive mode without a session flag,
+    When the prompt completes,
+    Then no persistent session is created implicitly`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const input = new PassThrough();
+    input.end("hello\n");
+    const fixture = createRuntime([], {
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Remembered: hello\n");
+      await expect(access(join(home, "sessions"))).rejects.toThrow();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user runs a one-shot prompt,
+    When the prompt completes,
+    Then no persistent session is required`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const fixture = createRuntime(["hello"], {
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Hello from fake provider.\n");
+      await expect(access(join(home, "sessions"))).rejects.toThrow();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given root AGENTS instructions exist,
     When the user sends an interactive prompt through CLI main,
     Then the provider receives those project instructions in the system prompt`, async () => {
@@ -1791,6 +2076,41 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe(
       "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.\n",
     );
+  });
+
+  test(`Given a named session fails before the first completed turn,
+    When the provider configuration is invalid,
+    Then the CLI main does not create an empty session ledger`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const input = new PassThrough();
+    input.end("hello\n");
+    const fixture = createRuntime(["--session", "provider-fails"], {
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_PROVIDER: "deepseek",
+        DEEPSEEK_API_KEY: "",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.\n",
+      );
+      await expect(
+        access(join(home, "sessions", "provider-fails", "ledger.jsonl")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given a one-shot run asks for a machine-readable report,

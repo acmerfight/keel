@@ -111,6 +111,7 @@ describe("CLI Text Reply", () => {
     expect(result.stderr).toBe(
       [
         "Usage: keel [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] <message>",
+        "       keel [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--session <id> | --resume <id>]",
         "       keel eval [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
         "       keel /undo",
         "",

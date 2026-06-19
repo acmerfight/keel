@@ -271,6 +271,98 @@ describe("Interactive Session", () => {
     ]);
   });
 
+  test(`Given a resumed session contains historical tool results,
+    When the user sends a follow-up prompt,
+    Then the model sees the history without re-running old tools`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-resume-"));
+    const initialMessages: readonly Message[] = [
+      { role: "user", content: "create the old file" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "historical_write",
+            tool: "write",
+            path: "old.txt",
+            content: "old content\n",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "historical_write",
+        content: "Wrote old.txt",
+      },
+    ];
+    let observedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        observedMessages = options.messages;
+        yield { type: "text", text: "Continuing from history." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      initialMessages,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.end("continue\n");
+
+      // Then
+      await session;
+      expect(stdout).toBe("Continuing from history.\n");
+      expect(observedMessages).toEqual([
+        ...initialMessages,
+        { role: "user", content: "continue" },
+      ]);
+      await expect(
+        readFile(join(workspace, "old.txt"), "utf8"),
+      ).rejects.toThrow("ENOENT");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an interactive session asks for bash permission,
     When the user approves the command for the session,
     Then repeated matching commands run without asking again`, async () => {
@@ -339,6 +431,129 @@ describe("Interactive Session", () => {
       expect(stdout).toBe("Ran twice.\n");
       expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
       expect(stderr.match(/Approve bash command/g)).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a resumed session previously approved bash for the session,
+    When the assistant repeats the command after resume,
+    Then the resumed session asks for approval again`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command =
+      "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
+    let persistedMessages: readonly Message[] = [];
+    let firstApprovalPrompts = 0;
+    const firstInput = new PassThrough();
+    const firstProvider = createFakeProvider([
+      fakeBashResponse(command),
+      fakeResponse("First run done."),
+    ]);
+    const firstSession = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace,
+      platform: process.platform,
+      input: firstInput,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        if (text.includes("Approve bash command")) {
+          firstApprovalPrompts++;
+          firstInput.write("s\n");
+          firstInput.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider: firstProvider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionMessages: (messages) => {
+        persistedMessages = [...messages];
+      },
+    });
+
+    try {
+      firstInput.write("run once\n");
+      await firstSession;
+
+      let secondApprovalPrompts = 0;
+      const secondInput = new PassThrough();
+      const secondProvider = createFakeProvider([
+        fakeBashResponse(command),
+        fakeResponse("Second run done."),
+      ]);
+      const secondSession = runInteractiveSession({
+        cliArgs: { bashMode: "ask" },
+        workspace,
+        platform: process.platform,
+        initialMessages: persistedMessages,
+        input: secondInput,
+        writeStdout: () => {},
+        writeStderr: (text) => {
+          if (text.includes("Approve bash command")) {
+            secondApprovalPrompts++;
+            secondInput.write("y\n");
+            secondInput.end();
+          }
+        },
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => ({
+          provider: secondProvider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        }),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async (stream) => {
+          let finalEnd:
+            | Extract<AgentEvent, { readonly type: "end" }>
+            | undefined;
+          for await (const event of stream) {
+            if (event.type === "end") {
+              finalEnd = event;
+            }
+          }
+          return finalEnd;
+        },
+        formatCostReport: () => "",
+      });
+
+      // When
+      secondInput.write("run again\n");
+
+      // Then
+      await withTimeout(
+        secondSession,
+        5000,
+        "resumed approval prompt was not answered",
+      );
+      expect(firstApprovalPrompts).toBe(1);
+      expect(secondApprovalPrompts).toBe(1);
+      expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
