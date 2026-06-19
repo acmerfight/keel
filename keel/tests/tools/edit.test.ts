@@ -313,7 +313,7 @@ describe("Edit Tool", () => {
 
   test(`Given the matched source span has no line ending and the replacement inserts one,
     When the edit tool applies the replacement,
-    Then it keeps the replacement's requested line ending`, async () => {
+    Then it uses the matched line's line ending`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
     await writeFile(
@@ -329,7 +329,53 @@ describe("Edit Tool", () => {
       // Then
       expect(result.content).toBe("Edited note.ts");
       expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
-        "const value = new\nwrapped;\r\nnext();\r\n",
+        "const value = new\r\nwrapped;\r\nnext();\r\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the matched source span is on a final line without its own line ending,
+    When the edit tool applies a replacement with a line ending,
+    Then it uses the previous line's line ending`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.ts"),
+      "header\r\nconst value = old",
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(workspace, "note.ts", "old", "new\nwrapped");
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        "header\r\nconst value = new\r\nwrapped",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the file has no existing line endings and the replacement inserts one,
+    When the edit tool applies the replacement,
+    Then it uses LF as the default line ending`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, "note.ts"), "old", "utf8");
+
+    try {
+      // When
+      const result = executeEdit(workspace, "note.ts", "old", "new\r\nwrapped");
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        "new\nwrapped",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -433,6 +479,33 @@ describe("Edit Tool", () => {
           "next();",
           "",
         ].join("\r\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a CRLF file has repeated single-line targets and replaceAll inserts lines,
+    When replaceAll is enabled,
+    Then every replacement uses the matched line's CRLF ending`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.ts"),
+      "const first = old;\r\nconst second = old;\r\n",
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(workspace, "note.ts", "old", "new\nwrapped", {
+        replaceAll: true,
+      });
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        "const first = new\r\nwrapped;\r\nconst second = new\r\nwrapped;\r\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

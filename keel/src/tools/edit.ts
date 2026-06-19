@@ -15,10 +15,16 @@ interface ExecuteEditOptions {
   readonly replaceAll?: boolean;
 }
 
-interface NormalizedText {
-  readonly text: string;
-  readonly sourceIndexByNormalizedIndex: readonly number[];
-}
+type NormalizedText =
+  | {
+      readonly kind: "identity";
+      readonly text: string;
+    }
+  | {
+      readonly kind: "mapped";
+      readonly text: string;
+      readonly sourceIndexByNormalizedIndex: readonly number[];
+    };
 
 function countLines(content: string): number {
   let lineCount = 1;
@@ -30,18 +36,6 @@ function countLines(content: string): number {
   return lineCount;
 }
 
-function detectLineEnding(content: string): "\r\n" | "\n" | undefined {
-  for (let index = 0; index < content.length; index++) {
-    if (content[index] === "\r" && content[index + 1] === "\n") {
-      return "\r\n";
-    }
-    if (content[index] === "\n") {
-      return "\n";
-    }
-  }
-  return undefined;
-}
-
 function normalizeLineEndings(text: string): string {
   return text.replace(/\r\n/gu, "\n");
 }
@@ -50,14 +44,40 @@ function lineEndingAdjusted(text: string, lineEnding: "\r\n" | "\n"): string {
   return normalizeLineEndings(text).replaceAll("\n", lineEnding);
 }
 
-function sourceSpanReplacement(text: string, sourceSpan: string): string {
+function lineEndingAtNewline(
+  content: string,
+  newlineIndex: number,
+): "\r\n" | "\n" {
+  return content[newlineIndex - 1] === "\r" ? "\r\n" : "\n";
+}
+
+function sourceLineEnding(content: string, span: EditMatchSpan): "\r\n" | "\n" {
+  const spanEnd = span.index + span.length;
+  for (let index = span.index; index < spanEnd; index++) {
+    if (content[index] === "\n") return lineEndingAtNewline(content, index);
+  }
+  for (let index = spanEnd; index < content.length; index++) {
+    if (content[index] === "\n") return lineEndingAtNewline(content, index);
+  }
+  for (let index = span.index - 1; index >= 0; index--) {
+    if (content[index] === "\n") return lineEndingAtNewline(content, index);
+  }
+  return "\n";
+}
+
+function sourceSpanReplacement(
+  text: string,
+  lineEnding: "\r\n" | "\n",
+): string {
   if (!text.includes("\r") && !text.includes("\n")) return text;
-  const sourceLineEnding = detectLineEnding(sourceSpan);
-  if (sourceLineEnding === undefined) return text;
-  return lineEndingAdjusted(text, sourceLineEnding);
+  return lineEndingAdjusted(text, lineEnding);
 }
 
 function normalizeWithSourceMap(content: string): NormalizedText {
+  if (!content.includes("\r\n")) {
+    return { kind: "identity", text: content };
+  }
+
   const normalized: string[] = [];
   const sourceIndexByNormalizedIndex: number[] = [];
   let index = 0;
@@ -72,7 +92,11 @@ function normalizeWithSourceMap(content: string): NormalizedText {
     sourceIndexByNormalizedIndex.push(index);
     index++;
   }
-  return { text: normalized.join(""), sourceIndexByNormalizedIndex };
+  return {
+    kind: "mapped",
+    text: normalized.join(""),
+    sourceIndexByNormalizedIndex,
+  };
 }
 
 function originalSpan(
@@ -80,6 +104,10 @@ function originalSpan(
   match: EditMatchSpan,
   originalLength: number,
 ): EditMatchSpan {
+  if (normalized.kind === "identity") {
+    return { index: match.index, length: match.length };
+  }
+
   const index = normalized.sourceIndexByNormalizedIndex[match.index];
   const normalizedEnd = match.index + match.length;
   const end =
@@ -107,13 +135,9 @@ function replaceAllNormalized(
   let start = 0;
   for (const match of matches) {
     const sourceMatch = originalSpan(normalized, match, content.length);
-    const sourceSpan = content.slice(
-      sourceMatch.index,
-      sourceMatch.index + sourceMatch.length,
-    );
     parts.push(
       content.slice(start, sourceMatch.index),
-      sourceSpanReplacement(newString, sourceSpan),
+      sourceSpanReplacement(newString, sourceLineEnding(content, sourceMatch)),
     );
     start = sourceMatch.index + sourceMatch.length;
   }
@@ -221,8 +245,10 @@ export function executeEdit(
       matchResult.match,
       content.length,
     );
-    const sourceSpan = content.slice(match.index, match.index + match.length);
-    const replacement = sourceSpanReplacement(newString, sourceSpan);
+    const replacement = sourceSpanReplacement(
+      newString,
+      sourceLineEnding(content, match),
+    );
     updated =
       content.slice(0, match.index) +
       replacement +
