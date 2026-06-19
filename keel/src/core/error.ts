@@ -5,6 +5,7 @@ const recoverableToolErrorCodes = [
   "tool_empty_command",
   "tool_empty_old_string",
   "tool_empty_pattern",
+  "tool_edit_no_op",
   "tool_invalid_pattern",
   "tool_not_file",
   "tool_not_directory",

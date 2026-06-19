@@ -266,6 +266,62 @@ describe("Context Compaction", () => {
     expect(shouldCompact).toBe(true);
   });
 
+  test(`Given a completed edit tool call gains replaceAll after usage accounting,
+    When proactive compaction checks the request,
+    Then it treats the cached accounting as stale`, () => {
+    // Given
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: "I will update the file.",
+        toolCalls: [
+          {
+            id: "edit_note",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "old",
+            newString: "new",
+          },
+        ],
+      },
+    ];
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+    });
+    const [assistantMessage] = messages;
+    const [editToolCall] =
+      assistantMessage?.role === "assistant"
+        ? (assistantMessage.toolCalls ?? [])
+        : [];
+    if (editToolCall?.tool !== "edit") {
+      throw new Error("test setup expected an edit tool call");
+    }
+    Object.assign(editToolCall, {
+      replaceAll: true,
+    });
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      messages,
+      {
+        contextWindowTokens: 5,
+        reserveTokens: 0,
+      },
+      accounting,
+    );
+
+    // Then
+    expect(shouldCompact).toBe(true);
+  });
+
   test(`Given a completed tool output is mutated in place after usage accounting,
     When proactive compaction checks the request,
     Then it falls back to the estimated request size`, () => {

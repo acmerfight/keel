@@ -119,6 +119,9 @@ export async function executeToolCall(
           toolCall.path,
           toolCall.oldString,
           toolCall.newString,
+          toolCall.replaceAll !== undefined
+            ? { replaceAll: toolCall.replaceAll }
+            : {},
         );
         return { content: result.content, ok: true };
       } catch (error) {

@@ -56,6 +56,32 @@ describe("tool registry", () => {
     });
   });
 
+  test(`Given a provider returns an edit call with replaceAll enabled,
+    When the registry parses and serializes the call,
+    Then the replaceAll flag is preserved for tool execution`, () => {
+    const parsed = toolCallFromParsedArguments("call_edit", "edit", {
+      path: "src/index.ts",
+      oldString: "old",
+      newString: "new",
+      replaceAll: true,
+    });
+
+    expect(parsed).toEqual({
+      id: "call_edit",
+      tool: "edit",
+      path: "src/index.ts",
+      oldString: "old",
+      newString: "new",
+      replaceAll: true,
+    });
+    expect(parsed === null ? null : toolCallArguments(parsed)).toEqual({
+      path: "src/index.ts",
+      oldString: "old",
+      newString: "new",
+      replaceAll: true,
+    });
+  });
+
   test(`Given a provider returns invalid tool arguments,
     When the registry parses the call,
     Then it rejects the arguments without constructing a tool call`, () => {

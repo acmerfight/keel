@@ -339,6 +339,88 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given the assistant requests replacing every exact occurrence in a file,
+    When the agent handles the edit tool call,
+    Then all occurrences are updated before the assistant replies`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "old one\nold two\n", "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "replace-all-edit",
+      async *stream(options) {
+        if (turn === 1) {
+          secondTurnMessages = options.messages;
+          yield { type: "text", text: "Updated every occurrence." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
+        yield {
+          type: "tool_call",
+          id: "replace_all_edit",
+          tool: "edit",
+          path: "note.txt",
+          oldString: "old",
+          newString: "new",
+          replaceAll: true,
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "replace every occurrence",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "new one\nnew two\n",
+      );
+      expect(
+        secondTurnMessages.filter((message) => message.role === "tool"),
+      ).toEqual([
+        {
+          role: "tool",
+          toolCallId: "replace_all_edit",
+          content: "Edited note.txt",
+        },
+      ]);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Updated every occurrence.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the assistant proposes multiple file changes in one response,
     When the agent handles the tool calls,
     Then each file is updated before the assistant replies`, async () => {
