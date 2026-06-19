@@ -30,6 +30,13 @@ interface FakeReadResponse {
   readonly usage: Usage;
 }
 
+interface FakeLsResponse {
+  readonly type: "ls";
+  readonly path?: string;
+  readonly limit?: number;
+  readonly usage: Usage;
+}
+
 interface FakeGrepResponse {
   readonly type: "grep";
   readonly pattern: string;
@@ -56,6 +63,7 @@ export type FakeResponse =
   | FakeEditResponse
   | FakeWriteResponse
   | FakeReadResponse
+  | FakeLsResponse
   | FakeGlobResponse
   | FakeGrepResponse
   | FakeBashResponse;
@@ -101,6 +109,18 @@ export function fakeReadResponse(
     type: "read",
     path,
     ...(options.offset !== undefined ? { offset: options.offset } : {}),
+    ...(options.limit !== undefined ? { limit: options.limit } : {}),
+    usage,
+  };
+}
+
+export function fakeLsResponse(
+  usage: Usage = ZERO_USAGE,
+  options: { readonly path?: string; readonly limit?: number } = {},
+): FakeResponse {
+  return {
+    type: "ls",
+    ...(options.path !== undefined ? { path: options.path } : {}),
     ...(options.limit !== undefined ? { limit: options.limit } : {}),
     usage,
   };
@@ -200,6 +220,15 @@ export function createFakeProvider(
             ...(response.offset !== undefined
               ? { offset: response.offset }
               : {}),
+            ...(response.limit !== undefined ? { limit: response.limit } : {}),
+          };
+          break;
+        case "ls":
+          yield {
+            type: "tool_call",
+            id: `fake_tool_call_${turn}`,
+            tool: "ls",
+            ...(response.path !== undefined ? { path: response.path } : {}),
             ...(response.limit !== undefined ? { limit: response.limit } : {}),
           };
           break;

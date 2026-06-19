@@ -13,6 +13,7 @@ describe("tool registry", () => {
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "read",
+      "ls",
       "glob",
       "grep",
       "edit",
@@ -27,6 +28,7 @@ describe("tool registry", () => {
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "read",
+      "ls",
       "glob",
       "grep",
       "edit",
@@ -84,11 +86,51 @@ describe("tool registry", () => {
     });
   });
 
+  test(`Given a provider returns an ls call,
+    When the registry parses and serializes the call,
+    Then the path and optional limit are preserved for tool execution`, () => {
+    const parsed = toolCallFromParsedArguments("call_ls", "ls", {
+      path: "src/tools",
+      limit: 25,
+    });
+
+    expect(parsed).toEqual({
+      id: "call_ls",
+      tool: "ls",
+      path: "src/tools",
+      limit: 25,
+    });
+    expect(parsed === null ? null : toolCallArguments(parsed)).toEqual({
+      path: "src/tools",
+      limit: 25,
+    });
+  });
+
+  test(`Given a provider returns an ls call without optional fields,
+    When the registry parses and serializes the call,
+    Then no default arguments are serialized`, () => {
+    const parsed = toolCallFromParsedArguments("call_ls", "ls", {});
+
+    expect(parsed).toEqual({
+      id: "call_ls",
+      tool: "ls",
+    });
+    expect(parsed === null ? null : toolCallArguments(parsed)).toEqual({});
+  });
+
   test(`Given a provider returns invalid tool arguments,
     When the registry parses the call,
     Then it rejects the arguments without constructing a tool call`, () => {
     expect(
       toolCallFromParsedArguments("call_1", "grep", { path: "src" }),
+    ).toBeNull();
+  });
+
+  test(`Given a provider returns invalid ls arguments,
+    When the registry parses the call,
+    Then it rejects the ls call without constructing a tool call`, () => {
+    expect(
+      toolCallFromParsedArguments("call_ls", "ls", { limit: 0 }),
     ).toBeNull();
   });
 
