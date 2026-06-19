@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -481,6 +481,34 @@ describe("CLI Main", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe('Error: unknown provider "unknown"\n');
+  });
+
+  test(`Given root AGENTS escapes the workspace through a symlink,
+    When the CLI main starts a one-shot run,
+    Then it rejects the project instructions before calling the provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-agents-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-cli-main-outside-"));
+    await writeFile(join(outside, "secret.txt"), "SECRET_OUTSIDE_WORKSPACE");
+    await symlink(join(outside, "secret.txt"), join(workspace, "AGENTS.md"));
+    const fixture = createRuntime(["hello"], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain("cannot load AGENTS.md");
+      expect(fixture.stderr()).toContain("outside the workspace");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
   test(`Given the fake provider is selected,
@@ -1426,21 +1454,125 @@ describe("CLI Main", () => {
     When the user sends two prompts on stdin,
     Then the second reply can use the first prompt as context`, async () => {
     // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-no-agents-"));
     const input = new PassThrough();
     input.end("remember alpha\nwhat did I ask you to remember?\n");
     const fixture = createRuntime([], {
+      cwd: workspace,
       env: { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
       input,
     });
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(0);
-    expect(fixture.stdout()).toContain("Remembered: remember alpha\n");
-    expect(fixture.stdout()).toContain("Earlier you said: remember alpha\n");
-    expect(fixture.stderr()).toBe("");
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("Remembered: remember alpha\n");
+      expect(fixture.stdout()).toContain("Earlier you said: remember alpha\n");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given root AGENTS instructions exist,
+    When the user sends an interactive prompt through CLI main,
+    Then the provider receives those project instructions in the system prompt`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-agents-"));
+    await writeFile(
+      join(workspace, "AGENTS.md"),
+      "Prefer BDD tests before production changes.\n",
+      "utf8",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Done."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.end("fix the bug\n");
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Done.\n");
+      expect(fixture.stderr()).toBe("");
+      const request = requestWithMessagesSchema.parse(capturedBodies[0]);
+      const system = request.messages?.find(
+        (message) => message.role === "system",
+      );
+      if (system === undefined) {
+        throw new Error("provider request had no system message");
+      }
+      expect(system.content).toContain("Project instructions from AGENTS.md");
+      expect(system.content).toContain(
+        "> Prefer BDD tests before production changes.",
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given root AGENTS escapes the workspace through a symlink,
+    When the CLI main starts an interactive run,
+    Then it returns the project instructions error before reading input`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-agents-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-cli-main-outside-"));
+    await writeFile(join(outside, "secret.txt"), "SECRET_OUTSIDE_WORKSPACE");
+    await symlink(join(outside, "secret.txt"), join(workspace, "AGENTS.md"));
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain("cannot load AGENTS.md");
+      expect(fixture.stderr()).toContain("outside the workspace");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
   test(`Given interactive mode has cost tracking enabled,
