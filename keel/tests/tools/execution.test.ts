@@ -1,4 +1,11 @@
-import { mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  rm,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -7,6 +14,71 @@ import { executeToolCall } from "../../src/tools/execution.ts";
 const EDIT_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 
 describe("Tool Execution", () => {
+  test(`Given a glob tool call has a recoverable input error,
+    When the tool execution layer handles the call,
+    Then it returns a tool failure message for the next model turn`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tool-execution-"));
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        toolCall: {
+          id: "glob_1",
+          tool: "glob",
+          pattern: "",
+        },
+        signal: new AbortController().signal,
+        allowBash: false,
+      });
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("Tool failed:");
+      expect(result.content).toContain("pattern is empty");
+      expect(result.content).toContain("Recovery:");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    `Given a glob tool call hits a ripgrep filesystem failure,
+    When the tool execution layer handles the call,
+    Then it rethrows the fatal tool error instead of converting it to model-recoverable output`,
+    async () => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-tool-execution-"));
+      const lockedPath = join(workspace, "locked");
+      await mkdir(lockedPath);
+      await chmod(lockedPath, 0);
+
+      try {
+        // When / Then
+        await expect(
+          executeToolCall({
+            workspace,
+            toolCall: {
+              id: "glob_1",
+              tool: "glob",
+              pattern: "**/*.ts",
+            },
+            signal: new AbortController().signal,
+            allowBash: false,
+          }),
+        ).rejects.toMatchObject({
+          name: "KeelError",
+          code: "tool_unavailable",
+          message: expect.stringContaining("ripgrep exited with code 2"),
+        });
+      } finally {
+        await chmod(lockedPath, 0o700);
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
+
   test(`Given an edit tool call targets an oversized file,
     When the tool execution layer handles the call,
     Then it reports a recoverable tool failure instead of rethrowing`, async () => {

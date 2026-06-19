@@ -19,6 +19,58 @@ async function* agentEvents(
 }
 
 describe("CLI Output", () => {
+  test(`Given a glob tool call has an explicit search path,
+    When the CLI prints agent events,
+    Then the progress label includes the pattern and path`, async () => {
+    // Given
+    let stdout = "";
+    let stderr = "";
+
+    // When
+    const finalEnd = await printAgentEvents(
+      agentEvents([
+        {
+          type: "tool_start",
+          toolCall: {
+            id: "glob_1",
+            tool: "glob",
+            pattern: "**/*.test.ts",
+            path: "tests",
+          },
+        },
+        {
+          type: "tool_end",
+          toolCall: {
+            id: "glob_1",
+            tool: "glob",
+            pattern: "**/*.test.ts",
+            path: "tests",
+          },
+          ok: true,
+        },
+        {
+          type: "end",
+          usage: ZERO_USAGE,
+          turns: 1,
+          stopReason: "completed",
+        },
+      ]),
+      {
+        writeStdout: (text) => {
+          stdout += text;
+        },
+        writeStderr: (text) => {
+          stderr += text;
+        },
+      },
+    );
+
+    // Then
+    expect(stdout).toBe("");
+    expect(stderr).toBe("Tool: glob **/*.test.ts tests\n");
+    expect(finalEnd?.stopReason).toBe("completed");
+  });
+
   test(`Given status line text contains unsafe terminal bytes,
     When it is sanitized,
     Then controls are rendered visibly and the line is capped`, () => {

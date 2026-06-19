@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -214,6 +214,31 @@ describe("Glob Tool File Discovery", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test.skipIf(process.platform === "win32")(
+    `Given a workspace directory cannot be traversed,
+    When ripgrep reports a filesystem failure during glob discovery,
+    Then the glob tool surfaces the search failure instead of reporting no files`,
+    async () => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-glob-"));
+      const lockedPath = join(workspace, "locked");
+      await mkdir(lockedPath);
+      await chmod(lockedPath, 0);
+
+      try {
+        // When / Then
+        await expectGlobError(
+          () => executeGlob(workspace, "**/*.ts"),
+          "tool_unavailable",
+          "ripgrep exited with code 2",
+        );
+      } finally {
+        await chmod(lockedPath, 0o700);
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given the search path points outside the workspace,
     When the glob tool validates the request,

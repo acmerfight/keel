@@ -65,6 +65,7 @@ export async function runRipgrepProcess(
     const stopRipgrep = () => {
       child.kill("SIGTERM");
       if (forceKillTimeout !== undefined) return;
+      /* v8 ignore next 3: SIGKILL fallback only fires if ripgrep ignores SIGTERM. */
       forceKillTimeout = setTimeout(() => {
         child.kill("SIGKILL");
       }, RIPGREP_KILL_GRACE_MS);
@@ -91,18 +92,10 @@ export async function runRipgrepProcess(
       stderr += chunk.toString();
     });
 
+    /* v8 ignore next 6: resolveRipgrep validates the binary before spawn; this only handles OS races. */
     child.on("error", (error: NodeJS.ErrnoException) => {
       cleanup();
       settle(() => {
-        if (error.code === "ENOENT") {
-          rejectResult(
-            new KeelError(
-              "tool_unavailable",
-              `${options.toolName} failed: bundled ripgrep is not available (${ripgrep.provider})`,
-            ),
-          );
-          return;
-        }
         rejectResult(error);
       });
     });
