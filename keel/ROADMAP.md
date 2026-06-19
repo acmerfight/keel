@@ -35,7 +35,7 @@ before every pick, and re-triage this file when reality changes.
 What a user can do today:
 
 - `keel "<message>"` — one-shot agent run: streamed text, multi-round tool
-  calls (read / grep / edit / write / bash), recoverable tool errors with
+  calls (read / glob / grep / edit / write / bash), recoverable tool errors with
   LLM-facing recovery hints, tool progress on stderr, graceful stop with
   a progress summary when the 64-turn limit is exhausted.
 - `keel` — interactive in-process session: sequential follow-up messages
@@ -139,7 +139,9 @@ Codex/Claude Code — or directly moves the eval numbers.
   success rate is a tracked eval sub-metric.
 - **Project context injection** — read the project's AGENTS.md (or
   equivalent) into the system prompt.
-- **File discovery tools** — `glob`/`ls`; today the model can only grep.
+- **File discovery tools** — ✅ Partial (2026-06): `glob` discovers files
+  by path pattern before reading; `ls` is still missing for directory
+  browsing.
 - **Parallel tool execution.** Keel runs tool calls strictly
   sequentially. References parallelize reads while serializing writes
   via resource conflict rules (kimi's scheduler, codex's read/write

@@ -1,27 +1,25 @@
-import { spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { createInterface } from "node:readline";
+import { statSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import { z } from "zod";
 import { KeelError } from "../core/error.ts";
+import {
+  displayPath,
+  hasIgnoredPathSegment,
+  ignoredDirectoryGlobArgs,
+  normalizeRipgrepPath,
+  workspaceRootIgnoreArgsForTarget,
+} from "./file-search.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
-import { resolveRipgrep } from "./ripgrep.ts";
+import { runRipgrepProcess } from "./ripgrep-process.ts";
 import type { ToolResult } from "./types.ts";
 import { resolveWorkspaceTarget } from "./workspace-path.ts";
 
 const MAX_GREP_MATCHES = 50;
 
 const DEFAULT_RIPGREP_TIMEOUT_MS = 20_000;
-const RIPGREP_KILL_GRACE_MS = 1_000;
 const MAX_SNIPPET_CHARS = 240;
 const RIPGREP_INACCESSIBLE_WARNING =
   "[grep warning: some paths were inaccessible and skipped]";
-const IGNORED_DIRECTORIES = new Set([
-  ".git",
-  "coverage",
-  "dist",
-  "node_modules",
-]);
 
 export interface GrepOptions {
   readonly path?: string;
@@ -33,19 +31,6 @@ interface RipgrepMatch {
   readonly path: string;
   readonly lineNumber: number;
   readonly line: string;
-}
-
-interface RipgrepProcessOptions {
-  readonly workspacePath: string;
-  readonly args: readonly string[];
-  readonly signal?: AbortSignal;
-  readonly timeoutMs: number;
-  readonly onStdoutLine: (line: string, stopRipgrep: () => void) => void;
-}
-
-interface RipgrepProcessResult {
-  readonly code: number | null;
-  readonly stderr: string;
 }
 
 const ripgrepMatchSchema = z.object({
@@ -60,12 +45,6 @@ const ripgrepMatchSchema = z.object({
     line_number: z.number().int().positive(),
   }),
 });
-
-function displayPath(workspacePath: string, targetPath: string): string {
-  const workspaceRelativePath = relative(workspacePath, targetPath);
-  if (workspaceRelativePath === "") return ".";
-  return workspaceRelativePath.split(sep).join("/");
-}
 
 function truncateLineForDisplay(line: string): string {
   if (line.length <= MAX_SNIPPET_CHARS) return line;
@@ -88,47 +67,6 @@ function parseRipgrepMatch(line: string): RipgrepMatch | null {
     lineNumber: result.data.data.line_number,
     line: result.data.data.lines.text.replace(/\r?\n$/, ""),
   };
-}
-
-function hasIgnoredPathSegment(
-  workspacePath: string,
-  targetPath: string,
-): boolean {
-  const workspaceRelativePath = relative(workspacePath, targetPath);
-  if (workspaceRelativePath === "") return false;
-  return workspaceRelativePath
-    .split(sep)
-    .some((segment) => IGNORED_DIRECTORIES.has(segment));
-}
-
-function ignoredGlobArgs(): string[] {
-  return [...IGNORED_DIRECTORIES].flatMap((directory) => [
-    "--glob",
-    `!**/${directory}/**`,
-  ]);
-}
-
-function workspaceRootIgnoreArgsForTarget(
-  workspacePath: string,
-  targetPath: string,
-): string[] {
-  if (targetPath === ".") return [];
-
-  // Subdirectory targets do not automatically inherit the workspace root
-  // .gitignore when --no-ignore-parent is set, so pass it explicitly.
-  const ignorePath = join(workspacePath, ".gitignore");
-  if (!existsSync(ignorePath)) return [];
-  return ["--ignore-file", ignorePath];
-}
-
-function normalizeRipgrepPath(
-  workspacePath: string,
-  ripgrepPath: string,
-): string {
-  const absolutePath = isAbsolute(ripgrepPath)
-    ? resolve(ripgrepPath)
-    : resolve(workspacePath, ripgrepPath);
-  return displayPath(workspacePath, absolutePath);
 }
 
 function formatGrepResult(
@@ -181,108 +119,11 @@ function ripgrepArgs(
     ...workspaceRootIgnoreArgsForTarget(workspacePath, targetPath),
     "--sort",
     "path",
-    ...ignoredGlobArgs(),
+    ...ignoredDirectoryGlobArgs(),
     "--",
     pattern,
     targetPath,
   ];
-}
-
-async function runRipgrepProcess(
-  options: RipgrepProcessOptions,
-): Promise<RipgrepProcessResult> {
-  const ripgrep = await resolveRipgrep();
-
-  return new Promise<RipgrepProcessResult>((resolveResult, rejectResult) => {
-    let settled = false;
-    let stderr = "";
-
-    const settle = (callback: () => void) => {
-      if (settled) return;
-      settled = true;
-      callback();
-    };
-
-    const child = spawn(ripgrep.path, options.args, {
-      cwd: options.workspacePath,
-      stdio: ["ignore", "pipe", "pipe"],
-      ...(options.signal !== undefined ? { signal: options.signal } : {}),
-    });
-
-    const stdout = createInterface({ input: child.stdout });
-    let timeout: NodeJS.Timeout | undefined;
-    let forceKillTimeout: NodeJS.Timeout | undefined;
-    let stdoutClosed = false;
-    const closeStdout = () => {
-      if (stdoutClosed) return;
-      stdoutClosed = true;
-      stdout.close();
-    };
-    const clearSearchTimeout = () => {
-      if (timeout === undefined) return;
-      clearTimeout(timeout);
-      timeout = undefined;
-    };
-    const cleanup = () => {
-      clearSearchTimeout();
-      if (forceKillTimeout !== undefined) {
-        clearTimeout(forceKillTimeout);
-        forceKillTimeout = undefined;
-      }
-      closeStdout();
-    };
-    const stopRipgrep = () => {
-      child.kill("SIGTERM");
-      if (forceKillTimeout !== undefined) return;
-      forceKillTimeout = setTimeout(() => {
-        child.kill("SIGKILL");
-      }, RIPGREP_KILL_GRACE_MS);
-    };
-    timeout = setTimeout(() => {
-      stopRipgrep();
-      clearSearchTimeout();
-      closeStdout();
-      settle(() => {
-        rejectResult(
-          new KeelError(
-            "tool_unavailable",
-            `grep failed: ripgrep timed out after ${options.timeoutMs}ms`,
-          ),
-        );
-      });
-    }, options.timeoutMs);
-
-    stdout.on("line", (line) => {
-      options.onStdoutLine(line, stopRipgrep);
-    });
-
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    child.on("error", (error: NodeJS.ErrnoException) => {
-      cleanup();
-      settle(() => {
-        if (error.code === "ENOENT") {
-          rejectResult(
-            new KeelError(
-              "tool_unavailable",
-              `grep failed: bundled ripgrep is not available (${ripgrep.provider})`,
-            ),
-          );
-          return;
-        }
-        rejectResult(error);
-      });
-    });
-
-    child.on("close", (code) => {
-      cleanup();
-      settle(() => {
-        resolveResult({ code, stderr });
-      });
-    });
-  });
 }
 
 async function runRipgrep(
@@ -297,6 +138,7 @@ async function runRipgrep(
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
 
   const result = await runRipgrepProcess({
+    toolName: "grep",
     workspacePath,
     args: ripgrepArgs(workspacePath, pattern, targetPath),
     ...(signal !== undefined ? { signal } : {}),

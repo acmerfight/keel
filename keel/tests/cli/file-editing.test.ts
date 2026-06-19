@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -166,6 +166,32 @@ function sseGrepToolCall(): string {
                 name: "grep",
                 arguments: JSON.stringify({
                   pattern: "handleSubmit",
+                }),
+              },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+    usage: null,
+  });
+}
+
+function sseGlobToolCall(): string {
+  return sseData({
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_glob",
+              type: "function",
+              function: {
+                name: "glob",
+                arguments: JSON.stringify({
+                  pattern: "**/*validator*.test.ts",
                 }),
               },
             },
@@ -436,7 +462,7 @@ describe("CLI File Editing", () => {
           (tool: { readonly function?: { readonly name?: string } }) =>
             tool.function?.name,
         ),
-      ).toEqual(["read", "grep", "edit", "write"]);
+      ).toEqual(["read", "glob", "grep", "edit", "write"]);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -508,6 +534,7 @@ describe("CLI File Editing", () => {
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
       expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([
         "read",
+        "glob",
         "grep",
         "edit",
         "write",
@@ -573,6 +600,7 @@ describe("CLI File Editing", () => {
       const request = requestWithToolsSchema.parse(JSON.parse(capturedBody));
       expect(request.tools?.map((tool) => tool.function?.name)).toEqual([
         "read",
+        "glob",
         "grep",
         "edit",
         "write",
@@ -753,6 +781,7 @@ describe("CLI File Editing", () => {
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
       expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([
         "read",
+        "glob",
         "grep",
         "edit",
         "write",
@@ -839,6 +868,83 @@ describe("CLI File Editing", () => {
         role: "tool",
         tool_call_id: "call_grep",
         content: "app.ts:1:export function handleSubmit() {}",
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the configured provider discovers files by name,
+    When user asks the CLI to find a matching test file,
+    Then the agent sends discovered paths back before the final answer`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-glob-"));
+    await mkdir(join(workspace, "tests"), { recursive: true });
+    await writeFile(
+      join(workspace, "tests", "validator.test.ts"),
+      "test('validator', () => {});\n",
+      "utf8",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+
+        if (capturedBodies.length === 1) {
+          res.write(sseGlobToolCall());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 20, completion_tokens: 5 }),
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.write(sseTextReply("Found validator.test.ts."));
+        res.write(sseStopFinish({ prompt_tokens: 25, completion_tokens: 4 }));
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["find validator tests"], {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Found validator.test.ts.\n");
+      expect(result.stderr).toBe("Tool: glob **/*validator*.test.ts\n");
+      expect(capturedBodies).toHaveLength(2);
+
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_glob",
+        content: "tests/validator.test.ts",
       });
     } finally {
       await close(server);

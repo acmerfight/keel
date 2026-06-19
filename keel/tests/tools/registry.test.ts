@@ -13,6 +13,7 @@ describe("tool registry", () => {
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "read",
+      "glob",
       "grep",
       "edit",
       "write",
@@ -26,6 +27,7 @@ describe("tool registry", () => {
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "read",
+      "glob",
       "grep",
       "edit",
       "write",
@@ -88,5 +90,25 @@ describe("tool registry", () => {
     expect(
       toolCallFromParsedArguments("call_1", "grep", { path: "src" }),
     ).toBeNull();
+  });
+
+  test(`Given a provider returns a glob call,
+    When the registry parses and serializes the call,
+    Then the pattern and optional search path are preserved for tool execution`, () => {
+    const parsed = toolCallFromParsedArguments("call_glob", "glob", {
+      pattern: "**/*.test.ts",
+      path: "tests",
+    });
+
+    expect(parsed).toEqual({
+      id: "call_glob",
+      tool: "glob",
+      pattern: "**/*.test.ts",
+      path: "tests",
+    });
+    expect(parsed === null ? null : toolCallArguments(parsed)).toEqual({
+      pattern: "**/*.test.ts",
+      path: "tests",
+    });
   });
 });

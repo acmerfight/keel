@@ -86,6 +86,12 @@ function toolCallLabel(toolCall: ToolCall): string {
   switch (toolCall.tool) {
     case "read":
       return sanitizeToolLabel(`read ${toolCall.path}`);
+    case "glob":
+      return sanitizeToolLabel(
+        toolCall.path === undefined
+          ? `glob ${toolCall.pattern}`
+          : `glob ${toolCall.pattern} ${toolCall.path}`,
+      );
     case "grep":
       return sanitizeToolLabel(
         toolCall.path === undefined

@@ -6,6 +6,7 @@ import {
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeBash } from "./bash.ts";
 import { executeEdit } from "./edit.ts";
+import { executeGlob } from "./glob.ts";
 import { executeGrep } from "./grep.ts";
 import { executeRead } from "./read.ts";
 import type { ToolCall } from "./registry.ts";
@@ -46,6 +47,20 @@ export async function executeToolCall(
 ): Promise<ToolExecution> {
   const { workspace, toolCall, signal, allowBash, bashPermission } = options;
   switch (toolCall.tool) {
+    case "glob": {
+      try {
+        const result = await executeGlob(workspace, toolCall.pattern, {
+          ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
+          signal,
+        });
+        return { content: result.content, ok: true };
+      } catch (error) {
+        if (!isRecoverableToolError(error)) {
+          throw error;
+        }
+        return { content: toolFailureMessage(error), ok: false };
+      }
+    }
     case "grep": {
       try {
         const result = await executeGrep(workspace, toolCall.pattern, {
