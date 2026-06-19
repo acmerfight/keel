@@ -110,6 +110,10 @@ When `?` IS correct:
 
 Litmus test: if you would write `?? defaultValue` every time you read this field, it is required — the default belongs in a factory, not in the type.
 
+Corollary: trust correct types. Do not guard against states an already-trusted internal type excludes — in source or tests. Runtime checks that enforce domain predicates the type system cannot encode (workspace safety, range constraints, protocol validity) are not redundant.
+
+Decision: "Does the type permit this state?" No → delete the check. Yes → either narrow the type or keep the guard if the predicate is beyond the type system's reach.
+
 ## Development
 
 **BDD: test first, then implement.** Every feature starts with a failing test in GWTE format. Write the test, watch it fail, then write the minimum code to make it pass. Do not write implementation code without a corresponding test.
