@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
+import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 
 const ZERO_USAGE: Usage = {
@@ -65,6 +66,8 @@ describe("Conversation History", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -115,6 +118,8 @@ describe("Conversation History", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -179,6 +184,8 @@ describe("Conversation History", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         drainInjectedUserMessages: () => [
           { role: "user", content: "Also explain the scripts." },
         ],
@@ -275,6 +282,8 @@ describe("Conversation History", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 200,
           reserveTokens: 0,

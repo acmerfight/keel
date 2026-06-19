@@ -4,6 +4,7 @@ import {
   runAgent,
   runAgentTurn,
 } from "../../src/agent/loop.ts";
+import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import { KeelError } from "../../src/core/error.ts";
 import {
@@ -71,6 +72,8 @@ describe("Text Reply", () => {
         userMessage: "hi",
         systemPrompt: "You are a helpful assistant.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -100,6 +103,8 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -138,6 +143,8 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
     messages.push({ role: "user", content: "are you there?" });
@@ -150,6 +157,8 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -196,6 +205,8 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
     messages.push({ role: "user", content: "what did I ask you to remember?" });
@@ -208,6 +219,8 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -255,6 +268,8 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         costTracking: {
           model: budgetModel,
           maxCostUsd: 0.5,
@@ -271,6 +286,8 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -325,6 +342,8 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
     messages.push({ role: "user", content: "continue from the package" });
@@ -337,6 +356,8 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -401,6 +422,8 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         drainInjectedUserMessages: () => {
           if (drained) {
             return [];
@@ -478,6 +501,8 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         drainInjectedUserMessages: () => {
           if (drained) {
             return [];
@@ -535,6 +560,8 @@ describe("Text Reply", () => {
         userMessage: "hello",
         systemPrompt: "You are a helpful assistant.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -573,6 +600,8 @@ describe("Text Reply", () => {
         userMessage: "answer after retry",
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -612,6 +641,8 @@ describe("Text Reply", () => {
         userMessage: "summarize",
         systemPrompt: "You are a helpful assistant.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -655,6 +686,8 @@ describe("Text Reply", () => {
         userMessage: "hi",
         systemPrompt: "You are helpful.",
         signal: controller.signal,
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -682,6 +715,8 @@ describe("Text Reply", () => {
           userMessage: "hi",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       ),
     ).rejects.toThrow("LLM stream ended without stop event");
@@ -712,6 +747,8 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       })) {
         events.push(event);
       }
@@ -777,6 +814,8 @@ describe("Text Reply", () => {
         userMessage: "inspect several files and verify the result",
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -841,6 +880,8 @@ describe("Text Reply", () => {
         userMessage: "inspect forever",
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 

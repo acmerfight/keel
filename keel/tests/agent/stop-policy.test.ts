@@ -8,6 +8,7 @@ import type { AgentStopPolicy } from "../../src/agent/stop-policy.ts";
 import {
   composeStopPolicies,
   costBudgetStopPolicy,
+  defaultStopPolicy,
   maxTurnFallbackPolicy,
   repeatedToolCallPolicy,
 } from "../../src/agent/stop-policy.ts";
@@ -102,6 +103,7 @@ describe("Agent Stopping", () => {
           userMessage: "edit both files",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           stopPolicy: maxTurnFallbackPolicy(2),
         }),
       );
@@ -163,6 +165,7 @@ describe("Agent Stopping", () => {
           userMessage: "edit the file",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           stopPolicy: maxTurnFallbackPolicy(1),
         }),
       );
@@ -202,6 +205,7 @@ describe("Agent Stopping", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           stopPolicy: maxTurnFallbackPolicy(1),
         }),
       );
@@ -241,6 +245,7 @@ describe("Agent Stopping", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           stopPolicy: maxTurnFallbackPolicy(1),
         }),
       );
@@ -280,6 +285,7 @@ describe("Agent Stopping", () => {
           userMessage: "edit the file",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           stopPolicy: maxTurnFallbackPolicy(1),
         }),
       );
@@ -325,6 +331,7 @@ describe("Agent Stopping", () => {
           userMessage: "edit the file",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           stopPolicy: stopAfterFirstRound,
         }),
       );
@@ -386,6 +393,7 @@ describe("Agent Stopping", () => {
           userMessage: "edit note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           costTracking: {
             model: budgetModel,
             maxCostUsd: 0.5,
@@ -442,6 +450,8 @@ describe("Agent Stopping", () => {
           userMessage: "fix the note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -485,6 +495,8 @@ describe("Agent Stopping", () => {
           userMessage: "inspect the workspace",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -520,6 +532,7 @@ describe("Agent Stopping", () => {
           userMessage: "read the file forever",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           stopPolicy: composeStopPolicies([
             repeatedToolCallPolicy(),
             maxTurnFallbackPolicy(100),
@@ -565,6 +578,7 @@ describe("Agent Stopping", () => {
           userMessage: "first task",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           stopPolicy: sharedPolicy,
         }),
       );
@@ -575,6 +589,7 @@ describe("Agent Stopping", () => {
           userMessage: "second task",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           stopPolicy: sharedPolicy,
         }),
       );
@@ -616,6 +631,7 @@ describe("Agent Stopping", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           stopPolicy: repeatedToolCallPolicy(),
         }),
       );
@@ -627,6 +643,7 @@ describe("Agent Stopping", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           stopPolicy: repeatedToolCallPolicy(),
         }),
       );
@@ -670,6 +687,7 @@ describe("Agent Stopping", () => {
             userMessage: "hi",
             systemPrompt: "You are helpful.",
             signal: freshSignal(),
+            allowBash: false,
             stopPolicy: neverStop,
           }),
         ),

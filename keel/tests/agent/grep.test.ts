@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgent } from "../../src/agent/loop.ts";
+import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import type { LLMProvider } from "../../src/llm/types.ts";
 
 const ZERO_USAGE = {
@@ -63,6 +64,8 @@ describe("Searching Code", () => {
           userMessage: "find the alpha/beta block",
           systemPrompt: "You are a helpful assistant.",
           signal: new AbortController().signal,
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 

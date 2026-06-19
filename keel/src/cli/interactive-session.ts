@@ -6,6 +6,7 @@ import {
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
 import { runAgentTurn } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
+import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { type CostModel, calculateCostUsd } from "../core/cost.ts";
 import type { LLMProvider, Message, Usage } from "../llm/types.ts";
 import {
@@ -457,9 +458,8 @@ export async function runInteractiveSession(
           messages,
           systemPrompt,
           signal: turnAbortController.signal,
-          ...(bashModeExposesTool(options.cliArgs.bashMode)
-            ? { allowBash: true }
-            : {}),
+          allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+          stopPolicy: defaultStopPolicy(),
           ...(bashPermission !== undefined ? { bashPermission } : {}),
           ...(options.cliArgs.maxCostUsd !== undefined
             ? {

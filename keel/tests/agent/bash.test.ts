@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgent } from "../../src/agent/loop.ts";
+import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import {
   createFakeProvider,
   fakeBashResponse,
@@ -71,6 +72,8 @@ describe("Bash Commands", () => {
           userMessage: "create a file",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -126,6 +129,7 @@ describe("Bash Commands", () => {
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           allowBash: true,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -181,6 +185,7 @@ describe("Bash Commands", () => {
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           allowBash: true,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -239,6 +244,7 @@ describe("Bash Commands", () => {
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           allowBash: true,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -277,6 +283,7 @@ describe("Bash Commands", () => {
             systemPrompt: "You are helpful.",
             signal: freshSignal(),
             allowBash: true,
+            stopPolicy: defaultStopPolicy(),
           }),
         ),
       ).rejects.toMatchObject({
@@ -312,6 +319,7 @@ describe("Bash Commands", () => {
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           allowBash: true,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -351,6 +359,7 @@ describe("Bash Commands", () => {
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           allowBash: true,
+          stopPolicy: defaultStopPolicy(),
           bashPermission: {
             review: (request) => {
               reviewedCommand = request.command;
@@ -405,6 +414,7 @@ describe("Bash Commands", () => {
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           allowBash: true,
+          stopPolicy: defaultStopPolicy(),
           bashPermission,
         }),
       );
@@ -448,6 +458,7 @@ describe("Bash Commands", () => {
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           allowBash: true,
+          stopPolicy: defaultStopPolicy(),
           bashPermission,
         }),
       );

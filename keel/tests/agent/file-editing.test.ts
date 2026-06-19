@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgent } from "../../src/agent/loop.ts";
+import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import {
   createFakeProvider,
   fakeEditResponse,
@@ -59,6 +60,8 @@ describe("File Editing", () => {
           userMessage: "create config.json",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -140,6 +143,8 @@ describe("File Editing", () => {
           userMessage: "write both files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -249,6 +254,8 @@ describe("File Editing", () => {
           userMessage: "write a generated config",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -296,6 +303,8 @@ describe("File Editing", () => {
           userMessage: "create a file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       ),
     ).rejects.toMatchObject({
@@ -323,6 +332,8 @@ describe("File Editing", () => {
           userMessage: "replace the word",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -396,6 +407,8 @@ describe("File Editing", () => {
           userMessage: "replace every occurrence",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -489,6 +502,8 @@ describe("File Editing", () => {
           userMessage: "edit both files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -590,6 +605,8 @@ describe("File Editing", () => {
           userMessage: "edit both files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -690,6 +707,8 @@ describe("File Editing", () => {
           userMessage: "edit both files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -754,6 +773,8 @@ describe("File Editing", () => {
           userMessage: "edit outside",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -853,6 +874,8 @@ describe("File Editing", () => {
           userMessage: "replace the word",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -920,6 +943,8 @@ describe("File Editing", () => {
           userMessage: "replace empty text",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -1018,6 +1043,8 @@ describe("File Editing", () => {
           userMessage: "edit missing file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -1076,6 +1103,8 @@ describe("File Editing", () => {
           userMessage: "edit through symlink",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -1153,6 +1182,8 @@ describe("File Editing", () => {
           userMessage: "read the large file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -1232,6 +1263,8 @@ describe("File Editing", () => {
           userMessage: "read a file window",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -1288,6 +1321,8 @@ describe("File Editing", () => {
           userMessage: "read from line 3",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -1391,6 +1426,8 @@ describe("File Editing", () => {
           userMessage: "read missing file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -1490,6 +1527,8 @@ describe("File Editing", () => {
           userMessage: "inspect the workspace",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -1574,6 +1613,8 @@ describe("File Editing", () => {
           userMessage: "read the binary file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -1617,6 +1658,8 @@ describe("File Editing", () => {
             userMessage: "read from line zero",
             systemPrompt: "You are a helpful assistant.",
             signal: freshSignal(),
+            allowBash: false,
+            stopPolicy: defaultStopPolicy(),
           }),
         ),
       ).rejects.toMatchObject({
@@ -1708,6 +1751,8 @@ describe("File Editing", () => {
           userMessage: "find handleSubmit",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -1769,6 +1814,8 @@ describe("File Editing", () => {
           userMessage: "inspect target",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -1862,6 +1909,8 @@ describe("File Editing", () => {
           userMessage: "find target",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -1907,6 +1956,8 @@ describe("File Editing", () => {
             userMessage: "find target",
             systemPrompt: "You are a helpful assistant.",
             signal: abortController.signal,
+            allowBash: false,
+            stopPolicy: defaultStopPolicy(),
           }),
         ),
       ).rejects.toMatchObject({
@@ -2006,6 +2057,8 @@ describe("File Editing", () => {
           userMessage: "find target",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -2142,6 +2195,8 @@ describe("File Editing", () => {
           userMessage: "find target",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -2290,6 +2345,8 @@ describe("File Editing", () => {
           userMessage: "change the leaked key",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -2394,6 +2451,8 @@ describe("File Editing", () => {
           userMessage: "read the text-named binary file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -2439,6 +2498,8 @@ describe("File Editing", () => {
           userMessage: "replace duplicate text",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -2494,6 +2555,8 @@ describe("File Editing", () => {
             userMessage: "edit the file",
             systemPrompt: "You are a helpful assistant.",
             signal: freshSignal(),
+            allowBash: false,
+            stopPolicy: defaultStopPolicy(),
           }),
         ),
       ).rejects.toThrow("LLM stream ended without stop event");
@@ -2527,6 +2590,8 @@ describe("File Editing", () => {
           userMessage: "fix the typos in both files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -2568,6 +2633,8 @@ describe("File Editing", () => {
           userMessage: "fix the bug in app.ts",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
