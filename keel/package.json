@@ -35,12 +35,12 @@
     "@biomejs/biome": "2.4.16",
     "@fast-check/vitest": "^0.4.1",
     "@types/node": "^24.13.2",
-    "@vitest/coverage-v8": "^4.1.8",
+    "@vitest/coverage-v8": "^4.1.9",
     "fast-check": "^4.8.0",
     "knip": "^6.16.1",
     "simple-git-hooks": "^2.13.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.9"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
