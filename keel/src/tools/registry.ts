@@ -147,27 +147,11 @@ export function toolCallFromParsedArguments(
     return null;
   }
   const toolCall = Object.assign({ id, tool: name }, result.data);
-  return isToolCall(toolCall) ? toolCall : null;
-}
-
-function toolCallRawArguments(
-  tool: { readonly args: { readonly fields: object } },
-  toolCall: object,
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(toolCall).filter(([name]) =>
-      Object.hasOwn(tool.args.fields, name),
-    ),
-  );
-}
-
-function isToolCall(toolCall: {
-  readonly id: string;
-  readonly tool: ToolName;
-}): toolCall is ToolCall {
-  const tool = builtinToolForName(toolCall.tool);
-  return tool.args.schema.safeParse(toolCallRawArguments(tool, toolCall))
-    .success;
+  /* v8 ignore next 4: toolCall is built from this tool's strict schema after successful parse; the guard narrows the registry-derived union without `as`. */
+  if (!tool.isCall(toolCall)) {
+    return null;
+  }
+  return toolCall;
 }
 
 export function executeBuiltinToolCall(
