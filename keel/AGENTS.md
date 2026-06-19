@@ -67,6 +67,7 @@ Prefer concrete, linear code. Add abstraction only when it makes current code si
 - Keep control flow local and sequential when possible.
 - Use indirection only when it names a real domain concept or protects a real boundary.
 - Remove extension points that are not exercised by current behavior.
+- Extract when inline detail obscures the calling function's control flow. Don't extract when the detail IS the function's primary job — process lifecycle wiring in a spawn wrapper, accumulator state transitions in a parser, etc.
 
 ## Type Precision
 
@@ -109,6 +110,8 @@ When `?` IS correct:
 - PATCH DTOs (only send changed fields)
 
 Litmus test: if you would write `?? defaultValue` every time you read this field, it is required — the default belongs in a factory, not in the type.
+
+Signature honesty: a function's parameter type is its contract, not a convenience wrapper for the caller. If the function's job is "append a message," accept `Message`, not `Message | null`. The null-guard belongs at the call site where the conditional is visible.
 
 Corollary: trust correct types. Do not guard against states an already-trusted internal type excludes — in source or tests. Runtime checks that enforce domain predicates the type system cannot encode (workspace safety, range constraints, protocol validity) are not redundant.
 
