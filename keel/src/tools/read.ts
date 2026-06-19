@@ -89,6 +89,118 @@ function appendTruncationNotice(
   return `${content}\n\n${notice}`;
 }
 
+type TruncationReason = "budget" | "line-limit";
+
+type LineWindowAccumulator = {
+  lineBuffer: string;
+  lineBytes: number;
+  lineNumber: number;
+  countedLines: number;
+  content: string;
+  outputBytes: number;
+  outputLines: number;
+  truncated: boolean;
+  truncatedReason: TruncationReason;
+  firstLineExceedsLimit: boolean;
+  keepReading: boolean;
+  hasCurrentLineContent: boolean;
+};
+
+function createLineWindowAccumulator(): LineWindowAccumulator {
+  return {
+    lineBuffer: "",
+    lineBytes: 0,
+    lineNumber: 1,
+    countedLines: 0,
+    content: "",
+    outputBytes: 0,
+    outputLines: 0,
+    truncated: false,
+    truncatedReason: "budget",
+    firstLineExceedsLimit: false,
+    keepReading: true,
+    hasCurrentLineContent: false,
+  };
+}
+
+function finishAccumulatorLine(acc: LineWindowAccumulator): void {
+  acc.countedLines = acc.lineNumber;
+  acc.lineNumber++;
+  acc.hasCurrentLineContent = false;
+}
+
+function flushAccumulatorOutputLine(acc: LineWindowAccumulator): void {
+  acc.content += acc.lineBuffer;
+  acc.outputBytes += acc.lineBytes;
+  acc.outputLines++;
+  acc.lineBuffer = "";
+  acc.lineBytes = 0;
+  finishAccumulatorLine(acc);
+}
+
+function consumeLinePiece(
+  acc: LineWindowAccumulator,
+  options: NormalizedReadOptions,
+  piece: string,
+  completesLine: boolean,
+): void {
+  if (piece !== "") {
+    acc.hasCurrentLineContent = true;
+  }
+
+  if (acc.lineNumber < options.offset) {
+    if (completesLine) {
+      finishAccumulatorLine(acc);
+    }
+    return;
+  }
+
+  if (acc.outputLines >= options.limit) {
+    acc.truncated = true;
+    acc.truncatedReason = "line-limit";
+    acc.keepReading = false;
+    return;
+  }
+
+  const pieceBytes = Buffer.byteLength(piece, "utf8");
+  const projectedLineBytes = acc.lineBytes + pieceBytes;
+  if (acc.outputBytes + projectedLineBytes > MAX_READ_BYTES) {
+    acc.truncated = true;
+    acc.truncatedReason = "budget";
+    acc.firstLineExceedsLimit = acc.outputLines === 0;
+    acc.keepReading = false;
+    return;
+  }
+
+  acc.lineBuffer += piece;
+  acc.lineBytes = projectedLineBytes;
+
+  if (completesLine) {
+    flushAccumulatorOutputLine(acc);
+  }
+}
+
+function consumeDecodedText(
+  acc: LineWindowAccumulator,
+  options: NormalizedReadOptions,
+  text: string,
+): void {
+  let cursor = 0;
+  while (acc.keepReading) {
+    const newlineIndex = text.indexOf("\n", cursor);
+    if (newlineIndex < 0) {
+      const piece = text.slice(cursor);
+      if (piece !== "") {
+        consumeLinePiece(acc, options, piece, false);
+      }
+      break;
+    }
+
+    consumeLinePiece(acc, options, text.slice(cursor, newlineIndex + 1), true);
+    cursor = newlineIndex + 1;
+  }
+}
+
 function readTextWindow(
   fd: number,
   filePath: string,
@@ -96,89 +208,9 @@ function readTextWindow(
 ): string {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
-  let lineBuffer = "";
-  let lineBytes = 0;
-  let lineNumber = 1;
-  let countedLines = 0;
-  let content = "";
-  let outputBytes = 0;
-  let outputLines = 0;
-  let truncated = false;
-  let truncatedReason: "budget" | "line-limit" = "budget";
-  let firstLineExceedsLimit = false;
-  let keepReading = true;
-  let hasCurrentLineContent = false;
+  const acc = createLineWindowAccumulator();
 
-  const finishLine = (): void => {
-    countedLines = lineNumber;
-    lineNumber++;
-    hasCurrentLineContent = false;
-  };
-
-  const flushOutputLine = (): void => {
-    content += lineBuffer;
-    outputBytes += lineBytes;
-    outputLines++;
-    lineBuffer = "";
-    lineBytes = 0;
-    finishLine();
-  };
-
-  const consumeLinePiece = (piece: string, completesLine: boolean): void => {
-    if (piece !== "") {
-      hasCurrentLineContent = true;
-    }
-
-    if (lineNumber < options.offset) {
-      if (completesLine) {
-        finishLine();
-      }
-      return;
-    }
-
-    if (outputLines >= options.limit) {
-      truncated = true;
-      truncatedReason = "line-limit";
-      keepReading = false;
-      return;
-    }
-
-    const pieceBytes = Buffer.byteLength(piece, "utf8");
-    const projectedLineBytes = lineBytes + pieceBytes;
-    if (outputBytes + projectedLineBytes > MAX_READ_BYTES) {
-      truncated = true;
-      truncatedReason = "budget";
-      firstLineExceedsLimit = outputLines === 0;
-      keepReading = false;
-      return;
-    }
-
-    lineBuffer += piece;
-    lineBytes = projectedLineBytes;
-
-    if (completesLine) {
-      flushOutputLine();
-    }
-  };
-
-  const consumeText = (text: string): void => {
-    let cursor = 0;
-    while (keepReading) {
-      const newlineIndex = text.indexOf("\n", cursor);
-      if (newlineIndex < 0) {
-        const piece = text.slice(cursor);
-        if (piece !== "") {
-          consumeLinePiece(piece, false);
-        }
-        break;
-      }
-
-      consumeLinePiece(text.slice(cursor, newlineIndex + 1), true);
-      cursor = newlineIndex + 1;
-    }
-  };
-
-  while (keepReading) {
+  while (acc.keepReading) {
     const bytesRead = readSync(fd, chunk, 0, chunk.length, null);
     if (bytesRead === 0) break;
 
@@ -187,44 +219,53 @@ function readTextWindow(
       throw binaryFileError("read", filePath);
     }
 
-    consumeText(decodeUtf8("read", filePath, decoder, bytes, { stream: true }));
+    consumeDecodedText(
+      acc,
+      options,
+      decodeUtf8("read", filePath, decoder, bytes, { stream: true }),
+    );
   }
 
-  if (keepReading) {
+  if (acc.keepReading) {
     const remaining = decodeUtf8("read", filePath, decoder);
     if (remaining !== "") {
-      consumeText(remaining);
+      consumeDecodedText(acc, options, remaining);
     }
-    if (keepReading && hasCurrentLineContent) {
-      if (lineNumber < options.offset) {
-        finishLine();
+    if (acc.keepReading && acc.hasCurrentLineContent) {
+      if (acc.lineNumber < options.offset) {
+        finishAccumulatorLine(acc);
       } else {
-        flushOutputLine();
+        flushAccumulatorOutputLine(acc);
       }
     }
   }
 
   if (
-    countedLines < options.offset &&
+    acc.countedLines < options.offset &&
     options.offset !== 1 &&
-    outputLines === 0
+    acc.outputLines === 0
   ) {
     throw new KeelError(
       "tool_read_offset_out_of_range",
-      `read failed: offset ${options.offset} is beyond end of file (${countedLines} lines)`,
-      `Retry read with a smaller offset, or omit offset to read from the start. Available lines: ${countedLines}.`,
+      `read failed: offset ${options.offset} is beyond end of file (${acc.countedLines} lines)`,
+      `Retry read with a smaller offset, or omit offset to read from the start. Available lines: ${acc.countedLines}.`,
     );
   }
 
-  if (firstLineExceedsLimit) {
+  if (acc.firstLineExceedsLimit) {
     return `[Read output truncated: line ${options.offset} exceeds ${formatSize(
       MAX_READ_BYTES,
     )}. Use grep to find a smaller target before reading this file.]`;
   }
 
-  return truncated
-    ? appendTruncationNotice(content, options, outputLines, truncatedReason)
-    : content;
+  return acc.truncated
+    ? appendTruncationNotice(
+        acc.content,
+        options,
+        acc.outputLines,
+        acc.truncatedReason,
+      )
+    : acc.content;
 }
 
 export function executeRead(

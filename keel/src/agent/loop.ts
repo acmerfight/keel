@@ -422,6 +422,39 @@ async function* streamTurnWithOverflowRecovery(
   }
 }
 
+interface WrapUpSummarizeOptions {
+  readonly config: CompactionConfig;
+  readonly state: CompactionState;
+  readonly streamOptions: Omit<LedgerTurnOptions, "getLedger" | "setLedger">;
+  readonly turnText: string;
+  readonly sessionLedger: SessionLedger;
+}
+
+async function* streamWrapUpSummary(
+  options: WrapUpSummarizeOptions,
+): AsyncGenerator<AgentEvent, AgentTurn> {
+  const { config, state, streamOptions, turnText, sessionLedger } = options;
+  const interimReply = finalReplyMessage(turnText);
+  let wrapUpLedger =
+    interimReply !== null
+      ? appendSessionLedgerMessage(sessionLedger, interimReply)
+      : sessionLedger;
+  wrapUpLedger = appendSessionLedgerMessage(wrapUpLedger, {
+    role: "user",
+    content: WRAP_UP_INSTRUCTION,
+  });
+  const setWrapUpLedger = (next: SessionLedger) => {
+    wrapUpLedger = next;
+  };
+  return yield* streamTurnWithOverflowRecovery(config, state, {
+    ...streamOptions,
+    getLedger: () => wrapUpLedger,
+    setLedger: setWrapUpLedger,
+    toolChoice: "none",
+    textPrefix: turnText === "" || turnText.endsWith("\n") ? "" : "\n",
+  });
+}
+
 export async function* runAgentTurn(
   options: RunAgentTurnOptions,
 ): AsyncGenerator<AgentEvent> {
@@ -496,28 +529,12 @@ export async function* runAgentTurn(
     }
 
     if (decision.type === "summarize") {
-      const interimReply = finalReplyMessage(turnResult.text);
-      let wrapUpLedger =
-        interimReply !== null
-          ? appendSessionLedgerMessage(sessionLedger, interimReply)
-          : sessionLedger;
-      wrapUpLedger = appendSessionLedgerMessage(wrapUpLedger, {
-        role: "user",
-        content: WRAP_UP_INSTRUCTION,
-      });
-      const setWrapUpLedger = (next: SessionLedger) => {
-        wrapUpLedger = next;
-      };
-      const wrapUpTurn = yield* streamTurnWithOverflowRecovery(config, state, {
-        provider,
-        systemPrompt,
-        getLedger: () => wrapUpLedger,
-        setLedger: setWrapUpLedger,
-        signal,
-        allowBash,
-        toolChoice: "none",
-        textPrefix:
-          turnResult.text === "" || turnResult.text.endsWith("\n") ? "" : "\n",
+      const wrapUpTurn = yield* streamWrapUpSummary({
+        config,
+        state,
+        streamOptions: { provider, systemPrompt, signal, allowBash },
+        turnText: turnResult.text,
+        sessionLedger,
       });
       const summary =
         wrapUpTurn.text === "" ? MISSING_SUMMARY_NOTICE : wrapUpTurn.text;
