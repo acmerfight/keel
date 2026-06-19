@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgent } from "../../src/agent/loop.ts";
-import { maxTurnFallbackPolicy } from "../../src/agent/stop-policy.ts";
+import {
+  defaultStopPolicy,
+  maxTurnFallbackPolicy,
+} from "../../src/agent/stop-policy.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import {
   createFakeProvider,
@@ -63,6 +66,8 @@ describe("Run Outcome Reporting", () => {
         userMessage: "say hi",
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
       }),
     );
 
@@ -93,6 +98,8 @@ describe("Run Outcome Reporting", () => {
           userMessage: "fix the note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -144,6 +151,8 @@ describe("Run Outcome Reporting", () => {
           userMessage: "edit note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
           costTracking: { model: budgetModel, maxCostUsd: 0.5 },
         }),
       );
@@ -178,6 +187,8 @@ describe("Run Outcome Reporting", () => {
           userMessage: "read the file forever",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -211,6 +222,7 @@ describe("Run Outcome Reporting", () => {
           userMessage: "edit twice",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
           stopPolicy: maxTurnFallbackPolicy(2),
         }),
       );

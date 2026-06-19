@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgent } from "../../src/agent/loop.ts";
+import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import type { LLMProvider } from "../../src/llm/types.ts";
 
@@ -66,6 +67,8 @@ describe("Cost Budget", () => {
           userMessage: "edit note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
           costTracking: {
             model: budgetModel,
             maxCostUsd: 0.5,
@@ -151,6 +154,8 @@ describe("Cost Budget", () => {
           userMessage: "edit note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -210,6 +215,8 @@ describe("Cost Budget", () => {
           userMessage: "edit note twice",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
           costTracking: {
             model: budgetModel,
             maxCostUsd: 0.5,

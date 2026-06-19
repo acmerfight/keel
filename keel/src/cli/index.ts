@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { runAgent } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
+import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import {
   type BashMode,
   type BashPermissionPolicy,
@@ -179,7 +180,8 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         platform: runtime.platform,
       }),
       signal: abortController.signal,
-      ...(bashModeExposesTool(cliArgs.bashMode) ? { allowBash: true } : {}),
+      allowBash: bashModeExposesTool(cliArgs.bashMode),
+      stopPolicy: defaultStopPolicy(),
       ...(bashPermission !== undefined ? { bashPermission } : {}),
       ...(cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
         ? {
