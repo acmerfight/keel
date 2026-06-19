@@ -820,6 +820,231 @@ describe("Edit Tool", () => {
     }
   });
 
+  test(`Given an ASCII punctuation span is copied with smart punctuation,
+    When the edit tool locates the target,
+    Then it replaces the original span without changing unrelated bytes`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "copy.ts"),
+      [
+        "const before = true;",
+        'const label = "don\'t wait...";',
+        "const after = true;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "copy.ts",
+        "const label = “don’t wait…”;",
+        'const label = "done";',
+      );
+
+      // Then
+      expect(result.content).toBe("Edited copy.ts");
+      expect(await readFile(join(workspace, "copy.ts"), "utf8")).toBe(
+        [
+          "const before = true;",
+          'const label = "done";',
+          "const after = true;",
+          "",
+        ].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an inline ASCII punctuation span is copied with smart punctuation,
+    When the edit tool locates the target,
+    Then it replaces only that inline span`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "copy.ts"),
+      ['const label = "don\'t wait...";', ""].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(workspace, "copy.ts", "don’t wait…", "go now");
+
+      // Then
+      expect(result.content).toBe("Edited copy.ts");
+      expect(await readFile(join(workspace, "copy.ts"), "utf8")).toBe(
+        ['const label = "go now";', ""].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a smart punctuation span is copied with ASCII punctuation,
+    When the edit tool locates the target,
+    Then it replaces the original span`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "copy.ts"),
+      [
+        "const before = true;",
+        'const label = "range 1–5 — ready…";',
+        "const after = true;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "copy.ts",
+        'const label = "range 1-5 - ready...";',
+        'const label = "range 1-10 - done";',
+      );
+
+      // Then
+      expect(result.content).toBe("Edited copy.ts");
+      expect(await readFile(join(workspace, "copy.ts"), "utf8")).toBe(
+        [
+          "const before = true;",
+          'const label = "range 1-10 - done";',
+          "const after = true;",
+          "",
+        ].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a smart punctuation span reaches the end of the file,
+    When the edit tool locates the target with ASCII punctuation,
+    Then it maps the replacement to the original terminal span`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, "copy.txt"), "range 1–5…", "utf8");
+
+    try {
+      // When
+      const result = executeEdit(workspace, "copy.txt", "range 1-5...", "done");
+
+      // Then
+      expect(result.content).toBe("Edited copy.txt");
+      expect(await readFile(join(workspace, "copy.txt"), "utf8")).toBe("done");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given punctuation matching finds multiple candidate spans,
+    When the edit tool validates the target,
+    Then it rejects the edit as ambiguous and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const original = [
+      'const label = "range 1-5";',
+      'const label = "range 1–5";',
+      "",
+    ].join("\n");
+    await writeFile(join(workspace, "copy.ts"), original, "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () =>
+          executeEdit(
+            workspace,
+            "copy.ts",
+            'const label = "range 1—5";',
+            'const label = "range 1-10";',
+          ),
+        "tool_old_string_not_unique",
+        "old string appears 2 times",
+      );
+      expect(await readFile(join(workspace, "copy.ts"), "utf8")).toBe(original);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given punctuation normalization only matches inside an ellipsis,
+    When the edit tool validates the target,
+    Then it does not replace a partial punctuation expansion`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const original = ['const label = "wait…";', ""].join("\n");
+    await writeFile(join(workspace, "copy.ts"), original, "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () => executeEdit(workspace, "copy.ts", ".", "!"),
+        "tool_old_string_not_found",
+        "old string not found",
+      );
+      expect(await readFile(join(workspace, "copy.ts"), "utf8")).toBe(original);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an ellipsis follows a literal period,
+    When the edit tool skips a partial punctuation expansion,
+    Then it can still match the adjacent complete ellipsis`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, "copy.txt"), "x.…", "utf8");
+
+    try {
+      // When
+      const result = executeEdit(workspace, "copy.txt", "...", "done");
+
+      // Then
+      expect(result.content).toBe("Edited copy.txt");
+      expect(await readFile(join(workspace, "copy.txt"), "utf8")).toBe(
+        "x.done",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given replaceAll is enabled for a punctuation-only mismatch,
+    When the edit tool validates exact occurrences,
+    Then it reports not found and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const original = ['const label = "range 1–5";', ""].join("\n");
+    await writeFile(join(workspace, "copy.ts"), original, "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () =>
+          executeEdit(
+            workspace,
+            "copy.ts",
+            'const label = "range 1-5";',
+            'const label = "range 1-10";',
+            { replaceAll: true },
+          ),
+        "tool_old_string_not_found",
+        "old string not found",
+      );
+      expect(await readFile(join(workspace, "copy.ts"), "utf8")).toBe(original);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an edit target differs only by common indentation,
     When the edit tool locates the target,
     Then it applies the requested replacement`, async () => {

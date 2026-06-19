@@ -28,6 +28,12 @@ interface SearchBlock {
   readonly endsWithNewline: boolean;
 }
 
+interface NormalizedTypographicPunctuation {
+  readonly text: string;
+  readonly sourceIndexByNormalizedIndex: readonly number[];
+  readonly sourceLength: number;
+}
+
 function exactMatches(
   content: string,
   search: string,
@@ -79,6 +85,63 @@ function splitLineRecords(content: string): readonly LineRecord[] {
 
 function trailingWhitespaceTrimmed(line: string): string {
   return line.replace(/[ \t]+$/u, "");
+}
+
+function typographicPunctuationReplacement(character: string): string {
+  switch (character) {
+    case "\u2018":
+    case "\u2019":
+    case "\u201a":
+    case "\u201b":
+      return "'";
+    case "\u201c":
+    case "\u201d":
+    case "\u201e":
+    case "\u201f":
+      return '"';
+    case "\u2010":
+    case "\u2011":
+    case "\u2012":
+    case "\u2013":
+    case "\u2014":
+    case "\u2015":
+      return "-";
+    case "\u2026":
+      return "...";
+    default:
+      return character;
+  }
+}
+
+function typographicPunctuationNormalizedWithSourceMap(
+  text: string,
+): NormalizedTypographicPunctuation {
+  const normalized: string[] = [];
+  const sourceIndexByNormalizedIndex: number[] = [];
+  for (let index = 0; index < text.length; index++) {
+    const replacement = typographicPunctuationReplacement(text.charAt(index));
+    normalized.push(replacement);
+    for (
+      let replacementIndex = 0;
+      replacementIndex < replacement.length;
+      replacementIndex++
+    ) {
+      sourceIndexByNormalizedIndex.push(index);
+    }
+  }
+  return {
+    text: normalized.join(""),
+    sourceIndexByNormalizedIndex,
+    sourceLength: text.length,
+  };
+}
+
+function typographicPunctuationNormalized(text: string): string {
+  const normalized: string[] = [];
+  for (let index = 0; index < text.length; index++) {
+    normalized.push(typographicPunctuationReplacement(text.charAt(index)));
+  }
+  return normalized.join("");
 }
 
 function leadingWhitespaceLength(line: string): number {
@@ -212,6 +275,71 @@ function uniqueMatchResult(matches: readonly EditMatchSpan[]): EditMatchResult {
   return { status: "matched", match };
 }
 
+function typographicPunctuationSourceSpan(
+  normalized: NormalizedTypographicPunctuation,
+  match: EditMatchSpan,
+): EditMatchSpan | null {
+  const sourceStart = normalized.sourceIndexByNormalizedIndex[match.index];
+  /* v8 ignore next 3: typographic punctuation scan only returns spans inside the normalized text. */
+  if (sourceStart === undefined) {
+    throw new Error(
+      "edit match invariant violated: punctuation span is invalid",
+    );
+  }
+  if (
+    match.index > 0 &&
+    normalized.sourceIndexByNormalizedIndex[match.index - 1] === sourceStart
+  ) {
+    return null;
+  }
+
+  const normalizedEnd = match.index + match.length;
+  let sourceEnd: number;
+  if (normalizedEnd >= normalized.sourceIndexByNormalizedIndex.length) {
+    sourceEnd = normalized.sourceLength;
+  } else {
+    const endSourceIndex =
+      normalized.sourceIndexByNormalizedIndex[normalizedEnd];
+    /* v8 ignore next 3: typographic punctuation scan only returns spans inside the normalized text. */
+    if (endSourceIndex === undefined) {
+      throw new Error(
+        "edit match invariant violated: punctuation span is invalid",
+      );
+    }
+    if (
+      normalizedEnd > 0 &&
+      normalized.sourceIndexByNormalizedIndex[normalizedEnd - 1] ===
+        endSourceIndex
+    ) {
+      return null;
+    }
+    sourceEnd = endSourceIndex;
+  }
+
+  return { index: sourceStart, length: sourceEnd - sourceStart };
+}
+
+function typographicPunctuationMatches(
+  content: string,
+  search: string,
+): readonly EditMatchSpan[] {
+  const normalizedContent =
+    typographicPunctuationNormalizedWithSourceMap(content);
+  const normalizedSearch = typographicPunctuationNormalized(search);
+  const matches: EditMatchSpan[] = [];
+  let start = 0;
+  while (true) {
+    const index = normalizedContent.text.indexOf(normalizedSearch, start);
+    if (index < 0) return matches;
+    const sourceSpan = typographicPunctuationSourceSpan(normalizedContent, {
+      index,
+      length: normalizedSearch.length,
+    });
+    if (sourceSpan !== null) matches.push(sourceSpan);
+    start = index + 1;
+  }
+}
+
 export function locateUniqueEditSpan(
   content: string,
   search: string,
@@ -221,6 +349,11 @@ export function locateUniqueEditSpan(
 
   const lineTrimmed = lineBasedMatches(content, search, lineTrimmedMatches);
   if (lineTrimmed.length > 0) return uniqueMatchResult(lineTrimmed);
+
+  const typographicPunctuation = typographicPunctuationMatches(content, search);
+  if (typographicPunctuation.length > 0) {
+    return uniqueMatchResult(typographicPunctuation);
+  }
 
   const indentationFlexible = lineBasedMatches(
     content,
