@@ -110,6 +110,10 @@ When `?` IS correct:
 
 Litmus test: if you would write `?? defaultValue` every time you read this field, it is required — the default belongs in a factory, not in the type.
 
+Corollary: trust correct types. Do not handle states the type system excludes — in source or tests. A guard whose removal still compiles is dead code.
+
+Decision: "Does the type permit this state?" No → delete the check. Yes → narrow the type.
+
 ## Development
 
 **BDD: test first, then implement.** Every feature starts with a failing test in GWTE format. Write the test, watch it fail, then write the minimum code to make it pass. Do not write implementation code without a corresponding test.
