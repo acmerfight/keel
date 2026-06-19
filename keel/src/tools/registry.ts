@@ -169,7 +169,7 @@ const editTool: OpenAICompatibleToolDefinition = {
       "Replace text in an existing workspace file. oldString should be copied from the current file content and identify one target unless replaceAll is true.",
       "Use when: changing an existing file after read confirmed the exact target text.",
       "Do not use when: creating a new file (use write), or when you have not read the file and would be guessing oldString from memory.",
-      "Keel can correct harmless line-ending, trailing-space, and common-indentation differences while preserving unrelated file bytes.",
+      "For single-target edits, Keel can correct harmless line-ending, trailing-space, smart-punctuation, and common-indentation differences while preserving unrelated file bytes.",
       "Large generated files, bundles, and logs may exceed the edit safety limit; inspect them with grep/read and use a targeted external command when appropriate.",
       "On failure: if the string is not found, read the file and retry with the exact current text; if it appears more than once, include more surrounding lines in oldString to make it unique.",
     ].join("\n"),
