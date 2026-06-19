@@ -121,6 +121,46 @@ describe("CLI Output", () => {
     expect(finalEnd?.stopReason).toBe("completed");
   });
 
+  test(`Given an ls tool call lists the workspace root,
+    When the CLI prints agent events,
+    Then the progress label shows the default directory`, async () => {
+    // Given
+    let stdout = "";
+    let stderr = "";
+
+    // When
+    const finalEnd = await printAgentEvents(
+      agentEvents([
+        {
+          type: "tool_start",
+          toolCall: {
+            id: "ls_1",
+            tool: "ls",
+          },
+        },
+        {
+          type: "end",
+          usage: ZERO_USAGE,
+          turns: 1,
+          stopReason: "completed",
+        },
+      ]),
+      {
+        writeStdout: (text) => {
+          stdout += text;
+        },
+        writeStderr: (text) => {
+          stderr += text;
+        },
+      },
+    );
+
+    // Then
+    expect(stdout).toBe("");
+    expect(stderr).toBe("Tool: ls .\n");
+    expect(finalEnd?.stopReason).toBe("completed");
+  });
+
   test(`Given status line text contains unsafe terminal bytes,
     When it is sanitized,
     Then controls are rendered visibly and the line is capped`, () => {
