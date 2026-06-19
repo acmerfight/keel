@@ -443,12 +443,12 @@ export async function runInteractiveSession(
       resolved ??= options.resolveProvider(userMessage);
       const messagesBeforeTurn = messages.slice();
       const turnStartSequence = lineReader.sequence();
-      const drainedSteeringLines: QueuedLine[] = [];
+      const drainedInjectedLines: QueuedLine[] = [];
       const deferredInputLines: QueuedLine[] = [];
       const turnAbortController = new AbortController();
       activeAbortController = turnAbortController;
       messages.push({ role: "user", content: userMessage });
-      let deferRemainingSteeringInput = false;
+      let deferRemainingInjectedInput = false;
 
       try {
         const stream = runAgentTurn({
@@ -473,33 +473,31 @@ export async function runInteractiveSession(
             ? { contextCompaction: resolved.contextCompaction }
             : {}),
           drainInjectedUserMessages: () => {
-            const steeringLines = lineReader
+            const queuedLines = lineReader
               .drainLinesAfter(turnStartSequence)
               .map((queuedLine) => ({
                 sequence: queuedLine.sequence,
                 line: queuedLine.line.trim(),
               }))
               .filter((queuedLine) => queuedLine.line !== "");
-            if (deferRemainingSteeringInput) {
-              deferredInputLines.push(...steeringLines);
+            if (deferRemainingInjectedInput) {
+              deferredInputLines.push(...queuedLines);
               return [];
             }
-            const firstCommandIndex = steeringLines.findIndex(
+            const firstCommandIndex = queuedLines.findIndex(
               (queuedLine) =>
                 parseManualCompactCommand(queuedLine.line) !== null,
             );
-            const activeSteeringLines =
+            const injectableLines =
               firstCommandIndex < 0
-                ? steeringLines
-                : steeringLines.slice(0, firstCommandIndex);
-            drainedSteeringLines.push(...activeSteeringLines);
+                ? queuedLines
+                : queuedLines.slice(0, firstCommandIndex);
+            drainedInjectedLines.push(...injectableLines);
             if (firstCommandIndex >= 0) {
-              deferRemainingSteeringInput = true;
-              deferredInputLines.push(
-                ...steeringLines.slice(firstCommandIndex),
-              );
+              deferRemainingInjectedInput = true;
+              deferredInputLines.push(...queuedLines.slice(firstCommandIndex));
             }
-            return activeSteeringLines.map((content) => ({
+            return injectableLines.map((content) => ({
               role: "user",
               content: content.line,
             }));
@@ -509,7 +507,7 @@ export async function runInteractiveSession(
         if (turnAbortController.signal.aborted) {
           messages.splice(0, messages.length, ...messagesBeforeTurn);
           const restoredLines = [
-            ...drainedSteeringLines,
+            ...drainedInjectedLines,
             ...deferredInputLines,
           ];
           restoreDrainedInput(restoredLines);
@@ -531,7 +529,7 @@ export async function runInteractiveSession(
           throw error;
         }
         messages.splice(0, messages.length, ...messagesBeforeTurn);
-        const restoredLines = [...drainedSteeringLines, ...deferredInputLines];
+        const restoredLines = [...drainedInjectedLines, ...deferredInputLines];
         restoreDrainedInput(restoredLines);
         options.writeStdout("\n");
       } finally {
