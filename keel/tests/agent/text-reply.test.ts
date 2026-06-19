@@ -401,7 +401,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        drainSteeringMessages: () => {
+        drainInjectedUserMessages: () => {
           if (drained) {
             return [];
           }
@@ -478,7 +478,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        drainSteeringMessages: () => {
+        drainInjectedUserMessages: () => {
           if (drained) {
             return [];
           }

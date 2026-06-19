@@ -81,7 +81,7 @@ export interface RunAgentOptions {
   readonly contextCompaction?: ContextCompactionOptions;
 }
 
-type SteeringMessage = Extract<Message, { readonly role: "user" }>;
+type InjectedUserMessage = Extract<Message, { readonly role: "user" }>;
 
 export interface RunAgentTurnOptions {
   readonly workspace: string;
@@ -96,9 +96,9 @@ export interface RunAgentTurnOptions {
   readonly bashPermission?: BashPermissionPolicy;
   readonly stopPolicy?: AgentStopPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
-  readonly drainSteeringMessages?: () =>
-    | readonly SteeringMessage[]
-    | Promise<readonly SteeringMessage[]>;
+  readonly drainInjectedUserMessages?: () =>
+    | readonly InjectedUserMessage[]
+    | Promise<readonly InjectedUserMessage[]>;
 }
 
 class ContextOverflowBeforeAssistantError extends Error {
@@ -173,6 +173,25 @@ function finishAgentTurn(
     text: assistantText.join(""),
     toolCalls: pendingToolCalls,
     usage,
+  };
+}
+
+function buildCostReport(
+  usage: Usage,
+  costTracking: CostTrackingOptions | undefined,
+): CostReport | undefined {
+  if (costTracking === undefined) {
+    return undefined;
+  }
+  const spentUsd = calculateCostUsd(usage, costTracking.model);
+  const budgetExceeded =
+    costTracking.maxCostUsd !== undefined && spentUsd > costTracking.maxCostUsd;
+  return {
+    spentUsd,
+    ...(costTracking.maxCostUsd !== undefined
+      ? { maxUsd: costTracking.maxCostUsd }
+      : {}),
+    budgetExceeded,
   };
 }
 
@@ -285,7 +304,7 @@ export async function* runAgentTurn(
     allowBash = false,
     bashPermission,
     stopPolicy = defaultStopPolicy(),
-    drainSteeringMessages,
+    drainInjectedUserMessages,
   } = options;
   let sessionLedger = sessionLedgerFromMessages(messages);
   // During a turn the ledger owns transcript mutations; messages is only the
@@ -306,23 +325,6 @@ export async function* runAgentTurn(
     outputTokens: 0,
   };
   let contextAccounting: ContextCompactionAccountingSnapshot | undefined;
-
-  function reportCost(usage: Usage): CostReport | undefined {
-    if (costTracking === undefined) {
-      return undefined;
-    }
-    const spentUsd = calculateCostUsd(usage, costTracking.model);
-    const budgetExceeded =
-      costTracking.maxCostUsd !== undefined &&
-      spentUsd > costTracking.maxCostUsd;
-    return {
-      spentUsd,
-      ...(costTracking.maxCostUsd !== undefined
-        ? { maxUsd: costTracking.maxCostUsd }
-        : {}),
-      budgetExceeded,
-    };
-  }
 
   async function compactContextIfPossible(
     streamOptions: LedgerTurnOptions,
@@ -440,7 +442,7 @@ export async function* runAgentTurn(
       allowBash,
     });
     totalUsage = addUsage(totalUsage, turnResult.usage);
-    const cost = reportCost(totalUsage);
+    const cost = buildCostReport(totalUsage, costTracking);
 
     const decision = stopPolicy.shouldStopAfterTurn({
       completedTurns,
@@ -504,7 +506,7 @@ export async function* runAgentTurn(
         ),
       );
       totalUsage = addUsage(totalUsage, wrapUpTurn.usage);
-      const finalCost = reportCost(totalUsage);
+      const finalCost = buildCostReport(totalUsage, costTracking);
       yield {
         type: "end",
         usage: totalUsage,
@@ -556,11 +558,11 @@ export async function* runAgentTurn(
       );
     }
 
-    if (drainSteeringMessages !== undefined && !signal.aborted) {
+    if (drainInjectedUserMessages !== undefined && !signal.aborted) {
       setSessionLedger(
         appendSessionLedgerMessages(
           sessionLedger,
-          await drainSteeringMessages(),
+          await drainInjectedUserMessages(),
         ),
       );
     }

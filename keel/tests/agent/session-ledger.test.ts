@@ -179,7 +179,7 @@ describe("Conversation History", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        drainSteeringMessages: () => [
+        drainInjectedUserMessages: () => [
           { role: "user", content: "Also explain the scripts." },
         ],
       }),
