@@ -192,7 +192,7 @@ describe("tool registry", () => {
       risk: tool.risk,
       concurrency: tool.concurrency,
       hasFormatLabel: typeof tool.display.formatLabel === "function",
-      execute: tool.execute,
+      hasExecute: typeof tool.execute === "function",
     }));
 
     expect(contracts).toEqual([
@@ -203,7 +203,7 @@ describe("tool registry", () => {
         risk: { kind: "workspace-read" },
         concurrency: { kind: "parallel-safe" },
         hasFormatLabel: true,
-        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+        hasExecute: true,
       },
       {
         name: "ls",
@@ -212,7 +212,7 @@ describe("tool registry", () => {
         risk: { kind: "workspace-read" },
         concurrency: { kind: "parallel-safe" },
         hasFormatLabel: true,
-        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+        hasExecute: true,
       },
       {
         name: "glob",
@@ -221,7 +221,7 @@ describe("tool registry", () => {
         risk: { kind: "workspace-read" },
         concurrency: { kind: "parallel-safe" },
         hasFormatLabel: true,
-        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+        hasExecute: true,
       },
       {
         name: "grep",
@@ -230,7 +230,7 @@ describe("tool registry", () => {
         risk: { kind: "workspace-read" },
         concurrency: { kind: "parallel-safe" },
         hasFormatLabel: true,
-        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+        hasExecute: true,
       },
       {
         name: "edit",
@@ -242,7 +242,7 @@ describe("tool registry", () => {
           reason: "May mutate workspace files.",
         },
         hasFormatLabel: true,
-        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+        hasExecute: true,
       },
       {
         name: "write",
@@ -254,7 +254,7 @@ describe("tool registry", () => {
           reason: "Creates workspace files.",
         },
         hasFormatLabel: true,
-        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+        hasExecute: true,
       },
       {
         name: "bash",
@@ -266,7 +266,7 @@ describe("tool registry", () => {
           reason: "May mutate workspace or depend on process state.",
         },
         hasFormatLabel: true,
-        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+        hasExecute: true,
       },
     ]);
   });
