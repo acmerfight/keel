@@ -462,7 +462,7 @@ describe("CLI File Editing", () => {
           (tool: { readonly function?: { readonly name?: string } }) =>
             tool.function?.name,
         ),
-      ).toEqual(["read", "glob", "grep", "edit", "write"]);
+      ).toEqual(["read", "ls", "glob", "grep", "edit", "write"]);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -534,6 +534,7 @@ describe("CLI File Editing", () => {
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
       expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([
         "read",
+        "ls",
         "glob",
         "grep",
         "edit",
@@ -600,6 +601,7 @@ describe("CLI File Editing", () => {
       const request = requestWithToolsSchema.parse(JSON.parse(capturedBody));
       expect(request.tools?.map((tool) => tool.function?.name)).toEqual([
         "read",
+        "ls",
         "glob",
         "grep",
         "edit",
@@ -781,6 +783,7 @@ describe("CLI File Editing", () => {
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
       expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([
         "read",
+        "ls",
         "glob",
         "grep",
         "edit",

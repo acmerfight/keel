@@ -27,7 +27,7 @@ src/
   llm/         → Provider abstraction (DeepSeek, Kimi, Qwen, fake, OpenAI-compatible shared runtime)
   permissions/ → Tool permission policies
   testing/     → Test support code (CLI harnesses, fixture factories)
-  tools/       → bash, edit, glob, grep, read, write
+  tools/       → bash, edit, glob, grep, ls, read, write
 ```
 
 Layer rules (enforced by `tests/invariants/boundaries.test.ts`):

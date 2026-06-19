@@ -8,6 +8,7 @@ const recoverableToolErrorCodes = [
   "tool_edit_no_op",
   "tool_file_too_large",
   "tool_invalid_pattern",
+  "tool_invalid_ls_options",
   "tool_not_file",
   "tool_not_directory",
   "tool_old_string_not_found",

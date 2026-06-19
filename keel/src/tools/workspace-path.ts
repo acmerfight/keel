@@ -3,7 +3,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { KeelError } from "../core/error.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 
-type FileToolName = "edit" | "glob" | "grep" | "read" | "write";
+type FileToolName = "edit" | "glob" | "grep" | "ls" | "read" | "write";
 
 export interface WorkspaceTarget {
   readonly workspacePath: string;

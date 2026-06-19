@@ -8,6 +8,7 @@ import { executeBash } from "./bash.ts";
 import { executeEdit } from "./edit.ts";
 import { executeGlob } from "./glob.ts";
 import { executeGrep } from "./grep.ts";
+import { executeLs } from "./ls.ts";
 import { executeRead } from "./read.ts";
 import type { ToolCall } from "./registry.ts";
 import { executeWrite } from "./write.ts";
@@ -66,6 +67,20 @@ export async function executeToolCall(
         const result = await executeGrep(workspace, toolCall.pattern, {
           ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
           signal,
+        });
+        return { content: result.content, ok: true };
+      } catch (error) {
+        if (!isRecoverableToolError(error)) {
+          throw error;
+        }
+        return { content: toolFailureMessage(error), ok: false };
+      }
+    }
+    case "ls": {
+      try {
+        const result = await executeLs(workspace, {
+          ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
+          ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
         });
         return { content: result.content, ok: true };
       } catch (error) {

@@ -10,7 +10,7 @@ import {
   fakeGlobResponse,
   fakeResponse,
 } from "../../src/llm/providers/fake.ts";
-import type { LLMEvent, LLMProvider, Message } from "../../src/llm/types.ts";
+import type { LLMProvider, Message } from "../../src/llm/types.ts";
 
 const ZERO_USAGE = {
   inputTokens: 0,
@@ -29,39 +29,7 @@ async function collect(
   return events;
 }
 
-async function collectProviderEvents(
-  provider: LLMProvider,
-): Promise<LLMEvent[]> {
-  const events: LLMEvent[] = [];
-  for await (const event of provider.stream({
-    systemPrompt: "You are helpful.",
-    messages: [],
-    signal: new AbortController().signal,
-  })) {
-    events.push(event);
-  }
-  return events;
-}
-
 describe("File Discovery", () => {
-  test(`Given the fake provider is scripted to glob from the workspace root,
-    When it streams tool events,
-    Then the glob call omits the optional path`, async () => {
-    // Given
-    const provider = createFakeProvider([fakeGlobResponse("**/*.test.ts")]);
-
-    // When
-    const events = await collectProviderEvents(provider);
-
-    // Then
-    expect(events[0]).toEqual({
-      type: "tool_call",
-      id: "fake_tool_call_1",
-      tool: "glob",
-      pattern: "**/*.test.ts",
-    });
-  });
-
   test(`Given the assistant needs to discover files by name,
     When the agent runs the glob tool,
     Then the discovered path is returned as tool output before the final answer`, async () => {
@@ -108,6 +76,94 @@ describe("File Discovery", () => {
       expect(events).toContainEqual({
         type: "text",
         text: "Found the validator test.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user asks about a known directory,
+    When the assistant lists the directory before reading a file,
+    Then the directory entries are available to the next model turn`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-discovery-"));
+    await mkdir(join(workspace, "src", "tools"), { recursive: true });
+    await writeFile(
+      join(workspace, "src", "tools", "edit.ts"),
+      "export const edit = true;\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "src", "tools", "glob.ts"),
+      "export const glob = true;\n",
+      "utf8",
+    );
+
+    let turn = 0;
+    let afterLsMessages: readonly Message[] = [];
+    let afterReadMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "directory-discovery-provider",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "list_tools",
+            tool: "ls",
+            path: "src/tools",
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          afterLsMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "read_edit_tool",
+            tool: "read",
+            path: "src/tools/edit.ts",
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        afterReadMessages = options.messages;
+        yield { type: "text", text: "Listed and read the edit tool." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "inspect src/tools",
+          systemPrompt: "You are a helpful assistant.",
+          signal: new AbortController().signal,
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(afterLsMessages).toContainEqual({
+        role: "tool",
+        toolCallId: "list_tools",
+        content: ["edit.ts", "glob.ts"].join("\n"),
+      });
+      expect(afterReadMessages).toContainEqual({
+        role: "tool",
+        toolCallId: "read_edit_tool",
+        content: "export const edit = true;\n",
+      });
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Listed and read the edit tool.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
