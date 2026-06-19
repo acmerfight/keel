@@ -396,6 +396,10 @@ describe("Context Compaction", () => {
         limit: 25,
       },
       {
+        id: "list_root",
+        tool: "ls",
+      },
+      {
         id: "glob_tests",
         tool: "glob",
         pattern: "**/*.test.ts",

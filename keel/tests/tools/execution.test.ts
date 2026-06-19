@@ -73,6 +73,59 @@ describe("Tool Execution", () => {
     }
   });
 
+  test(`Given an ls tool call lists the workspace with only a limit,
+    When the tool execution layer handles the call,
+    Then it executes the ls tool without serializing a path`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tool-execution-"));
+    await writeFile(join(workspace, "note.txt"), "hello\n", "utf8");
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        toolCall: {
+          id: "ls_1",
+          tool: "ls",
+          limit: 1,
+        },
+        signal: new AbortController().signal,
+        allowBash: false,
+      });
+
+      // Then
+      expect(result).toEqual({
+        ok: true,
+        content: "note.txt",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an ls tool call hits an unexpected workspace error,
+    When the tool execution layer handles the call,
+    Then it rethrows the fatal error instead of reporting recoverable output`, async () => {
+    // Given
+    const workspace = join(
+      tmpdir(),
+      `keel-tool-execution-missing-${crypto.randomUUID()}`,
+    );
+
+    // When / Then
+    await expect(
+      executeToolCall({
+        workspace,
+        toolCall: {
+          id: "ls_1",
+          tool: "ls",
+        },
+        signal: new AbortController().signal,
+        allowBash: false,
+      }),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   test.skipIf(process.platform === "win32")(
     `Given a glob tool call hits a ripgrep filesystem failure,
     When the tool execution layer handles the call,
