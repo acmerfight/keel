@@ -1,4 +1,4 @@
-import type { ZodType } from "zod";
+import type { z } from "zod";
 import {
   bashToolArgumentsSchema,
   editToolArgumentsSchema,
@@ -19,9 +19,20 @@ interface ToolArgDefinition {
   readonly maximum?: number;
 }
 
-interface ToolArgsSpec<Args> {
-  readonly schema: ZodType<Args>;
-  readonly fields: Readonly<Record<string, ToolArgDefinition>>;
+type ToolArgShape = z.ZodRawShape;
+
+type ToolArgFields<Shape extends ToolArgShape> = Readonly<{
+  [Field in keyof Shape & string]: ToolArgDefinition;
+}>;
+
+type ToolArgsSchema<Shape extends ToolArgShape> = z.ZodObject<
+  Shape,
+  z.core.$ZodObjectConfig
+>;
+
+interface ToolArgsSpec<Shape extends ToolArgShape> {
+  readonly schema: ToolArgsSchema<Shape>;
+  readonly fields: ToolArgFields<Shape>;
 }
 
 type ToolPermission<Args> =
@@ -56,13 +67,13 @@ interface BuiltinToolExecution {
   readonly owner: "executeToolCall";
 }
 
-interface BuiltinTool<Name extends string, Args> {
+interface BuiltinTool<Name extends string, Shape extends ToolArgShape> {
   readonly name: Name;
   readonly description: string;
-  readonly args: ToolArgsSpec<Args>;
-  readonly permission: ToolPermission<Args>;
+  readonly args: ToolArgsSpec<Shape>;
+  readonly permission: ToolPermission<z.infer<ToolArgsSchema<Shape>>>;
   readonly output: ToolOutput;
-  readonly display: ToolDisplay<Args>;
+  readonly display: ToolDisplay<z.infer<ToolArgsSchema<Shape>>>;
   readonly risk: ToolRisk;
   readonly concurrency: ToolConcurrency;
   readonly execute: BuiltinToolExecution;
@@ -71,20 +82,24 @@ interface BuiltinTool<Name extends string, Args> {
 interface ToolArgOptions {
   readonly required: boolean;
   readonly description: string;
-  readonly minimum?: number;
+}
+
+interface IntegerToolArgOptions extends ToolArgOptions {
+  readonly minimum: number;
   readonly maximum?: number;
 }
 
-function defineTool<const Name extends string, Args>(
-  tool: BuiltinTool<Name, Args>,
-): BuiltinTool<Name, Args> {
+function defineTool<
+  const Name extends string,
+  const Shape extends ToolArgShape,
+>(tool: BuiltinTool<Name, Shape>): BuiltinTool<Name, Shape> {
   return tool;
 }
 
-function toolArgs<Args>(
-  schema: ZodType<Args>,
-  fields: Readonly<Record<string, ToolArgDefinition>>,
-): ToolArgsSpec<Args> {
+function toolArgs<const Shape extends ToolArgShape>(
+  schema: ToolArgsSchema<Shape>,
+  fields: ToolArgFields<Shape>,
+): ToolArgsSpec<Shape> {
   return { schema, fields };
 }
 
@@ -96,12 +111,12 @@ function stringArg(options: ToolArgOptions): ToolArgDefinition {
   };
 }
 
-function integerArg(options: ToolArgOptions): ToolArgDefinition {
+function integerArg(options: IntegerToolArgOptions): ToolArgDefinition {
   return {
     type: "integer",
     description: options.description,
     required: options.required,
-    ...(options.minimum !== undefined ? { minimum: options.minimum } : {}),
+    minimum: options.minimum,
     ...(options.maximum !== undefined ? { maximum: options.maximum } : {}),
   };
 }

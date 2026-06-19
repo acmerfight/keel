@@ -1,10 +1,73 @@
 import { describe, expect, test } from "vitest";
+import { z } from "zod";
 import { builtinTools } from "../../src/tools/builtin.ts";
 import {
   openAICompatibleTools,
   toolCallArguments,
   toolCallFromParsedArguments,
 } from "../../src/tools/registry.ts";
+
+type ProviderField = {
+  readonly type: "string" | "integer" | "boolean";
+  readonly required: boolean;
+  readonly minimum?: number;
+  readonly maximum?: number;
+};
+
+function inclusiveIntegerMinimum(
+  schemaField: z.core.JSONSchema.JSONSchema,
+): number | undefined {
+  if (typeof schemaField.minimum === "number") {
+    return schemaField.minimum;
+  }
+
+  if (
+    schemaField.type === "integer" &&
+    typeof schemaField.exclusiveMinimum === "number"
+  ) {
+    return schemaField.exclusiveMinimum + 1;
+  }
+
+  return undefined;
+}
+
+function inclusiveIntegerMaximum(
+  schemaField: z.core.JSONSchema.JSONSchema,
+): number | undefined {
+  if (
+    schemaField.type === "integer" &&
+    schemaField.maximum === Number.MAX_SAFE_INTEGER
+  ) {
+    return undefined;
+  }
+
+  if (typeof schemaField.maximum === "number") {
+    return schemaField.maximum;
+  }
+
+  if (
+    schemaField.type === "integer" &&
+    typeof schemaField.exclusiveMaximum === "number"
+  ) {
+    return schemaField.exclusiveMaximum - 1;
+  }
+
+  return undefined;
+}
+
+function validProviderValue(field: ProviderField): string | number | boolean {
+  switch (field.type) {
+    case "string":
+      return "value";
+    case "integer":
+      if (field.minimum === undefined) {
+        throw new Error("integer provider field is missing minimum");
+      }
+      return field.minimum;
+    case "boolean":
+      return true;
+  }
+}
 
 describe("tool registry", () => {
   test(`Given builtin tools declare display contracts,
@@ -28,9 +91,15 @@ describe("tool registry", () => {
     expect(
       globTool.display.formatLabel({ pattern: "**/*.ts", path: "src" }),
     ).toBe("glob **/*.ts src");
+    expect(globTool.display.formatLabel({ pattern: "**/*.ts" })).toBe(
+      "glob **/*.ts",
+    );
     expect(grepTool.display.formatLabel({ pattern: "needle" })).toBe(
       "grep needle",
     );
+    expect(
+      grepTool.display.formatLabel({ pattern: "needle", path: "src" }),
+    ).toBe("grep needle src");
     expect(
       editTool.display.formatLabel({
         path: "a.ts",
@@ -186,6 +255,67 @@ describe("tool registry", () => {
       write: { fields: ["path", "content"], required: ["path", "content"] },
       bash: { fields: ["command", "timeoutMs"], required: ["command"] },
     });
+  });
+
+  test(`Given builtin tools declare arguments in Zod and provider metadata,
+    When metadata is compared with generated JSON schema,
+    Then keys requiredness types and numeric bounds stay equivalent`, () => {
+    for (const tool of builtinTools) {
+      const jsonSchema = z.toJSONSchema(tool.args.schema);
+      const schemaFields = jsonSchema.properties ?? {};
+      const metadataFields = tool.args.fields;
+      const fieldKeys = Object.keys(metadataFields).sort();
+      const requiredFields = Object.entries(metadataFields)
+        .filter(([, field]) => field.required)
+        .map(([name]) => name)
+        .sort();
+      const completeArgs = Object.fromEntries(
+        Object.entries(metadataFields).map(([name, field]) => [
+          name,
+          validProviderValue(field),
+        ]),
+      );
+
+      expect(jsonSchema.type, `${tool.name} schema must be an object`).toBe(
+        "object",
+      );
+      expect(
+        jsonSchema.additionalProperties,
+        `${tool.name} schema must reject unknown fields`,
+      ).toBe(false);
+      expect(
+        Object.keys(schemaFields).sort(),
+        `${tool.name} fields/schema key mismatch`,
+      ).toEqual(fieldKeys);
+      expect(
+        [...(jsonSchema.required ?? [])].sort(),
+        `${tool.name} required field drift`,
+      ).toEqual(requiredFields);
+      expect(
+        tool.args.schema.safeParse(completeArgs).success,
+        `${tool.name} metadata-derived arguments must parse`,
+      ).toBe(true);
+
+      for (const [fieldName, field] of Object.entries(metadataFields)) {
+        const schemaField = schemaFields[fieldName];
+
+        if (schemaField === undefined || typeof schemaField === "boolean") {
+          throw new Error(`${tool.name}.${fieldName} schema field is missing`);
+        }
+
+        expect(schemaField.type, `${tool.name}.${fieldName} type drift`).toBe(
+          field.type,
+        );
+        expect(
+          inclusiveIntegerMinimum(schemaField),
+          `${tool.name}.${fieldName} minimum drift`,
+        ).toBe(field.minimum);
+        expect(
+          inclusiveIntegerMaximum(schemaField),
+          `${tool.name}.${fieldName} maximum drift`,
+        ).toBe(field.maximum);
+      }
+    }
   });
 
   test(`Given provider exposure still uses the legacy list,
