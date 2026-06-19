@@ -2,14 +2,15 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, test } from "vitest";
 
+interface ParsedSource {
+  readonly path: string;
+  readonly sourceFile: ts.SourceFile;
+}
+
 const registryPath = "src/tools/registry.ts";
-const registrySource = readFileSync(registryPath, "utf8");
-const registrySourceFile = ts.createSourceFile(
-  registryPath,
-  registrySource,
-  ts.ScriptTarget.Latest,
-  true,
-);
+const executionPath = "src/tools/execution.ts";
+const registrySource = parseSource(registryPath);
+const executionSource = parseSource(executionPath);
 const builtinToolConstantNames = new Set([
   "readTool",
   "lsTool",
@@ -28,12 +29,38 @@ const builtinToolNames = new Set([
   "write",
   "bash",
 ]);
+const perToolArgumentSchemaNames = new Set([
+  "readToolArgumentsSchema",
+  "lsToolArgumentsSchema",
+  "globToolArgumentsSchema",
+  "grepToolArgumentsSchema",
+  "editToolArgumentsSchema",
+  "writeToolArgumentsSchema",
+  "bashToolArgumentsSchema",
+]);
+const perToolExecutorNames = new Set([
+  "executeRead",
+  "executeLs",
+  "executeGlob",
+  "executeGrep",
+  "executeEdit",
+  "executeWrite",
+  "executeBash",
+]);
 
-function location(node: ts.Node): string {
-  const position = registrySourceFile.getLineAndCharacterOfPosition(
-    node.getStart(registrySourceFile),
+function parseSource(path: string): ParsedSource {
+  const text = readFileSync(path, "utf8");
+  return {
+    path,
+    sourceFile: ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true),
+  };
+}
+
+function location(source: ParsedSource, node: ts.Node): string {
+  const position = source.sourceFile.getLineAndCharacterOfPosition(
+    node.getStart(source.sourceFile),
   );
-  return `${registryPath}:${position.line + 1}:${position.character + 1}`;
+  return `${source.path}:${position.line + 1}:${position.character + 1}`;
 }
 
 function stringLiteralText(node: ts.Node): string | null {
@@ -59,7 +86,10 @@ function isEqualityOperator(kind: ts.SyntaxKind): boolean {
   );
 }
 
-function toolNameComparison(node: ts.BinaryExpression): string | null {
+function toolNameComparison(
+  source: ParsedSource,
+  node: ts.BinaryExpression,
+): string | null {
   if (!isEqualityOperator(node.operatorToken.kind)) {
     return null;
   }
@@ -70,7 +100,7 @@ function toolNameComparison(node: ts.BinaryExpression): string | null {
     builtinToolNames.has(leftLiteral) &&
     isNameExpression(node.right)
   ) {
-    return `${location(node)} ${node.getText(registrySourceFile)}`;
+    return `${location(source, node)} ${node.getText(source.sourceFile)}`;
   }
 
   const rightLiteral = stringLiteralText(node.right);
@@ -79,15 +109,13 @@ function toolNameComparison(node: ts.BinaryExpression): string | null {
     builtinToolNames.has(rightLiteral) &&
     isNameExpression(node.left)
   ) {
-    return `${location(node)} ${node.getText(registrySourceFile)}`;
+    return `${location(source, node)} ${node.getText(source.sourceFile)}`;
   }
 
   return null;
 }
 
-function perToolProviderConstants(
-  sourceFile: ts.SourceFile,
-): readonly string[] {
+function perToolProviderConstants(source: ParsedSource): readonly string[] {
   const violations: string[] = [];
 
   function visit(node: ts.Node): void {
@@ -96,23 +124,21 @@ function perToolProviderConstants(
       ts.isIdentifier(node.name) &&
       builtinToolConstantNames.has(node.name.text)
     ) {
-      violations.push(`${location(node)} ${node.name.text}`);
+      violations.push(`${location(source, node)} ${node.name.text}`);
     }
     ts.forEachChild(node, visit);
   }
 
-  visit(sourceFile);
+  visit(source.sourceFile);
   return violations;
 }
 
-function toolNameStringComparisons(
-  sourceFile: ts.SourceFile,
-): readonly string[] {
+function toolNameStringComparisons(source: ParsedSource): readonly string[] {
   const violations: string[] = [];
 
   function visit(node: ts.Node): void {
     if (ts.isBinaryExpression(node)) {
-      const violation = toolNameComparison(node);
+      const violation = toolNameComparison(source, node);
       if (violation !== null) {
         violations.push(violation);
       }
@@ -120,7 +146,76 @@ function toolNameStringComparisons(
     ts.forEachChild(node, visit);
   }
 
-  visit(sourceFile);
+  visit(source.sourceFile);
+  return violations;
+}
+
+function functionDeclaration(
+  source: ParsedSource,
+  name: string,
+): ts.FunctionDeclaration | null {
+  let declaration: ts.FunctionDeclaration | null = null;
+
+  function visit(node: ts.Node): void {
+    if (
+      declaration === null &&
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === name
+    ) {
+      declaration = node;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source.sourceFile);
+  return declaration;
+}
+
+function switchStatements(
+  source: ParsedSource,
+  node: ts.Node,
+): readonly string[] {
+  const switches: string[] = [];
+
+  function visit(current: ts.Node): void {
+    if (ts.isSwitchStatement(current)) {
+      switches.push(
+        `${location(source, current)} ${current.expression.getText(
+          source.sourceFile,
+        )}`,
+      );
+    }
+    ts.forEachChild(current, visit);
+  }
+
+  visit(node);
+  return switches;
+}
+
+function importedBindings(
+  source: ParsedSource,
+  names: ReadonlySet<string>,
+): readonly string[] {
+  const violations: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isImportDeclaration(node)) {
+      const namedBindings = node.importClause?.namedBindings;
+      if (namedBindings !== undefined && ts.isNamedImports(namedBindings)) {
+        for (const element of namedBindings.elements) {
+          if (names.has(element.name.text)) {
+            violations.push(
+              `${location(source, element)} ${element.name.text}`,
+            );
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source.sourceFile);
   return violations;
 }
 
@@ -128,12 +223,39 @@ describe("builtin tool registry invariants", () => {
   test(`Given provider exposure is a registry-derived surface,
     When registry syntax is inspected,
     Then it does not keep per-tool provider definition objects`, () => {
-    expect(perToolProviderConstants(registrySourceFile)).toEqual([]);
+    expect(perToolProviderConstants(registrySource)).toEqual([]);
   });
 
   test(`Given builtin tool names are owned by builtinTools,
     When registry syntax is inspected,
     Then tool name checks do not duplicate the names as string comparisons`, () => {
-    expect(toolNameStringComparisons(registrySourceFile)).toEqual([]);
+    expect(toolNameStringComparisons(registrySource)).toEqual([]);
+  });
+
+  test(`Given tool call parsing is derived from builtin tool metadata,
+    When registry syntax is inspected,
+    Then parsing does not import per-tool argument schemas or switch on tool names`, () => {
+    const parser = functionDeclaration(
+      registrySource,
+      "toolCallFromParsedArguments",
+    );
+
+    expect(
+      importedBindings(registrySource, perToolArgumentSchemaNames),
+    ).toEqual([]);
+    expect(
+      parser === null ? [] : switchStatements(registrySource, parser),
+    ).toEqual([]);
+  });
+
+  test(`Given tool execution is derived from builtin tool metadata,
+    When execution syntax is inspected,
+    Then executeToolCall does not import per-tool executors or switch on tool names`, () => {
+    const executor = functionDeclaration(executionSource, "executeToolCall");
+
+    expect(importedBindings(executionSource, perToolExecutorNames)).toEqual([]);
+    expect(
+      executor === null ? [] : switchStatements(executionSource, executor),
+    ).toEqual([]);
   });
 });
