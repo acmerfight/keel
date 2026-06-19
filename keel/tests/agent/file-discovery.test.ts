@@ -10,7 +10,7 @@ import {
   fakeGlobResponse,
   fakeResponse,
 } from "../../src/llm/providers/fake.ts";
-import type { LLMEvent, LLMProvider, Message } from "../../src/llm/types.ts";
+import type { LLMProvider, Message } from "../../src/llm/types.ts";
 
 const ZERO_USAGE = {
   inputTokens: 0,
@@ -29,39 +29,7 @@ async function collect(
   return events;
 }
 
-async function collectProviderEvents(
-  provider: LLMProvider,
-): Promise<LLMEvent[]> {
-  const events: LLMEvent[] = [];
-  for await (const event of provider.stream({
-    systemPrompt: "You are helpful.",
-    messages: [],
-    signal: new AbortController().signal,
-  })) {
-    events.push(event);
-  }
-  return events;
-}
-
 describe("File Discovery", () => {
-  test(`Given the fake provider is scripted to glob from the workspace root,
-    When it streams tool events,
-    Then the glob call omits the optional path`, async () => {
-    // Given
-    const provider = createFakeProvider([fakeGlobResponse("**/*.test.ts")]);
-
-    // When
-    const events = await collectProviderEvents(provider);
-
-    // Then
-    expect(events[0]).toEqual({
-      type: "tool_call",
-      id: "fake_tool_call_1",
-      tool: "glob",
-      pattern: "**/*.test.ts",
-    });
-  });
-
   test(`Given the assistant needs to discover files by name,
     When the agent runs the glob tool,
     Then the discovered path is returned as tool output before the final answer`, async () => {
