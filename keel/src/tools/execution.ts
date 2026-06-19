@@ -78,7 +78,7 @@ export async function executeToolCall(
     }
     case "ls": {
       try {
-        const result = await executeLs(workspace, {
+        const result = executeLs(workspace, {
           ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
           ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
         });
