@@ -103,28 +103,37 @@ describe("Tool Execution", () => {
     }
   });
 
-  test(`Given an ls tool call hits an unexpected workspace error,
+  test.skipIf(process.platform === "win32")(
+    `Given an ls tool call hits an unreadable directory,
     When the tool execution layer handles the call,
-    Then it rethrows the fatal error instead of reporting recoverable output`, async () => {
-    // Given
-    const workspace = join(
-      tmpdir(),
-      `keel-tool-execution-missing-${crypto.randomUUID()}`,
-    );
+    Then it rethrows the fatal filesystem error instead of reporting recoverable output`,
+    async () => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-tool-execution-"));
+      const lockedPath = join(workspace, "locked");
+      await mkdir(lockedPath);
+      await chmod(lockedPath, 0);
 
-    // When / Then
-    await expect(
-      executeToolCall({
-        workspace,
-        toolCall: {
-          id: "ls_1",
-          tool: "ls",
-        },
-        signal: new AbortController().signal,
-        allowBash: false,
-      }),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-  });
+      try {
+        // When / Then
+        await expect(
+          executeToolCall({
+            workspace,
+            toolCall: {
+              id: "ls_1",
+              tool: "ls",
+              path: "locked",
+            },
+            signal: new AbortController().signal,
+            allowBash: false,
+          }),
+        ).rejects.toMatchObject({ code: "EACCES" });
+      } finally {
+        await chmod(lockedPath, 0o700);
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test.skipIf(process.platform === "win32")(
     `Given a glob tool call hits a ripgrep filesystem failure,

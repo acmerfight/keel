@@ -927,6 +927,72 @@ describe("CLI Main", () => {
     }
   });
 
+  test(`Given the configured provider lists the workspace root,
+    When the CLI main runs in-process,
+    Then it reports the default ls path and sends root entries back to the provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-ls-root-"));
+    await mkdir(join(workspace, "src"), { recursive: true });
+    await writeFile(join(workspace, "README.md"), "docs\n", "utf8");
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(sseToolCall("call_ls_root", "ls", {}));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Root listed."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["list root"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Root listed.\n");
+      expect(fixture.stderr()).toBe("Tool: ls .\n");
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_ls_root",
+        content: ["src/", "README.md"].join("\n"),
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the configured provider searches the workspace,
     When the CLI main runs in-process,
     Then it reports the grep tool and sends matches back to the provider`, async () => {
