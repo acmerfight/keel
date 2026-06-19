@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { builtinTools } from "../../src/tools/builtin.ts";
+import type { OpenAICompatibleToolDefinition } from "../../src/tools/registry.ts";
 import {
+  isToolName,
   openAICompatibleTools,
   toolCallArguments,
   toolCallFromParsedArguments,
@@ -9,10 +11,14 @@ import {
 
 type ProviderField = {
   readonly type: "string" | "integer" | "boolean";
+  readonly description: string;
   readonly required: boolean;
   readonly minimum?: number;
   readonly maximum?: number;
 };
+
+type ProviderParameter =
+  OpenAICompatibleToolDefinition["function"]["parameters"]["properties"][string];
 
 function inclusiveIntegerMinimum(
   schemaField: z.core.JSONSchema.JSONSchema,
@@ -67,6 +73,43 @@ function validProviderValue(field: ProviderField): string | number | boolean {
     case "boolean":
       return true;
   }
+}
+
+function providerParameterFromField(field: ProviderField): ProviderParameter {
+  return {
+    type: field.type,
+    description: field.description,
+    ...(field.minimum !== undefined ? { minimum: field.minimum } : {}),
+    ...(field.maximum !== undefined ? { maximum: field.maximum } : {}),
+  };
+}
+
+function providerDefinitionFromBuiltinTool(
+  tool: (typeof builtinTools)[number],
+): OpenAICompatibleToolDefinition {
+  const properties: Record<string, ProviderParameter> = {};
+  const required: string[] = [];
+
+  for (const [name, field] of Object.entries(tool.args.fields)) {
+    properties[name] = providerParameterFromField(field);
+    if (field.required) {
+      required.push(name);
+    }
+  }
+
+  return {
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: {
+        type: "object",
+        properties,
+        required,
+        additionalProperties: false,
+      },
+    },
+  };
 }
 
 describe("tool registry", () => {
@@ -318,7 +361,7 @@ describe("tool registry", () => {
     }
   });
 
-  test(`Given provider exposure still uses the legacy list,
+  test(`Given provider exposure is derived from the builtin registry,
     When builtin metadata is compared with provider tools,
     Then bash filtering matches the explicit trusted shell risk`, () => {
     const allBuiltinToolNames = builtinTools.map((tool) => tool.name);
@@ -332,6 +375,28 @@ describe("tool registry", () => {
     expect(
       openAICompatibleTools(true).map((tool) => tool.function.name),
     ).toEqual(allBuiltinToolNames);
+  });
+
+  test(`Given provider tools are requested,
+    When OpenAI-compatible definitions are built,
+    Then descriptions and parameter schemas match the builtin registry metadata`, () => {
+    const expectedProviderTools = builtinTools.map(
+      providerDefinitionFromBuiltinTool,
+    );
+
+    expect(openAICompatibleTools(true)).toEqual(expectedProviderTools);
+  });
+
+  test(`Given provider tool names arrive as strings,
+    When the registry validates them,
+    Then every builtin tool name is accepted and unknown names are rejected`, () => {
+    for (const tool of builtinTools) {
+      expect(isToolName(tool.name), `${tool.name} should be a tool name`).toBe(
+        true,
+      );
+    }
+
+    expect(isToolName("unknown")).toBe(false);
   });
 
   test(`Given bash is disabled,

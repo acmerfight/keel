@@ -9,10 +9,8 @@ import {
   writeToolArgumentsSchema,
 } from "./tool-arguments.ts";
 
-type ToolArgType = "string" | "integer" | "boolean";
-
-interface ToolArgDefinition {
-  readonly type: ToolArgType;
+export interface ToolArgDefinition {
+  readonly type: "string" | "integer" | "boolean";
   readonly description: string;
   readonly required: boolean;
   readonly minimum?: number;
