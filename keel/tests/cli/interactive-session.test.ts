@@ -1081,7 +1081,7 @@ describe("Interactive Session", () => {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
       },
-      { role: "assistant", content: "Tool turn done." },
+      { role: "assistant", content: "Tool turn done.", toolCalls: [] },
       { role: "user", content: "after compact" },
     ]);
     expect(JSON.stringify(observedContexts[2])).not.toContain("/compact");
@@ -1908,7 +1908,7 @@ describe("Interactive Session", () => {
     expect(compactionPrompts[0]).toContain("First done");
     expect(observedRequestContexts[2]).toEqual([
       { role: "user", content: "first prompt" },
-      { role: "assistant", content: "First done" },
+      { role: "assistant", content: "First done", toolCalls: [] },
       { role: "user", content: "third prompt" },
     ]);
   });
@@ -2642,7 +2642,7 @@ describe("Interactive Session", () => {
     );
     expect(observedRequestContexts[1]).toEqual([
       { role: "user", content: "first prompt" },
-      { role: "assistant", content: "First done" },
+      { role: "assistant", content: "First done", toolCalls: [] },
       { role: "user", content: "second prompt" },
     ]);
   });
@@ -2753,7 +2753,7 @@ describe("Interactive Session", () => {
     expect(compactionPrompts).toHaveLength(1);
     expect(observedRequestContexts[1]).toEqual([
       { role: "user", content: "first prompt" },
-      { role: "assistant", content: "First done" },
+      { role: "assistant", content: "First done", toolCalls: [] },
       { role: "user", content: "second prompt" },
     ]);
     expect(JSON.stringify(observedRequestContexts[1])).not.toContain(
@@ -2869,7 +2869,7 @@ describe("Interactive Session", () => {
     expect(stderr).toBe("");
     expect(observedRequestContexts[1]).toEqual([
       { role: "user", content: "first prompt" },
-      { role: "assistant", content: "First done" },
+      { role: "assistant", content: "First done", toolCalls: [] },
       { role: "user", content: "second prompt" },
     ]);
   });

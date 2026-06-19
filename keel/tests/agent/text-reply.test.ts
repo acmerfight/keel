@@ -105,7 +105,7 @@ describe("Text Reply", () => {
 
     // Then
     expect(messages).toEqual([
-      { role: "assistant", content: "Session started." },
+      { role: "assistant", content: "Session started.", toolCalls: [] },
     ]);
   });
 
@@ -214,7 +214,7 @@ describe("Text Reply", () => {
     // Then
     expect(secondTurnMessages).toEqual([
       { role: "user", content: "remember alpha" },
-      { role: "assistant", content: "Remembered alpha." },
+      { role: "assistant", content: "Remembered alpha.", toolCalls: [] },
       { role: "user", content: "what did I ask you to remember?" },
     ]);
   });
@@ -277,7 +277,11 @@ describe("Text Reply", () => {
     // Then
     expect(secondTurnMessages).toEqual([
       { role: "user", content: "summarize alpha" },
-      { role: "assistant", content: "Alpha summary before budget stop." },
+      {
+        role: "assistant",
+        content: "Alpha summary before budget stop.",
+        toolCalls: [],
+      },
       { role: "user", content: "continue from that summary" },
     ]);
   });
@@ -355,7 +359,7 @@ describe("Text Reply", () => {
         role: "tool",
         toolCallId: "read_package",
       }),
-      { role: "assistant", content: "Inspected package." },
+      { role: "assistant", content: "Inspected package.", toolCalls: [] },
       { role: "user", content: "continue from the package" },
     ]);
   });

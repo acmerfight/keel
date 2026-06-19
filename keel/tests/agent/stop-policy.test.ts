@@ -174,6 +174,7 @@ describe("Agent Stopping", () => {
       expect(wrapUpTranscripts[0]).toContainEqual({
         role: "assistant",
         content: "Editing a.txt next.",
+        toolCalls: [],
       });
       expect(await readFile(join(workspace, "a.txt"), "utf8")).toBe("old a\n");
     } finally {
@@ -213,6 +214,7 @@ describe("Agent Stopping", () => {
       expect(messages.at(-1)).toEqual({
         role: "assistant",
         content: "Editing a.txt next.\nStopping here.",
+        toolCalls: [],
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -251,6 +253,7 @@ describe("Agent Stopping", () => {
       expect(messages.at(-1)).toEqual({
         role: "assistant",
         content: "Editing a.txt next.\nStopping here.",
+        toolCalls: [],
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

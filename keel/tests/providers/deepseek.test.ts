@@ -1629,7 +1629,7 @@ describe("DeepSeek Provider", () => {
         systemPrompt: "You are helpful.",
         messages: [
           { role: "user", content: "serialize-history" },
-          { role: "assistant", content: "plain answer" },
+          { role: "assistant", content: "plain answer", toolCalls: [] },
           {
             role: "assistant",
             content: "I need to inspect the readme.",
