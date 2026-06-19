@@ -6,7 +6,10 @@ import {
 } from "../../src/agent/context-compaction.ts";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
-import { maxTurnFallbackPolicy } from "../../src/agent/stop-policy.ts";
+import {
+  defaultStopPolicy,
+  maxTurnFallbackPolicy,
+} from "../../src/agent/stop-policy.ts";
 import { KeelError } from "../../src/core/error.ts";
 import type {
   LLMProvider,
@@ -153,6 +156,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
           reserveTokens: 1,
@@ -1677,6 +1682,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 6,
           summaryInputMaxChars: 4_000,
@@ -1744,6 +1751,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 120,
           keepRecentTokens: 6,
@@ -1903,6 +1912,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 80,
           keepRecentTokens: 6,
@@ -1980,6 +1991,7 @@ describe("Context Compaction", () => {
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         allowBash: true,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 280,
           reserveTokens: 0,
@@ -2090,6 +2102,7 @@ describe("Context Compaction", () => {
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         allowBash: true,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 260,
           reserveTokens: 0,
@@ -2199,6 +2212,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 6,
         },
@@ -2341,6 +2356,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,
           toolOutputMaxChars: 128,
@@ -2492,6 +2509,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,
           toolOutputMaxChars: 128,
@@ -2645,6 +2664,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,
           toolOutputMaxChars: 128,
@@ -3119,6 +3140,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,
           toolOutputMaxChars: 128,
@@ -3231,6 +3254,8 @@ describe("Context Compaction", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 20,
             toolOutputMaxChars: 128,
@@ -3362,6 +3387,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20,
           toolOutputMaxChars: 128,
@@ -3507,6 +3534,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20,
           toolOutputMaxChars: 128,
@@ -3626,6 +3655,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20,
           toolOutputMaxChars: 128,
@@ -3931,6 +3962,8 @@ describe("Context Compaction", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 1,
           },
@@ -4082,6 +4115,8 @@ describe("Context Compaction", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 6,
           },
@@ -4138,6 +4173,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
         },
@@ -4182,6 +4219,8 @@ describe("Context Compaction", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 1,
           },
@@ -4252,6 +4291,8 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
         },
@@ -4331,6 +4372,7 @@ describe("Context Compaction", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
+        allowBash: false,
         stopPolicy: maxTurnFallbackPolicy(1),
         contextCompaction: {
           keepRecentTokens: 1,

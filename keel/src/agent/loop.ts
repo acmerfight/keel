@@ -22,7 +22,6 @@ import {
   syncMessagesFromSessionLedger,
 } from "./session-ledger.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
-import { defaultStopPolicy } from "./stop-policy.ts";
 
 export interface CostReport {
   readonly spentUsd: number;
@@ -74,10 +73,10 @@ export interface RunAgentOptions {
   readonly userMessage: string;
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
+  readonly allowBash: boolean;
+  readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
-  readonly allowBash?: boolean;
   readonly bashPermission?: BashPermissionPolicy;
-  readonly stopPolicy?: AgentStopPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
 }
 
@@ -91,10 +90,10 @@ export interface RunAgentTurnOptions {
   readonly messages: Message[];
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
+  readonly allowBash: boolean;
+  readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
-  readonly allowBash?: boolean;
   readonly bashPermission?: BashPermissionPolicy;
-  readonly stopPolicy?: AgentStopPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly drainInjectedUserMessages?: () =>
     | readonly InjectedUserMessage[]
@@ -301,9 +300,9 @@ export async function* runAgentTurn(
     systemPrompt,
     signal,
     costTracking,
-    allowBash = false,
+    allowBash,
     bashPermission,
-    stopPolicy = defaultStopPolicy(),
+    stopPolicy,
     drainInjectedUserMessages,
   } = options;
   let sessionLedger = sessionLedgerFromMessages(messages);
@@ -579,17 +578,13 @@ export async function* runAgent(
     messages,
     systemPrompt: options.systemPrompt,
     signal: options.signal,
+    allowBash: options.allowBash,
+    stopPolicy: options.stopPolicy,
     ...(options.costTracking !== undefined
       ? { costTracking: options.costTracking }
       : {}),
-    ...(options.allowBash !== undefined
-      ? { allowBash: options.allowBash }
-      : {}),
     ...(options.bashPermission !== undefined
       ? { bashPermission: options.bashPermission }
-      : {}),
-    ...(options.stopPolicy !== undefined
-      ? { stopPolicy: options.stopPolicy }
       : {}),
     ...(options.contextCompaction !== undefined
       ? { contextCompaction: options.contextCompaction }
