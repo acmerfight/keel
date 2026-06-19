@@ -71,7 +71,7 @@ function positiveIntegerEnv(
   return parsed;
 }
 
-function defaultContextWindowTokens(
+function contextWindowTokensForProvider(
   providerId: ProviderId,
 ): number | undefined {
   if (providerId === "fake") {
@@ -86,7 +86,7 @@ function contextCompactionOptions(
 ): ContextCompactionOptions | undefined {
   const contextWindowTokens =
     positiveIntegerEnv(runtime, "KEEL_CONTEXT_WINDOW_TOKENS") ??
-    defaultContextWindowTokens(providerId);
+    contextWindowTokensForProvider(providerId);
   return contextWindowTokens === undefined
     ? undefined
     : { contextWindowTokens };
