@@ -101,7 +101,7 @@ function editToolCallDelta(argumentsJson: string): {
 }
 
 function toolCallDelta(
-  name: "read" | "grep" | "write" | "bash" | "unknown",
+  name: "read" | "glob" | "grep" | "write" | "bash" | "unknown",
   argumentsJson: string,
 ): {
   readonly index: number;
@@ -619,6 +619,33 @@ describe("Kimi Provider", () => {
           return;
         }
 
+        if (userMessage === "glob-tool-call") {
+          writeSseResponse(res, [
+            sseData({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      toolCallDelta(
+                        "glob",
+                        JSON.stringify({
+                          pattern: "**/*.test.ts",
+                          path: "tests",
+                        }),
+                      ),
+                    ],
+                  },
+                },
+              ],
+            }),
+            `${sseData({
+              choices: [{ delta: {}, finish_reason: "tool_calls" }],
+              usage: { prompt_tokens: 20, completion_tokens: 6 },
+            })}data: [DONE]\n\n`,
+          ]);
+          return;
+        }
+
         if (userMessage === "write-tool-call") {
           writeSseResponse(res, [
             sseData({
@@ -945,6 +972,7 @@ describe("Kimi Provider", () => {
     });
     expect(capturedBody?.tools?.map((tool) => tool.function.name)).toEqual([
       "read",
+      "glob",
       "grep",
       "edit",
       "write",
@@ -991,6 +1019,7 @@ describe("Kimi Provider", () => {
     // Then
     expect(capturedBody?.tools?.map((tool) => tool.function.name)).toEqual([
       "read",
+      "glob",
       "grep",
       "edit",
       "write",
@@ -1305,18 +1334,18 @@ describe("Kimi Provider", () => {
     ]);
   });
 
-  test(`Given Kimi returns read, grep, write, and bash tool calls,
+  test(`Given Kimi returns read, glob, grep, write, and bash tool calls,
     When each stream finishes with tool_calls,
     Then the provider emits each parsed Keel tool shape`, async () => {
     // When
-    const [readEvents, grepEvents, writeEvents, bashEvents] = await Promise.all(
-      [
+    const [readEvents, globEvents, grepEvents, writeEvents, bashEvents] =
+      await Promise.all([
         streamFor("read-tool-call"),
+        streamFor("glob-tool-call"),
         streamFor("grep-tool-call"),
         streamFor("write-tool-call"),
         streamFor("bash-tool-call"),
-      ],
-    );
+      ]);
 
     // Then
     expect(readEvents[0]).toEqual({
@@ -1333,6 +1362,13 @@ describe("Kimi Provider", () => {
       tool: "grep",
       pattern: "hello",
       path: "src",
+    });
+    expect(globEvents[0]).toEqual({
+      type: "tool_call",
+      id: "call_kimi_glob",
+      tool: "glob",
+      pattern: "**/*.test.ts",
+      path: "tests",
     });
     expect(writeEvents[0]).toEqual({
       type: "tool_call",

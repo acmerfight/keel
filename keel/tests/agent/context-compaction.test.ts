@@ -390,6 +390,12 @@ describe("Context Compaction", () => {
         path: "package.json",
       },
       {
+        id: "glob_tests",
+        tool: "glob",
+        pattern: "**/*.test.ts",
+        path: "tests",
+      },
+      {
         id: "edit_note",
         tool: "edit",
         path: "notes.txt",

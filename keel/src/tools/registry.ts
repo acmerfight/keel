@@ -33,6 +33,12 @@ export type ToolCall =
     }
   | {
       readonly id: string;
+      readonly tool: "glob";
+      readonly pattern: string;
+      readonly path?: string;
+    }
+  | {
+      readonly id: string;
       readonly tool: "grep";
       readonly pattern: string;
       readonly path?: string;
@@ -65,6 +71,13 @@ const readToolArgumentsSchema = z
     path: z.string(),
     offset: z.number().int().positive().optional(),
     limit: z.number().int().positive().optional(),
+  })
+  .strict();
+
+const globToolArgumentsSchema = z
+  .object({
+    pattern: z.string(),
+    path: z.string().optional(),
   })
   .strict();
 
@@ -127,6 +140,36 @@ const readTool: OpenAICompatibleToolDefinition = {
         },
       },
       required: ["path"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const globTool: OpenAICompatibleToolDefinition = {
+  type: "function",
+  function: {
+    name: "glob",
+    description: [
+      "Find workspace files by glob pattern, skipping gitignored files. Returns capped workspace-relative file paths.",
+      "Use when: locating files by name or extension before reading them - do not guess file paths.",
+      "Do not use when: searching inside file contents (use grep), reading exact content (use read), or writing changes.",
+      'On failure: if there are too many matches, narrow pattern or path; if there are zero matches, retry with a broader pattern such as "**/*.ts" before concluding the file is absent.',
+    ].join("\n"),
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: {
+          type: "string",
+          description:
+            'Glob pattern for file paths, such as "**/*.test.ts" or "src/**/*.tsx".',
+        },
+        path: {
+          type: "string",
+          description:
+            "Optional workspace-relative directory to search. Defaults to the whole workspace.",
+        },
+      },
+      required: ["pattern"],
       additionalProperties: false,
     },
   },
@@ -236,7 +279,7 @@ const bashTool: OpenAICompatibleToolDefinition = {
     description: [
       "Run a trusted shell command in the workspace. Commands use the current OS user's permissions and are not constrained by Keel's gitignore file-tool policy. Output is capped to the last 20KB per stream.",
       "Use when: the task needs commands the file tools cannot do, such as running builds, tests, or git.",
-      "Do not use when: a dedicated tool can do the job - prefer read, grep, edit, and write for file inspection and changes.",
+      "Do not use when: a dedicated tool can do the job - prefer read, glob, grep, edit, and write for file inspection and changes.",
       "On failure: a non-zero exit code returns stdout/stderr for diagnosis - fix the command rather than retrying it unchanged; if the command timed out, raise timeoutMs (up to 60000) or run a narrower command.",
     ].join("\n"),
     parameters: {
@@ -263,6 +306,7 @@ const bashTool: OpenAICompatibleToolDefinition = {
 export function isToolName(name: string): name is ToolName {
   return (
     name === "read" ||
+    name === "glob" ||
     name === "grep" ||
     name === "edit" ||
     name === "write" ||
@@ -274,8 +318,8 @@ export function openAICompatibleTools(
   allowBash: boolean,
 ): readonly OpenAICompatibleToolDefinition[] {
   return allowBash
-    ? [readTool, grepTool, editTool, writeTool, bashTool]
-    : [readTool, grepTool, editTool, writeTool];
+    ? [readTool, globTool, grepTool, editTool, writeTool, bashTool]
+    : [readTool, globTool, grepTool, editTool, writeTool];
 }
 
 export function toolCallFromParsedArguments(
@@ -297,6 +341,16 @@ export function toolCallFromParsedArguments(
         ...(result.data.limit !== undefined
           ? { limit: result.data.limit }
           : {}),
+      };
+    }
+    case "glob": {
+      const result = globToolArgumentsSchema.safeParse(parsedArguments);
+      if (!result.success) return null;
+      return {
+        id,
+        tool: "glob",
+        pattern: result.data.pattern,
+        ...(result.data.path !== undefined ? { path: result.data.path } : {}),
       };
     }
     case "grep": {
@@ -355,6 +409,11 @@ export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
         path: toolCall.path,
         ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
         ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
+      };
+    case "glob":
+      return {
+        pattern: toolCall.pattern,
+        ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
       };
     case "grep":
       return {

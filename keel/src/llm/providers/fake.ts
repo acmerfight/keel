@@ -37,6 +37,13 @@ interface FakeGrepResponse {
   readonly usage: Usage;
 }
 
+interface FakeGlobResponse {
+  readonly type: "glob";
+  readonly pattern: string;
+  readonly path?: string;
+  readonly usage: Usage;
+}
+
 interface FakeBashResponse {
   readonly type: "bash";
   readonly command: string;
@@ -49,6 +56,7 @@ export type FakeResponse =
   | FakeEditResponse
   | FakeWriteResponse
   | FakeReadResponse
+  | FakeGlobResponse
   | FakeGrepResponse
   | FakeBashResponse;
 
@@ -105,6 +113,19 @@ export function fakeGrepResponse(
 ): FakeResponse {
   return {
     type: "grep",
+    pattern,
+    ...(options.path !== undefined ? { path: options.path } : {}),
+    usage,
+  };
+}
+
+export function fakeGlobResponse(
+  pattern: string,
+  usage: Usage = ZERO_USAGE,
+  options: { readonly path?: string } = {},
+): FakeResponse {
+  return {
+    type: "glob",
     pattern,
     ...(options.path !== undefined ? { path: options.path } : {}),
     usage,
@@ -187,6 +208,15 @@ export function createFakeProvider(
             type: "tool_call",
             id: `fake_tool_call_${turn}`,
             tool: "grep",
+            pattern: response.pattern,
+            ...(response.path !== undefined ? { path: response.path } : {}),
+          };
+          break;
+        case "glob":
+          yield {
+            type: "tool_call",
+            id: `fake_tool_call_${turn}`,
+            tool: "glob",
             pattern: response.pattern,
             ...(response.path !== undefined ? { path: response.path } : {}),
           };
