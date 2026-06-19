@@ -1,4 +1,11 @@
 import type { z } from "zod";
+import type { BashPermissionPolicy } from "../permissions/bash.ts";
+import { executeBash } from "./bash.ts";
+import { executeEdit } from "./edit.ts";
+import { executeGlob } from "./glob.ts";
+import { executeGrep } from "./grep.ts";
+import { executeLs } from "./ls.ts";
+import { executeRead } from "./read.ts";
 import {
   bashToolArgumentsSchema,
   editToolArgumentsSchema,
@@ -8,6 +15,7 @@ import {
   readToolArgumentsSchema,
   writeToolArgumentsSchema,
 } from "./tool-arguments.ts";
+import { executeWrite } from "./write.ts";
 
 export interface ToolArgDefinition {
   readonly type: "string" | "integer" | "boolean";
@@ -25,7 +33,7 @@ type ToolArgFields<Shape extends ToolArgShape> = Readonly<{
 
 type ToolArgsSchema<Shape extends ToolArgShape> = z.ZodObject<
   Shape,
-  z.core.$ZodObjectConfig
+  z.core.$strict
 >;
 
 interface ToolArgsSpec<Shape extends ToolArgShape> {
@@ -60,9 +68,26 @@ type ToolConcurrency =
   | { readonly kind: "parallel-safe" }
   | { readonly kind: "exclusive"; readonly reason: string };
 
-interface BuiltinToolExecution {
-  readonly kind: "legacy-switch";
-  readonly owner: "executeToolCall";
+export interface BuiltinToolExecutionContext {
+  readonly workspace: string;
+  readonly signal: AbortSignal;
+  readonly allowBash: boolean;
+  readonly bashPermission?: BashPermissionPolicy;
+}
+
+export interface ToolExecution {
+  readonly content: string;
+  readonly ok: boolean;
+}
+
+type BuiltinToolExecution<Args> = (
+  context: BuiltinToolExecutionContext,
+  args: Args,
+) => ToolExecution | Promise<ToolExecution>;
+
+interface BuiltinToolCallInput {
+  readonly id: string;
+  readonly tool: string;
 }
 
 interface BuiltinTool<Name extends string, Shape extends ToolArgShape> {
@@ -74,7 +99,15 @@ interface BuiltinTool<Name extends string, Shape extends ToolArgShape> {
   readonly display: ToolDisplay<z.infer<ToolArgsSchema<Shape>>>;
   readonly risk: ToolRisk;
   readonly concurrency: ToolConcurrency;
-  readonly execute: BuiltinToolExecution;
+  readonly execute: BuiltinToolExecution<z.infer<ToolArgsSchema<Shape>>>;
+}
+
+interface BuiltinToolRuntime<Name extends string, Shape extends ToolArgShape>
+  extends BuiltinTool<Name, Shape> {
+  readonly executeCall: (
+    context: BuiltinToolExecutionContext,
+    toolCall: BuiltinToolCallInput,
+  ) => ToolExecution | Promise<ToolExecution>;
 }
 
 interface ToolArgOptions {
@@ -90,8 +123,27 @@ interface IntegerToolArgOptions extends ToolArgOptions {
 function defineTool<
   const Name extends string,
   const Shape extends ToolArgShape,
->(tool: BuiltinTool<Name, Shape>): BuiltinTool<Name, Shape> {
-  return tool;
+>(tool: BuiltinTool<Name, Shape>): BuiltinToolRuntime<Name, Shape> {
+  function isCallForThisTool(
+    toolCall: BuiltinToolCallInput,
+  ): toolCall is BuiltinToolCallInput & {
+    readonly tool: Name;
+  } & z.infer<ToolArgsSchema<Shape>> {
+    return toolCall.tool === tool.name;
+  }
+
+  return Object.assign({}, tool, {
+    executeCall: (
+      context: BuiltinToolExecutionContext,
+      toolCall: BuiltinToolCallInput,
+    ) => {
+      if (isCallForThisTool(toolCall)) {
+        return tool.execute(context, toolCall);
+      }
+      /* v8 ignore next: registry selects executeCall by tool name. */
+      throw new Error(`Mismatched builtin tool call for ${toolCall.tool}`);
+    },
+  });
 }
 
 function toolArgs<const Shape extends ToolArgShape>(
@@ -127,10 +179,13 @@ function booleanArg(options: ToolArgOptions): ToolArgDefinition {
   };
 }
 
-const legacySwitchExecution: BuiltinToolExecution = {
-  kind: "legacy-switch",
-  owner: "executeToolCall",
-};
+function disabledBashMessage(): string {
+  return "Tool failed: bash failed: shell commands are disabled. Re-run with --bash-policy ask, --bash-policy trusted, or --allow-bash to enable them.";
+}
+
+function deniedBashMessage(message: string): string {
+  return `Tool failed: bash permission denied: ${message}\nRecovery: Ask the user for permission or choose a non-shell approach.`;
+}
 
 const readTool = defineTool({
   name: "read",
@@ -163,7 +218,13 @@ const readTool = defineTool({
   },
   risk: { kind: "workspace-read" },
   concurrency: { kind: "parallel-safe" },
-  execute: legacySwitchExecution,
+  execute: ({ workspace }, args) => {
+    const result = executeRead(workspace, args.path, {
+      offset: args.offset,
+      limit: args.limit,
+    });
+    return { content: result.content, ok: true };
+  },
 });
 
 const lsTool = defineTool({
@@ -196,7 +257,13 @@ const lsTool = defineTool({
   },
   risk: { kind: "workspace-read" },
   concurrency: { kind: "parallel-safe" },
-  execute: legacySwitchExecution,
+  execute: ({ workspace }, args) => {
+    const result = executeLs(workspace, {
+      ...(args.path !== undefined ? { path: args.path } : {}),
+      ...(args.limit !== undefined ? { limit: args.limit } : {}),
+    });
+    return { content: result.content, ok: true };
+  },
 });
 
 const globTool = defineTool({
@@ -229,7 +296,13 @@ const globTool = defineTool({
   },
   risk: { kind: "workspace-read" },
   concurrency: { kind: "parallel-safe" },
-  execute: legacySwitchExecution,
+  execute: async ({ workspace, signal }, args) => {
+    const result = await executeGlob(workspace, args.pattern, {
+      ...(args.path !== undefined ? { path: args.path } : {}),
+      signal,
+    });
+    return { content: result.content, ok: true };
+  },
 });
 
 const grepTool = defineTool({
@@ -261,7 +334,13 @@ const grepTool = defineTool({
   },
   risk: { kind: "workspace-read" },
   concurrency: { kind: "parallel-safe" },
-  execute: legacySwitchExecution,
+  execute: async ({ workspace, signal }, args) => {
+    const result = await executeGrep(workspace, args.pattern, {
+      ...(args.path !== undefined ? { path: args.path } : {}),
+      signal,
+    });
+    return { content: result.content, ok: true };
+  },
 });
 
 const editTool = defineTool({
@@ -304,7 +383,16 @@ const editTool = defineTool({
     kind: "exclusive",
     reason: "May mutate workspace files.",
   },
-  execute: legacySwitchExecution,
+  execute: ({ workspace }, args) => {
+    const result = executeEdit(
+      workspace,
+      args.path,
+      args.oldString,
+      args.newString,
+      args.replaceAll !== undefined ? { replaceAll: args.replaceAll } : {},
+    );
+    return { content: result.content, ok: true };
+  },
 });
 
 const writeTool = defineTool({
@@ -335,7 +423,10 @@ const writeTool = defineTool({
     kind: "exclusive",
     reason: "Creates workspace files.",
   },
-  execute: legacySwitchExecution,
+  execute: ({ workspace }, args) => {
+    const result = executeWrite(workspace, args.path, args.content);
+    return { content: result.content, ok: true };
+  },
 });
 
 const bashTool = defineTool({
@@ -372,7 +463,31 @@ const bashTool = defineTool({
     kind: "exclusive",
     reason: "May mutate workspace or depend on process state.",
   },
-  execute: legacySwitchExecution,
+  execute: async ({ workspace, signal, allowBash, bashPermission }, args) => {
+    if (!allowBash) {
+      return { content: disabledBashMessage(), ok: false };
+    }
+
+    if (bashPermission !== undefined) {
+      const decision = await bashPermission.review({
+        command: args.command,
+        cwd: workspace,
+        signal,
+      });
+      if (decision.type === "deny") {
+        return {
+          content: deniedBashMessage(decision.message),
+          ok: false,
+        };
+      }
+    }
+
+    const result = await executeBash(workspace, args.command, {
+      signal,
+      ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
+    });
+    return { content: result.content, ok: true };
+  },
 });
 
 export const builtinTools = [

@@ -1,14 +1,10 @@
-import type { ToolArgDefinition } from "./builtin.ts";
+import type { z } from "zod";
+import type {
+  BuiltinToolExecutionContext,
+  ToolArgDefinition,
+  ToolExecution,
+} from "./builtin.ts";
 import { builtinTools } from "./builtin.ts";
-import {
-  bashToolArgumentsSchema,
-  editToolArgumentsSchema,
-  globToolArgumentsSchema,
-  grepToolArgumentsSchema,
-  lsToolArgumentsSchema,
-  readToolArgumentsSchema,
-  writeToolArgumentsSchema,
-} from "./tool-arguments.ts";
 
 interface OpenAICompatibleToolParameter {
   readonly type: "string" | "integer" | "object" | "boolean";
@@ -33,54 +29,37 @@ export interface OpenAICompatibleToolDefinition {
   };
 }
 
-export type ToolCall =
-  | {
-      readonly id: string;
-      readonly tool: "read";
-      readonly path: string;
-      readonly offset?: number;
-      readonly limit?: number;
-    }
-  | {
-      readonly id: string;
-      readonly tool: "ls";
-      readonly path?: string;
-      readonly limit?: number;
-    }
-  | {
-      readonly id: string;
-      readonly tool: "glob";
-      readonly pattern: string;
-      readonly path?: string;
-    }
-  | {
-      readonly id: string;
-      readonly tool: "grep";
-      readonly pattern: string;
-      readonly path?: string;
-    }
-  | {
-      readonly id: string;
-      readonly tool: "edit";
-      readonly path: string;
-      readonly oldString: string;
-      readonly newString: string;
-      readonly replaceAll?: boolean;
-    }
-  | {
-      readonly id: string;
-      readonly tool: "write";
-      readonly path: string;
-      readonly content: string;
-    }
-  | {
-      readonly id: string;
-      readonly tool: "bash";
-      readonly command: string;
-      readonly timeoutMs?: number;
-    };
+type RegisteredBuiltinTool = (typeof builtinTools)[number];
 
-export type ToolName = ToolCall["tool"];
+export type ToolName = RegisteredBuiltinTool["name"];
+
+type BuiltinToolForName<Name extends ToolName> = Extract<
+  RegisteredBuiltinTool,
+  { readonly name: Name }
+>;
+
+type ToolNameOf<Tool> = Tool extends {
+  readonly name: infer Name extends string;
+}
+  ? Name
+  : never;
+
+type ToolArgsOf<Tool> = Tool extends {
+  readonly args: { readonly schema: infer Schema extends z.ZodType };
+}
+  ? z.infer<Schema>
+  : never;
+
+type ToolCallFor<Tool> = Tool extends unknown
+  ? {
+      readonly id: string;
+      readonly tool: ToolNameOf<Tool>;
+    } & ToolArgsOf<Tool>
+  : never;
+
+export type ToolCall = {
+  readonly [Tool in RegisteredBuiltinTool as Tool["name"]]: ToolCallFor<Tool>;
+}[ToolName];
 
 const builtinToolNames: ReadonlySet<string> = new Set(
   builtinTools.map((tool) => tool.name),
@@ -88,6 +67,26 @@ const builtinToolNames: ReadonlySet<string> = new Set(
 
 export function isToolName(name: string): name is ToolName {
   return builtinToolNames.has(name);
+}
+
+function isBuiltinToolForName<Name extends ToolName>(
+  tool: RegisteredBuiltinTool,
+  name: Name,
+): tool is BuiltinToolForName<Name> {
+  return tool.name === name;
+}
+
+function builtinToolForName<Name extends ToolName>(
+  name: Name,
+): BuiltinToolForName<Name> {
+  const tool = builtinTools.find((candidate) =>
+    isBuiltinToolForName(candidate, name),
+  );
+  if (tool !== undefined) {
+    return tool;
+  }
+  /* v8 ignore next: ToolName is derived from builtinTools. */
+  throw new Error(`Missing builtin tool registration for ${name}`);
 }
 
 function toOpenAICompatibleToolParameter(
@@ -102,7 +101,7 @@ function toOpenAICompatibleToolParameter(
 }
 
 function toOpenAICompatibleToolDefinition(
-  tool: (typeof builtinTools)[number],
+  tool: RegisteredBuiltinTool,
 ): OpenAICompatibleToolDefinition {
   const properties: Record<string, OpenAICompatibleToolParameter> = {};
   const required: string[] = [];
@@ -142,91 +141,41 @@ export function toolCallFromParsedArguments(
   name: ToolName,
   parsedArguments: unknown,
 ): ToolCall | null {
-  switch (name) {
-    case "read": {
-      const result = readToolArgumentsSchema.safeParse(parsedArguments);
-      if (!result.success) return null;
-      return {
-        id,
-        tool: "read",
-        path: result.data.path,
-        ...(result.data.offset !== undefined
-          ? { offset: result.data.offset }
-          : {}),
-        ...(result.data.limit !== undefined
-          ? { limit: result.data.limit }
-          : {}),
-      };
-    }
-    case "ls": {
-      const result = lsToolArgumentsSchema.safeParse(parsedArguments);
-      if (!result.success) return null;
-      return {
-        id,
-        tool: "ls",
-        ...(result.data.path !== undefined ? { path: result.data.path } : {}),
-        ...(result.data.limit !== undefined
-          ? { limit: result.data.limit }
-          : {}),
-      };
-    }
-    case "glob": {
-      const result = globToolArgumentsSchema.safeParse(parsedArguments);
-      if (!result.success) return null;
-      return {
-        id,
-        tool: "glob",
-        pattern: result.data.pattern,
-        ...(result.data.path !== undefined ? { path: result.data.path } : {}),
-      };
-    }
-    case "grep": {
-      const result = grepToolArgumentsSchema.safeParse(parsedArguments);
-      if (!result.success) return null;
-      return {
-        id,
-        tool: "grep",
-        pattern: result.data.pattern,
-        ...(result.data.path !== undefined ? { path: result.data.path } : {}),
-      };
-    }
-    case "edit": {
-      const result = editToolArgumentsSchema.safeParse(parsedArguments);
-      if (!result.success) return null;
-      return {
-        id,
-        tool: "edit",
-        path: result.data.path,
-        oldString: result.data.oldString,
-        newString: result.data.newString,
-        ...(result.data.replaceAll !== undefined
-          ? { replaceAll: result.data.replaceAll }
-          : {}),
-      };
-    }
-    case "write": {
-      const result = writeToolArgumentsSchema.safeParse(parsedArguments);
-      if (!result.success) return null;
-      return {
-        id,
-        tool: "write",
-        path: result.data.path,
-        content: result.data.content,
-      };
-    }
-    case "bash": {
-      const result = bashToolArgumentsSchema.safeParse(parsedArguments);
-      if (!result.success) return null;
-      return {
-        id,
-        tool: "bash",
-        command: result.data.command,
-        ...(result.data.timeoutMs !== undefined
-          ? { timeoutMs: result.data.timeoutMs }
-          : {}),
-      };
-    }
+  const tool = builtinToolForName(name);
+  const result = tool.args.schema.safeParse(parsedArguments);
+  if (!result.success) {
+    return null;
   }
+  const toolCall = Object.assign({ id, tool: name }, result.data);
+  return isToolCall(toolCall) ? toolCall : null;
+}
+
+function toolCallRawArguments(
+  tool: { readonly args: { readonly fields: object } },
+  toolCall: object,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(toolCall).filter(([name]) =>
+      Object.hasOwn(tool.args.fields, name),
+    ),
+  );
+}
+
+function isToolCall(toolCall: {
+  readonly id: string;
+  readonly tool: ToolName;
+}): toolCall is ToolCall {
+  const tool = builtinToolForName(toolCall.tool);
+  return tool.args.schema.safeParse(toolCallRawArguments(tool, toolCall))
+    .success;
+}
+
+export function executeBuiltinToolCall(
+  context: BuiltinToolExecutionContext,
+  toolCall: ToolCall,
+): ToolExecution | Promise<ToolExecution> {
+  const tool = builtinToolForName(toolCall.tool);
+  return tool.executeCall(context, toolCall);
 }
 
 export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
