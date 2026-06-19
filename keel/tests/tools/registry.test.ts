@@ -271,6 +271,100 @@ describe("tool registry", () => {
     ]);
   });
 
+  test(`Given builtin tool execution receives a matching call without required arguments,
+    When the registry-owned execution guard validates the call,
+    Then it rejects the malformed internal call before reaching the tool executor`, () => {
+    const [readTool] = builtinTools;
+    expect(readTool.name).toBe("read");
+
+    expect(() =>
+      readTool.executeCall(
+        {
+          workspace: ".",
+          signal: new AbortController().signal,
+          allowBash: false,
+        },
+        { id: "call_read", tool: "read" },
+      ),
+    ).toThrow("Invalid builtin tool call for read");
+  });
+
+  test(`Given builtin tool execution receives a matching call with an invalid argument type,
+    When the registry-owned execution guard validates the call,
+    Then it rejects the malformed internal call before tool-specific validation runs`, () => {
+    const [readTool] = builtinTools;
+    const malformedCall = {
+      id: "call_read",
+      tool: "read",
+      path: "note.txt",
+      offset: "1",
+    };
+    expect(readTool.name).toBe("read");
+
+    expect(() =>
+      readTool.executeCall(
+        {
+          workspace: ".",
+          signal: new AbortController().signal,
+          allowBash: false,
+        },
+        malformedCall,
+      ),
+    ).toThrow("Invalid builtin tool call for read");
+  });
+
+  test(`Given builtin tool execution receives an integer argument with a fractional value,
+    When the registry-owned execution guard validates the call,
+    Then it rejects the malformed internal call before tool-specific validation runs`, () => {
+    const bashTool = builtinTools[6];
+    const malformedCall = {
+      id: "call_bash",
+      tool: "bash",
+      command: "printf ok",
+      timeoutMs: 1.5,
+    };
+    expect(bashTool.name).toBe("bash");
+
+    expect(() =>
+      bashTool.executeCall(
+        {
+          workspace: ".",
+          signal: new AbortController().signal,
+          allowBash: false,
+        },
+        malformedCall,
+      ),
+    ).toThrow("Invalid builtin tool call for bash");
+  });
+
+  test(`Given builtin tool execution receives a matching call with an explicit undefined optional argument,
+    When the registry-owned execution guard validates the call,
+    Then it treats the optional argument as absent`, async () => {
+    const bashTool = builtinTools[6];
+    const callWithAbsentOptional = {
+      id: "call_bash",
+      tool: "bash",
+      command: "printf ok",
+      timeoutMs: undefined,
+    };
+    expect(bashTool.name).toBe("bash");
+
+    await expect(
+      bashTool.executeCall(
+        {
+          workspace: ".",
+          signal: new AbortController().signal,
+          allowBash: false,
+        },
+        callWithAbsentOptional,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      content:
+        "Tool failed: bash failed: shell commands are disabled. Re-run with --bash-policy ask, --bash-policy trusted, or --allow-bash to enable them.",
+    });
+  });
+
   test(`Given builtin tools declare their argument contracts,
     When the registry metadata is inspected,
     Then each tool lists its provider-visible arguments and required fields`, () => {

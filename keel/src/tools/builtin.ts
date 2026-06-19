@@ -90,6 +90,10 @@ interface BuiltinToolCallInput {
   readonly tool: string;
 }
 
+type ObjectFieldValue =
+  | { readonly exists: false }
+  | { readonly exists: true; readonly value: unknown };
+
 interface BuiltinTool<Name extends string, Shape extends ToolArgShape> {
   readonly name: Name;
   readonly description: string;
@@ -104,6 +108,11 @@ interface BuiltinTool<Name extends string, Shape extends ToolArgShape> {
 
 interface BuiltinToolRuntime<Name extends string, Shape extends ToolArgShape>
   extends BuiltinTool<Name, Shape> {
+  readonly isCall: (
+    toolCall: BuiltinToolCallInput,
+  ) => toolCall is BuiltinToolCallInput & {
+    readonly tool: Name;
+  } & z.infer<ToolArgsSchema<Shape>>;
   readonly executeCall: (
     context: BuiltinToolExecutionContext,
     toolCall: BuiltinToolCallInput,
@@ -120,19 +129,61 @@ interface IntegerToolArgOptions extends ToolArgOptions {
   readonly maximum?: number;
 }
 
+function objectFieldValue(input: object, key: string): ObjectFieldValue {
+  for (const [name, value] of Object.entries(input)) {
+    if (name === key) {
+      return { exists: true, value };
+    }
+  }
+  return { exists: false };
+}
+
+function isToolArgValue(field: ToolArgDefinition, value: unknown): boolean {
+  if (value === undefined) {
+    return !field.required;
+  }
+
+  switch (field.type) {
+    case "string":
+      return typeof value === "string";
+    case "integer":
+      return typeof value === "number" && Number.isInteger(value);
+    case "boolean":
+      return typeof value === "boolean";
+  }
+}
+
 function defineTool<
   const Name extends string,
   const Shape extends ToolArgShape,
 >(tool: BuiltinTool<Name, Shape>): BuiltinToolRuntime<Name, Shape> {
+  function hasCallArgumentShape(toolCall: BuiltinToolCallInput): boolean {
+    for (const [name, field] of Object.entries(tool.args.fields)) {
+      const value = objectFieldValue(toolCall, name);
+      if (!value.exists) {
+        if (field.required) {
+          return false;
+        }
+        continue;
+      }
+
+      if (!isToolArgValue(field, value.value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   function isCallForThisTool(
     toolCall: BuiltinToolCallInput,
   ): toolCall is BuiltinToolCallInput & {
     readonly tool: Name;
   } & z.infer<ToolArgsSchema<Shape>> {
-    return toolCall.tool === tool.name;
+    return toolCall.tool === tool.name && hasCallArgumentShape(toolCall);
   }
 
   return Object.assign({}, tool, {
+    isCall: isCallForThisTool,
     executeCall: (
       context: BuiltinToolExecutionContext,
       toolCall: BuiltinToolCallInput,
@@ -140,8 +191,7 @@ function defineTool<
       if (isCallForThisTool(toolCall)) {
         return tool.execute(context, toolCall);
       }
-      /* v8 ignore next: registry selects executeCall by tool name. */
-      throw new Error(`Mismatched builtin tool call for ${toolCall.tool}`);
+      throw new Error(`Invalid builtin tool call for ${tool.name}`);
     },
   });
 }
