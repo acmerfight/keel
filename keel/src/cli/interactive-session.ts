@@ -123,6 +123,80 @@ function formatManualCompactionFailure(error: unknown): string {
   return `Context compaction failed: ${sanitizeStatusLineText(message)}\n`;
 }
 
+interface ManualCompactContext {
+  readonly command: ManualCompactCommand;
+  readonly resolved: InteractiveResolvedProvider;
+  readonly messages: Message[];
+  readonly systemPrompt: string;
+  readonly signal: AbortSignal;
+  readonly options: InteractiveSessionOptions;
+}
+
+async function executeManualCompaction(
+  ctx: ManualCompactContext,
+): Promise<void> {
+  const { command, resolved, messages, systemPrompt, signal, options } = ctx;
+  const manualCostModel =
+    options.cliArgs.maxCostUsd === undefined
+      ? undefined
+      : options.requireKnownCostModel(resolved);
+  const messagesBeforeCompact = messages.slice();
+
+  try {
+    const result = await compactMessages({
+      provider: resolved.provider,
+      systemPrompt,
+      messages,
+      signal,
+      ...(resolved.contextCompaction !== undefined
+        ? { contextCompaction: resolved.contextCompaction }
+        : {}),
+      ...(command.focusInstruction !== undefined
+        ? { focusInstruction: command.focusInstruction }
+        : {}),
+    });
+    if (signal.aborted) {
+      messages.splice(0, messages.length, ...messagesBeforeCompact);
+      options.writeStdout("\n");
+      return;
+    }
+    if (result.compacted && result.stats !== undefined) {
+      options.writeStderr(
+        formatContextCompactionReport({
+          ...result.stats,
+          reasonLabel: "manual",
+        }),
+      );
+      if (
+        options.cliArgs.maxCostUsd !== undefined &&
+        manualCostModel !== undefined
+      ) {
+        options.writeStderr(
+          options.formatCostReport(
+            manualCompactionCostReport(
+              result.usage,
+              manualCostModel,
+              options.cliArgs.maxCostUsd,
+            ),
+            options.cliArgs.maxCostUsd,
+          ),
+        );
+      }
+    } else {
+      options.writeStderr(
+        "Context compaction skipped: no safe history to compact.\n",
+      );
+    }
+  } catch (error) {
+    messages.splice(0, messages.length, ...messagesBeforeCompact);
+    if (signal.aborted) {
+      options.writeStdout("\n");
+      return;
+    }
+    options.writeStderr(formatManualCompactionFailure(error));
+  }
+}
+
 function manualCompactionCostReport(
   usage: Usage,
   model: CostModel,
@@ -379,70 +453,17 @@ export async function runInteractiveSession(
           );
           continue;
         }
-
-        const manualCostModel =
-          options.cliArgs.maxCostUsd === undefined
-            ? undefined
-            : options.requireKnownCostModel(resolved);
-        const messagesBeforeCompact = messages.slice();
         const compactAbortController = new AbortController();
         activeAbortController = compactAbortController;
         try {
-          const result = await compactMessages({
-            provider: resolved.provider,
-            systemPrompt,
+          await executeManualCompaction({
+            command: manualCompactCommand,
+            resolved,
             messages,
+            systemPrompt,
             signal: compactAbortController.signal,
-            ...(resolved.contextCompaction !== undefined
-              ? { contextCompaction: resolved.contextCompaction }
-              : {}),
-            ...(manualCompactCommand.focusInstruction !== undefined
-              ? { focusInstruction: manualCompactCommand.focusInstruction }
-              : {}),
+            options,
           });
-          // A summary can finish just as Ctrl-C is delivered; keep manual abort
-          // semantics by rolling back the newly installed checkpoint.
-          if (compactAbortController.signal.aborted) {
-            messages.splice(0, messages.length, ...messagesBeforeCompact);
-            options.writeStdout("\n");
-            continue;
-          }
-          if (result.compacted && result.stats !== undefined) {
-            options.writeStderr(
-              formatContextCompactionReport({
-                ...result.stats,
-                reasonLabel: "manual",
-              }),
-            );
-            if (
-              options.cliArgs.maxCostUsd !== undefined &&
-              manualCostModel !== undefined
-            ) {
-              options.writeStderr(
-                options.formatCostReport(
-                  manualCompactionCostReport(
-                    result.usage,
-                    manualCostModel,
-                    options.cliArgs.maxCostUsd,
-                  ),
-                  options.cliArgs.maxCostUsd,
-                ),
-              );
-            }
-          } else {
-            options.writeStderr(
-              "Context compaction skipped: no safe history to compact.\n",
-            );
-          }
-        } catch (error) {
-          // Keep rollback unconditional so abort/failure races cannot preserve a
-          // partially installed checkpoint.
-          messages.splice(0, messages.length, ...messagesBeforeCompact);
-          if (compactAbortController.signal.aborted) {
-            options.writeStdout("\n");
-            continue;
-          }
-          options.writeStderr(formatManualCompactionFailure(error));
         } finally {
           activeAbortController = null;
         }
