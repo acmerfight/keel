@@ -43,7 +43,7 @@ function detectLineEnding(content: string): "\r\n" | "\n" | undefined {
 }
 
 function normalizeLineEndings(text: string): string {
-  return text.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
+  return text.replace(/\r\n/gu, "\n");
 }
 
 function lineEndingAdjusted(text: string, lineEnding: "\r\n" | "\n"): string {
@@ -68,14 +68,6 @@ function normalizeWithSourceMap(content: string): NormalizedText {
       index += 2;
       continue;
     }
-    /* v8 ignore next 6: lone CR is normalized defensively; supported text files use LF or CRLF. */
-    if (content[index] === "\r") {
-      normalized.push("\n");
-      sourceIndexByNormalizedIndex.push(index);
-      index++;
-      continue;
-    }
-
     normalized.push(content.charAt(index));
     sourceIndexByNormalizedIndex.push(index);
     index++;
@@ -96,7 +88,7 @@ function originalSpan(
       : normalized.sourceIndexByNormalizedIndex[normalizedEnd];
   /* v8 ignore next 3: locateUniqueEditSpan only returns spans from normalized text. */
   if (index === undefined || end === undefined) {
-    return { index: originalLength, length: 0 };
+    throw new Error("edit source map invariant violated: match is invalid");
   }
   return { index, length: end - index };
 }

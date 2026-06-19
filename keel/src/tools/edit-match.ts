@@ -83,12 +83,9 @@ function trailingWhitespaceTrimmed(line: string): string {
 
 function leadingWhitespaceLength(line: string): number {
   let length = 0;
-  while (length < line.length) {
-    const character = line[length];
-    if (character !== " " && character !== "\t") return length;
+  while (line[length] === " " || line[length] === "\t") {
     length++;
   }
-  /* v8 ignore next: whitespace-only lines are ignored before indent counting. */
   return length;
 }
 
@@ -128,7 +125,7 @@ function candidateSpan(
   const lastLine = lines[startLine + lineCount - 1];
   /* v8 ignore next 3: lineBasedMatches bounds-checks candidate windows before computing spans. */
   if (firstLine === undefined || lastLine === undefined) {
-    return null;
+    throw new Error("edit match invariant violated: candidate span is invalid");
   }
   if (endsWithNewline && lastLine.end === lastLine.contentEnd) return null;
   return {
@@ -202,12 +199,13 @@ function indentationFlexibleMatches(
 }
 
 function uniqueMatchResult(matches: readonly EditMatchSpan[]): EditMatchResult {
-  if (matches.length === 0) return { status: "not_found" };
-  if (matches.length > 1) {
-    return { status: "not_unique", occurrenceCount: matches.length };
+  let match: EditMatchSpan | undefined;
+  for (const candidate of matches) {
+    if (match !== undefined) {
+      return { status: "not_unique", occurrenceCount: matches.length };
+    }
+    match = candidate;
   }
-  const [match] = matches;
-  /* v8 ignore next 3: length checks above guarantee the single-match element exists. */
   if (match === undefined) {
     return { status: "not_found" };
   }
