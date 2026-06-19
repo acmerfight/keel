@@ -44,7 +44,7 @@ describe("Conversation History", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Remember alpha." },
-      { role: "assistant", content: "I will remember alpha." },
+      { role: "assistant", content: "I will remember alpha.", toolCalls: [] },
       { role: "user", content: "What should you remember?" },
     ];
     let providerMessages: readonly Message[] | null = null;
@@ -71,14 +71,14 @@ describe("Conversation History", () => {
     // Then
     expect(receivedMessages(providerMessages)).toEqual([
       { role: "user", content: "Remember alpha." },
-      { role: "assistant", content: "I will remember alpha." },
+      { role: "assistant", content: "I will remember alpha.", toolCalls: [] },
       { role: "user", content: "What should you remember?" },
     ]);
     expect(messages).toEqual([
       { role: "user", content: "Remember alpha." },
-      { role: "assistant", content: "I will remember alpha." },
+      { role: "assistant", content: "I will remember alpha.", toolCalls: [] },
       { role: "user", content: "What should you remember?" },
-      { role: "assistant", content: "Alpha." },
+      { role: "assistant", content: "Alpha.", toolCalls: [] },
     ]);
   });
 
@@ -142,6 +142,7 @@ describe("Conversation History", () => {
     expect(messages.at(-1)).toEqual({
       role: "assistant",
       content: "Read package.json.",
+      toolCalls: [],
     });
   });
 
@@ -225,7 +226,11 @@ describe("Conversation History", () => {
         content: expect.stringContaining('"name": "keel"'),
       },
       { role: "user", content: "Also explain the scripts." },
-      { role: "assistant", content: "Read package and noted steering." },
+      {
+        role: "assistant",
+        content: "Read package and noted steering.",
+        toolCalls: [],
+      },
     ]);
   });
 
@@ -235,7 +240,11 @@ describe("Conversation History", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Older task details ".repeat(80) },
-      { role: "assistant", content: "Older progress ".repeat(80) },
+      {
+        role: "assistant",
+        content: "Older progress ".repeat(80),
+        toolCalls: [],
+      },
       { role: "user", content: "Continue with the latest step." },
     ];
     const providerRequests: (readonly Message[])[] = [];
@@ -291,7 +300,11 @@ describe("Conversation History", () => {
         content: expect.stringContaining("<conversation-checkpoint>"),
       },
       { role: "user", content: "Continue with the latest step." },
-      { role: "assistant", content: "Continued after checkpoint." },
+      {
+        role: "assistant",
+        content: "Continued after checkpoint.",
+        toolCalls: [],
+      },
     ]);
   });
 });

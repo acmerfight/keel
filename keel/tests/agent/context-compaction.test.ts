@@ -124,7 +124,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Earlier context ".repeat(80) },
-      { role: "assistant", content: "Earlier answer ".repeat(80) },
+      {
+        role: "assistant",
+        content: "Earlier answer ".repeat(80),
+        toolCalls: [],
+      },
       { role: "user", content: "Continue." },
     ];
     let summaryRequested = false;
@@ -241,9 +245,7 @@ describe("Context Compaction", () => {
     });
     const [assistantMessage] = messages;
     const [editToolCall] =
-      assistantMessage?.role === "assistant"
-        ? (assistantMessage.toolCalls ?? [])
-        : [];
+      assistantMessage?.role === "assistant" ? assistantMessage.toolCalls : [];
     if (editToolCall?.tool !== "edit") {
       throw new Error("test setup expected an edit tool call");
     }
@@ -297,9 +299,7 @@ describe("Context Compaction", () => {
     });
     const [assistantMessage] = messages;
     const [editToolCall] =
-      assistantMessage?.role === "assistant"
-        ? (assistantMessage.toolCalls ?? [])
-        : [];
+      assistantMessage?.role === "assistant" ? assistantMessage.toolCalls : [];
     if (editToolCall?.tool !== "edit") {
       throw new Error("test setup expected an edit tool call");
     }
@@ -510,6 +510,7 @@ describe("Context Compaction", () => {
         {
           role: "assistant",
           content: "Completed assistant response ".repeat(80),
+          toolCalls: [],
         },
       ],
       mismatchedCache: {
@@ -802,7 +803,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Inspect." },
-      { role: "assistant", content: "I can summarize up to here." },
+      {
+        role: "assistant",
+        content: "I can summarize up to here.",
+        toolCalls: [],
+      },
       { role: "user", content: "Read package." },
       {
         role: "assistant",
@@ -876,6 +881,7 @@ describe("Context Compaction", () => {
       {
         role: "assistant",
         content: "The root cause is stale config normalization.",
+        toolCalls: [],
       },
       { role: "user", content: "Continue." },
     ];
@@ -918,6 +924,7 @@ describe("Context Compaction", () => {
       {
         role: "assistant",
         content: "The root cause is stale config normalization.",
+        toolCalls: [],
       },
       { role: "user", content: "Continue." },
     ];
@@ -957,7 +964,7 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Earlier ask." },
-      { role: "assistant", content: "Recent answer." },
+      { role: "assistant", content: "Recent answer.", toolCalls: [] },
       { role: "user", content: "Continue." },
     ];
     const provider: LLMProvider = {
@@ -991,7 +998,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Investigate alpha failure." },
-      { role: "assistant", content: "Alpha failure comes from config drift." },
+      {
+        role: "assistant",
+        content: "Alpha failure comes from config drift.",
+        toolCalls: [],
+      },
       { role: "user", content: "Continue from the first phase." },
     ];
     const summaryPrompts: string[] = [];
@@ -1022,7 +1033,11 @@ describe("Context Compaction", () => {
       contextCompaction: { keepRecentTokens: 1 },
     });
     messages.push(
-      { role: "assistant", content: "Work continued after the checkpoint." },
+      {
+        role: "assistant",
+        content: "Work continued after the checkpoint.",
+        toolCalls: [],
+      },
       { role: "user", content: "Continue again." },
     );
     const second = await compactMessages({
@@ -1079,7 +1094,11 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Investigate alpha failure." },
-      { role: "assistant", content: "Alpha failure comes from config drift." },
+      {
+        role: "assistant",
+        content: "Alpha failure comes from config drift.",
+        toolCalls: [],
+      },
       { role: "user", content: "Continue from the first phase." },
     ];
     const summaryPrompts: string[] = [];
@@ -1111,7 +1130,11 @@ describe("Context Compaction", () => {
     });
     const storedCheckpoint = messages[0];
     messages.push(
-      { role: "assistant", content: "Work continued after the checkpoint." },
+      {
+        role: "assistant",
+        content: "Work continued after the checkpoint.",
+        toolCalls: [],
+      },
       { role: "user", content: "Continue again." },
     );
     const second = await compactMessages({
@@ -1164,7 +1187,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: userAuthoredCheckpointLikeText },
-      { role: "assistant", content: "Noted the example." },
+      { role: "assistant", content: "Noted the example.", toolCalls: [] },
       { role: "user", content: "Continue." },
     ];
     let summaryPrompt = "";
@@ -1210,7 +1233,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: userAuthoredEmptySummaryCheckpoint },
-      { role: "assistant", content: "Noted the empty example." },
+      { role: "assistant", content: "Noted the empty example.", toolCalls: [] },
       { role: "user", content: "Continue." },
     ];
     let summaryPrompt = "";
@@ -1253,7 +1276,11 @@ describe("Context Compaction", () => {
           noLaterMessages: true,
         }),
       },
-      { role: "assistant", content: "Resumed from the checkpoint." },
+      {
+        role: "assistant",
+        content: "Resumed from the checkpoint.",
+        toolCalls: [],
+      },
       { role: "user", content: "Continue after resume." },
     ];
     let summaryPrompt = "";
@@ -1293,7 +1320,7 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Earlier task." },
-      { role: "assistant", content: "Earlier progress." },
+      { role: "assistant", content: "Earlier progress.", toolCalls: [] },
       { role: "user", content: "Continue." },
     ];
     const provider: LLMProvider = {
@@ -1327,7 +1354,7 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Remember alpha." },
-      { role: "assistant", content: "Stored alpha." },
+      { role: "assistant", content: "Stored alpha.", toolCalls: [] },
       { role: "user", content: "Continue." },
     ];
     const provider: LLMProvider = {
@@ -1375,7 +1402,11 @@ describe("Context Compaction", () => {
         toolCallId: "read_long",
         content: "abcdefghijklmnopqrstuvwxyz".repeat(20),
       },
-      { role: "assistant", content: "I inspected package.json." },
+      {
+        role: "assistant",
+        content: "I inspected package.json.",
+        toolCalls: [],
+      },
       { role: "user", content: "Continue." },
     ];
     let summaryPrompt = "";
@@ -1426,7 +1457,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Earlier user context ".repeat(20) },
-      { role: "assistant", content: "Earlier assistant context ".repeat(20) },
+      {
+        role: "assistant",
+        content: "Earlier assistant context ".repeat(20),
+        toolCalls: [],
+      },
       { role: "user", content: "Continue." },
     ];
     let summaryPrompt = "";
@@ -1464,7 +1499,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Earlier task ".repeat(5_000) },
-      { role: "assistant", content: "Earlier progress ".repeat(5_000) },
+      {
+        role: "assistant",
+        content: "Earlier progress ".repeat(5_000),
+        toolCalls: [],
+      },
       { role: "user", content: "Finish now." },
     ];
     let summaryRequests = 0;
@@ -1510,7 +1549,7 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Remember alpha." },
-      { role: "assistant", content: "Stored alpha." },
+      { role: "assistant", content: "Stored alpha.", toolCalls: [] },
       { role: "user", content: "Continue." },
     ];
     const provider: LLMProvider = {
@@ -1547,7 +1586,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Earlier task ".repeat(80) },
-      { role: "assistant", content: "Earlier progress ".repeat(80) },
+      {
+        role: "assistant",
+        content: "Earlier progress ".repeat(80),
+        toolCalls: [],
+      },
       { role: "user", content: "Finish now." },
     ];
     let summaryRequests = 0;
@@ -1589,7 +1632,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Earlier task ".repeat(80) },
-      { role: "assistant", content: "Earlier progress ".repeat(80) },
+      {
+        role: "assistant",
+        content: "Earlier progress ".repeat(80),
+        toolCalls: [],
+      },
       { role: "user", content: "Finish now." },
     ];
     let mainRequests = 0;
@@ -1651,7 +1698,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Remember alpha ".repeat(80) },
-      { role: "assistant", content: "Alpha is important. ".repeat(80) },
+      {
+        role: "assistant",
+        content: "Alpha is important. ".repeat(80),
+        toolCalls: [],
+      },
       { role: "user", content: "Now continue with beta." },
     ];
     const mutableProviderRequests: Message[][] = [];
@@ -1731,7 +1782,11 @@ describe("Context Compaction", () => {
         content: expect.stringContaining("<conversation-checkpoint>"),
       },
       { role: "user", content: "Now continue with beta." },
-      { role: "assistant", content: "Continued with compacted context." },
+      {
+        role: "assistant",
+        content: "Continued with compacted context.",
+        toolCalls: [],
+      },
     ]);
     expect(events).toContainEqual({
       type: "text",
@@ -1767,7 +1822,11 @@ describe("Context Compaction", () => {
         toolCallId: "read_package",
         content: "large tool output ".repeat(80),
       },
-      { role: "assistant", content: "I inspected package.json." },
+      {
+        role: "assistant",
+        content: "I inspected package.json.",
+        toolCalls: [],
+      },
       { role: "user", content: "Continue." },
     ];
     const provider: LLMProvider = {
@@ -1794,7 +1853,11 @@ describe("Context Compaction", () => {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
       },
-      { role: "assistant", content: "I inspected package.json." },
+      {
+        role: "assistant",
+        content: "I inspected package.json.",
+        toolCalls: [],
+      },
       { role: "user", content: "Continue." },
     ]);
   });
@@ -1805,7 +1868,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Long prior request ".repeat(80) },
-      { role: "assistant", content: "Long prior answer ".repeat(80) },
+      {
+        role: "assistant",
+        content: "Long prior answer ".repeat(80),
+        toolCalls: [],
+      },
       { role: "user", content: "Continue." },
     ];
     let summaryRequests = 0;
@@ -1950,7 +2017,7 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "prior ".repeat(50) },
-      { role: "assistant", content: "answer ".repeat(45) },
+      { role: "assistant", content: "answer ".repeat(45), toolCalls: [] },
       { role: "user", content: "Run the accounting probe." },
     ];
     let mainRequests = 0;
@@ -2078,7 +2145,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Earlier task ".repeat(80) },
-      { role: "assistant", content: "Earlier progress ".repeat(80) },
+      {
+        role: "assistant",
+        content: "Earlier progress ".repeat(80),
+        toolCalls: [],
+      },
       { role: "user", content: "Finish now." },
     ];
     let requestCount = 0;
@@ -2180,7 +2251,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Remember the setup." },
-      { role: "assistant", content: "Setup remembered." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },
       {
         role: "assistant",
@@ -2201,6 +2272,7 @@ describe("Context Compaction", () => {
       {
         role: "assistant",
         content: "The old report was inspected; alpha is the key finding.",
+        toolCalls: [],
       },
       { role: "user", content: "Continue with the latest instruction." },
     ];
@@ -2286,9 +2358,7 @@ describe("Context Compaction", () => {
     const toolCallIndex = retriedMessages.findIndex(
       (message) =>
         message.role === "assistant" &&
-        (message.toolCalls ?? []).some(
-          (toolCall) => toolCall.id === "read_old_report",
-        ),
+        message.toolCalls.some((toolCall) => toolCall.id === "read_old_report"),
     );
     const toolResultIndex = retriedMessages.findIndex(
       (message) =>
@@ -2349,7 +2419,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Remember the setup." },
-      { role: "assistant", content: "Setup remembered." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the first log." },
       {
         role: "assistant",
@@ -2364,6 +2434,7 @@ describe("Context Compaction", () => {
       {
         role: "assistant",
         content: "The first log was inspected.",
+        toolCalls: [],
       },
       { role: "user", content: "Read the second log." },
       {
@@ -2381,6 +2452,7 @@ describe("Context Compaction", () => {
       {
         role: "assistant",
         content: "The second log was inspected.",
+        toolCalls: [],
       },
       { role: "user", content: "Continue with the latest instruction." },
     ];
@@ -2500,7 +2572,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Remember the setup." },
-      { role: "assistant", content: "Setup remembered." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Analyze the current log." },
       {
         role: "assistant",
@@ -2521,6 +2593,7 @@ describe("Context Compaction", () => {
       {
         role: "assistant",
         content: "The current log was inspected; beta is the key finding.",
+        toolCalls: [],
       },
     ];
     let mainRequests = 0;
@@ -2615,7 +2688,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Remember the baseline." },
-      { role: "assistant", content: "Baseline remembered." },
+      { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
       { role: "user", content: pastedLog },
       {
         role: "user",
@@ -2677,7 +2750,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Remember the baseline." },
-      { role: "assistant", content: "Baseline remembered." },
+      { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
       { role: "user", content: "Read the consumed log." },
       {
         role: "assistant",
@@ -2698,6 +2771,7 @@ describe("Context Compaction", () => {
       {
         role: "assistant",
         content: "Consumed log inspected; gamma is the key finding.",
+        toolCalls: [],
       },
       {
         role: "user",
@@ -2741,6 +2815,7 @@ describe("Context Compaction", () => {
       {
         role: "assistant",
         content: "Consumed log inspected; gamma is the key finding.",
+        toolCalls: [],
       },
       {
         role: "user",
@@ -2755,7 +2830,7 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Older setup ".repeat(100) },
-      { role: "assistant", content: "Older setup remembered." },
+      { role: "assistant", content: "Older setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the pending report." },
       {
         role: "assistant",
@@ -2827,7 +2902,7 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Older setup ".repeat(100) },
-      { role: "assistant", content: "Older setup remembered." },
+      { role: "assistant", content: "Older setup remembered.", toolCalls: [] },
       {
         role: "user",
         content: "Older steering note before pending work ".repeat(80),
@@ -2904,12 +2979,16 @@ describe("Context Compaction", () => {
     const strayToolOutput = "stray tool output ".repeat(400);
     const messages: Message[] = [
       { role: "user", content: "Older setup ".repeat(100) },
-      { role: "assistant", content: "Older setup remembered." },
+      { role: "assistant", content: "Older setup remembered.", toolCalls: [] },
       {
         role: "user",
         content: "Continue from malformed history ".repeat(200),
       },
-      { role: "assistant", content: "Progress before a stray tool result." },
+      {
+        role: "assistant",
+        content: "Progress before a stray tool result.",
+        toolCalls: [],
+      },
       {
         role: "tool",
         toolCallId: "stray_tool_result",
@@ -2944,6 +3023,7 @@ describe("Context Compaction", () => {
     expect(messages).toContainEqual({
       role: "assistant",
       content: "Progress before a stray tool result.",
+      toolCalls: [],
     });
     expect(messages).toContainEqual({
       role: "tool",
@@ -2967,7 +3047,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Remember the setup." },
-      { role: "assistant", content: "Setup remembered." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the current log." },
       {
         role: "assistant",
@@ -3081,9 +3161,13 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Remember the baseline." },
-      { role: "assistant", content: "Baseline remembered." },
+      { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
       { role: "user", content: "Review the older recent note." },
-      { role: "assistant", content: "Older recent note can be summarized." },
+      {
+        role: "assistant",
+        content: "Older recent note can be summarized.",
+        toolCalls: [],
+      },
       { role: "user", content: "Read the current log." },
       {
         role: "assistant",
@@ -3164,7 +3248,7 @@ describe("Context Compaction", () => {
     const toolCallIndex = retriedMessages.findIndex(
       (message) =>
         message.role === "assistant" &&
-        (message.toolCalls ?? []).some(
+        message.toolCalls.some(
           (toolCall) => toolCall.id === "read_unconsumed_log",
         ),
     );
@@ -3200,7 +3284,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Remember the baseline." },
-      { role: "assistant", content: "Baseline remembered." },
+      { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
       { role: "user", content: "Read the queued steering log." },
       {
         role: "assistant",
@@ -3326,7 +3410,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Remember the baseline." },
-      { role: "assistant", content: "Baseline remembered." },
+      { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
       { role: "user", content: "Read both current logs." },
       {
         role: "assistant",
@@ -3384,8 +3468,7 @@ describe("Context Compaction", () => {
         retriedMessages = [...options.messages];
         const toolRequestIndex = retriedMessages.findIndex(
           (message) =>
-            message.role === "assistant" &&
-            (message.toolCalls ?? []).length === 2,
+            message.role === "assistant" && message.toolCalls.length === 2,
         );
         const firstToolIndex = retriedMessages.findIndex(
           (message) =>
@@ -3469,7 +3552,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Remember the baseline." },
-      { role: "assistant", content: "Baseline remembered." },
+      { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
       { role: "user", content: "Inspect both logs before answering." },
       {
         role: "assistant",
@@ -3583,7 +3666,7 @@ describe("Context Compaction", () => {
     )}\n[stale tool output compacted: approximately omitted 8000 chars]`;
     const messages: Message[] = [
       { role: "user", content: "Remember the setup." },
-      { role: "assistant", content: "Setup remembered." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },
       {
         role: "assistant",
@@ -3604,6 +3687,7 @@ describe("Context Compaction", () => {
       {
         role: "assistant",
         content: "The compacted old report was already inspected.",
+        toolCalls: [],
       },
       { role: "user", content: "Continue with the latest instruction." },
     ];
@@ -3649,7 +3733,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Remember the setup." },
-      { role: "assistant", content: "Setup remembered." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },
       {
         role: "assistant",
@@ -3670,6 +3754,7 @@ describe("Context Compaction", () => {
       {
         role: "assistant",
         content: "The marker suffix log was already inspected.",
+        toolCalls: [],
       },
       { role: "user", content: "Continue with the latest instruction." },
     ];
@@ -3720,7 +3805,7 @@ describe("Context Compaction", () => {
     ].join("\n");
     const messages: Message[] = [
       { role: "user", content: "Remember the setup." },
-      { role: "assistant", content: "Setup remembered." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },
       {
         role: "assistant",
@@ -3741,6 +3826,7 @@ describe("Context Compaction", () => {
       {
         role: "assistant",
         content: "The marker log was already inspected.",
+        toolCalls: [],
       },
       { role: "user", content: "Continue with the latest instruction." },
     ];
@@ -3963,7 +4049,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Earlier task ".repeat(80) },
-      { role: "assistant", content: "Earlier progress ".repeat(80) },
+      {
+        role: "assistant",
+        content: "Earlier progress ".repeat(80),
+        toolCalls: [],
+      },
       { role: "user", content: "Finish now." },
     ];
     let requestCount = 0;
@@ -4010,7 +4100,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Earlier task ".repeat(80) },
-      { role: "assistant", content: "Earlier progress ".repeat(80) },
+      {
+        role: "assistant",
+        content: "Earlier progress ".repeat(80),
+        toolCalls: [],
+      },
       { role: "user", content: "Finish now." },
     ];
     let mainRequests = 0;
@@ -4106,7 +4200,11 @@ describe("Context Compaction", () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Earlier context ".repeat(80) },
-      { role: "assistant", content: "Earlier answer ".repeat(80) },
+      {
+        role: "assistant",
+        content: "Earlier answer ".repeat(80),
+        toolCalls: [],
+      },
       { role: "user", content: "Read package then answer." },
     ];
     let mainRequests = 0;
@@ -4253,6 +4351,7 @@ describe("Context Compaction", () => {
     expect(messages.at(-1)).toEqual({
       role: "assistant",
       content: "Need to inspect.\nStopped before running tools.",
+      toolCalls: [],
     });
   });
 });

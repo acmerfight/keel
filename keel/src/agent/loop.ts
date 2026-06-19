@@ -139,7 +139,7 @@ function priorToolCallsFromMessages(messages: readonly Message[]): ToolCall[] {
   const currentTurnHistory =
     lastUserIndex < 0 ? messages : messages.slice(lastUserIndex + 1);
   return currentTurnHistory.flatMap((message) =>
-    message.role === "assistant" ? (message.toolCalls ?? []) : [],
+    message.role === "assistant" ? message.toolCalls : [],
   );
 }
 
@@ -152,7 +152,9 @@ function toolRequestMessage(turn: AgentTurn): Message {
 }
 
 function finalReplyMessage(text: string): Message | null {
-  return text === "" ? null : { role: "assistant", content: text };
+  return text === ""
+    ? null
+    : { role: "assistant", content: text, toolCalls: [] };
 }
 
 function finishAgentTurn(
