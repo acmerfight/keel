@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { builtinTools } from "../../src/tools/builtin.ts";
 import {
   openAICompatibleTools,
   toolCallArguments,
@@ -6,6 +7,203 @@ import {
 } from "../../src/tools/registry.ts";
 
 describe("tool registry", () => {
+  test(`Given builtin tools declare display contracts,
+    When labels and approval prompts are rendered,
+    Then each tool has explicit user-visible text without generic fallback`, () => {
+    const [
+      readTool,
+      lsTool,
+      globTool,
+      grepTool,
+      editTool,
+      writeTool,
+      bashTool,
+    ] = builtinTools;
+
+    expect(readTool.display.formatLabel({ path: "src/index.ts" })).toBe(
+      "read src/index.ts",
+    );
+    expect(lsTool.display.formatLabel({})).toBe("ls .");
+    expect(lsTool.display.formatLabel({ path: "src" })).toBe("ls src");
+    expect(
+      globTool.display.formatLabel({ pattern: "**/*.ts", path: "src" }),
+    ).toBe("glob **/*.ts src");
+    expect(grepTool.display.formatLabel({ pattern: "needle" })).toBe(
+      "grep needle",
+    );
+    expect(
+      editTool.display.formatLabel({
+        path: "a.ts",
+        oldString: "old",
+        newString: "new",
+      }),
+    ).toBe("edit a.ts");
+    expect(
+      writeTool.display.formatLabel({ path: "new.ts", content: "new" }),
+    ).toBe("write new.ts");
+    expect(bashTool.display.formatLabel({ command: "pnpm test" })).toBe(
+      "bash pnpm test",
+    );
+
+    expect(bashTool.permission.kind).toBe("approval");
+    if (bashTool.permission.kind === "approval") {
+      expect(bashTool.permission.renderPrompt({ command: "pnpm test" })).toBe(
+        "Run shell command: pnpm test",
+      );
+    }
+  });
+
+  test(`Given builtin tools declare their contracts,
+    When the registry metadata is inspected,
+    Then every builtin tool has a unique name in stable order`, () => {
+    const names = builtinTools.map((tool) => tool.name);
+
+    expect(names).toEqual([
+      "read",
+      "ls",
+      "glob",
+      "grep",
+      "edit",
+      "write",
+      "bash",
+    ]);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  test(`Given builtin tools declare their behavior contracts,
+    When the registry metadata is inspected,
+    Then each tool makes permission output risk and concurrency explicit`, () => {
+    const contracts = builtinTools.map((tool) => ({
+      name: tool.name,
+      permission: tool.permission.kind,
+      output: tool.output.kind,
+      risk: tool.risk,
+      concurrency: tool.concurrency,
+      hasFormatLabel: typeof tool.display.formatLabel === "function",
+      execute: tool.execute,
+    }));
+
+    expect(contracts).toEqual([
+      {
+        name: "read",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-read" },
+        concurrency: { kind: "parallel-safe" },
+        hasFormatLabel: true,
+        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+      },
+      {
+        name: "ls",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-read" },
+        concurrency: { kind: "parallel-safe" },
+        hasFormatLabel: true,
+        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+      },
+      {
+        name: "glob",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-read" },
+        concurrency: { kind: "parallel-safe" },
+        hasFormatLabel: true,
+        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+      },
+      {
+        name: "grep",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-read" },
+        concurrency: { kind: "parallel-safe" },
+        hasFormatLabel: true,
+        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+      },
+      {
+        name: "edit",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-write", destructive: false },
+        concurrency: {
+          kind: "exclusive",
+          reason: "May mutate workspace files.",
+        },
+        hasFormatLabel: true,
+        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+      },
+      {
+        name: "write",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-write", destructive: true },
+        concurrency: {
+          kind: "exclusive",
+          reason: "Creates workspace files.",
+        },
+        hasFormatLabel: true,
+        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+      },
+      {
+        name: "bash",
+        permission: "approval",
+        output: "text",
+        risk: { kind: "trusted-shell" },
+        concurrency: {
+          kind: "exclusive",
+          reason: "May mutate workspace or depend on process state.",
+        },
+        hasFormatLabel: true,
+        execute: { kind: "legacy-switch", owner: "executeToolCall" },
+      },
+    ]);
+  });
+
+  test(`Given builtin tools declare their argument contracts,
+    When the registry metadata is inspected,
+    Then each tool lists its provider-visible arguments and required fields`, () => {
+    const argumentsByTool = Object.fromEntries(
+      builtinTools.map((tool) => [
+        tool.name,
+        {
+          fields: Object.keys(tool.args.fields),
+          required: Object.entries(tool.args.fields)
+            .filter(([, field]) => field.required)
+            .map(([name]) => name),
+        },
+      ]),
+    );
+
+    expect(argumentsByTool).toEqual({
+      read: { fields: ["path", "offset", "limit"], required: ["path"] },
+      ls: { fields: ["path", "limit"], required: [] },
+      glob: { fields: ["pattern", "path"], required: ["pattern"] },
+      grep: { fields: ["pattern", "path"], required: ["pattern"] },
+      edit: {
+        fields: ["path", "oldString", "newString", "replaceAll"],
+        required: ["path", "oldString", "newString"],
+      },
+      write: { fields: ["path", "content"], required: ["path", "content"] },
+      bash: { fields: ["command", "timeoutMs"], required: ["command"] },
+    });
+  });
+
+  test(`Given provider exposure still uses the legacy list,
+    When builtin metadata is compared with provider tools,
+    Then bash filtering matches the explicit trusted shell risk`, () => {
+    const allBuiltinToolNames = builtinTools.map((tool) => tool.name);
+    const nonShellBuiltinToolNames = builtinTools
+      .filter((tool) => tool.risk.kind !== "trusted-shell")
+      .map((tool) => tool.name);
+
+    expect(
+      openAICompatibleTools(false).map((tool) => tool.function.name),
+    ).toEqual(nonShellBuiltinToolNames);
+    expect(
+      openAICompatibleTools(true).map((tool) => tool.function.name),
+    ).toEqual(allBuiltinToolNames);
+  });
+
   test(`Given bash is disabled,
     When provider tools are requested,
     Then only file tools are exposed in stable order`, () => {

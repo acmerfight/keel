@@ -1,4 +1,12 @@
-import { z } from "zod";
+import {
+  bashToolArgumentsSchema,
+  editToolArgumentsSchema,
+  globToolArgumentsSchema,
+  grepToolArgumentsSchema,
+  lsToolArgumentsSchema,
+  readToolArgumentsSchema,
+  writeToolArgumentsSchema,
+} from "./tool-arguments.ts";
 
 interface OpenAICompatibleToolParameter {
   readonly type: "string" | "integer" | "object" | "boolean";
@@ -71,58 +79,6 @@ export type ToolCall =
     };
 
 export type ToolName = ToolCall["tool"];
-
-const readToolArgumentsSchema = z
-  .object({
-    path: z.string(),
-    offset: z.number().int().positive().optional(),
-    limit: z.number().int().positive().optional(),
-  })
-  .strict();
-
-const lsToolArgumentsSchema = z
-  .object({
-    path: z.string().optional(),
-    limit: z.number().int().positive().max(1000).optional(),
-  })
-  .strict();
-
-const globToolArgumentsSchema = z
-  .object({
-    pattern: z.string(),
-    path: z.string().optional(),
-  })
-  .strict();
-
-const grepToolArgumentsSchema = z
-  .object({
-    pattern: z.string(),
-    path: z.string().optional(),
-  })
-  .strict();
-
-const editToolArgumentsSchema = z
-  .object({
-    path: z.string(),
-    oldString: z.string(),
-    newString: z.string(),
-    replaceAll: z.boolean().optional(),
-  })
-  .strict();
-
-const writeToolArgumentsSchema = z
-  .object({
-    path: z.string(),
-    content: z.string(),
-  })
-  .strict();
-
-const bashToolArgumentsSchema = z
-  .object({
-    command: z.string(),
-    timeoutMs: z.number().int().positive().max(60_000).optional(),
-  })
-  .strict();
 
 const readTool: OpenAICompatibleToolDefinition = {
   type: "function",
