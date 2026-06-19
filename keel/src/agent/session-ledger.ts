@@ -22,11 +22,8 @@ export function sessionLedgerFromMessages(
 
 export function appendSessionLedgerMessage(
   ledger: SessionLedger,
-  message: Message | null,
+  message: Message,
 ): SessionLedger {
-  if (message === null) {
-    return ledger;
-  }
   return {
     entries: [...ledger.entries, { type: "message", message }],
   };

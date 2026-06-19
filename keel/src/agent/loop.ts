@@ -302,7 +302,7 @@ type CompactionState = {
   totalUsage: Usage;
 };
 
-async function compactContextIfPossible(
+async function attemptContextCompaction(
   config: CompactionConfig,
   state: CompactionState,
   streamOptions: LedgerTurnOptions,
@@ -354,7 +354,7 @@ async function* streamTurnWithOverflowRecovery(
       )
     ) {
       compactedBeforeRequest = true;
-      const compaction = await compactContextIfPossible(
+      const compaction = await attemptContextCompaction(
         config,
         state,
         streamOptions,
@@ -398,7 +398,7 @@ async function* streamTurnWithOverflowRecovery(
       if (error instanceof ContextOverflowBeforeAssistantError) {
         if (!overflowRecoveryAttempted) {
           overflowRecoveryAttempted = true;
-          const compaction = await compactContextIfPossible(
+          const compaction = await attemptContextCompaction(
             config,
             state,
             streamOptions,
@@ -438,7 +438,7 @@ export async function* runAgentTurn(
     drainInjectedUserMessages,
   } = options;
   let sessionLedger = sessionLedgerFromMessages(messages);
-  const setSessionLedger = (next: SessionLedger) => {
+  const applySessionLedger = (next: SessionLedger) => {
     sessionLedger = next;
     syncMessagesFromSessionLedger(messages, sessionLedger);
   };
@@ -466,7 +466,7 @@ export async function* runAgentTurn(
       provider,
       systemPrompt,
       getLedger: () => sessionLedger,
-      setLedger: setSessionLedger,
+      setLedger: applySessionLedger,
       signal,
       allowBash,
     });
@@ -481,12 +481,10 @@ export async function* runAgentTurn(
     });
 
     if (decision.type === "stop") {
-      setSessionLedger(
-        appendSessionLedgerMessage(
-          sessionLedger,
-          finalReplyMessage(turnResult.text),
-        ),
-      );
+      const reply = finalReplyMessage(turnResult.text);
+      if (reply !== null) {
+        applySessionLedger(appendSessionLedgerMessage(sessionLedger, reply));
+      }
       yield {
         type: "end",
         usage: state.totalUsage,
@@ -499,10 +497,10 @@ export async function* runAgentTurn(
 
     if (decision.type === "summarize") {
       const interimReply = finalReplyMessage(turnResult.text);
-      let wrapUpLedger = appendSessionLedgerMessage(
-        sessionLedger,
-        interimReply,
-      );
+      let wrapUpLedger =
+        interimReply !== null
+          ? appendSessionLedgerMessage(sessionLedger, interimReply)
+          : sessionLedger;
       wrapUpLedger = appendSessionLedgerMessage(wrapUpLedger, {
         role: "user",
         content: WRAP_UP_INSTRUCTION,
@@ -526,12 +524,12 @@ export async function* runAgentTurn(
       if (wrapUpTurn.text === "") {
         yield { type: "text", text: MISSING_SUMMARY_NOTICE };
       }
-      setSessionLedger(
-        appendSessionLedgerMessage(
-          sessionLedger,
-          finalReplyMessage(`${turnResult.text}${summary}`),
-        ),
-      );
+      const combinedReply = finalReplyMessage(`${turnResult.text}${summary}`);
+      if (combinedReply !== null) {
+        applySessionLedger(
+          appendSessionLedgerMessage(sessionLedger, combinedReply),
+        );
+      }
       state.totalUsage = addUsage(state.totalUsage, wrapUpTurn.usage);
       const finalCost = buildCostReport(state.totalUsage, costTracking);
       yield {
@@ -545,12 +543,10 @@ export async function* runAgentTurn(
     }
 
     if (turnResult.toolCalls.length === 0) {
-      setSessionLedger(
-        appendSessionLedgerMessage(
-          sessionLedger,
-          finalReplyMessage(turnResult.text),
-        ),
-      );
+      const reply = finalReplyMessage(turnResult.text);
+      if (reply !== null) {
+        applySessionLedger(appendSessionLedgerMessage(sessionLedger, reply));
+      }
       yield {
         type: "end",
         usage: state.totalUsage,
@@ -561,7 +557,7 @@ export async function* runAgentTurn(
       return;
     }
 
-    setSessionLedger(
+    applySessionLedger(
       appendSessionLedgerMessage(sessionLedger, toolRequestMessage(turnResult)),
     );
     priorToolCalls.push(...turnResult.toolCalls);
@@ -576,7 +572,7 @@ export async function* runAgentTurn(
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
       yield { type: "tool_end", toolCall, ok: execution.ok };
-      setSessionLedger(
+      applySessionLedger(
         appendSessionLedgerMessage(sessionLedger, {
           role: "tool",
           toolCallId: toolCall.id,
@@ -586,7 +582,7 @@ export async function* runAgentTurn(
     }
 
     if (drainInjectedUserMessages !== undefined && !signal.aborted) {
-      setSessionLedger(
+      applySessionLedger(
         appendSessionLedgerMessages(
           sessionLedger,
           await drainInjectedUserMessages(),
