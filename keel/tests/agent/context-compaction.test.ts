@@ -245,9 +245,7 @@ describe("Context Compaction", () => {
     });
     const [assistantMessage] = messages;
     const [editToolCall] =
-      assistantMessage?.role === "assistant"
-        ? (assistantMessage.toolCalls ?? [])
-        : [];
+      assistantMessage?.role === "assistant" ? assistantMessage.toolCalls : [];
     if (editToolCall?.tool !== "edit") {
       throw new Error("test setup expected an edit tool call");
     }
@@ -301,9 +299,7 @@ describe("Context Compaction", () => {
     });
     const [assistantMessage] = messages;
     const [editToolCall] =
-      assistantMessage?.role === "assistant"
-        ? (assistantMessage.toolCalls ?? [])
-        : [];
+      assistantMessage?.role === "assistant" ? assistantMessage.toolCalls : [];
     if (editToolCall?.tool !== "edit") {
       throw new Error("test setup expected an edit tool call");
     }
@@ -2362,9 +2358,7 @@ describe("Context Compaction", () => {
     const toolCallIndex = retriedMessages.findIndex(
       (message) =>
         message.role === "assistant" &&
-        (message.toolCalls ?? []).some(
-          (toolCall) => toolCall.id === "read_old_report",
-        ),
+        message.toolCalls.some((toolCall) => toolCall.id === "read_old_report"),
     );
     const toolResultIndex = retriedMessages.findIndex(
       (message) =>
@@ -3254,7 +3248,7 @@ describe("Context Compaction", () => {
     const toolCallIndex = retriedMessages.findIndex(
       (message) =>
         message.role === "assistant" &&
-        (message.toolCalls ?? []).some(
+        message.toolCalls.some(
           (toolCall) => toolCall.id === "read_unconsumed_log",
         ),
     );
@@ -3474,8 +3468,7 @@ describe("Context Compaction", () => {
         retriedMessages = [...options.messages];
         const toolRequestIndex = retriedMessages.findIndex(
           (message) =>
-            message.role === "assistant" &&
-            (message.toolCalls ?? []).length === 2,
+            message.role === "assistant" && message.toolCalls.length === 2,
         );
         const firstToolIndex = retriedMessages.findIndex(
           (message) =>
