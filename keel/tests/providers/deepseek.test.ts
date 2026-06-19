@@ -3849,6 +3849,7 @@ describe("DeepSeek Provider", () => {
       const parsed = parseDeepseekRequestBody(capturedBody);
       expect(parsed.tools?.map((tool) => tool.function.name)).toEqual([
         "read",
+        "glob",
         "grep",
         "edit",
         "write",
@@ -3947,6 +3948,7 @@ describe("DeepSeek Provider", () => {
       const parsed = parseDeepseekRequestBody(capturedBody);
       expect(parsed.tools?.map((tool) => tool.function.name)).toEqual([
         "read",
+        "glob",
         "grep",
         "edit",
         "write",
@@ -4136,6 +4138,7 @@ describe("DeepSeek Provider", () => {
       }
       expect(parsed.tools.map((tool) => tool.function.name)).toEqual([
         "read",
+        "glob",
         "grep",
         "edit",
         "write",

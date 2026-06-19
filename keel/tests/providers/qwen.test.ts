@@ -240,6 +240,41 @@ describe("Qwen Provider", () => {
           return;
         }
 
+        if (userMessage === "glob-tool-call") {
+          writeSseResponse(res, [
+            sseData({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "call_qwen_glob",
+                        type: "function",
+                        function: {
+                          name: "glob",
+                          arguments:
+                            '{"pattern":"**/*.test.ts","path":"tests"}',
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            sseData({
+              choices: [{ delta: {}, finish_reason: "tool_calls" }],
+              usage: {
+                prompt_tokens: 100,
+                completion_tokens: 20,
+                prompt_tokens_details: { cached_tokens: 25 },
+              },
+            }),
+            "data: [DONE]\n\n",
+          ]);
+          return;
+        }
+
         writeSseResponse(res, [
           sseData({
             choices: [
@@ -308,6 +343,13 @@ describe("Qwen Provider", () => {
     expect(capturedAuthorization).toBe("Bearer test-qwen-key");
     expect(capturedBody?.model).toBe("qwen3.7-plus");
     expect(capturedBody?.tool_choice).toBe("auto");
+    expect(capturedBody?.tools?.map((tool) => tool.function.name)).toEqual([
+      "read",
+      "glob",
+      "grep",
+      "edit",
+      "write",
+    ]);
     expect(events).toEqual([
       { type: "text", text: "Hello from Qwen." },
       {
@@ -348,6 +390,46 @@ describe("Qwen Provider", () => {
         id: "call_qwen_read",
         tool: "read",
         path: "README.md",
+      },
+      {
+        type: "stop",
+        usage: {
+          inputTokens: 100,
+          cachedInputTokens: 25,
+          uncachedInputTokens: 75,
+          outputTokens: 20,
+        },
+      },
+    ]);
+  });
+
+  test(`Given Qwen requests a glob tool call,
+    When Keel reads the stream,
+    Then the file discovery request is parsed into a Keel tool call`, async () => {
+    // Given
+    const provider = createQwenProvider({
+      apiKey: "test-qwen-key",
+      baseUrl,
+      model: "qwen3.7-plus",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are Keel.",
+        messages: [{ role: "user", content: "glob-tool-call" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_qwen_glob",
+        tool: "glob",
+        pattern: "**/*.test.ts",
+        path: "tests",
       },
       {
         type: "stop",

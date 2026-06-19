@@ -402,6 +402,13 @@ function toolCallFingerprintParts(
         toolCall.pattern,
         toolCall.path ?? null,
       ];
+    case "glob":
+      return [
+        toolCall.id,
+        toolCall.tool,
+        toolCall.pattern,
+        toolCall.path ?? null,
+      ];
     case "edit":
       return [
         toolCall.id,
