@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { extname } from "node:path";
 import { KeelError } from "../core/error.ts";
 
@@ -160,15 +160,49 @@ export interface EditableTextFile {
   readonly hasUtf8Bom: boolean;
 }
 
+export interface ReadEditableTextFileOptions {
+  readonly maxBytes: number;
+  readonly tooLargeError: (observedBytes: number) => KeelError;
+}
+
 function hasUtf8Bom(bytes: Uint8Array): boolean {
   return bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+}
+
+function readFileCapped(targetPath: string, maxBytes: number): Buffer {
+  const readLimit = maxBytes + 1;
+  const chunks: Buffer[] = [];
+  let offset = 0;
+  const fd = openSync(targetPath, "r");
+  try {
+    const reportedSize = fstatSync(fd).size;
+    let nextChunkSize = Math.min(Math.max(reportedSize + 1, 1), readLimit);
+    while (offset < readLimit) {
+      const chunk = Buffer.allocUnsafe(
+        Math.min(nextChunkSize, readLimit - offset),
+      );
+      const read = readSync(fd, chunk, 0, chunk.length, null);
+      if (read === 0) break;
+      chunks.push(chunk.subarray(0, read));
+      offset += read;
+      if (read < chunk.length) break;
+      nextChunkSize = Math.min(Math.max(nextChunkSize * 2, 1), readLimit);
+    }
+    return Buffer.concat(chunks, offset);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export function readEditableTextFileWithMetadata(
   targetPath: string,
   filePath: string,
+  options: ReadEditableTextFileOptions,
 ): EditableTextFile {
-  const bytes = readFileSync(targetPath);
+  const bytes = readFileCapped(targetPath, options.maxBytes);
+  if (bytes.length > options.maxBytes) {
+    throw options.tooLargeError(bytes.length);
+  }
   const sample = bytes.subarray(0, BINARY_SAMPLE_BYTES);
   if (isBinarySample(targetPath, sample) || hasBinaryControlBytes(bytes)) {
     throw binaryFileError("edit", filePath);
