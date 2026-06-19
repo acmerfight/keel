@@ -395,6 +395,13 @@ function toolCallFingerprintParts(
         toolCall.offset ?? null,
         toolCall.limit ?? null,
       ];
+    case "ls":
+      return [
+        toolCall.id,
+        toolCall.tool,
+        toolCall.path ?? null,
+        toolCall.limit ?? null,
+      ];
     case "grep":
       return [
         toolCall.id,

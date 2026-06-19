@@ -27,7 +27,7 @@ src/
   llm/         → Provider abstraction (DeepSeek, Kimi, Qwen, fake, OpenAI-compatible shared runtime)
   permissions/ → Tool permission policies
   testing/     → Test support code (CLI harnesses, fixture factories)
-  tools/       → bash, edit, glob, grep, read, write
+  tools/       → bash, edit, glob, grep, ls, read, write
 ```
 
 Layer rules (enforced by `tests/invariants/boundaries.test.ts`):
@@ -56,7 +56,7 @@ Edit fuzzy matching is only a locator. Replacement must splice the original file
 
 ### Shell Safety Semantics
 
-Keel's project ignore policy is enforced by the built-in file tools: `read`, `glob`, `grep`, `edit`, and `write`. `bash` is disabled by default. When enabled with `--allow-bash` or `--bash-policy trusted`, it is trusted shell mode: commands run with the current OS user's permissions and may read or modify gitignored files. `--bash-policy ask` adds per-command user approval in interactive sessions, but it is still approval, not an OS sandbox. Do not describe bash approval as preserving the file-tool ignore boundary unless a real permission or sandbox layer exists.
+Keel's project ignore policy is enforced by the built-in file tools: `read`, `ls`, `glob`, `grep`, `edit`, and `write`. `bash` is disabled by default. When enabled with `--allow-bash` or `--bash-policy trusted`, it is trusted shell mode: commands run with the current OS user's permissions and may read or modify gitignored files. `--bash-policy ask` adds per-command user approval in interactive sessions, but it is still approval, not an OS sandbox. Do not describe bash approval as preserving the file-tool ignore boundary unless a real permission or sandbox layer exists.
 
 ### Abstraction Discipline
 

@@ -82,6 +82,94 @@ describe("File Discovery", () => {
     }
   });
 
+  test(`Given the user asks about a known directory,
+    When the assistant lists the directory before reading a file,
+    Then the directory entries are available to the next model turn`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-discovery-"));
+    await mkdir(join(workspace, "src", "tools"), { recursive: true });
+    await writeFile(
+      join(workspace, "src", "tools", "edit.ts"),
+      "export const edit = true;\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "src", "tools", "glob.ts"),
+      "export const glob = true;\n",
+      "utf8",
+    );
+
+    let turn = 0;
+    let afterLsMessages: readonly Message[] = [];
+    let afterReadMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "directory-discovery-provider",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "list_tools",
+            tool: "ls",
+            path: "src/tools",
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          afterLsMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "read_edit_tool",
+            tool: "read",
+            path: "src/tools/edit.ts",
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        afterReadMessages = options.messages;
+        yield { type: "text", text: "Listed and read the edit tool." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "inspect src/tools",
+          systemPrompt: "You are a helpful assistant.",
+          signal: new AbortController().signal,
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(afterLsMessages).toContainEqual({
+        role: "tool",
+        toolCallId: "list_tools",
+        content: ["edit.ts", "glob.ts"].join("\n"),
+      });
+      expect(afterReadMessages).toContainEqual({
+        role: "tool",
+        toolCallId: "read_edit_tool",
+        content: "export const edit = true;\n",
+      });
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Listed and read the edit tool.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the user asks about files by name pattern,
     When the assistant discovers matching files before reading one,
     Then the discovered path is available to the next model turn`, async () => {

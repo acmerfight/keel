@@ -345,6 +345,7 @@ describe("Qwen Provider", () => {
     expect(capturedBody?.tool_choice).toBe("auto");
     expect(capturedBody?.tools?.map((tool) => tool.function.name)).toEqual([
       "read",
+      "ls",
       "glob",
       "grep",
       "edit",

@@ -33,6 +33,12 @@ export type ToolCall =
     }
   | {
       readonly id: string;
+      readonly tool: "ls";
+      readonly path?: string;
+      readonly limit?: number;
+    }
+  | {
+      readonly id: string;
       readonly tool: "glob";
       readonly pattern: string;
       readonly path?: string;
@@ -71,6 +77,13 @@ const readToolArgumentsSchema = z
     path: z.string(),
     offset: z.number().int().positive().optional(),
     limit: z.number().int().positive().optional(),
+  })
+  .strict();
+
+const lsToolArgumentsSchema = z
+  .object({
+    path: z.string().optional(),
+    limit: z.number().int().positive().max(1000).optional(),
   })
   .strict();
 
@@ -140,6 +153,38 @@ const readTool: OpenAICompatibleToolDefinition = {
         },
       },
       required: ["path"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const lsTool: OpenAICompatibleToolDefinition = {
+  type: "function",
+  function: {
+    name: "ls",
+    description: [
+      "List direct entries in a workspace directory, skipping gitignored and built-in ignored paths. Directories are suffixed with '/'.",
+      "Use when: you know a directory path and need to inspect its immediate children before choosing files to read.",
+      "Do not use when: searching by file name or extension across a tree (use glob), searching file contents (use grep), or reading file contents (use read).",
+      "On failure: if the path is not a directory, use glob or grep to discover the correct directory; if output is truncated, list a narrower directory or increase limit.",
+    ].join("\n"),
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description:
+            "Optional workspace-relative directory to list. Defaults to the workspace root.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 1000,
+          description:
+            "Optional maximum number of entries to return. Defaults to 200.",
+        },
+      },
+      required: [],
       additionalProperties: false,
     },
   },
@@ -279,7 +324,7 @@ const bashTool: OpenAICompatibleToolDefinition = {
     description: [
       "Run a trusted shell command in the workspace. Commands use the current OS user's permissions and are not constrained by Keel's gitignore file-tool policy. Output is capped to the last 20KB per stream.",
       "Use when: the task needs commands the file tools cannot do, such as running builds, tests, or git.",
-      "Do not use when: a dedicated tool can do the job - prefer read, glob, grep, edit, and write for file inspection and changes.",
+      "Do not use when: a dedicated tool can do the job - prefer read, ls, glob, grep, edit, and write for file inspection and changes.",
       "On failure: a non-zero exit code returns stdout/stderr for diagnosis - fix the command rather than retrying it unchanged; if the command timed out, raise timeoutMs (up to 60000) or run a narrower command.",
     ].join("\n"),
     parameters: {
@@ -306,6 +351,7 @@ const bashTool: OpenAICompatibleToolDefinition = {
 export function isToolName(name: string): name is ToolName {
   return (
     name === "read" ||
+    name === "ls" ||
     name === "glob" ||
     name === "grep" ||
     name === "edit" ||
@@ -318,8 +364,8 @@ export function openAICompatibleTools(
   allowBash: boolean,
 ): readonly OpenAICompatibleToolDefinition[] {
   return allowBash
-    ? [readTool, globTool, grepTool, editTool, writeTool, bashTool]
-    : [readTool, globTool, grepTool, editTool, writeTool];
+    ? [readTool, lsTool, globTool, grepTool, editTool, writeTool, bashTool]
+    : [readTool, lsTool, globTool, grepTool, editTool, writeTool];
 }
 
 export function toolCallFromParsedArguments(
@@ -338,6 +384,18 @@ export function toolCallFromParsedArguments(
         ...(result.data.offset !== undefined
           ? { offset: result.data.offset }
           : {}),
+        ...(result.data.limit !== undefined
+          ? { limit: result.data.limit }
+          : {}),
+      };
+    }
+    case "ls": {
+      const result = lsToolArgumentsSchema.safeParse(parsedArguments);
+      if (!result.success) return null;
+      return {
+        id,
+        tool: "ls",
+        ...(result.data.path !== undefined ? { path: result.data.path } : {}),
         ...(result.data.limit !== undefined
           ? { limit: result.data.limit }
           : {}),
@@ -408,6 +466,11 @@ export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
       return {
         path: toolCall.path,
         ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
+        ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
+      };
+    case "ls":
+      return {
+        ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
         ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
       };
     case "glob":
