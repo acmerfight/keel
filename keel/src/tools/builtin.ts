@@ -113,6 +113,13 @@ interface BuiltinToolRuntime<Name extends string, Shape extends ToolArgShape>
   ) => toolCall is BuiltinToolCallInput & {
     readonly tool: Name;
   } & z.infer<ToolArgsSchema<Shape>>;
+  readonly argumentsFromCall: (
+    toolCall: BuiltinToolCallInput,
+  ) => Record<string, unknown>;
+  readonly canonicalArgumentsFromCall: (
+    toolCall: BuiltinToolCallInput,
+  ) => Record<string, unknown>;
+  readonly formatCallLabel: (toolCall: BuiltinToolCallInput) => string;
   readonly executeCall: (
     context: BuiltinToolExecutionContext,
     toolCall: BuiltinToolCallInput,
@@ -157,6 +164,37 @@ function defineTool<
   const Name extends string,
   const Shape extends ToolArgShape,
 >(tool: BuiltinTool<Name, Shape>): BuiltinToolRuntime<Name, Shape> {
+  function argumentsFromCall(
+    toolCall: BuiltinToolCallInput,
+  ): Record<string, unknown> {
+    const args: Record<string, unknown> = {};
+    for (const [name] of Object.entries(tool.args.fields)) {
+      const value = objectFieldValue(toolCall, name);
+      if (value.exists && value.value !== undefined && value.value !== null) {
+        args[name] = value.value;
+      }
+    }
+    return args;
+  }
+
+  function canonicalArgumentsFromCall(
+    toolCall: BuiltinToolCallInput,
+  ): Record<string, unknown> {
+    const args: Record<string, unknown> = {};
+    for (const [name, field] of Object.entries(tool.args.fields)) {
+      const value = objectFieldValue(toolCall, name);
+      if (!value.exists || value.value === undefined || value.value === null) {
+        if (field.required) {
+          throw new Error(`Invalid builtin tool call for ${tool.name}`);
+        }
+        args[name] = null;
+        continue;
+      }
+      args[name] = value.value;
+    }
+    return args;
+  }
+
   function hasCallArgumentShape(toolCall: BuiltinToolCallInput): boolean {
     for (const [name, field] of Object.entries(tool.args.fields)) {
       const value = objectFieldValue(toolCall, name);
@@ -182,8 +220,18 @@ function defineTool<
     return toolCall.tool === tool.name && hasCallArgumentShape(toolCall);
   }
 
+  function formatCallLabel(toolCall: BuiltinToolCallInput): string {
+    if (isCallForThisTool(toolCall)) {
+      return tool.display.formatLabel(toolCall);
+    }
+    throw new Error(`Invalid builtin tool call for ${tool.name}`);
+  }
+
   return Object.assign({}, tool, {
     isCall: isCallForThisTool,
+    argumentsFromCall,
+    canonicalArgumentsFromCall,
+    formatCallLabel,
     executeCall: (
       context: BuiltinToolExecutionContext,
       toolCall: BuiltinToolCallInput,

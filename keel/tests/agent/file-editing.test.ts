@@ -1635,18 +1635,27 @@ describe("File Editing", () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
-    const provider = createFakeProvider([
-      fakeReadResponse(
-        "note.txt",
-        {
-          inputTokens: 1,
-          cachedInputTokens: 0,
-          uncachedInputTokens: 1,
-          outputTokens: 1,
-        },
-        { offset: 0 },
-      ),
-    ]);
+    const provider: LLMProvider = {
+      id: "domain-invalid-read",
+      async *stream() {
+        yield {
+          type: "tool_call",
+          id: "invalid_read_window",
+          tool: "read",
+          path: "note.txt",
+          offset: 0,
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
 
     try {
       // When / Then
