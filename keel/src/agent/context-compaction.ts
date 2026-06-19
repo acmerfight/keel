@@ -133,7 +133,7 @@ interface StaleToolOutputCompactionStats {
   readonly toolOutputEstimatedTokensAfter: number;
 }
 
-type ToolCallFingerprintPart = string | number | null;
+type ToolCallFingerprintPart = string | number | boolean | null;
 
 interface ToolCallFingerprintCache {
   readonly parts: readonly ToolCallFingerprintPart[];
@@ -409,6 +409,7 @@ function toolCallFingerprintParts(
         toolCall.path,
         toolCall.oldString,
         toolCall.newString,
+        toolCall.replaceAll ?? null,
       ];
     case "write":
       return [toolCall.id, toolCall.tool, toolCall.path, toolCall.content];
