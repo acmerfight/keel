@@ -356,7 +356,7 @@ function estimateMessageTokens(message: Message): number {
       return (
         roleOverhead +
         estimateTextTokens(message.content) +
-        (message.toolCalls ?? []).reduce(
+        message.toolCalls.reduce(
           (total, toolCall) => total + estimateToolCallTokens(toolCall),
           0,
         )
@@ -460,7 +460,7 @@ function messageFingerprint(message: Message): string {
       return JSON.stringify([
         message.role,
         message.content,
-        (message.toolCalls ?? []).map(toolCallFingerprint),
+        message.toolCalls.map(toolCallFingerprint),
       ]);
     case "tool":
       return JSON.stringify([
@@ -482,9 +482,7 @@ function captureMessageFingerprintCache(
         fingerprint: JSON.stringify([message.role, message.content]),
       };
     case "assistant": {
-      const toolCalls = (message.toolCalls ?? []).map(
-        captureToolCallFingerprint,
-      );
+      const toolCalls = message.toolCalls.map(captureToolCallFingerprint);
       return {
         role: message.role,
         content: message.content,
@@ -527,7 +525,7 @@ function cachedMessageFingerprint(
       if (cache.role !== "assistant") {
         return messageFingerprint(message);
       }
-      const toolCalls = message.toolCalls ?? [];
+      const { toolCalls } = message;
       const toolCallCaches = cache.toolCalls;
       if (
         cache.content === message.content &&
@@ -666,7 +664,7 @@ function canSplitAfter(
   if (message.role === "user") {
     return false;
   }
-  if (message.role === "assistant" && (message.toolCalls ?? []).length > 0) {
+  if (message.role === "assistant" && message.toolCalls.length > 0) {
     return false;
   }
   return nextMessage?.role !== "tool";
@@ -732,10 +730,7 @@ function currentToolOutputSuffixStart(
     (message) => message.role === "assistant",
   );
   const toolRequest = messages[toolRequestIndex];
-  if (
-    toolRequest?.role !== "assistant" ||
-    (toolRequest.toolCalls ?? []).length === 0
-  ) {
+  if (toolRequest?.role !== "assistant" || toolRequest.toolCalls.length === 0) {
     return null;
   }
 
@@ -764,7 +759,7 @@ function canSplitTurnAfter(
   if (message.role === "user") {
     return nextMessage.role === "user";
   }
-  if (message.role === "assistant" && (message.toolCalls ?? []).length > 0) {
+  if (message.role === "assistant" && message.toolCalls.length > 0) {
     return false;
   }
   if (message.role === "tool" && messageIndex >= lastAssistantIndex) {
@@ -984,7 +979,7 @@ function serializeMessage(
       return `<message role="user">\n${message.content}\n</message>`;
     }
     case "assistant": {
-      const toolCalls = message.toolCalls ?? [];
+      const { toolCalls } = message;
       const toolCallText =
         toolCalls.length === 0
           ? ""

@@ -27,7 +27,7 @@ function toOpenAICompatibleMessage(message: Message): Record<string, unknown> {
     case "user":
       return { role: "user", content: message.content };
     case "assistant": {
-      const toolCalls = message.toolCalls?.map((toolCall) => ({
+      const toolCalls = message.toolCalls.map((toolCall) => ({
         id: toolCall.id,
         type: "function",
         function: {
@@ -38,10 +38,10 @@ function toOpenAICompatibleMessage(message: Message): Record<string, unknown> {
       return {
         role: "assistant",
         content:
-          toolCalls && toolCalls.length > 0 && message.content === ""
+          toolCalls.length > 0 && message.content === ""
             ? null
             : message.content,
-        ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       };
     }
     case "tool":

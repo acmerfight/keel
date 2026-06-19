@@ -17,7 +17,7 @@ export type { ToolCall } from "../tools/registry.ts";
 interface AssistantMessage {
   readonly role: "assistant";
   readonly content: string;
-  readonly toolCalls?: readonly ToolCall[];
+  readonly toolCalls: readonly ToolCall[];
 }
 
 interface ToolMessage {
