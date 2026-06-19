@@ -67,7 +67,7 @@ function displayPath(workspacePath: string, targetPath: string): string {
   return workspaceRelativePath.split(sep).join("/");
 }
 
-function snippet(line: string): string {
+function truncateLineForDisplay(line: string): string {
   if (line.length <= MAX_SNIPPET_CHARS) return line;
   return `${line.slice(0, MAX_SNIPPET_CHARS)}...`;
 }
@@ -313,7 +313,9 @@ async function runRipgrep(
       if (projectIgnorePolicy.isIgnored(absoluteMatchPath, false)) return;
 
       const matchPath = normalizeRipgrepPath(workspacePath, match.path);
-      matches.push(`${matchPath}:${match.lineNumber}:${snippet(match.line)}`);
+      matches.push(
+        `${matchPath}:${match.lineNumber}:${truncateLineForDisplay(match.line)}`,
+      );
 
       if (matches.length >= MAX_GREP_MATCHES) {
         killedForLimit = true;

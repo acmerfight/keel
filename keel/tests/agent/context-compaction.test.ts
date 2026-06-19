@@ -4255,7 +4255,7 @@ describe("Context Compaction", () => {
         contextCompaction: {
           keepRecentTokens: 1,
         },
-        drainSteeringMessages: () => {
+        drainInjectedUserMessages: () => {
           if (drainedSteering) {
             return [];
           }

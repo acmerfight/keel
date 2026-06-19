@@ -117,7 +117,7 @@ function stopChildProcess(childPid: number | undefined): void {
   killChildProcess(childPid);
 }
 
-function streamText(
+function formatCapturedOutput(
   label: "stdout" | "stderr",
   stream: CapturedStream,
 ): string {
@@ -143,8 +143,8 @@ function formatResult(result: BashProcessResult): ToolResult {
     sections.push(`Signal: ${result.signal}`);
   }
 
-  const stdout = streamText("stdout", result.stdout);
-  const stderr = streamText("stderr", result.stderr);
+  const stdout = formatCapturedOutput("stdout", result.stdout);
+  const stderr = formatCapturedOutput("stderr", result.stderr);
   if (stdout !== "") sections.push(stdout);
   if (stderr !== "") sections.push(stderr);
   if (stdout === "" && stderr === "") sections.push("(no output)");

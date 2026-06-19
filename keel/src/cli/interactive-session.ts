@@ -472,7 +472,7 @@ export async function runInteractiveSession(
           ...(resolved.contextCompaction !== undefined
             ? { contextCompaction: resolved.contextCompaction }
             : {}),
-          drainSteeringMessages: () => {
+          drainInjectedUserMessages: () => {
             const steeringLines = lineReader
               .drainLinesAfter(turnStartSequence)
               .map((queuedLine) => ({
