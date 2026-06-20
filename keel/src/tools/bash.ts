@@ -81,6 +81,7 @@ function normalizeTimeout(timeoutMs: number | undefined): number {
     throw new KeelError(
       "tool_invalid_bash_timeout",
       `bash failed: timeout must be an integer between 1 and ${MAX_TIMEOUT_MS}ms`,
+      `Set timeoutMs to an integer between 1 and ${MAX_TIMEOUT_MS}.`,
     );
   }
   return timeoutMs;
@@ -164,7 +165,11 @@ function runBashProcess(
   return new Promise<BashProcessResult>((resolveProcess, rejectProcess) => {
     if (signal?.aborted === true) {
       rejectProcess(
-        new KeelError("tool_aborted", "bash failed: command aborted"),
+        new KeelError(
+          "tool_aborted",
+          "bash failed: command aborted",
+          "The task was cancelled. Do not retry this command; proceed with the next step or stop.",
+        ),
       );
       return;
     }
@@ -219,7 +224,11 @@ function runBashProcess(
       stopChildProcess(child.pid);
       finish({
         type: "reject",
-        error: new KeelError("tool_aborted", "bash failed: command aborted"),
+        error: new KeelError(
+          "tool_aborted",
+          "bash failed: command aborted",
+          "The task was cancelled. Do not retry this command; proceed with the next step or stop.",
+        ),
       });
     };
 
@@ -240,6 +249,7 @@ function runBashProcess(
         error: new KeelError(
           "tool_unavailable",
           `bash failed: could not start shell: ${error.message}`,
+          "Verify the workspace directory exists and is accessible, or use file tools instead.",
         ),
       });
     });
