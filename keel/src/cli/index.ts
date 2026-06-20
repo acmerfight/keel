@@ -5,13 +5,17 @@ import { pathToFileURL } from "node:url";
 import { runAgent } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
+import type { Message } from "../llm/types.ts";
 import {
   type BashMode,
   type BashPermissionPolicy,
   bashModeExposesTool,
 } from "../permissions/bash.ts";
 import { parseCliArgs, USAGE } from "./args.ts";
-import { runInteractiveSession } from "./interactive-session.ts";
+import {
+  runInteractiveSession,
+  type SessionPersistenceReason,
+} from "./interactive-session.ts";
 import { formatCostReport, printAgentEvents } from "./output.ts";
 import {
   loadProjectInstructions,
@@ -24,6 +28,16 @@ import {
   resolveProvider,
 } from "./provider-config.ts";
 import { assertEndEventHasCost, writeRunReport } from "./report.ts";
+import {
+  acquireSessionLock,
+  createSessionStore,
+  ensureSessionCanBeCreated,
+  persistSessionMessages,
+  resumeSessionStore,
+  type SessionLock,
+  type SessionState,
+  SessionStoreError,
+} from "./session-store.ts";
 
 interface CliInput extends NodeJS.ReadableStream {
   readonly isTTY?: boolean;
@@ -105,6 +119,15 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
   }
 
   const userMessage = cliArgs.userMessage;
+  if (
+    userMessage !== undefined &&
+    (cliArgs.sessionId !== undefined || cliArgs.resumeSessionId !== undefined)
+  ) {
+    runtime.writeStderr(
+      "Error: --session and --resume are only supported for interactive sessions.\n",
+    );
+    return 1;
+  }
   if (!userMessage) {
     if (
       runtime.input.isTTY !== true &&
@@ -125,37 +148,119 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
       );
       return 1;
     }
+    let sessionLock: SessionLock | undefined;
     try {
       const workspace = runtime.cwd();
-      const projectInstructions = loadProjectInstructions(workspace);
-      await runInteractiveSession({
-        cliArgs,
-        workspace,
-        platform: runtime.platform,
-        ...(projectInstructions !== undefined ? { projectInstructions } : {}),
-        input: runtime.input,
-        writeStdout: (text) => {
-          runtime.writeStdout(text);
-        },
-        writeStderr: (text) => {
-          runtime.writeStderr(text);
-        },
-        onSigint: (handler) => {
-          runtime.onSigint(handler);
-        },
-        offSigint: (handler) => {
-          runtime.offSigint(handler);
-        },
-        setExitCode: (code) => {
-          exitCode = code;
-        },
-        forceExit: runtime.forceExit,
-        resolveProvider: (message) =>
-          resolveInteractiveProvider(message, runtime),
-        requireKnownCostModel,
-        printAgentEvents: (stream) => printAgentEvents(stream, runtime),
-        formatCostReport,
-      });
+      try {
+        const sessionIdForLock = cliArgs.sessionId ?? cliArgs.resumeSessionId;
+        if (sessionIdForLock !== undefined) {
+          sessionLock = acquireSessionLock({
+            sessionId: sessionIdForLock,
+            runtime,
+          });
+        }
+        let session: SessionState | undefined;
+        let persistedMessages: readonly Message[] = [];
+        if (cliArgs.sessionId !== undefined) {
+          ensureSessionCanBeCreated({
+            sessionId: cliArgs.sessionId,
+            runtime,
+          });
+        } else if (cliArgs.resumeSessionId !== undefined) {
+          session = resumeSessionStore({
+            sessionId: cliArgs.resumeSessionId,
+            workspace,
+            runtime,
+          });
+          persistedMessages = session.messages;
+        }
+        let sessionPersistence:
+          | {
+              readonly initialMessages: readonly Message[];
+              readonly persistSessionMessages: (
+                messages: readonly Message[],
+                reason: SessionPersistenceReason,
+              ) => void;
+            }
+          | undefined;
+        if (session !== undefined) {
+          const resumedSession = session;
+          sessionPersistence = {
+            initialMessages: resumedSession.messages,
+            persistSessionMessages: (
+              messages: readonly Message[],
+              reason: SessionPersistenceReason,
+            ) => {
+              persistedMessages = persistSessionMessages({
+                session: resumedSession,
+                previousMessages: persistedMessages,
+                currentMessages: messages,
+                runtime,
+                reason,
+              });
+            },
+          };
+        } else if (cliArgs.sessionId !== undefined) {
+          const sessionId = cliArgs.sessionId;
+          sessionPersistence = {
+            initialMessages: [],
+            persistSessionMessages: (
+              messages: readonly Message[],
+              reason: SessionPersistenceReason,
+            ) => {
+              let activeSession = session;
+              if (activeSession === undefined) {
+                activeSession = createSessionStore({
+                  sessionId,
+                  workspace,
+                  runtime,
+                });
+                session = activeSession;
+                persistedMessages = activeSession.messages;
+              }
+              persistedMessages = persistSessionMessages({
+                session: activeSession,
+                previousMessages: persistedMessages,
+                currentMessages: messages,
+                runtime,
+                reason,
+              });
+            },
+          };
+        }
+        const projectInstructions = loadProjectInstructions(workspace);
+        await runInteractiveSession({
+          cliArgs,
+          workspace,
+          platform: runtime.platform,
+          ...(projectInstructions !== undefined ? { projectInstructions } : {}),
+          ...(sessionPersistence !== undefined ? sessionPersistence : {}),
+          input: runtime.input,
+          writeStdout: (text) => {
+            runtime.writeStdout(text);
+          },
+          writeStderr: (text) => {
+            runtime.writeStderr(text);
+          },
+          onSigint: (handler) => {
+            runtime.onSigint(handler);
+          },
+          offSigint: (handler) => {
+            runtime.offSigint(handler);
+          },
+          setExitCode: (code) => {
+            exitCode = code;
+          },
+          forceExit: runtime.forceExit,
+          resolveProvider: (message) =>
+            resolveInteractiveProvider(message, runtime),
+          requireKnownCostModel,
+          printAgentEvents: (stream) => printAgentEvents(stream, runtime),
+          formatCostReport,
+        });
+      } finally {
+        sessionLock?.release();
+      }
     } catch (error) {
       if (error instanceof ProviderConfigError) {
         runtime.writeStderr(`${error.message}\n`);
@@ -165,8 +270,12 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         runtime.writeStderr(`${error.message}\n`);
         return 1;
       }
-      /* v8 ignore next: unexpected interactive runtime failures are allowed to escape. */
-      throw error;
+      /* v8 ignore next 3: unexpected interactive runtime failures are allowed to escape. */
+      if (!(error instanceof SessionStoreError)) {
+        throw error;
+      }
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
     }
     return exitCode;
   }
