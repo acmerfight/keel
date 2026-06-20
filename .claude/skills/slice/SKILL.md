@@ -9,6 +9,14 @@ user-invocable: true
 
 Use this workflow for one bounded, user-reviewable Keel PR slice. Keep the slice narrow and vertical.
 
+## Workflow Position
+
+Use this only after the implementation target is clear.
+
+- Use `/next-slice` first when the next slice is unclear.
+- Use `/agent-research <question>` first when the target depends on unresolved peer-agent research or architecture tradeoffs.
+- Use `/slice <issue-or-slice>` to implement the selected slice and prepare a PR.
+
 ## Fast Invocation
 
 Accept short requests. The target can be a GitHub issue number, issue URL, PR URL, or plain slice description.

@@ -9,6 +9,16 @@ user-invocable: true
 
 Use this workflow to decide what Keel should work on next. The output is a recommendation with evidence, not an implementation PR.
 
+## Workflow Position
+
+Use this first when the next unit of work is unclear.
+
+- Use `/next-slice` to choose the next slice.
+- Use `/agent-research <question>` when a candidate needs deeper peer-agent or industry research before it is ready to implement.
+- Use `/slice <issue-or-slice>` only after the implementation target is clear.
+
+Keep peer-agent comparison deep enough to rank candidates. Do not fully design every candidate; hand off unresolved design questions to `/agent-research`.
+
 ## Fast Invocation
 
 - `/next-slice`

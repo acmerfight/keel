@@ -9,6 +9,14 @@ user-invocable: true
 
 Use this workflow to answer one architecture or product-design question by comparing Keel with the reference agents in this repo and current industry practice.
 
+## Workflow Position
+
+Use this after `/next-slice` identifies a promising direction but the design, tradeoffs, or peer-agent precedent are still unclear. Also use it directly when the user names a concrete technical or product-design question.
+
+- Do not rank the whole project backlog; use `/next-slice` for that.
+- Do not implement the result; use `/slice <issue-or-slice>` after the design is clear.
+- End with a concrete handoff recommendation when the research supports implementation.
+
 ## Fast Invocation
 
 Accept a concrete research target:
