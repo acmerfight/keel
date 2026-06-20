@@ -1,6 +1,6 @@
 ---
 name: next-slice
-description: 'Recommend the next Keel slice from latest main, project goals, open issues, current implementation state, and peer-agent evidence. Use for `/next-slice`, `what should we do next`, `which slice now`, or `基于最新 main 分析该做什么`. Produce a fact-grounded recommendation, not code changes, unless the user explicitly asks to implement.'
+description: 'Recommend the next Keel slice from latest main, project goals, open issues, current implementation state, and relevant peer-agent evidence. Use for requests such as `/next-slice`, `what should we do next`, `which slice now`, or `基于最新 main 分析该做什么`. Produce a fact-grounded recommendation, not code changes, unless the user explicitly asks to implement. Hand off to `/agent-research` only when a recommendation cannot be made responsibly without deeper peer-agent or industry research.'
 argument-hint: "[focus=<area>]"
 user-invocable: true
 ---
@@ -14,10 +14,10 @@ Use this workflow to decide what Keel should work on next. The output is a recom
 Use this first when the next unit of work is unclear.
 
 - Use `/next-slice` to choose the next slice.
-- Use `/agent-research <question>` when a candidate needs deeper peer-agent or industry research before it is ready to implement.
+- Use `/agent-research <question>` only when a candidate cannot be recommended responsibly without deeper peer-agent or industry research.
 - Use `/slice <issue-or-slice>` only after the implementation target is clear.
 
-Keep peer-agent comparison deep enough to rank candidates. Do not fully design every candidate; hand off unresolved design questions to `/agent-research`.
+Keep peer-agent comparison deep enough to rank candidates. Do not fully design every candidate; hand off only unresolved design questions that block a responsible recommendation.
 
 ## Fast Invocation
 
