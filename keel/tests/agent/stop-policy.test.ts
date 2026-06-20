@@ -39,6 +39,7 @@ async function createWorkspace(): Promise<string> {
 }
 
 const budgetModel: CostModel = {
+  type: "fixed",
   uncachedInputPerMillionTokens: 1,
   cachedInputPerMillionTokens: 0.5,
   outputPerMillionTokens: 2,

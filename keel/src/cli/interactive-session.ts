@@ -10,7 +10,7 @@ import {
   type ProjectInstructions,
 } from "../agent/prompt.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
-import { type CostModel, calculateCostUsd } from "../core/cost.ts";
+import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
 import type { LLMProvider, Message, Usage } from "../llm/types.ts";
 import {
   type BashMode,
@@ -209,7 +209,10 @@ function manualCompactionCostReport(
   model: CostModel,
   maxCostUsd: number,
 ): CostReport {
-  const spentUsd = calculateCostUsd(usage, model);
+  const spentUsd = calculateRequestCostBatchUsd(
+    { requests: [{ usage }] },
+    model,
+  );
   return {
     spentUsd,
     maxUsd: maxCostUsd,

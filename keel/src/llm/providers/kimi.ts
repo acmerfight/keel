@@ -10,6 +10,7 @@ import {
 
 // Kimi K2.6 prices are per 1M tokens.
 export const KIMI_K2_6_COST_MODEL: CostModel = {
+  type: "fixed",
   uncachedInputPerMillionTokens: 0.95,
   cachedInputPerMillionTokens: 0.16,
   outputPerMillionTokens: 4,

@@ -21,6 +21,7 @@ const ZERO_USAGE: Usage = {
 };
 
 const ZERO_COST_MODEL: CostModel = {
+  type: "fixed",
   uncachedInputPerMillionTokens: 0,
   cachedInputPerMillionTokens: 0,
   outputPerMillionTokens: 0,
@@ -2293,12 +2294,14 @@ describe("Interactive Session", () => {
         providerId: "fake",
         model: "fake",
         costModel: {
+          type: "fixed",
           uncachedInputPerMillionTokens: 100,
           cachedInputPerMillionTokens: 0,
           outputPerMillionTokens: 200,
         },
       }),
       requireKnownCostModel: () => ({
+        type: "fixed",
         uncachedInputPerMillionTokens: 100,
         cachedInputPerMillionTokens: 0,
         outputPerMillionTokens: 200,
