@@ -31,6 +31,8 @@ interface InteractiveSessionArgs {
   readonly maxCostUsd?: number;
 }
 
+export type SessionPersistenceReason = "turn" | "compaction";
+
 interface InteractiveResolvedProviderBase {
   readonly provider: LLMProvider;
   readonly model: string;
@@ -60,6 +62,11 @@ export interface InteractiveSessionOptions {
   readonly workspace: string;
   readonly platform: NodeJS.Platform;
   readonly projectInstructions?: ProjectInstructions;
+  readonly initialMessages?: readonly Message[];
+  readonly persistSessionMessages?: (
+    messages: readonly Message[],
+    reason: SessionPersistenceReason,
+  ) => void;
   readonly input: NodeJS.ReadableStream;
   readonly writeStdout: (text: string) => void;
   readonly writeStderr: (text: string) => void;
@@ -405,7 +412,7 @@ export async function runInteractiveSession(
       ? { projectInstructions: options.projectInstructions }
       : {}),
   });
-  const messages: Message[] = [];
+  const messages: Message[] = [...(options.initialMessages ?? [])];
   let resolved: InteractiveResolvedProvider | null = null;
   const input = createInterface({
     input: options.input,
@@ -466,6 +473,9 @@ export async function runInteractiveSession(
           });
         } finally {
           activeAbortController = null;
+        }
+        if (!compactAbortController.signal.aborted) {
+          options.persistSessionMessages?.(messages, "compaction");
         }
         continue;
       }
@@ -543,6 +553,7 @@ export async function runInteractiveSession(
           continue;
         }
         restoreDrainedInput(deferredInputLines);
+        options.persistSessionMessages?.(messages, "turn");
         options.writeStdout("\n");
         if (
           options.cliArgs.maxCostUsd !== undefined &&

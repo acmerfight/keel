@@ -25,6 +25,8 @@ export type CliArgs =
       readonly userMessage?: string;
       readonly maxCostUsd?: number;
       readonly reportFile?: string;
+      readonly sessionId?: string;
+      readonly resumeSessionId?: string;
     };
 
 type ParseResult<T> =
@@ -41,6 +43,7 @@ function parseError(message: string): ParseResult<never> {
 
 export const USAGE = [
   "Usage: keel [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] <message>",
+  "       keel [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--session <id> | --resume <id>]",
   "       keel eval [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
   "       keel /undo",
   "",
@@ -177,10 +180,14 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   let bashPolicyOptionSeen = false;
   let maxCostUsd: number | undefined;
   let reportFile: string | undefined;
+  let sessionId: string | undefined;
+  let resumeSessionId: string | undefined;
   let userMessage: string | undefined;
   const maxCostPrefix = "--max-cost=";
   const reportPrefix = "--report=";
   const bashPolicyPrefix = "--bash-policy=";
+  const sessionPrefix = "--session=";
+  const resumePrefix = "--resume=";
 
   let skipNext = false;
   for (const [index, arg] of args.entries()) {
@@ -257,8 +264,48 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
       continue;
     }
 
+    if (arg === "--session") {
+      const parsed = requireOptionValue("--session", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      sessionId = parsed.value;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(sessionPrefix)) {
+      const parsed = requireOptionValue(
+        "--session",
+        arg.slice(sessionPrefix.length),
+      );
+      if (!parsed.ok) return parsed;
+      sessionId = parsed.value;
+      continue;
+    }
+
+    if (arg === "--resume") {
+      const parsed = requireOptionValue("--resume", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      resumeSessionId = parsed.value;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(resumePrefix)) {
+      const parsed = requireOptionValue(
+        "--resume",
+        arg.slice(resumePrefix.length),
+      );
+      if (!parsed.ok) return parsed;
+      resumeSessionId = parsed.value;
+      continue;
+    }
+
     userMessage = args.slice(index).join(" ");
     break;
+  }
+
+  if (sessionId !== undefined && resumeSessionId !== undefined) {
+    return parseError("Error: --session cannot be combined with --resume.");
   }
 
   return parseOk({
@@ -267,5 +314,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
     ...(userMessage !== undefined ? { userMessage } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(reportFile !== undefined ? { reportFile } : {}),
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
   });
 }
