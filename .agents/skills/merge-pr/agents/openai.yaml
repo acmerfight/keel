@@ -1,0 +1,4 @@
+interface:
+  display_name: "Merge PR"
+  short_description: "Merge reviewed PRs and clean up branches."
+  default_prompt: "$merge-pr #<pr>"

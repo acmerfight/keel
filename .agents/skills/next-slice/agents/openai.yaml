@@ -1,0 +1,4 @@
+interface:
+  display_name: "Next Slice"
+  short_description: "Recommend Keel's next slice from evidence."
+  default_prompt: "$next-slice"

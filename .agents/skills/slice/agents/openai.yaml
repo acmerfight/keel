@@ -1,0 +1,4 @@
+interface:
+  display_name: "Slice"
+  short_description: "Run the standard Keel PR slice workflow."
+  default_prompt: "$slice #<issue-or-slice>"

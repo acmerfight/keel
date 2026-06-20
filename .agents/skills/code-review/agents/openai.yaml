@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Review"
+  short_description: "Review changes, recommend merge, comment on PRs."
+  default_prompt: "$code-review"
