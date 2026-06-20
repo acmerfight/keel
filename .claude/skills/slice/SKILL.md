@@ -16,6 +16,7 @@ Use this only after the implementation target is clear.
 - Use `/next-slice` first when the next slice is unclear.
 - Use `/agent-research <question>` first when the target depends on unresolved peer-agent research or architecture tradeoffs.
 - Use `/slice <issue-or-slice>` to implement the selected slice and prepare a PR.
+- Use `/code-review <target>` for read-only review and `/merge-pr <target>` only after the user explicitly asks to merge.
 
 ## Fast Invocation
 
@@ -30,6 +31,7 @@ Accept short requests. The target can be a GitHub issue number, issue URL, PR UR
 When the request omits the target, infer it only if the current conversation contains exactly one unambiguous active issue or slice. Use recent explicit user messages, issue links, PR links, and agreed "next slice" decisions as evidence. If there are zero candidates, multiple candidates, or the evidence depends on stale/compacted context, ask the user for the issue or slice instead of guessing.
 
 The workflow already stops before merge, so the user does not need to say "do not merge" or "暂不合并".
+If the user later asks to merge, use `/merge-pr <target>` for merge and cleanup.
 
 ## Start
 

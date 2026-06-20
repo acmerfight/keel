@@ -8,6 +8,7 @@ user-invocable: true
 # Code Review
 
 Use this workflow to review code, docs, or skill changes without modifying files.
+If the review recommends `Merge now` and the user asks to merge, use `/merge-pr <target>` for the merge and cleanup steps.
 
 ## Fast Invocation
 
