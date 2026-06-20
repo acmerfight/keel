@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Research"
+  short_description: "Research peer agent implementations and propose a Keel design."
+  default_prompt: "$agent-research <question>"
