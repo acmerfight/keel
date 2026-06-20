@@ -64,7 +64,7 @@ type ToolRisk =
   | { readonly kind: "workspace-write"; readonly destructive: boolean }
   | { readonly kind: "trusted-shell" };
 
-type ToolConcurrency =
+export type ToolConcurrency =
   | { readonly kind: "parallel-safe" }
   | { readonly kind: "exclusive"; readonly reason: string };
 
