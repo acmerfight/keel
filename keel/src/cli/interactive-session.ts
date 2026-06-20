@@ -24,11 +24,13 @@ import {
 } from "./output.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
+type EndEventWithCost = EndEvent & { readonly cost: CostReport };
 export type ProviderId = "fake" | "deepseek" | "kimi" | "qwen";
 
 interface InteractiveSessionArgs {
   readonly bashMode: BashMode;
   readonly maxCostUsd?: number;
+  readonly reportFile?: string;
 }
 
 export type SessionPersistenceReason = "turn" | "compaction";
@@ -86,6 +88,14 @@ export interface InteractiveSessionOptions {
   readonly formatCostReport: (cost: CostReport, maxUsd: number) => string;
 }
 
+export interface InteractiveSessionResult {
+  readonly report?: {
+    readonly provider: ProviderId;
+    readonly model: string;
+    readonly end: EndEventWithCost;
+  };
+}
+
 interface LineReader {
   readonly readLine: () => Promise<string | null>;
   readonly readLineAfter: (
@@ -137,16 +147,27 @@ interface ManualCompactContext {
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
   readonly options: InteractiveSessionOptions;
+  readonly recordCompactionCost: (
+    usage: Usage,
+    costModel: CostModel,
+  ) => CostReport;
 }
 
 async function executeManualCompaction(
   ctx: ManualCompactContext,
-): Promise<void> {
-  const { command, resolved, messages, systemPrompt, signal, options } = ctx;
-  const manualCostModel =
-    options.cliArgs.maxCostUsd === undefined
-      ? undefined
-      : options.requireKnownCostModel(resolved);
+): Promise<CostReport | undefined> {
+  const {
+    command,
+    resolved,
+    messages,
+    systemPrompt,
+    signal,
+    options,
+    recordCompactionCost,
+  } = ctx;
+  const manualCostModel = !shouldTrackInteractiveCost(options.cliArgs)
+    ? undefined
+    : options.requireKnownCostModel(resolved);
   const messagesBeforeCompact = messages.slice();
 
   try {
@@ -165,7 +186,7 @@ async function executeManualCompaction(
     if (signal.aborted) {
       messages.splice(0, messages.length, ...messagesBeforeCompact);
       options.writeStdout("\n");
-      return;
+      return undefined;
     }
     if (result.compacted && result.stats !== undefined) {
       options.writeStderr(
@@ -174,49 +195,60 @@ async function executeManualCompaction(
           reasonLabel: "manual",
         }),
       );
-      if (
-        options.cliArgs.maxCostUsd !== undefined &&
-        manualCostModel !== undefined
-      ) {
-        options.writeStderr(
-          options.formatCostReport(
-            manualCompactionCostReport(
-              result.usage,
-              manualCostModel,
-              options.cliArgs.maxCostUsd,
-            ),
-            options.cliArgs.maxCostUsd,
-          ),
-        );
+      if (manualCostModel !== undefined) {
+        const cost = recordCompactionCost(result.usage, manualCostModel);
+        if (options.cliArgs.maxCostUsd !== undefined) {
+          options.writeStderr(
+            options.formatCostReport(cost, options.cliArgs.maxCostUsd),
+          );
+        }
+        return cost;
       }
     } else {
       options.writeStderr(
         "Context compaction skipped: no safe history to compact.\n",
       );
     }
+    return undefined;
   } catch (error) {
     messages.splice(0, messages.length, ...messagesBeforeCompact);
     if (signal.aborted) {
       options.writeStdout("\n");
-      return;
+      return undefined;
     }
     options.writeStderr(formatManualCompactionFailure(error));
+    return undefined;
   }
 }
 
-function manualCompactionCostReport(
-  usage: Usage,
-  model: CostModel,
-  maxCostUsd: number,
+const EMPTY_USAGE: Usage = {
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  uncachedInputTokens: 0,
+  outputTokens: 0,
+};
+
+function addUsage(left: Usage, right: Usage): Usage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
+    uncachedInputTokens: left.uncachedInputTokens + right.uncachedInputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+  };
+}
+
+function shouldTrackInteractiveCost(args: InteractiveSessionArgs): boolean {
+  return args.maxCostUsd !== undefined || args.reportFile !== undefined;
+}
+
+function buildSessionCostReport(
+  spentUsd: number,
+  maxCostUsd: number | undefined,
 ): CostReport {
-  const spentUsd = calculateRequestCostBatchUsd(
-    { requests: [{ usage }] },
-    model,
-  );
   return {
     spentUsd,
-    maxUsd: maxCostUsd,
-    budgetExceeded: spentUsd > maxCostUsd,
+    ...(maxCostUsd !== undefined ? { maxUsd: maxCostUsd } : {}),
+    budgetExceeded: maxCostUsd !== undefined && spentUsd > maxCostUsd,
   };
 }
 
@@ -407,7 +439,7 @@ function interactiveBashPermissionPolicy(
 
 export async function runInteractiveSession(
   options: InteractiveSessionOptions,
-): Promise<void> {
+): Promise<InteractiveSessionResult> {
   const systemPrompt = buildAgentSystemPrompt({
     workspace: options.workspace,
     platform: options.platform,
@@ -428,6 +460,11 @@ export async function runInteractiveSession(
     options.writeStderr,
   );
   let activeAbortController: AbortController | null = null;
+  let reportProvider: InteractiveResolvedProvider | null = null;
+  let sessionUsage = EMPTY_USAGE;
+  let sessionTurns = 0;
+  let sessionCostUsd = 0;
+  let sessionStopReason = "completed";
   const restoreDrainedInput = (lines: readonly QueuedLine[]) => {
     if (lines.length === 0) {
       return;
@@ -447,6 +484,47 @@ export async function runInteractiveSession(
     options.setExitCode(130);
     input.close();
   };
+  const currentSessionCostReport = (): CostReport =>
+    buildSessionCostReport(sessionCostUsd, options.cliArgs.maxCostUsd);
+  const currentReportEnd = (): EndEventWithCost | undefined => {
+    if (sessionTurns === 0) {
+      return undefined;
+    }
+    return {
+      type: "end",
+      usage: sessionUsage,
+      turns: sessionTurns,
+      stopReason: sessionStopReason,
+      cost: currentSessionCostReport(),
+    };
+  };
+  const remainingMaxCostUsd = (): number | undefined => {
+    if (options.cliArgs.maxCostUsd === undefined) {
+      return undefined;
+    }
+    return Math.max(0, options.cliArgs.maxCostUsd - sessionCostUsd);
+  };
+  const recordCompactionCost = (
+    usage: Usage,
+    costModel: CostModel,
+  ): CostReport => {
+    sessionUsage = addUsage(sessionUsage, usage);
+    sessionCostUsd += calculateRequestCostBatchUsd(
+      { requests: [{ usage }] },
+      costModel,
+    );
+    return currentSessionCostReport();
+  };
+  const recordTurnEnd = (end: EndEvent): CostReport | undefined => {
+    sessionUsage = addUsage(sessionUsage, end.usage);
+    sessionTurns += end.turns;
+    sessionStopReason = end.stopReason;
+    if (end.cost === undefined) {
+      return undefined;
+    }
+    sessionCostUsd += end.cost.spentUsd;
+    return currentSessionCostReport();
+  };
 
   options.onSigint(abortActiveTurn);
   try {
@@ -465,14 +543,16 @@ export async function runInteractiveSession(
         }
         const compactAbortController = new AbortController();
         activeAbortController = compactAbortController;
+        let compactCost: CostReport | undefined;
         try {
-          await executeManualCompaction({
+          compactCost = await executeManualCompaction({
             command: manualCompactCommand,
             resolved,
             messages,
             systemPrompt,
             signal: compactAbortController.signal,
             options,
+            recordCompactionCost,
           });
         } finally {
           activeAbortController = null;
@@ -480,9 +560,14 @@ export async function runInteractiveSession(
         if (!compactAbortController.signal.aborted) {
           options.persistSessionMessages?.(messages, "compaction");
         }
+        if (compactCost?.budgetExceeded === true) {
+          sessionStopReason = "cost_budget";
+          break;
+        }
         continue;
       }
       resolved ??= options.resolveProvider(userMessage);
+      reportProvider ??= resolved;
       const messagesBeforeTurn = messages.slice();
       const turnStartSequence = lineReader.sequence();
       const drainedInjectedLines: QueuedLine[] = [];
@@ -493,6 +578,7 @@ export async function runInteractiveSession(
       let deferRemainingInjectedInput = false;
 
       try {
+        const remainingCostUsd = remainingMaxCostUsd();
         const stream = runAgentTurn({
           workspace: options.workspace,
           provider: resolved.provider,
@@ -502,11 +588,13 @@ export async function runInteractiveSession(
           allowBash: bashModeExposesTool(options.cliArgs.bashMode),
           stopPolicy: defaultStopPolicy(),
           ...(bashPermission !== undefined ? { bashPermission } : {}),
-          ...(options.cliArgs.maxCostUsd !== undefined
+          ...(shouldTrackInteractiveCost(options.cliArgs)
             ? {
                 costTracking: {
                   model: options.requireKnownCostModel(resolved),
-                  maxCostUsd: options.cliArgs.maxCostUsd,
+                  ...(remainingCostUsd !== undefined
+                    ? { maxCostUsd: remainingCostUsd }
+                    : {}),
                 },
               }
             : {}),
@@ -558,13 +646,21 @@ export async function runInteractiveSession(
         restoreDrainedInput(deferredInputLines);
         options.persistSessionMessages?.(messages, "turn");
         options.writeStdout("\n");
+        const cumulativeCost =
+          finalEnd === undefined ? undefined : recordTurnEnd(finalEnd);
         if (
           options.cliArgs.maxCostUsd !== undefined &&
-          finalEnd?.cost !== undefined
+          cumulativeCost !== undefined
         ) {
           options.writeStderr(
-            options.formatCostReport(finalEnd.cost, options.cliArgs.maxCostUsd),
+            options.formatCostReport(
+              cumulativeCost,
+              options.cliArgs.maxCostUsd,
+            ),
           );
+        }
+        if (cumulativeCost?.budgetExceeded === true) {
+          break;
         }
       } catch (error) {
         if (!turnAbortController.signal.aborted) {
@@ -582,4 +678,19 @@ export async function runInteractiveSession(
     options.offSigint(abortActiveTurn);
     input.close();
   }
+  const reportEnd = currentReportEnd();
+  if (
+    options.cliArgs.reportFile !== undefined &&
+    reportProvider !== null &&
+    reportEnd !== undefined
+  ) {
+    return {
+      report: {
+        provider: reportProvider.providerId,
+        model: reportProvider.model,
+        end: reportEnd,
+      },
+    };
+  }
+  return {};
 }
