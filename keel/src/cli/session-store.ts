@@ -15,8 +15,12 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
-import type { Message } from "../llm/types.ts";
-import { isToolName, toolCallFromParsedArguments } from "../tools/registry.ts";
+import type { Message, ToolCall } from "../llm/types.ts";
+import {
+  isToolName,
+  toolCallCanonicalArguments,
+  toolCallFromParsedArguments,
+} from "../tools/registry.ts";
 
 const SESSION_SCHEMA_VERSION = 1;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
@@ -566,17 +570,67 @@ function formatResumeSessionLoadError(error: unknown): string {
   return formatNestedSessionStoreError(error);
 }
 
-function messagesEqual(
+function toolCallArgumentsEqual(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+): boolean {
+  const leftEntries = Object.entries(left);
+  if (leftEntries.length !== Object.keys(right).length) {
+    return false;
+  }
+  return leftEntries.every(
+    ([key, value]) => Object.hasOwn(right, key) && value === right[key],
+  );
+}
+
+function toolCallsEqual(left: ToolCall, right: ToolCall): boolean {
+  return (
+    left.id === right.id &&
+    left.tool === right.tool &&
+    toolCallArgumentsEqual(
+      toolCallCanonicalArguments(left),
+      toolCallCanonicalArguments(right),
+    )
+  );
+}
+
+function messagesEqual(left: Message, right: Message): boolean {
+  switch (left.role) {
+    case "user":
+      return right.role === "user" && left.content === right.content;
+    case "assistant":
+      return (
+        right.role === "assistant" &&
+        left.content === right.content &&
+        left.toolCalls.length === right.toolCalls.length &&
+        left.toolCalls.every((toolCall, index) => {
+          const rightToolCall = right.toolCalls[index];
+          return (
+            rightToolCall !== undefined &&
+            toolCallsEqual(toolCall, rightToolCall)
+          );
+        })
+      );
+    case "tool":
+      return (
+        right.role === "tool" &&
+        left.toolCallId === right.toolCallId &&
+        left.content === right.content
+      );
+  }
+}
+
+function messageArraysEqual(
   left: readonly Message[],
   right: readonly Message[],
 ): boolean {
   if (left.length !== right.length) {
     return false;
   }
-  return left.every(
-    (message, index) =>
-      JSON.stringify(message) === JSON.stringify(right[index]),
-  );
+  return left.every((message, index) => {
+    const rightMessage = right[index];
+    return rightMessage !== undefined && messagesEqual(message, rightMessage);
+  });
 }
 
 function hasMessagePrefix(
@@ -586,10 +640,12 @@ function hasMessagePrefix(
   if (currentMessages.length < previousMessages.length) {
     return false;
   }
-  return previousMessages.every(
-    (message, index) =>
-      JSON.stringify(message) === JSON.stringify(currentMessages[index]),
-  );
+  return previousMessages.every((message, index) => {
+    const currentMessage = currentMessages[index];
+    return (
+      currentMessage !== undefined && messagesEqual(message, currentMessage)
+    );
+  });
 }
 
 function parseProviderVisibleMessages(
@@ -733,7 +789,7 @@ export function persistSessionMessages(options: {
   );
   validateCompletedTranscript(options.session.id, currentMessages, "persist");
 
-  if (messagesEqual(currentMessages, options.previousMessages)) {
+  if (messageArraysEqual(currentMessages, options.previousMessages)) {
     return [...options.previousMessages];
   }
 

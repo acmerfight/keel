@@ -239,6 +239,73 @@ describe("Session Store", () => {
     }
   });
 
+  test(`Given completed tool calls are already persisted,
+    When the same transcript and then a follow-up are persisted,
+    Then the store compares the structural prefix and appends only new messages`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const messages: readonly Message[] = [
+      { role: "user", content: "list files" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "list_src", tool: "ls", path: "src", limit: 10 }],
+      },
+      { role: "tool", toolCallId: "list_src", content: "index.ts\n" },
+      { role: "assistant", content: "Found index.ts.", toolCalls: [] },
+    ];
+    const followUp = { role: "user" as const, content: "thanks" };
+
+    try {
+      const session = createSessionStore({
+        sessionId: "tool-prefix",
+        workspace,
+        runtime: runtime(home),
+      });
+      const afterFirstPersist = persistSessionMessages({
+        session,
+        previousMessages: [],
+        currentMessages: messages,
+        runtime: runtime(home, 1),
+        reason: "turn",
+      });
+
+      // When
+      const afterNoOpPersist = persistSessionMessages({
+        session,
+        previousMessages: afterFirstPersist,
+        currentMessages: messages,
+        runtime: runtime(home, 2),
+        reason: "turn",
+      });
+      persistSessionMessages({
+        session,
+        previousMessages: afterNoOpPersist,
+        currentMessages: [...messages, followUp],
+        runtime: runtime(home, 3),
+        reason: "turn",
+      });
+
+      // Then
+      const ledgerLines = (await readFile(session.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerLines).toHaveLength(3);
+      expect(ledgerLines[2]).toEqual({
+        schemaVersion: 1,
+        type: "append",
+        timestamp: "1970-01-01T00:00:00.003Z",
+        reason: "turn",
+        messages: [followUp],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a persisted tool call violates the builtin registry schema,
     When the session is resumed,
     Then it fails closed before rebuilding provider context`, async () => {
