@@ -1,4 +1,7 @@
 interface:
   display_name: "Agent Research"
-  short_description: "Research peer agent implementations and propose a Keel design."
+  short_description: "Research unresolved design questions before implementation."
   default_prompt: "$agent-research <question>"
+
+policy:
+  allow_implicit_invocation: false
