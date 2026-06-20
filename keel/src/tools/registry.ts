@@ -2,6 +2,7 @@ import type { z } from "zod";
 import type {
   BuiltinToolExecutionContext,
   ToolArgDefinition,
+  ToolConcurrency,
   ToolExecution,
 } from "./builtin.ts";
 import { builtinTools } from "./builtin.ts";
@@ -201,6 +202,11 @@ export function executeBuiltinToolCall(
 ): ToolExecution | Promise<ToolExecution> {
   const tool = builtinToolForName(toolCall.tool);
   return tool.executeCall(context, toolCall);
+}
+
+export function toolCallConcurrency(toolCall: ToolCall): ToolConcurrency {
+  const tool = builtinToolForName(toolCall.tool);
+  return tool.concurrency;
 }
 
 export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {

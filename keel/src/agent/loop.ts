@@ -2,7 +2,8 @@ import { type CostModel, calculateCostUsd } from "../core/cost.ts";
 import { KeelError } from "../core/error.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
-import { executeToolCall } from "../tools/execution.ts";
+import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
+import { toolCallConcurrency } from "../tools/registry.ts";
 import {
   type CompactMessagesResult,
   type ContextCompactionAccountingSnapshot,
@@ -22,6 +23,11 @@ import {
   syncMessagesFromSessionLedger,
 } from "./session-ledger.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
+import {
+  canExecuteToolCallsInParallel,
+  executeParallelToolCallsInSourceOrder,
+  type ScheduledToolCall,
+} from "./tool-scheduler.ts";
 
 export interface CostReport {
   readonly spentUsd: number;
@@ -148,6 +154,15 @@ function toolRequestMessage(turn: AgentTurn): Message {
     content: turn.text,
     toolCalls: turn.toolCalls,
   };
+}
+
+function scheduledToolCalls(
+  toolCalls: readonly ToolCall[],
+): readonly ScheduledToolCall[] {
+  return toolCalls.map((toolCall) => ({
+    toolCall,
+    concurrency: toolCallConcurrency(toolCall),
+  }));
 }
 
 function finalReplyMessage(text: string): Message | null {
@@ -579,23 +594,53 @@ export async function* runAgentTurn(
     );
     priorToolCalls.push(...turnResult.toolCalls);
 
-    for (const toolCall of turnResult.toolCalls) {
-      yield { type: "tool_start", toolCall };
-      const execution = await executeToolCall({
+    const executeTurnToolCall = async (
+      toolCall: ToolCall,
+    ): Promise<ToolExecution> =>
+      await executeToolCall({
         workspace,
         toolCall,
         signal,
         allowBash,
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
-      yield { type: "tool_end", toolCall, ok: execution.ok };
-      applySessionLedger(
-        appendSessionLedgerMessage(sessionLedger, {
-          role: "tool",
-          toolCallId: toolCall.id,
-          content: execution.content,
-        }),
-      );
+
+    const scheduled = scheduledToolCalls(turnResult.toolCalls);
+    if (canExecuteToolCallsInParallel(scheduled)) {
+      for (const { toolCall } of scheduled) {
+        yield { type: "tool_start", toolCall };
+      }
+      const results = await executeParallelToolCallsInSourceOrder({
+        toolCalls: scheduled,
+        execute: executeTurnToolCall,
+      });
+      for (const result of results) {
+        if (result.status === "rejected") {
+          throw result.reason;
+        }
+        const { toolCall, result: execution } = result;
+        yield { type: "tool_end", toolCall, ok: execution.ok };
+        applySessionLedger(
+          appendSessionLedgerMessage(sessionLedger, {
+            role: "tool",
+            toolCallId: toolCall.id,
+            content: execution.content,
+          }),
+        );
+      }
+    } else {
+      for (const toolCall of turnResult.toolCalls) {
+        yield { type: "tool_start", toolCall };
+        const execution = await executeTurnToolCall(toolCall);
+        yield { type: "tool_end", toolCall, ok: execution.ok };
+        applySessionLedger(
+          appendSessionLedgerMessage(sessionLedger, {
+            role: "tool",
+            toolCallId: toolCall.id,
+            content: execution.content,
+          }),
+        );
+      }
     }
 
     if (drainInjectedUserMessages !== undefined && !signal.aborted) {
