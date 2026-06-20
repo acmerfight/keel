@@ -1,5 +1,8 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { Server } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import {
@@ -116,7 +119,7 @@ describe("CLI Text Reply", () => {
     expect(result.stderr).toBe(
       [
         "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] <message>",
-        "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--session <id> | --resume <id>]",
+        "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id>]",
         "       keel eval [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
         "       keel /undo",
         "",
@@ -416,20 +419,41 @@ describe("CLI Text Reply", () => {
   });
 
   test(`Given user requests an interactive session report,
-    When user runs the CLI without a message,
-    Then the CLI rejects the unsupported report option`, async () => {
+    When user finishes prompts from stdin,
+    Then the CLI writes the report`, async () => {
     // Given
-    const args: readonly string[] = ["--report", "run.json"];
-
-    // When
-    const result = await runCli(args, { KEEL_FORCE_INTERACTIVE: "1" });
-
-    // Then
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe(
-      "Error: --report is only supported for one-shot runs.\n",
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-text-report-"));
+    const reportPath = join(workspace, "run.json");
+    const { child, result } = runCliProcess(
+      ["--report", reportPath],
+      { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
+      { stdin: "pipe" },
     );
+
+    try {
+      // When
+      child.stdin?.end("remember alpha\nwhat did I ask you to remember?\n");
+
+      // Then
+      const exit = await withTimeout(
+        result,
+        5000,
+        "interactive CLI did not finish after stdin closed",
+      );
+      expect(exit.exitCode).toBe(0);
+      expect(exit.stdout).toContain("Remembered: remember alpha\n");
+      expect(exit.stdout).toContain("Earlier you said: remember alpha\n");
+      expect(exit.stderr).toBe("");
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        schemaVersion: 1,
+        provider: "fake",
+        model: "fake",
+        costUsd: 0,
+      });
+    } finally {
+      child.kill("SIGKILL");
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test(`Given user asks for diagnostics,

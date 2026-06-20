@@ -752,22 +752,40 @@ describe("CLI Main", () => {
   });
 
   test(`Given an interactive run asks for a report,
-    When the CLI main sees there is no one-shot message,
-    Then it rejects the unsupported report option`, async () => {
+    When the CLI main completes prompts from stdin,
+    Then it writes a session report`, async () => {
     // Given
-    const fixture = createRuntime(["--report", "run.json"], {
-      env: { KEEL_FORCE_INTERACTIVE: "1" },
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-report-"));
+    const reportPath = join(workspace, "run.json");
+    const input = new PassThrough();
+    input.end("remember alpha\nwhat did I ask you to remember?\n");
+    const fixture = createRuntime(["--report", reportPath], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
+      input,
     });
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      "Error: --report is only supported for one-shot runs.\n",
-    );
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("Remembered: remember alpha\n");
+      expect(fixture.stdout()).toContain("Earlier you said: remember alpha\n");
+      expect(fixture.stderr()).toBe("");
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report).toMatchObject({
+        schemaVersion: 1,
+        provider: "fake",
+        model: "fake",
+        costUsd: 0,
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test(`Given an unknown provider is configured,
