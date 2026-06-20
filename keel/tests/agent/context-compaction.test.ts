@@ -17,6 +17,7 @@ import type {
   ToolCall,
   Usage,
 } from "../../src/llm/types.ts";
+import { toolCallFromParsedArguments } from "../../src/tools/registry.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 type ContextCompactedEvent = Extract<
@@ -325,6 +326,56 @@ describe("Context Compaction", () => {
 
     // Then
     expect(shouldCompact).toBe(true);
+  });
+
+  test(`Given equivalent optional tool arguments are omitted undefined or null,
+    When context accounting captures tool-call fingerprints,
+    Then the fingerprints are canonicalized to the same value`, () => {
+    // Given
+    const parsedToolCall = (args: unknown): ToolCall => {
+      const toolCall = toolCallFromParsedArguments("read_note", "read", args);
+      if (toolCall === null) {
+        throw new Error("test setup expected parsed read tool call");
+      }
+      return toolCall;
+    };
+    const toolCalls = [
+      parsedToolCall({ path: "note.txt" }),
+      parsedToolCall({
+        path: "note.txt",
+        offset: undefined,
+        limit: undefined,
+      }),
+      parsedToolCall({ path: "note.txt", offset: null, limit: null }),
+    ];
+
+    // When
+    const fingerprints = toolCalls.map((toolCall) => {
+      const accounting = captureContextCompactionAccountingSnapshot({
+        systemPrompt: "You are helpful.",
+        messages: [
+          {
+            role: "assistant",
+            content: "I will read the note.",
+            toolCalls: [toolCall],
+          },
+        ],
+        usage: {
+          inputTokens: 20,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 20,
+          outputTokens: 1,
+        },
+      });
+      if (accounting === undefined) {
+        throw new Error("test setup expected accounting");
+      }
+      return accounting.messageFingerprints;
+    });
+
+    // Then
+    expect(fingerprints[1]).toEqual(fingerprints[0]);
+    expect(fingerprints[2]).toEqual(fingerprints[0]);
   });
 
   test(`Given a completed tool output is mutated in place after usage accounting,

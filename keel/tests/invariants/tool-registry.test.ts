@@ -9,8 +9,14 @@ interface ParsedSource {
 
 const registryPath = "src/tools/registry.ts";
 const executionPath = "src/tools/execution.ts";
+const cliOutputPath = "src/cli/output.ts";
+const contextCompactionPath = "src/agent/context-compaction.ts";
+const fakeProviderPath = "src/llm/providers/fake.ts";
 const registrySource = parseSource(registryPath);
 const executionSource = parseSource(executionPath);
+const cliOutputSource = parseSource(cliOutputPath);
+const contextCompactionSource = parseSource(contextCompactionPath);
+const fakeProviderSource = parseSource(fakeProviderPath);
 const builtinToolConstantNames = new Set([
   "readTool",
   "lsTool",
@@ -193,6 +199,26 @@ function switchStatements(
   return switches;
 }
 
+function builtinToolSwitchCases(
+  source: ParsedSource,
+  node: ts.Node,
+): readonly string[] {
+  const cases: string[] = [];
+
+  function visit(current: ts.Node): void {
+    if (ts.isCaseClause(current)) {
+      const label = stringLiteralText(current.expression);
+      if (label !== null && builtinToolNames.has(label)) {
+        cases.push(`${location(source, current)} case "${label}"`);
+      }
+    }
+    ts.forEachChild(current, visit);
+  }
+
+  visit(node);
+  return cases;
+}
+
 function importedBindings(
   source: ParsedSource,
   names: ReadonlySet<string>,
@@ -256,6 +282,91 @@ describe("builtin tool registry invariants", () => {
     expect(importedBindings(executionSource, perToolExecutorNames)).toEqual([]);
     expect(
       executor === null ? [] : switchStatements(executionSource, executor),
+    ).toEqual([]);
+  });
+
+  test(`Given canonical tool arguments are derived from builtin metadata,
+    When registry syntax is inspected,
+    Then toolCallArguments does not switch on builtin tool names`, () => {
+    const serializer = functionDeclaration(registrySource, "toolCallArguments");
+
+    expect(
+      serializer === null
+        ? []
+        : builtinToolSwitchCases(registrySource, serializer),
+    ).toEqual([]);
+  });
+
+  test(`Given CLI tool labels are derived from builtin display metadata,
+    When CLI output syntax is inspected,
+    Then toolCallLabel does not switch on builtin tool names`, () => {
+    const registryLabeler = functionDeclaration(
+      registrySource,
+      "toolCallLabel",
+    );
+    const printer = functionDeclaration(cliOutputSource, "printAgentEvents");
+
+    expect(
+      importedBindings(cliOutputSource, new Set(["toolCallLabel"])),
+    ).toHaveLength(1);
+    expect(
+      registryLabeler === null
+        ? ["missing registry toolCallLabel"]
+        : builtinToolSwitchCases(registrySource, registryLabeler),
+    ).toEqual([]);
+    expect(
+      printer === null
+        ? ["missing printAgentEvents"]
+        : builtinToolSwitchCases(cliOutputSource, printer),
+    ).toEqual([]);
+  });
+
+  test(`Given context accounting fingerprints are derived from canonical tool arguments,
+    When compaction syntax is inspected,
+    Then fingerprinting does not switch on builtin tool names`, () => {
+    const fingerprintParts = functionDeclaration(
+      contextCompactionSource,
+      "toolCallFingerprintParts",
+    );
+    const fingerprint = functionDeclaration(
+      contextCompactionSource,
+      "toolCallFingerprint",
+    );
+    const capture = functionDeclaration(
+      contextCompactionSource,
+      "captureToolCallFingerprint",
+    );
+    const matches = functionDeclaration(
+      contextCompactionSource,
+      "toolCallMatchesFingerprintCache",
+    );
+
+    expect(fingerprintParts).toBeNull();
+    expect([
+      ...(fingerprint === null
+        ? []
+        : builtinToolSwitchCases(contextCompactionSource, fingerprint)),
+      ...(capture === null
+        ? []
+        : builtinToolSwitchCases(contextCompactionSource, capture)),
+      ...(matches === null
+        ? []
+        : builtinToolSwitchCases(contextCompactionSource, matches)),
+    ]).toEqual([]);
+  });
+
+  test(`Given fake provider tool calls are scripted through the registry,
+    When fake provider syntax is inspected,
+    Then createFakeProvider does not switch on builtin tool names`, () => {
+    const createProvider = functionDeclaration(
+      fakeProviderSource,
+      "createFakeProvider",
+    );
+
+    expect(
+      createProvider === null
+        ? []
+        : builtinToolSwitchCases(fakeProviderSource, createProvider),
     ).toEqual([]);
   });
 });

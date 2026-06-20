@@ -268,9 +268,19 @@ describe("Bash Commands", () => {
     Then the agent rejects the terminal tool error`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
-    const provider = createFakeProvider([
-      fakeBashResponse('node -e ""', ZERO_USAGE, { timeoutMs: 0 }),
-    ]);
+    const provider: LLMProvider = {
+      id: "domain-invalid-bash",
+      async *stream() {
+        yield {
+          type: "tool_call",
+          id: "invalid_timeout",
+          tool: "bash",
+          command: 'node -e ""',
+          timeoutMs: 0,
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
 
     try {
       // When / Then

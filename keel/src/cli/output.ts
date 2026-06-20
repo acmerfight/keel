@@ -1,6 +1,6 @@
 import type { ContextCompactionStats } from "../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
-import type { ToolCall } from "../llm/types.ts";
+import { toolCallLabel } from "../tools/registry.ts";
 
 interface CliOutputRuntime {
   readonly writeStdout: (text: string) => void;
@@ -82,35 +82,6 @@ export function sanitizeStatusLineText(text: string): string {
     : `${escaped.slice(0, STATUS_LINE_TEXT_MAX_LENGTH)}...`;
 }
 
-function toolCallLabel(toolCall: ToolCall): string {
-  switch (toolCall.tool) {
-    case "read":
-      return sanitizeToolLabel(`read ${toolCall.path}`);
-    case "ls":
-      return sanitizeToolLabel(
-        toolCall.path === undefined ? "ls ." : `ls ${toolCall.path}`,
-      );
-    case "glob":
-      return sanitizeToolLabel(
-        toolCall.path === undefined
-          ? `glob ${toolCall.pattern}`
-          : `glob ${toolCall.pattern} ${toolCall.path}`,
-      );
-    case "grep":
-      return sanitizeToolLabel(
-        toolCall.path === undefined
-          ? `grep ${toolCall.pattern}`
-          : `grep ${toolCall.pattern} ${toolCall.path}`,
-      );
-    case "edit":
-      return sanitizeToolLabel(`edit ${toolCall.path}`);
-    case "write":
-      return sanitizeToolLabel(`write ${toolCall.path}`);
-    case "bash":
-      return sanitizeToolLabel(`bash ${toolCall.command}`);
-  }
-}
-
 const providerRetryReasonLabels: Readonly<Record<string, string>> = {
   provider_rate_limited: "rate limited",
   provider_server_error: "server error",
@@ -178,12 +149,16 @@ export async function printAgentEvents(
         `Provider retry: ${sanitizeToolLabel(event.provider)} ${providerRetryReasonLabel(event.reason)} (attempt ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)}ms)\n`,
       );
     } else if (event.type === "tool_start") {
-      runtime.writeStderr(`Tool: ${toolCallLabel(event.toolCall)}\n`);
+      runtime.writeStderr(
+        `Tool: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}\n`,
+      );
     } else if (event.type === "tool_end") {
       // Status lives in the line prefix because the label is
       // model-controlled text and could end with a forged failure marker.
       if (!event.ok) {
-        runtime.writeStderr(`Tool failed: ${toolCallLabel(event.toolCall)}\n`);
+        runtime.writeStderr(
+          `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}\n`,
+        );
       }
     } else if (event.type === "end") {
       finalEnd = event;
