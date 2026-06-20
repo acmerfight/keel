@@ -170,7 +170,7 @@ describe("Bash Tool", () => {
 
   test(`Given an invalid timeout,
     When the bash tool validates the request,
-    Then it rejects the timeout before starting a process`, async () => {
+    Then it rejects with a recovery hint suggesting a valid range`, async () => {
     // Given
     const workspace = await createWorkspace();
 
@@ -185,6 +185,9 @@ describe("Bash Tool", () => {
       expect(error.message).toBe(
         "bash failed: timeout must be an integer between 1 and 60000ms",
       );
+      expect(error.recovery).toBeDefined();
+      expect(error.recovery).toContain("1");
+      expect(error.recovery).toContain("60000");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -192,7 +195,7 @@ describe("Bash Tool", () => {
 
   test(`Given a request is already aborted,
     When the bash tool receives it,
-    Then it rejects the command before starting a process`, async () => {
+    Then it rejects with a recovery hint indicating the task was cancelled`, async () => {
     // Given
     const workspace = await createWorkspace();
     const controller = new AbortController();
@@ -207,6 +210,7 @@ describe("Bash Tool", () => {
       // Then
       expect(error.code).toBe("tool_aborted");
       expect(error.message).toBe("bash failed: command aborted");
+      expect(error.recovery).toBeDefined();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -214,7 +218,7 @@ describe("Bash Tool", () => {
 
   test(`Given a running request is aborted,
     When the bash tool receives the abort signal,
-    Then it stops the command and rejects the request`, async () => {
+    Then it stops the command and rejects with a recovery hint`, async () => {
     // Given
     const workspace = await createWorkspace();
     const controller = new AbortController();
@@ -232,6 +236,7 @@ describe("Bash Tool", () => {
       // Then
       expect(error.code).toBe("tool_aborted");
       expect(error.message).toBe("bash failed: command aborted");
+      expect(error.recovery).toBeDefined();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -239,7 +244,7 @@ describe("Bash Tool", () => {
 
   test(`Given the workspace directory cannot be opened,
     When the bash tool starts the process,
-    Then it returns an unavailable-tool error`, async () => {
+    Then it returns an unavailable-tool error with a recovery hint`, async () => {
     // Given
     const workspace = await createWorkspace();
     const missingWorkspace = join(workspace, "missing");
@@ -253,6 +258,7 @@ describe("Bash Tool", () => {
       // Then
       expect(error.code).toBe("tool_unavailable");
       expect(error.message).toContain("bash failed: could not start shell:");
+      expect(error.recovery).toBeDefined();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
