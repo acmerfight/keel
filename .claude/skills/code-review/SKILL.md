@@ -59,7 +59,15 @@ Use this structure:
 4. Verification And Residual Risk
 5. Summary
 
-Lead with findings, ordered by severity.
+Lead with findings, grouped by severity in this order:
+
+- Blocking
+- High
+- Medium
+- Low
+- Nit / Info
+
+For any empty severity group, write `None`. Do not omit the group.
 
 For each finding include:
 
