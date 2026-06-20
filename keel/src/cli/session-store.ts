@@ -13,86 +13,44 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
-import type { Message, ToolCall } from "../llm/types.ts";
+import type { Message } from "../llm/types.ts";
+import { isToolName, toolCallFromParsedArguments } from "../tools/registry.ts";
 
 const SESSION_SCHEMA_VERSION = 1;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 
-const readToolCallSchema = z
+const persistedToolCallSchema = z
   .object({
     id: z.string(),
-    tool: z.literal("read"),
-    path: z.string(),
-    offset: z.number().int().positive().optional(),
-    limit: z.number().int().positive().optional(),
+    tool: z.string(),
   })
-  .strict();
+  .catchall(z.unknown());
 
-const lsToolCallSchema = z
-  .object({
-    id: z.string(),
-    tool: z.literal("ls"),
-    path: z.string().optional(),
-    limit: z.number().int().positive().optional(),
-  })
-  .strict();
-
-const globToolCallSchema = z
-  .object({
-    id: z.string(),
-    tool: z.literal("glob"),
-    pattern: z.string(),
-    path: z.string().optional(),
-  })
-  .strict();
-
-const grepToolCallSchema = z
-  .object({
-    id: z.string(),
-    tool: z.literal("grep"),
-    pattern: z.string(),
-    path: z.string().optional(),
-  })
-  .strict();
-
-const editToolCallSchema = z
-  .object({
-    id: z.string(),
-    tool: z.literal("edit"),
-    path: z.string(),
-    oldString: z.string(),
-    newString: z.string(),
-    replaceAll: z.boolean().optional(),
-  })
-  .strict();
-
-const writeToolCallSchema = z
-  .object({
-    id: z.string(),
-    tool: z.literal("write"),
-    path: z.string(),
-    content: z.string(),
-  })
-  .strict();
-
-const bashToolCallSchema = z
-  .object({
-    id: z.string(),
-    tool: z.literal("bash"),
-    command: z.string(),
-    timeoutMs: z.number().int().positive().optional(),
-  })
-  .strict();
-
-const toolCallSchema = z.discriminatedUnion("tool", [
-  readToolCallSchema,
-  lsToolCallSchema,
-  globToolCallSchema,
-  grepToolCallSchema,
-  editToolCallSchema,
-  writeToolCallSchema,
-  bashToolCallSchema,
-]);
+const toolCallSchema = persistedToolCallSchema.transform(
+  (toolCall, context) => {
+    const { id, tool, ...parsedArguments } = toolCall;
+    if (!isToolName(tool)) {
+      context.addIssue({
+        code: "custom",
+        message: `Unsupported builtin tool "${tool}".`,
+      });
+      return z.NEVER;
+    }
+    const parsedToolCall = toolCallFromParsedArguments(
+      id,
+      tool,
+      parsedArguments,
+    );
+    if (parsedToolCall === null) {
+      context.addIssue({
+        code: "custom",
+        message: `Invalid arguments for builtin tool "${tool}".`,
+      });
+      return z.NEVER;
+    }
+    return parsedToolCall;
+  },
+);
 
 const userMessageSchema = z
   .object({
@@ -164,7 +122,6 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   replaceRecordSchema,
 ]);
 
-type RawToolCall = z.infer<typeof toolCallSchema>;
 type RawMessage = z.infer<typeof messageSchema>;
 type RawSessionHeaderRecord = z.infer<typeof sessionHeaderSchema>;
 type RawSessionMutationRecord = z.infer<typeof sessionMutationRecordSchema>;
@@ -319,67 +276,6 @@ function writeInitialHeader(
   }
 }
 
-function toToolCall(toolCall: RawToolCall): ToolCall {
-  switch (toolCall.tool) {
-    case "read":
-      return {
-        id: toolCall.id,
-        tool: "read",
-        path: toolCall.path,
-        ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
-        ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
-      };
-    case "ls":
-      return {
-        id: toolCall.id,
-        tool: "ls",
-        ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
-        ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
-      };
-    case "glob":
-      return {
-        id: toolCall.id,
-        tool: "glob",
-        pattern: toolCall.pattern,
-        ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
-      };
-    case "grep":
-      return {
-        id: toolCall.id,
-        tool: "grep",
-        pattern: toolCall.pattern,
-        ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
-      };
-    case "edit":
-      return {
-        id: toolCall.id,
-        tool: "edit",
-        path: toolCall.path,
-        oldString: toolCall.oldString,
-        newString: toolCall.newString,
-        ...(toolCall.replaceAll !== undefined
-          ? { replaceAll: toolCall.replaceAll }
-          : {}),
-      };
-    case "write":
-      return {
-        id: toolCall.id,
-        tool: "write",
-        path: toolCall.path,
-        content: toolCall.content,
-      };
-    case "bash":
-      return {
-        id: toolCall.id,
-        tool: "bash",
-        command: toolCall.command,
-        ...(toolCall.timeoutMs !== undefined
-          ? { timeoutMs: toolCall.timeoutMs }
-          : {}),
-      };
-  }
-}
-
 function toMessage(message: RawMessage): Message {
   switch (message.role) {
     case "user":
@@ -391,7 +287,7 @@ function toMessage(message: RawMessage): Message {
       return {
         role: "assistant",
         content: message.content,
-        toolCalls: message.toolCalls.map(toToolCall),
+        toolCalls: message.toolCalls,
       };
     case "tool":
       return {
@@ -558,6 +454,20 @@ function hasMessagePrefix(
   );
 }
 
+function parseProviderVisibleMessages(
+  sessionId: string,
+  messages: readonly Message[],
+  action: "persist",
+): readonly Message[] {
+  const parsed = z.array(messageSchema).safeParse(messages);
+  if (!parsed.success) {
+    sessionStoreError(
+      `Error: cannot ${action} session "${sessionId}": ledger contains invalid provider-visible messages.`,
+    );
+  }
+  return parsed.data.map(toMessage);
+}
+
 function validateCompletedTranscript(
   sessionId: string,
   messages: readonly Message[],
@@ -678,20 +588,19 @@ export function persistSessionMessages(options: {
   readonly runtime: SessionStoreRuntime;
   readonly reason: SessionPersistenceReason;
 }): readonly Message[] {
-  validateCompletedTranscript(
+  const currentMessages = parseProviderVisibleMessages(
     options.session.id,
     options.currentMessages,
     "persist",
   );
+  validateCompletedTranscript(options.session.id, currentMessages, "persist");
 
-  if (messagesEqual(options.currentMessages, options.previousMessages)) {
+  if (messagesEqual(currentMessages, options.previousMessages)) {
     return [...options.previousMessages];
   }
 
-  if (hasMessagePrefix(options.currentMessages, options.previousMessages)) {
-    const messages = options.currentMessages.slice(
-      options.previousMessages.length,
-    );
+  if (hasMessagePrefix(currentMessages, options.previousMessages)) {
+    const messages = currentMessages.slice(options.previousMessages.length);
     appendJsonLine(options.session.filePath, {
       schemaVersion: SESSION_SCHEMA_VERSION,
       type: "append",
@@ -699,7 +608,7 @@ export function persistSessionMessages(options: {
       reason: "turn",
       messages,
     });
-    return [...options.currentMessages];
+    return [...currentMessages];
   }
 
   appendJsonLine(options.session.filePath, {
@@ -707,7 +616,7 @@ export function persistSessionMessages(options: {
     type: "replace",
     timestamp: isoTimestamp(options.runtime),
     reason: options.reason,
-    messages: [...options.currentMessages],
+    messages: [...currentMessages],
   });
-  return [...options.currentMessages];
+  return [...currentMessages];
 }

@@ -447,7 +447,7 @@ describe("Interactive Session", () => {
     let firstApprovalPrompts = 0;
     const firstInput = new PassThrough();
     const firstProvider = createFakeProvider([
-      fakeBashResponse(command),
+      fakeToolResponse("bash", { command }),
       fakeResponse("First run done."),
     ]);
     const firstSession = runInteractiveSession({
@@ -498,7 +498,7 @@ describe("Interactive Session", () => {
       let secondApprovalPrompts = 0;
       const secondInput = new PassThrough();
       const secondProvider = createFakeProvider([
-        fakeBashResponse(command),
+        fakeToolResponse("bash", { command }),
         fakeResponse("Second run done."),
       ]);
       const secondSession = runInteractiveSession({

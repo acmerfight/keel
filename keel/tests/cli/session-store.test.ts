@@ -238,6 +238,88 @@ describe("Session Store", () => {
     }
   });
 
+  test(`Given a persisted tool call violates the builtin registry schema,
+    When the session is resumed,
+    Then it fails closed before rebuilding provider context`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const messages: readonly Message[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "too_many_ls", tool: "ls", limit: 1_001 }],
+      },
+      { role: "tool", toolCallId: "too_many_ls", content: "ls result" },
+    ];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "invalid-registry-tool",
+        workspace,
+        runtime: runtime(home),
+      });
+      await writeFile(
+        session.filePath,
+        `${await readFile(session.filePath, "utf8")}${appendLine(messages)}\n`,
+        "utf8",
+      );
+
+      // When / Then
+      expect(() =>
+        resumeSessionStore({
+          sessionId: "invalid-registry-tool",
+          workspace,
+          runtime: runtime(home, 2),
+        }),
+      ).toThrow(SessionStoreError);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given provider-visible messages violate the builtin registry schema,
+    When the session store persists them,
+    Then it rejects the transcript before writing an invalid ledger entry`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const messages: readonly Message[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "too_many_ls", tool: "ls", limit: 1_001 }],
+      },
+      { role: "tool", toolCallId: "too_many_ls", content: "ls result" },
+    ];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "persist-invalid-registry-tool",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When / Then
+      expect(() =>
+        persistSessionMessages({
+          session,
+          previousMessages: [],
+          currentMessages: messages,
+          runtime: runtime(home, 1),
+          reason: "turn",
+        }),
+      ).toThrow(SessionStoreError);
+      expect(await readFile(session.filePath, "utf8")).toBe(
+        `${headerLine(session.id, session.workspace)}\n`,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a persisted session ends with a pending tool call,
     When the session is resumed,
     Then it fails closed instead of restoring in-flight work`, async () => {
