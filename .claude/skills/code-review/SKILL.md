@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: 'Review Keel changes against the project documentation. Use for `/code-review`, `/code-review PR #123`, `review this branch`, or `客观 review 当前 PR`. Do not edit files. Read the relevant repo docs first, prioritize correctness/regression/test/safety findings, cite exact files and lines, separate findings from questions and summary, and post the final review as a PR comment when the target is a GitHub PR.'
+description: 'Review Keel changes against the project documentation. Use for `/code-review`, `/code-review PR #123`, `review this branch`, or `客观 review 当前 PR`. Do not edit files. Read the relevant repo docs first, prioritize correctness/regression/test/safety findings, cite exact files and lines, include a structured merge recommendation, and post the final review as a PR comment when the target is a GitHub PR.'
 argument-hint: "[target]"
 user-invocable: true
 ---
@@ -47,8 +47,17 @@ When the target is a GitHub PR, post the final review as one PR comment after co
 - If the PR number is inferred, verify it with `gh pr view` before commenting.
 - If GitHub auth or network access is unavailable, say that the PR comment could not be posted and include the exact review text in the final answer.
 - Do not post duplicate comments for the same completed review.
+- The PR comment must include the same structured merge recommendation as the final answer.
 
 ## Output
+
+Use this structure:
+
+1. Findings
+2. Merge Recommendation
+3. Open Questions Or Assumptions
+4. Verification And Residual Risk
+5. Summary
 
 Lead with findings, ordered by severity.
 
@@ -60,10 +69,18 @@ For each finding include:
 - why it matters
 - concrete fix or decision needed
 
-After findings, include:
+In `Merge Recommendation`, choose exactly one:
+
+- `Merge now`
+- `Merge after fixes`
+- `Do not merge`
+
+Include a one-sentence rationale tied to the findings and verification state.
+
+After the merge recommendation, include:
 
 - open questions or assumptions
 - missing verification or residual risk
 - short summary of what changed
 
-If there are no findings, say that clearly and still mention any test gaps or residual risk.
+If there are no findings, say that clearly and still include a merge recommendation, any test gaps or residual risk, and a short summary.
