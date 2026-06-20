@@ -1,6 +1,6 @@
 ---
 name: slice
-description: 'Execute the standard Keel PR-slice workflow. Use for short requests such as `$slice #123`, `/goal $slice #123`, `$slice`, `slice`, `slice #123`, or `issue #123`; infer an omitted target only when the current thread contains exactly one unambiguous active issue or slice. Implement one slice, use strict BDD-first development, perform empty-context review, run real DeepSeek QA when applicable, monitor CI/Codecov, and stop before merge for user review.'
+description: 'Execute the standard Keel PR-slice workflow. Use for short requests such as `$slice #123`, `/goal $slice #123`, `$slice`, `slice`, `slice #123`, or `issue #123`; infer an omitted target only when the current thread contains exactly one unambiguous active issue or slice. Implement one slice, use strict BDD-first development, perform empty-context review, run real DeepSeek QA when applicable, monitor CI/Codecov, and stop before merge for user review. Do not reroute to `$agent-research` after the slice starts unless the user explicitly pauses implementation for research.'
 ---
 
 # Slice
@@ -12,9 +12,13 @@ Use this workflow for one bounded, user-reviewable Keel PR slice. Keep the slice
 Use this only after the implementation target is clear.
 
 - Use `$next-slice` first when the next slice is unclear.
-- Use `$agent-research <question>` first when the target depends on unresolved peer-agent research or architecture tradeoffs.
+- Before starting `$slice`, use `$agent-research <question>` only when the target is unclear because a specific peer-agent or architecture question must be answered. After `$slice` starts, do not switch to `$agent-research` unless the user explicitly asks to pause implementation for research.
 - Use `$slice <issue-or-slice>` to implement the selected slice and prepare a PR.
 - Use `$code-review <target>` for read-only review and `$merge-pr <target>` only after the user explicitly asks to merge.
+
+## Hard Boundary
+
+Once this workflow starts, continue implementation, review, QA, CI triage, and PR updates inside `$slice`. Resolve ordinary best-practice checks from local project docs and the current code. If a genuinely unresolved design question blocks progress, ask whether to pause the slice for `$agent-research` instead of auto-switching.
 
 ## Fast Invocation
 
