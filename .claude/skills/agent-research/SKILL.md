@@ -1,17 +1,21 @@
 ---
 name: agent-research
-description: 'Research how peer coding agents in this repository solve a specific problem, then propose the best Keel design. Use for `/agent-research context compaction`, `/agent-research session persistence`, `deeply compare other agents`, `how do codex/claude/opencode/pi/kimi solve this`, or `give Keel a best方案 based on source evidence and recent industry practice`. Require factual source-code evidence from repo submodules, current external research or community evidence when available, clear separation of facts from inference, and a concrete recommendation for Keel.'
+description: 'Explicit-only research workflow for peer-agent implementations or external industry practice on one unresolved Keel architecture or product-design question before implementation. Use when the user invokes `/agent-research <question>` to compare codex/claude/opencode/pi/kimi, research industry practice, or decide an unclear design. Do not use implicitly during `/slice` implementation, PR review, QA, CI fixing, merge cleanup, or ordinary best-practice checks.'
 argument-hint: "<question>"
 user-invocable: true
 ---
 
 # Agent Research
 
-Use this workflow to answer one architecture or product-design question by comparing Keel with the reference agents in this repo and current industry practice.
+Use this workflow before implementation to answer one unresolved architecture or product-design question by comparing Keel with the reference agents in this repo and current industry practice.
+
+## Hard Boundary
+
+Do not run during an active `/slice` implementation. If `/slice` is already selected and the target is clear, continue the slice workflow. Use this only if the user explicitly asks to pause implementation for peer-agent or external research.
 
 ## Workflow Position
 
-Use this after `/next-slice` identifies a promising direction but the design, tradeoffs, or peer-agent precedent are still unclear. Also use it directly when the user names a concrete technical or product-design question.
+Use this before `/slice` starts, after `/next-slice` identifies a promising direction but the design, tradeoffs, or peer-agent precedent are still unclear. Also use it directly when the user explicitly invokes `/agent-research` with a concrete technical or product-design question.
 
 - Do not rank the whole project backlog; use `/next-slice` for that.
 - Do not implement the result; use `/slice <issue-or-slice>` after the design is clear.
@@ -24,7 +28,7 @@ Accept a concrete research target:
 - `/agent-research context compaction`
 - `/agent-research session persistence`
 - `/agent-research how should Keel implement <capability>`
-- `deeply compare other agents on <problem>`
+- `/agent-research deeply compare other agents on <problem>`
 
 If the request omits the research target, infer it only when the current conversation has exactly one unambiguous active problem. Otherwise ask for the problem statement.
 
