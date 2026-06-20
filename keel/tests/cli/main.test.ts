@@ -56,6 +56,10 @@ const requestWithToolsSchema = z
   })
   .passthrough();
 
+const requestModelSchema = z.object({
+  model: z.string(),
+});
+
 interface RuntimeFixture {
   readonly runtime: CliRuntime;
   readonly stdout: () => string;
@@ -231,6 +235,21 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("Error: --report requires a file path.\n");
   });
 
+  test(`Given a report option with an empty equals path,
+    When the CLI main parses the request,
+    Then it returns a validation error before resolving a provider`, async () => {
+    // Given
+    const fixture = createRuntime(["--report=", "hello"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --report requires a file path.\n");
+  });
+
   test.each(["0", "abc"])(`Given invalid max cost value %s,
     When the CLI main parses the request,
     Then it returns a validation error before resolving a provider`, async (maxCost) => {
@@ -248,6 +267,156 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe(
       "Error: --max-cost must be a positive number.\n",
     );
+  });
+
+  test(`Given invalid max cost uses equals syntax,
+    When the CLI main parses the request,
+    Then it returns a validation error before resolving a provider`, async () => {
+    // Given
+    const fixture = createRuntime(["--max-cost=abc", "hello"], {
+      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --max-cost must be a positive number.\n",
+    );
+  });
+
+  test(`Given an unsupported provider flag,
+    When the CLI main parses the request,
+    Then it returns a validation error before resolving a provider`, async () => {
+    // Given
+    const fixture = createRuntime(["--provider", "anthropic", "hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --provider must be one of: fake, deepseek, kimi, qwen.\n",
+    );
+  });
+
+  test(`Given an unsupported provider flag uses equals syntax,
+    When the CLI main parses the request,
+    Then it returns a validation error before resolving a provider`, async () => {
+    // Given
+    const fixture = createRuntime(["--provider=anthropic", "hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --provider must be one of: fake, deepseek, kimi, qwen.\n",
+    );
+  });
+
+  test(`Given a provider flag without a value,
+    When the CLI main parses the request,
+    Then it returns a validation error before resolving a provider`, async () => {
+    // Given
+    const fixture = createRuntime(["--provider"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --provider requires a value.\n");
+  });
+
+  test(`Given a model flag without a value,
+    When the CLI main parses the request,
+    Then it returns a validation error before resolving a provider`, async () => {
+    // Given
+    const fixture = createRuntime(["--model"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --model requires a value.\n");
+  });
+
+  test(`Given a model flag with an empty equals value,
+    When the CLI main parses the request,
+    Then it returns a validation error before resolving a provider`, async () => {
+    // Given
+    const fixture = createRuntime(["--model=", "hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --model requires a value.\n");
+  });
+
+  test(`Given provider and model flags use equals syntax,
+    When the CLI main runs in-process,
+    Then the selected provider overrides provider env`, async () => {
+    // Given
+    const fixture = createRuntime(
+      ["--provider=fake", "--model=ignored", "hello"],
+      {
+        env: { KEEL_PROVIDER: "deepseek" },
+      },
+    );
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toBe("Hello from fake provider.\n");
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given provider and model flags are used for an interactive session,
+    When the CLI main runs in-process,
+    Then the selected interactive provider overrides provider env`, async () => {
+    // Given
+    const input = new PassThrough();
+    const fixture = createRuntime(["--provider=fake", "--model=ignored"], {
+      env: { KEEL_PROVIDER: "deepseek", KEEL_FORCE_INTERACTIVE: "1" },
+      input,
+    });
+
+    // When
+    const run = runCliMain(fixture.runtime);
+    input.write("hello\n");
+    input.end();
+    const exitCode = await run;
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toBe("Remembered: hello\n");
+    expect(fixture.stderr()).toBe("");
   });
 
   test(`Given resume is passed without a session id,
@@ -374,6 +543,36 @@ describe("CLI Main", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe("Error: --suite requires a value.\n");
+  });
+
+  test(`Given an eval output option is missing its value,
+    When the CLI main parses the eval request,
+    Then it returns an option value validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["eval", "--out"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --out requires a value.\n");
+  });
+
+  test(`Given an eval task option is missing its value,
+    When the CLI main parses the eval request,
+    Then it returns an option value validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["eval", "--task"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --task requires a value.\n");
   });
 
   test(`Given an invalid eval trial count,
@@ -655,6 +854,25 @@ describe("CLI Main", () => {
     Then it returns a bash policy validation error`, async () => {
     // Given
     const fixture = createRuntime(["--bash-policy", "sometimes", "hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --bash-policy must be one of: ask, deny, trusted.\n",
+    );
+  });
+
+  test(`Given an unknown bash policy uses equals syntax,
+    When the CLI main parses the request,
+    Then it returns a bash policy validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["--bash-policy=sometimes", "hello"], {
       env: { KEEL_PROVIDER: "fake" },
     });
 
@@ -1552,6 +1770,36 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("Cost: $0.000000 (budget $1.0000)\n");
   });
 
+  test(`Given DeepSeek is selected with unknown model pricing and a max cost,
+    When the CLI main resolves cost tracking,
+    Then it rejects the run before calling the provider`, async () => {
+    // Given
+    const fixture = createRuntime(
+      [
+        "--max-cost",
+        "1",
+        "--provider",
+        "deepseek",
+        "--model",
+        "deepseek-unknown",
+        "hello",
+      ],
+      {
+        env: { DEEPSEEK_API_KEY: "test-key" },
+      },
+    );
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      'Error: cost tracking is only supported for known DeepSeek model pricing; configured --model="deepseek-unknown".\n',
+    );
+  });
+
   test(`Given the configured provider exceeds the max cost,
     When the CLI main finishes a one-shot request,
     Then it marks the cost budget as exceeded`, async () => {
@@ -2369,6 +2617,58 @@ describe("CLI Main", () => {
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe("Qwen fallback.\n");
       expect(fixture.stderr()).toBe("");
+    } finally {
+      await close(server);
+    }
+  });
+
+  test(`Given provider and model flags override provider env,
+    When the CLI main runs in-process,
+    Then the selected model is sent to the provider`, async () => {
+    // Given
+    let capturedModel: string | undefined;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      req.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        capturedModel = requestModelSchema.parse(JSON.parse(body)).model;
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Selected Qwen."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      ["--provider", "qwen", "--model", "qwen3.7-plus", "hello"],
+      {
+        env: {
+          KEEL_PROVIDER: "fake",
+          DASHSCOPE_API_KEY: "test-key",
+          QWEN_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Selected Qwen.\n");
+      expect(fixture.stderr()).toBe("");
+      expect(capturedModel).toBe("qwen3.7-plus");
     } finally {
       await close(server);
     }

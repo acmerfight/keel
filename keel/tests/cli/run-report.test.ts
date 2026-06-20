@@ -23,6 +23,10 @@ const runReportSchema = z.object({
   costUsd: z.number(),
 });
 
+const requestModelSchema = z.object({
+  model: z.string(),
+});
+
 function getPort(server: Server): number {
   const addr = server.address();
   if (addr === null || typeof addr === "string") {
@@ -332,6 +336,73 @@ describe("CLI Run Report", () => {
     }
   });
 
+  test(`Given provider and model flags override provider env,
+    When the CLI writes a run report,
+    Then the selected provider and model are used end-to-end`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-provider-model-"));
+    const reportPath = join(workspace, "report.json");
+    let capturedModel: string | undefined;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedModel = requestModelSchema.parse(JSON.parse(body)).model;
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Hello from selected Qwen."));
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(
+        [
+          "--report",
+          reportPath,
+          "--provider",
+          "qwen",
+          "--model",
+          "qwen3.7-plus",
+          "hello",
+        ],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "fake",
+            DASHSCOPE_API_KEY: "test-key",
+            QWEN_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Hello from selected Qwen.\n");
+      expect(capturedModel).toBe("qwen3.7-plus");
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.provider).toBe("qwen");
+      expect(report.model).toBe("qwen3.7-plus");
+      expect(report.costUsd).toBeGreaterThan(0);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given Qwen Flash crosses its higher per-request input-token tier,
     When the CLI writes a run report,
     Then the report cost uses the Qwen Flash high-tier pricing`, async () => {
@@ -387,6 +458,49 @@ describe("CLI Run Report", () => {
       expect(report.costUsd).toBeCloseTo(0.34);
     } finally {
       await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given DeepSeek is selected with unknown model pricing,
+    When the CLI is asked to write a run report,
+    Then it rejects the run before writing misleading cost data`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-deepseek-report-cost-model-"),
+    );
+    const reportPath = join(workspace, "report.json");
+
+    try {
+      // When
+      const result = await runCli(
+        [
+          "--provider",
+          "deepseek",
+          "--model",
+          "deepseek-unknown",
+          "--report",
+          reportPath,
+          "hello",
+        ],
+        {
+          cwd: workspace,
+          env: {
+            DEEPSEEK_API_KEY: "test-key",
+          },
+        },
+      );
+
+      // Then
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(
+        'Error: cost tracking is only supported for known DeepSeek model pricing; configured --model="deepseek-unknown".\n',
+      );
+      await expect(readFile(reportPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
       await rm(workspace, { recursive: true, force: true });
     }
   });

@@ -74,11 +74,11 @@ Known limits that shape the priorities below:
   limits apply to each submitted turn rather than the whole interactive
   session. Persisted sessions restore transcript context, not bash approval
   grants or a durable mid-run input inbox.
-- Provider selection supports DeepSeek (`deepseek-v4-flash`), Kimi
-  (`kimi-k2.6` by default), and Qwen (`qwen3.7-max` by default) through
-  environment configuration. DeepSeek's model is currently fixed, while Kimi
-  and Qwen can be selected with provider-specific model env vars; a general
-  provider/model configuration surface is still missing.
+- Provider selection supports DeepSeek, Kimi, and Qwen through one-shot and
+  interactive `--provider` / `--model` overrides plus environment
+  configuration (`KEEL_PROVIDER`, provider-specific API keys, base URLs, and
+  model env vars). Cost tracking fail-closes when a selected model has unknown
+  pricing.
 - Provider retry/backoff is in place for request setup failures and
   pre-stream HTTP 408 / 409 / 429 / 5xx responses, including retry notices,
   `retry-after-ms`, `Retry-After`, per-wait ceilings, and a total retry
@@ -108,17 +108,16 @@ Known limits that shape the priorities below:
    real-task corpus the eval suite needs.
 2. **General provider/model configuration.**
    ✅ Partial (2026-06): DeepSeek, Kimi, and Qwen are wired through
-   `KEEL_PROVIDER`, provider-specific API keys, base URLs, Kimi/Qwen model
-   env vars, and reports that identify provider/model for one-shot runs.
-   Remaining work is a general provider/model configuration surface,
-   configurable DeepSeek model selection, additional frontier providers when
+   one-shot and interactive `--provider` / `--model` overrides,
+   `KEEL_PROVIDER`, provider-specific API keys, base URLs, model env vars
+   including `DEEPSEEK_MODEL`, and reports that identify provider/model for
+   one-shot runs. Remaining work is provider profile metadata beyond the
+   current resolver and pricing maps, additional frontier providers when
    needed, and clearer interactive-session reporting for the selected
    provider/model. This carries daily-use weight because switching frontier
-   models should not require code changes. Slice test: *a user selects a
-   provider/model outside the built-in defaults and the same prompt runs
-   end-to-end with a report that identifies that model.* Cross-agent
-   same-model evals remain useful later, but are not the next slice while the
-   core coding loop still has basic gaps.
+   models should not require code changes. Cross-agent same-model evals remain
+   useful later, but are not the next slice while the core coding loop still
+   has basic gaps.
 3. **Context compaction and overflow recovery.** ✅ Partial (2026-06):
    automatic compaction can trigger before oversized requests, summarizes old
    turns without cutting inside a current tool-call/result suffix, compacts
