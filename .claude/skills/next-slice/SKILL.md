@@ -41,10 +41,11 @@ Use current state, not memory.
    - If not already on `main`, compare against `origin/main` and avoid treating branch-local work as landed unless the user asks for branch-specific analysis.
 2. Read project intent and process:
    - root `AGENTS.md`
-   - `keel/AGENTS.md`
+   - `keel/AGENTS.md` and `keel/CLAUDE.md`
    - `keel/ROADMAP.md`
    - `keel/SLICING.md`
    - `keel/TESTING.md`
+   - `keel/EVALS.md` when evals or quality measurement affect priority
    - other repo docs directly relevant to the candidate area
 3. Inspect issue and PR evidence:
    - Use `gh issue list` and `gh issue view` when available.
@@ -65,18 +66,19 @@ Do not modify submodule contents. Treat reference agents as read-only evidence.
 ## Analysis Method
 
 1. State the project goal you are optimizing for.
-2. List 3-5 plausible next slices. Include the evidence that made each candidate plausible.
-3. Score each candidate qualitatively:
+2. Treat `keel/ROADMAP.md` as the default source for priority order and `keel/SLICING.md` as the source for how to cut the chosen work.
+3. List 3-5 plausible next slices. Include the evidence that made each candidate plausible.
+4. Score each candidate qualitatively:
    - user value
    - dependency unlock
    - risk reduction
    - fit with current architecture
    - testability
    - implementation size
-4. Compare with peer agents when a candidate overlaps a known agent capability. Cite local source files and line numbers for each factual claim.
-5. Prefer foundational gaps over eval-only or polish work when basic product capabilities are incomplete.
-6. Prefer narrow vertical slices over broad infrastructure unless the infrastructure is blocking multiple high-value slices.
-7. Mark inferences explicitly. Do not present guesses as facts.
+5. Compare with peer agents when a candidate overlaps a known agent capability. Cite local source files and line numbers for each factual claim.
+6. Prefer foundational gaps over eval-only or polish work when basic product capabilities are incomplete.
+7. Prefer narrow vertical slices over broad infrastructure unless the infrastructure is blocking multiple high-value slices.
+8. Mark inferences explicitly. Do not present guesses as facts.
 
 ## Output
 

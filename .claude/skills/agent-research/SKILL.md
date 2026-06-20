@@ -34,7 +34,7 @@ Use the repo as primary evidence.
 
 - Keel implementation: `keel/`
 - Reference agents: `codex/`, `claude-code/`, `opencode/`, `kimi-code/`, `pi/`
-- Project guidance: root `AGENTS.md`, plus `keel/AGENTS.md`, `keel/TESTING.md`, `keel/SLICING.md`, and `keel/ROADMAP.md` when they affect the recommendation
+- Project guidance: root `AGENTS.md`, plus `keel/AGENTS.md`, `keel/CLAUDE.md`, `keel/TESTING.md`, `keel/SLICING.md`, `keel/ROADMAP.md`, and `keel/EVALS.md` when they affect the recommendation
 
 Do not modify submodule contents. Treat reference agents as read-only evidence.
 
@@ -76,6 +76,7 @@ Include:
 - why alternatives are worse for Keel
 - implementation slices, ordered by dependency and value
 - expected tests, using BDD style when behavior changes
+- the `keel/SLICING.md` sentence for any implementation handoff: "After this, a user can run ___ and see ___."
 - risks and open questions
 - evidence summary with local source references and external links
 

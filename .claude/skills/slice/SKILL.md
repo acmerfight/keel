@@ -35,10 +35,12 @@ The workflow already stops before merge, so the user does not need to say "do no
 
 1. Update from latest `main` before implementation.
 2. Read the active project guidance before choosing or changing code:
-   - `AGENTS.md`
-   - `TESTING.md`
-   - `SLICING.md`
-   - `ROADMAP.md` when choosing or justifying the next slice
+   - root `AGENTS.md`
+   - `keel/AGENTS.md` and `keel/CLAUDE.md`
+   - `keel/TESTING.md`
+   - `keel/SLICING.md`
+   - `keel/ROADMAP.md` when choosing or justifying the next slice
+   - `keel/EVALS.md` when changing evals or making quality-measurement claims
    - any other repo-local MD file directly relevant to the slice
 3. Confirm the current branch, worktree status, existing PR state, and target issue/goal.
 4. Protect unrelated user changes. Do not revert files you did not need to touch.
@@ -47,6 +49,7 @@ The workflow already stops before merge, so the user does not need to say "do no
 
 For behavior changes, write the BDD case before production code.
 
+- Define the slice with the `keel/SLICING.md` sentence: "After this, a user can run ___ and see ___."
 - Use Given / When / Then style.
 - Make the test fail on the old behavior when practical.
 - Cover product-visible behavior at the owning boundary.
@@ -77,10 +80,12 @@ Fix all valid blocking/high/medium findings. For low/nit findings, apply only ch
 
 Run professional QA before opening or updating the PR.
 
-- Run targeted tests.
+- Run Keel commands from `keel/` unless the slice is explicitly repo-level documentation or agent configuration.
+- Run targeted tests for iteration.
 - Run `pnpm lint`.
 - Run `pnpm typecheck`.
-- Run full test or coverage according to project guidance.
+- Run `pnpm test:coverage` for PR-ready verification. Use `pnpm test` only for fast local iteration.
+- For pure docs/skill-only changes, run the relevant metadata or Markdown validators and explain why the Keel test suite was not run.
 - Use a real DeepSeek key for end-to-end QA when the slice has provider-visible behavior and the key is available. Never fake this result.
 - Record exact commands and outcomes in the PR body.
 
