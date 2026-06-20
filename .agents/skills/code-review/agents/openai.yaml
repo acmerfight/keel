@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Review"
+  short_description: "Review Keel changes against project docs."
+  default_prompt: "$code-review"
