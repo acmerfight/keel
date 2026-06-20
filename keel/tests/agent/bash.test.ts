@@ -8,8 +8,8 @@ import { runAgent } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import {
   createFakeProvider,
-  fakeBashResponse,
   fakeResponse,
+  fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 import { createSessionBashPermissionPolicy } from "../../src/permissions/bash.ts";
@@ -312,10 +312,11 @@ describe("Bash Commands", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
     const provider = createFakeProvider([
-      fakeBashResponse(""),
-      fakeBashResponse(
-        "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"",
-      ),
+      fakeToolResponse("bash", { command: "" }),
+      fakeToolResponse("bash", {
+        command:
+          "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"",
+      }),
       fakeResponse("Created the file."),
     ]);
 
@@ -354,7 +355,7 @@ describe("Bash Commands", () => {
     const command =
       "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
     const provider = createFakeProvider([
-      fakeBashResponse(command),
+      fakeToolResponse("bash", { command }),
       fakeResponse("I will avoid the shell."),
     ]);
     let reviewedCommand = "";
@@ -402,8 +403,8 @@ describe("Bash Commands", () => {
     const command =
       "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
     const provider = createFakeProvider([
-      fakeBashResponse(command),
-      fakeBashResponse(command),
+      fakeToolResponse("bash", { command }),
+      fakeToolResponse("bash", { command }),
       fakeResponse("Ran twice."),
     ]);
     let promptCount = 0;
@@ -445,8 +446,8 @@ describe("Bash Commands", () => {
     const command =
       "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
     const provider = createFakeProvider([
-      fakeBashResponse(command),
-      fakeBashResponse(command),
+      fakeToolResponse("bash", { command }),
+      fakeToolResponse("bash", { command }),
       fakeResponse("Ran twice."),
     ]);
     let promptCount = 0;

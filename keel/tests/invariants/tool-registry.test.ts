@@ -245,6 +245,35 @@ function importedBindings(
   return violations;
 }
 
+function perToolFakeResponseHelpers(source: ParsedSource): readonly string[] {
+  const violations: string[] = [];
+
+  function isPerToolFakeResponseHelperName(name: string): boolean {
+    return name !== "fakeToolResponse" && /^fake[A-Z].*Response$/.test(name);
+  }
+
+  function visit(node: ts.Node): void {
+    if (
+      ts.isFunctionDeclaration(node) &&
+      node.name !== undefined &&
+      isPerToolFakeResponseHelperName(node.name.text)
+    ) {
+      violations.push(`${location(source, node)} ${node.name.text}`);
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      isPerToolFakeResponseHelperName(node.name.text)
+    ) {
+      violations.push(`${location(source, node)} ${node.name.text}`);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source.sourceFile);
+  return violations;
+}
+
 describe("builtin tool registry invariants", () => {
   test(`Given provider exposure is a registry-derived surface,
     When registry syntax is inspected,
@@ -368,5 +397,11 @@ describe("builtin tool registry invariants", () => {
         ? []
         : builtinToolSwitchCases(fakeProviderSource, createProvider),
     ).toEqual([]);
+  });
+
+  test(`Given fake provider tool scripting is registry-generic,
+    When fake provider syntax is inspected,
+    Then it does not expose per-tool response helper functions`, () => {
+    expect(perToolFakeResponseHelpers(fakeProviderSource)).toEqual([]);
   });
 });

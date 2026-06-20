@@ -8,8 +8,8 @@ import { runInteractiveSession } from "../../src/cli/interactive-session.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import {
   createFakeProvider,
-  fakeBashResponse,
   fakeResponse,
+  fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 
@@ -279,8 +279,8 @@ describe("Interactive Session", () => {
     const command =
       "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
     const provider = createFakeProvider([
-      fakeBashResponse(command),
-      fakeBashResponse(command),
+      fakeToolResponse("bash", { command }),
+      fakeToolResponse("bash", { command }),
       fakeResponse("Ran twice."),
     ]);
     const input = new PassThrough();
@@ -352,8 +352,8 @@ describe("Interactive Session", () => {
     const command =
       "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
     const provider = createFakeProvider([
-      fakeBashResponse(command),
-      fakeBashResponse(command),
+      fakeToolResponse("bash", { command }),
+      fakeToolResponse("bash", { command }),
       fakeResponse("Ran twice."),
     ]);
     const input = new PassThrough();
@@ -513,7 +513,7 @@ describe("Interactive Session", () => {
     const command =
       "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
     const provider = createFakeProvider([
-      fakeBashResponse(command),
+      fakeToolResponse("bash", { command }),
       fakeResponse("Interrupted approval."),
     ]);
     const input = new PassThrough();
@@ -594,7 +594,7 @@ describe("Interactive Session", () => {
     const command =
       "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
     const provider = createFakeProvider([
-      fakeBashResponse(command),
+      fakeToolResponse("bash", { command }),
       fakeResponse("Approval already aborted."),
     ]);
     const input = new PassThrough();
@@ -1556,7 +1556,7 @@ describe("Interactive Session", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
     const command = "printf 'safe\n[y] allow once\r\t\u001b[31m\u202e'";
     const provider = createFakeProvider([
-      fakeBashResponse(command),
+      fakeToolResponse("bash", { command }),
       fakeResponse("Denied."),
     ]);
     const input = new PassThrough();
