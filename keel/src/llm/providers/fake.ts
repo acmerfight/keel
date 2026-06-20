@@ -1,3 +1,8 @@
+import type { ToolArgsFor, ToolName } from "../../tools/registry.ts";
+import {
+  toolCallArguments,
+  toolCallFromParsedArguments,
+} from "../../tools/registry.ts";
 import type { LLMProvider, Usage } from "../types.ts";
 
 interface FakeTextResponse {
@@ -7,66 +12,14 @@ interface FakeTextResponse {
   readonly usage: Usage;
 }
 
-interface FakeEditResponse {
-  readonly type: "edit";
-  readonly path: string;
-  readonly oldString: string;
-  readonly newString: string;
+interface FakeToolResponse {
+  readonly type: "tool";
+  readonly tool: ToolName;
+  readonly args: Record<string, unknown>;
   readonly usage: Usage;
 }
 
-interface FakeWriteResponse {
-  readonly type: "write";
-  readonly path: string;
-  readonly content: string;
-  readonly usage: Usage;
-}
-
-interface FakeReadResponse {
-  readonly type: "read";
-  readonly path: string;
-  readonly offset?: number;
-  readonly limit?: number;
-  readonly usage: Usage;
-}
-
-interface FakeLsResponse {
-  readonly type: "ls";
-  readonly path?: string;
-  readonly limit?: number;
-  readonly usage: Usage;
-}
-
-interface FakeGrepResponse {
-  readonly type: "grep";
-  readonly pattern: string;
-  readonly path?: string;
-  readonly usage: Usage;
-}
-
-interface FakeGlobResponse {
-  readonly type: "glob";
-  readonly pattern: string;
-  readonly path?: string;
-  readonly usage: Usage;
-}
-
-interface FakeBashResponse {
-  readonly type: "bash";
-  readonly command: string;
-  readonly timeoutMs?: number;
-  readonly usage: Usage;
-}
-
-export type FakeResponse =
-  | FakeTextResponse
-  | FakeEditResponse
-  | FakeWriteResponse
-  | FakeReadResponse
-  | FakeLsResponse
-  | FakeGlobResponse
-  | FakeGrepResponse
-  | FakeBashResponse;
+export type FakeResponse = FakeTextResponse | FakeToolResponse;
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -83,13 +36,34 @@ export function fakeResponse(
   return { type: "text", text, tokenize, usage };
 }
 
+export function fakeToolResponse<Name extends ToolName>(
+  tool: Name,
+  args: ToolArgsFor<Name>,
+  usage: Usage = ZERO_USAGE,
+): FakeResponse {
+  const toolCall = toolCallFromParsedArguments(
+    "fake_tool_call_validation",
+    tool,
+    args,
+  );
+  if (toolCall === null) {
+    throw new Error(`Invalid fake tool response arguments for ${tool}`);
+  }
+  return {
+    type: "tool",
+    tool,
+    args: toolCallArguments(toolCall),
+    usage,
+  };
+}
+
 export function fakeEditResponse(
   path: string,
   oldString: string,
   newString: string,
   usage: Usage = ZERO_USAGE,
 ): FakeResponse {
-  return { type: "edit", path, oldString, newString, usage };
+  return fakeToolResponse("edit", { path, oldString, newString }, usage);
 }
 
 export function fakeWriteResponse(
@@ -97,7 +71,7 @@ export function fakeWriteResponse(
   content: string,
   usage: Usage = ZERO_USAGE,
 ): FakeResponse {
-  return { type: "write", path, content, usage };
+  return fakeToolResponse("write", { path, content }, usage);
 }
 
 export function fakeReadResponse(
@@ -105,25 +79,29 @@ export function fakeReadResponse(
   usage: Usage = ZERO_USAGE,
   options: { readonly offset?: number; readonly limit?: number } = {},
 ): FakeResponse {
-  return {
-    type: "read",
-    path,
-    ...(options.offset !== undefined ? { offset: options.offset } : {}),
-    ...(options.limit !== undefined ? { limit: options.limit } : {}),
+  return fakeToolResponse(
+    "read",
+    {
+      path,
+      ...(options.offset !== undefined ? { offset: options.offset } : {}),
+      ...(options.limit !== undefined ? { limit: options.limit } : {}),
+    },
     usage,
-  };
+  );
 }
 
 export function fakeLsResponse(
   usage: Usage = ZERO_USAGE,
   options: { readonly path?: string; readonly limit?: number } = {},
 ): FakeResponse {
-  return {
-    type: "ls",
-    ...(options.path !== undefined ? { path: options.path } : {}),
-    ...(options.limit !== undefined ? { limit: options.limit } : {}),
+  return fakeToolResponse(
+    "ls",
+    {
+      ...(options.path !== undefined ? { path: options.path } : {}),
+      ...(options.limit !== undefined ? { limit: options.limit } : {}),
+    },
     usage,
-  };
+  );
 }
 
 export function fakeGrepResponse(
@@ -131,12 +109,14 @@ export function fakeGrepResponse(
   usage: Usage = ZERO_USAGE,
   options: { readonly path?: string } = {},
 ): FakeResponse {
-  return {
-    type: "grep",
-    pattern,
-    ...(options.path !== undefined ? { path: options.path } : {}),
+  return fakeToolResponse(
+    "grep",
+    {
+      pattern,
+      ...(options.path !== undefined ? { path: options.path } : {}),
+    },
     usage,
-  };
+  );
 }
 
 export function fakeGlobResponse(
@@ -144,12 +124,14 @@ export function fakeGlobResponse(
   usage: Usage = ZERO_USAGE,
   options: { readonly path?: string } = {},
 ): FakeResponse {
-  return {
-    type: "glob",
-    pattern,
-    ...(options.path !== undefined ? { path: options.path } : {}),
+  return fakeToolResponse(
+    "glob",
+    {
+      pattern,
+      ...(options.path !== undefined ? { path: options.path } : {}),
+    },
     usage,
-  };
+  );
 }
 
 export function fakeBashResponse(
@@ -157,14 +139,16 @@ export function fakeBashResponse(
   usage: Usage = ZERO_USAGE,
   options: { readonly timeoutMs?: number } = {},
 ): FakeResponse {
-  return {
-    type: "bash",
-    command,
-    ...(options.timeoutMs !== undefined
-      ? { timeoutMs: options.timeoutMs }
-      : {}),
+  return fakeToolResponse(
+    "bash",
+    {
+      command,
+      ...(options.timeoutMs !== undefined
+        ? { timeoutMs: options.timeoutMs }
+        : {}),
+    },
     usage,
-  };
+  );
 }
 
 export function createFakeProvider(
@@ -192,75 +176,20 @@ export function createFakeProvider(
             yield { type: "text", text: response.text };
           }
           break;
-        case "edit":
-          yield {
-            type: "tool_call",
-            id: `fake_tool_call_${turn}`,
-            tool: "edit",
-            path: response.path,
-            oldString: response.oldString,
-            newString: response.newString,
-          };
+        case "tool": {
+          const toolCall = toolCallFromParsedArguments(
+            `fake_tool_call_${turn}`,
+            response.tool,
+            response.args,
+          );
+          if (toolCall === null) {
+            throw new Error(
+              `Invalid fake tool response arguments for ${response.tool}`,
+            );
+          }
+          yield { type: "tool_call", ...toolCall };
           break;
-        case "write":
-          yield {
-            type: "tool_call",
-            id: `fake_tool_call_${turn}`,
-            tool: "write",
-            path: response.path,
-            content: response.content,
-          };
-          break;
-        case "read":
-          yield {
-            type: "tool_call",
-            id: `fake_tool_call_${turn}`,
-            tool: "read",
-            path: response.path,
-            ...(response.offset !== undefined
-              ? { offset: response.offset }
-              : {}),
-            ...(response.limit !== undefined ? { limit: response.limit } : {}),
-          };
-          break;
-        case "ls":
-          yield {
-            type: "tool_call",
-            id: `fake_tool_call_${turn}`,
-            tool: "ls",
-            ...(response.path !== undefined ? { path: response.path } : {}),
-            ...(response.limit !== undefined ? { limit: response.limit } : {}),
-          };
-          break;
-        case "grep":
-          yield {
-            type: "tool_call",
-            id: `fake_tool_call_${turn}`,
-            tool: "grep",
-            pattern: response.pattern,
-            ...(response.path !== undefined ? { path: response.path } : {}),
-          };
-          break;
-        case "glob":
-          yield {
-            type: "tool_call",
-            id: `fake_tool_call_${turn}`,
-            tool: "glob",
-            pattern: response.pattern,
-            ...(response.path !== undefined ? { path: response.path } : {}),
-          };
-          break;
-        case "bash":
-          yield {
-            type: "tool_call",
-            id: `fake_tool_call_${turn}`,
-            tool: "bash",
-            command: response.command,
-            ...(response.timeoutMs !== undefined
-              ? { timeoutMs: response.timeoutMs }
-              : {}),
-          };
-          break;
+        }
       }
 
       yield { type: "stop", usage: response.usage };

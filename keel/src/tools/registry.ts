@@ -50,6 +50,10 @@ type ToolArgsOf<Tool> = Tool extends {
   ? z.infer<Schema>
   : never;
 
+export type ToolArgsFor<Name extends ToolName> = ToolArgsOf<
+  BuiltinToolForName<Name>
+>;
+
 type ToolCallFor<Tool> = Tool extends unknown
   ? {
       readonly id: string;
@@ -87,6 +91,41 @@ function builtinToolForName<Name extends ToolName>(
   }
   /* v8 ignore next: ToolName is derived from builtinTools. */
   throw new Error(`Missing builtin tool registration for ${name}`);
+}
+
+function toolArgField(
+  tool: RegisteredBuiltinTool,
+  key: string,
+): ToolArgDefinition | null {
+  for (const [name, field] of Object.entries(tool.args.fields)) {
+    if (name === key) {
+      return field;
+    }
+  }
+  return null;
+}
+
+function normalizeParsedArguments(
+  tool: RegisteredBuiltinTool,
+  parsedArguments: unknown,
+): unknown {
+  if (
+    typeof parsedArguments !== "object" ||
+    parsedArguments === null ||
+    Array.isArray(parsedArguments)
+  ) {
+    return parsedArguments;
+  }
+
+  const normalized: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(parsedArguments)) {
+    const field = toolArgField(tool, name);
+    if (field !== null && !field.required && value === null) {
+      continue;
+    }
+    normalized[name] = value;
+  }
+  return normalized;
 }
 
 function toOpenAICompatibleToolParameter(
@@ -142,7 +181,9 @@ export function toolCallFromParsedArguments(
   parsedArguments: unknown,
 ): ToolCall | null {
   const tool = builtinToolForName(name);
-  const result = tool.args.schema.safeParse(parsedArguments);
+  const result = tool.args.schema.safeParse(
+    normalizeParsedArguments(tool, parsedArguments),
+  );
   if (!result.success) {
     return null;
   }
@@ -163,48 +204,18 @@ export function executeBuiltinToolCall(
 }
 
 export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
-  switch (toolCall.tool) {
-    case "read":
-      return {
-        path: toolCall.path,
-        ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
-        ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
-      };
-    case "ls":
-      return {
-        ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
-        ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
-      };
-    case "glob":
-      return {
-        pattern: toolCall.pattern,
-        ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
-      };
-    case "grep":
-      return {
-        pattern: toolCall.pattern,
-        ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
-      };
-    case "edit":
-      return {
-        path: toolCall.path,
-        oldString: toolCall.oldString,
-        newString: toolCall.newString,
-        ...(toolCall.replaceAll !== undefined
-          ? { replaceAll: toolCall.replaceAll }
-          : {}),
-      };
-    case "write":
-      return {
-        path: toolCall.path,
-        content: toolCall.content,
-      };
-    case "bash":
-      return {
-        command: toolCall.command,
-        ...(toolCall.timeoutMs !== undefined
-          ? { timeoutMs: toolCall.timeoutMs }
-          : {}),
-      };
-  }
+  const tool = builtinToolForName(toolCall.tool);
+  return tool.argumentsFromCall(toolCall);
+}
+
+export function toolCallCanonicalArguments(
+  toolCall: ToolCall,
+): Record<string, unknown> {
+  const tool = builtinToolForName(toolCall.tool);
+  return tool.canonicalArgumentsFromCall(toolCall);
+}
+
+export function toolCallLabel(toolCall: ToolCall): string {
+  const tool = builtinToolForName(toolCall.tool);
+  return tool.formatCallLabel(toolCall);
 }

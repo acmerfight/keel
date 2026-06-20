@@ -6,6 +6,7 @@ import {
   isToolName,
   openAICompatibleTools,
   toolCallArguments,
+  toolCallCanonicalArguments,
   toolCallFromParsedArguments,
 } from "../../src/tools/registry.ts";
 
@@ -365,6 +366,45 @@ describe("tool registry", () => {
     });
   });
 
+  test(`Given builtin tool execution receives a matching call with an explicit null optional argument,
+    When the registry-owned execution guard validates the internal call,
+    Then it rejects the malformed call instead of widening the ToolCall type`, () => {
+    const bashTool = builtinTools[6];
+    const malformedCall = {
+      id: "call_bash",
+      tool: "bash",
+      command: "printf ok",
+      timeoutMs: null,
+    };
+    expect(bashTool.name).toBe("bash");
+
+    expect(() =>
+      bashTool.executeCall(
+        {
+          workspace: ".",
+          signal: new AbortController().signal,
+          allowBash: false,
+        },
+        malformedCall,
+      ),
+    ).toThrow("Invalid builtin tool call for bash");
+  });
+
+  test(`Given registry-derived builtin call helpers receive malformed internal calls,
+    When they validate the call before deriving labels or canonical arguments,
+    Then they reject missing required fields`, () => {
+    const [readTool] = builtinTools;
+    const malformedCall = { id: "call_read", tool: "read" };
+    expect(readTool.name).toBe("read");
+
+    expect(() => readTool.formatCallLabel(malformedCall)).toThrow(
+      "Invalid builtin tool call for read",
+    );
+    expect(() => readTool.canonicalArgumentsFromCall(malformedCall)).toThrow(
+      "Invalid builtin tool call for read",
+    );
+  });
+
   test(`Given builtin tools declare their argument contracts,
     When the registry metadata is inspected,
     Then each tool lists its provider-visible arguments and required fields`, () => {
@@ -605,11 +645,71 @@ describe("tool registry", () => {
     expect(parsed === null ? null : toolCallArguments(parsed)).toEqual({});
   });
 
+  test(`Given a provider returns optional arguments as omitted undefined or null,
+    When the registry parses and canonicalizes the calls,
+    Then semantic equivalents share the same canonical argument shape`, () => {
+    const omitted = toolCallFromParsedArguments("call_read", "read", {
+      path: "src/index.ts",
+    });
+    const explicitUndefined = toolCallFromParsedArguments("call_read", "read", {
+      path: "src/index.ts",
+      offset: undefined,
+      limit: undefined,
+    });
+    const explicitNull = toolCallFromParsedArguments("call_read", "read", {
+      path: "src/index.ts",
+      offset: null,
+      limit: null,
+    });
+
+    expect(omitted === null ? null : toolCallArguments(omitted)).toEqual({
+      path: "src/index.ts",
+    });
+    expect(
+      explicitUndefined === null ? null : toolCallArguments(explicitUndefined),
+    ).toEqual({ path: "src/index.ts" });
+    expect(
+      explicitNull === null ? null : toolCallArguments(explicitNull),
+    ).toEqual({ path: "src/index.ts" });
+    expect(
+      omitted === null ? null : toolCallCanonicalArguments(omitted),
+    ).toEqual({
+      path: "src/index.ts",
+      offset: null,
+      limit: null,
+    });
+    expect(
+      explicitUndefined === null
+        ? null
+        : toolCallCanonicalArguments(explicitUndefined),
+    ).toEqual(omitted === null ? null : toolCallCanonicalArguments(omitted));
+    expect(
+      explicitNull === null ? null : toolCallCanonicalArguments(explicitNull),
+    ).toEqual(omitted === null ? null : toolCallCanonicalArguments(omitted));
+  });
+
   test(`Given a provider returns invalid tool arguments,
     When the registry parses the call,
     Then it rejects the arguments without constructing a tool call`, () => {
     expect(
       toolCallFromParsedArguments("call_1", "grep", { path: "src" }),
+    ).toBeNull();
+  });
+
+  test(`Given a provider returns a non-object tool argument payload,
+    When the registry parses the call,
+    Then it rejects the payload without constructing a tool call`, () => {
+    expect(toolCallFromParsedArguments("call_1", "read", null)).toBeNull();
+  });
+
+  test(`Given a provider returns an unknown argument field,
+    When the registry parses the call,
+    Then strict argument validation rejects the extra field`, () => {
+    expect(
+      toolCallFromParsedArguments("call_1", "read", {
+        path: "src/index.ts",
+        unexpected: null,
+      }),
     ).toBeNull();
   });
 

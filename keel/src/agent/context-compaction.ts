@@ -1,5 +1,6 @@
 import { KeelError } from "../core/error.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
+import { toolCallCanonicalArguments } from "../tools/registry.ts";
 
 const DEFAULT_RESERVE_TOKENS = 16_384;
 const DEFAULT_KEEP_RECENT_TOKENS = 20_000;
@@ -133,10 +134,10 @@ interface StaleToolOutputCompactionStats {
   readonly toolOutputEstimatedTokensAfter: number;
 }
 
-type ToolCallFingerprintPart = string | number | boolean | null;
-
 interface ToolCallFingerprintCache {
-  readonly parts: readonly ToolCallFingerprintPart[];
+  readonly id: string;
+  readonly tool: string;
+  readonly args: Readonly<Record<string, unknown>>;
 }
 
 interface CapturedToolCallFingerprint {
@@ -383,75 +384,82 @@ function resolvedRequestMetadata(
   };
 }
 
-function toolCallFingerprintParts(
-  toolCall: ToolCall,
-): readonly ToolCallFingerprintPart[] {
-  switch (toolCall.tool) {
-    case "read":
-      return [
-        toolCall.id,
-        toolCall.tool,
-        toolCall.path,
-        toolCall.offset ?? null,
-        toolCall.limit ?? null,
-      ];
-    case "ls":
-      return [
-        toolCall.id,
-        toolCall.tool,
-        toolCall.path ?? null,
-        toolCall.limit ?? null,
-      ];
-    case "grep":
-      return [
-        toolCall.id,
-        toolCall.tool,
-        toolCall.pattern,
-        toolCall.path ?? null,
-      ];
-    case "glob":
-      return [
-        toolCall.id,
-        toolCall.tool,
-        toolCall.pattern,
-        toolCall.path ?? null,
-      ];
-    case "edit":
-      return [
-        toolCall.id,
-        toolCall.tool,
-        toolCall.path,
-        toolCall.oldString,
-        toolCall.newString,
-        toolCall.replaceAll ?? null,
-      ];
-    case "write":
-      return [toolCall.id, toolCall.tool, toolCall.path, toolCall.content];
-    case "bash":
-      return [
-        toolCall.id,
-        toolCall.tool,
-        toolCall.command,
-        toolCall.timeoutMs ?? null,
-      ];
+function compareStableKeys(left: string, right: string): number {
+  return Number(left > right) - Number(left < right);
+}
+
+function stableJson(value: unknown): string {
+  if (value === null) {
+    return "null";
   }
-  /* v8 ignore start: compile-time exhaustiveness guard for future tools. */
-  const exhaustive: never = toolCall;
-  return exhaustive;
-  /* v8 ignore stop */
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return `${JSON.stringify(value)}`;
+  }
+  /* v8 ignore next 3: tool fingerprints are built from JSON-compatible canonical arguments. */
+  if (typeof value !== "object") {
+    return "null";
+  }
+  const entries = Object.entries(value).sort(([left], [right]) =>
+    compareStableKeys(left, right),
+  );
+  return `{${entries
+    .map(([key, item]) => `${stableJson(key)}:${stableJson(item)}`)
+    .join(",")}}`;
+}
+
+function stableValuesEqual(left: unknown, right: unknown): boolean {
+  if (
+    left === null ||
+    right === null ||
+    typeof left !== "object" ||
+    typeof right !== "object"
+  ) {
+    return left === right;
+  }
+  const leftEntries = Object.entries(left).sort(([leftKey], [rightKey]) =>
+    compareStableKeys(leftKey, rightKey),
+  );
+  const rightEntries = Object.entries(right).sort(([leftKey], [rightKey]) =>
+    compareStableKeys(leftKey, rightKey),
+  );
+  return (
+    leftEntries.length === rightEntries.length &&
+    leftEntries.every(([key, item], index) => {
+      const rightEntry = rightEntries[index];
+      return (
+        rightEntry !== undefined &&
+        key === rightEntry[0] &&
+        stableValuesEqual(item, rightEntry[1])
+      );
+    })
+  );
+}
+
+function toolCallFingerprintCache(
+  toolCall: ToolCall,
+): ToolCallFingerprintCache {
+  return {
+    id: toolCall.id,
+    tool: toolCall.tool,
+    args: toolCallCanonicalArguments(toolCall),
+  };
 }
 
 function toolCallFingerprint(toolCall: ToolCall): string {
-  return JSON.stringify(toolCallFingerprintParts(toolCall));
+  return stableJson(toolCallFingerprintCache(toolCall));
 }
 
 function captureToolCallFingerprint(
   toolCall: ToolCall,
 ): CapturedToolCallFingerprint {
-  const parts = toolCallFingerprintParts(toolCall);
+  const cache = toolCallFingerprintCache(toolCall);
   return {
-    cache: { parts },
-    fingerprint: JSON.stringify(parts),
+    cache,
+    fingerprint: stableJson(cache),
   };
 }
 
@@ -459,10 +467,11 @@ function toolCallMatchesFingerprintCache(
   toolCall: ToolCall,
   cache: ToolCallFingerprintCache,
 ): boolean {
-  const parts = toolCallFingerprintParts(toolCall);
+  const current = toolCallFingerprintCache(toolCall);
   return (
-    parts.length === cache.parts.length &&
-    parts.every((part, index) => part === cache.parts[index])
+    current.id === cache.id &&
+    current.tool === cache.tool &&
+    stableValuesEqual(current.args, cache.args)
   );
 }
 
