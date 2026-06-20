@@ -7,8 +7,8 @@ import { runAgent } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import {
   createFakeProvider,
-  fakeGlobResponse,
   fakeResponse,
+  fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../src/llm/types.ts";
 
@@ -42,9 +42,14 @@ describe("File Discovery", () => {
       "utf8",
     );
     const provider = createFakeProvider([
-      fakeGlobResponse("**/*validator*.test.ts", ZERO_USAGE, {
-        path: "tests",
-      }),
+      fakeToolResponse(
+        "glob",
+        {
+          pattern: "**/*validator*.test.ts",
+          path: "tests",
+        },
+        ZERO_USAGE,
+      ),
       fakeResponse("Found the validator test."),
     ]);
 

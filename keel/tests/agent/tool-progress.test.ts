@@ -7,8 +7,8 @@ import { runAgent } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import {
   createFakeProvider,
-  fakeEditResponse,
   fakeResponse,
+  fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
 
 async function collect(
@@ -37,7 +37,11 @@ describe("Tool Progress", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
     const provider = createFakeProvider([
-      fakeEditResponse("note.txt", "old", "new"),
+      fakeToolResponse("edit", {
+        path: "note.txt",
+        oldString: "old",
+        newString: "new",
+      }),
       fakeResponse("Done."),
     ]);
 
@@ -85,7 +89,11 @@ describe("Tool Progress", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
     const provider = createFakeProvider([
-      fakeEditResponse("note.txt", "missing", "new"),
+      fakeToolResponse("edit", {
+        path: "note.txt",
+        oldString: "missing",
+        newString: "new",
+      }),
       fakeResponse("The text was not found."),
     ]);
 

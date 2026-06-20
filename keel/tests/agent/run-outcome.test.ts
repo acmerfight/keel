@@ -11,9 +11,8 @@ import {
 import type { CostModel } from "../../src/core/cost.ts";
 import {
   createFakeProvider,
-  fakeEditResponse,
-  fakeReadResponse,
   fakeResponse,
+  fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
 import type { LLMProvider } from "../../src/llm/types.ts";
 
@@ -85,7 +84,11 @@ describe("Run Outcome Reporting", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello old\n", "utf8");
     const provider = createFakeProvider([
-      fakeEditResponse("note.txt", "old", "new"),
+      fakeToolResponse("edit", {
+        path: "note.txt",
+        oldString: "old",
+        newString: "new",
+      }),
       fakeResponse("Edited."),
     ]);
 
@@ -173,7 +176,7 @@ describe("Run Outcome Reporting", () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "a.txt"), "alpha\n", "utf8");
-    const sameRead = fakeReadResponse("a.txt");
+    const sameRead = fakeToolResponse("read", { path: "a.txt" });
     const provider = createFakeProvider(
       Array.from({ length: 16 }, () => sameRead),
     );
@@ -208,8 +211,16 @@ describe("Run Outcome Reporting", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
     const provider = createFakeProvider([
-      fakeEditResponse("a.txt", "old", "new"),
-      fakeEditResponse("a.txt", "new", "newer"),
+      fakeToolResponse("edit", {
+        path: "a.txt",
+        oldString: "old",
+        newString: "new",
+      }),
+      fakeToolResponse("edit", {
+        path: "a.txt",
+        oldString: "new",
+        newString: "newer",
+      }),
       fakeResponse("Out of rounds: a.txt updated once, second change pending."),
     ]);
 
