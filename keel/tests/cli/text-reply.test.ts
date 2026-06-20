@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import type { Server } from "node:net";
 import { describe, expect, test } from "vitest";
+import { z } from "zod";
 import {
   runCli as runCliCommand,
   runCliProcess as runCliProcessCommand,
@@ -46,6 +47,10 @@ function close(server: Server): Promise<void> {
     });
   });
 }
+
+const requestModelSchema = z.object({
+  model: z.string(),
+});
 
 function sseTextReplyWithUsage(
   text: string,
@@ -110,15 +115,16 @@ describe("CLI Text Reply", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toBe(
       [
-        "Usage: keel [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] <message>",
-        "       keel [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--session <id> | --resume <id>]",
+        "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] <message>",
+        "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--session <id> | --resume <id>]",
         "       keel eval [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
         "       keel /undo",
         "",
         "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
         "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
         "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
-        "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
+        "--provider and --model override provider env for the current run.",
+        "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, DEEPSEEK_MODEL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
         "Context compaction uses an estimated 256000-token default window for real providers; set KEEL_CONTEXT_WINDOW_TOKENS for a model-specific window.",
         "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
         "",
@@ -154,6 +160,83 @@ describe("CLI Text Reply", () => {
       expect(exit.stdout).toContain("Earlier you said: remember alpha\n");
     } finally {
       child.kill("SIGKILL");
+    }
+  });
+
+  test(`Given user starts an interactive session with provider and model flags,
+    When user sends a prompt,
+    Then the selected provider and model override provider env`, async () => {
+    // Given
+    let receiveRequestModel: (model: string) => void = () => {};
+    const requestModelReceived = new Promise<string>((resolve) => {
+      receiveRequestModel = resolve;
+    });
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      req.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        receiveRequestModel(requestModelSchema.parse(JSON.parse(body)).model);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(
+          sseTextReplyWithUsage("interactive selected Qwen", {
+            promptTokens: 10,
+            promptCacheHitTokens: 0,
+            promptCacheMissTokens: 10,
+            completionTokens: 3,
+          }),
+        );
+      });
+    });
+    await listen(server);
+    const { child, result } = runCliProcess(
+      ["--provider", "qwen", "--model", "qwen3.7-plus"],
+      {
+        KEEL_PROVIDER: "fake",
+        DASHSCOPE_API_KEY: "test-key",
+        QWEN_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_FORCE_INTERACTIVE: "1",
+      },
+      { stdin: "pipe" },
+    );
+    child.stdin?.on("error", () => {});
+
+    try {
+      // When
+      child.stdin?.write("hello selected provider\n");
+      child.stdin?.end();
+
+      // Then
+      const requestModel = await withTimeout(
+        requestModelReceived,
+        5000,
+        "interactive CLI did not send a provider request",
+      );
+      const exit = await withTimeout(
+        result,
+        5000,
+        "interactive CLI did not finish after stdin closed",
+      );
+      expect(exit.exitCode).toBe(0);
+      expect(exit.signal).toBeNull();
+      expect(exit.stdout).toContain("interactive selected Qwen\n");
+      expect(exit.stderr).toBe("");
+      expect(requestModel).toBe("qwen3.7-plus");
+    } finally {
+      child.kill("SIGKILL");
+      await close(server);
     }
   });
 

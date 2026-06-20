@@ -30,9 +30,10 @@ Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
 
 Exit code is non-zero when any trial fails to verify, times out, or crashes.
 
-Provider selection uses the same CLI environment variables as one-shot runs:
-DeepSeek is the default and reads `DEEPSEEK_API_KEY`,
-`DEEPSEEK_BASE_URL`, and the built-in `deepseek-v4-flash` model. Kimi uses
+Eval provider selection is environment based and shares the provider resolver
+defaults with one-shot runs: DeepSeek is the default and reads
+`DEEPSEEK_API_KEY`, optional `DEEPSEEK_MODEL` (default
+`deepseek-v4-flash`), and optional `DEEPSEEK_BASE_URL`. Kimi uses
 `KEEL_PROVIDER=kimi`, `KIMI_API_KEY`, optional `KIMI_MODEL` (default
 `kimi-k2.6`), and optional `KIMI_BASE_URL` (default
 `https://api.moonshot.cn/v1`; set it to the official regional endpoint for
@@ -40,7 +41,8 @@ your account when needed). Qwen uses `KEEL_PROVIDER=qwen`,
 `DASHSCOPE_API_KEY` or `QWEN_API_KEY`, optional `QWEN_MODEL` (default
 `qwen3.7-max`), and optional `QWEN_BASE_URL` (default
 `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`; set it for China
-region or workspace-scoped DashScope endpoints).
+region or workspace-scoped DashScope endpoints). The `keel eval` subcommand
+does not currently accept one-shot `--provider` / `--model` flags.
 
 ## GitHub Actions
 
@@ -168,10 +170,9 @@ and treat prior scores for that task version as invalid.
 
 ## What this is not (yet)
 
-- No cross-agent comparison until the **General provider/model configuration
-  and same-model comparisons** roadmap slice provides a same-model
-  comparison path; the JSONL schema already records provider/model so old
-  results stay usable.
+- No cross-agent comparison until a dedicated cross-agent runner provides a
+  same-model comparison path; the JSONL schema already records provider/model
+  so old results stay usable.
 - No LLM-graded rubrics; deterministic outcome checks only.
 - No transcript persistence per trial; the runner keeps only metrics.
 - `interventions` (human steering count) becomes meaningful with

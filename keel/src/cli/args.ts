@@ -15,6 +15,8 @@ interface EvalCliArgs {
   readonly check: boolean;
 }
 
+type CliProviderId = "fake" | "deepseek" | "kimi" | "qwen";
+
 export type CliArgs =
   | { readonly command: "doctor" }
   | { readonly command: "undo" }
@@ -27,6 +29,8 @@ export type CliArgs =
       readonly reportFile?: string;
       readonly sessionId?: string;
       readonly resumeSessionId?: string;
+      readonly providerId?: CliProviderId;
+      readonly model?: string;
     };
 
 type ParseResult<T> =
@@ -42,21 +46,23 @@ function parseError(message: string): ParseResult<never> {
 }
 
 export const USAGE = [
-  "Usage: keel [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] <message>",
-  "       keel [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--session <id> | --resume <id>]",
+  "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] <message>",
+  "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--session <id> | --resume <id>]",
   "       keel eval [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
   "       keel /undo",
   "",
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
   "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
   "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
-  "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
+  "--provider and --model override provider env for the current run.",
+  "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, DEEPSEEK_MODEL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
   "Context compaction uses an estimated 256000-token default window for real providers; set KEEL_CONTEXT_WINDOW_TOKENS for a model-specific window.",
   "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
 ].join("\n");
 
 const maxCostSchema = z.coerce.number().finite().positive();
 const bashPolicySchema = z.enum(["ask", "deny", "trusted"]);
+const providerIdSchema = z.enum(["fake", "deepseek", "kimi", "qwen"]);
 const trialsSchema = z.coerce.number().int().positive();
 
 function parseMaxCost(raw: string | undefined): ParseResult<number> {
@@ -82,6 +88,22 @@ function parseBashPolicy(raw: string | undefined): ParseResult<BashPolicy> {
     );
   }
   return parseOk(result.data);
+}
+
+function parseProviderId(raw: string | undefined): ParseResult<CliProviderId> {
+  const parsedValue = requireOptionValue("--provider", raw);
+  if (!parsedValue.ok) return parsedValue;
+  const result = providerIdSchema.safeParse(parsedValue.value);
+  if (!result.success) {
+    return parseError(
+      "Error: --provider must be one of: fake, deepseek, kimi, qwen.",
+    );
+  }
+  return parseOk(result.data);
+}
+
+function parseModel(raw: string | undefined): ParseResult<string> {
+  return requireOptionValue("--model", raw);
 }
 
 function parseTrials(raw: string | undefined): ParseResult<number> {
@@ -182,12 +204,16 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   let reportFile: string | undefined;
   let sessionId: string | undefined;
   let resumeSessionId: string | undefined;
+  let providerId: CliProviderId | undefined;
+  let model: string | undefined;
   let userMessage: string | undefined;
   const maxCostPrefix = "--max-cost=";
   const reportPrefix = "--report=";
   const bashPolicyPrefix = "--bash-policy=";
   const sessionPrefix = "--session=";
   const resumePrefix = "--resume=";
+  const providerPrefix = "--provider=";
+  const modelPrefix = "--model=";
 
   let skipNext = false;
   for (const [index, arg] of args.entries()) {
@@ -231,6 +257,36 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
       if (!parsed.ok) return parsed;
       bashPolicyOptionSeen = true;
       bashMode = bashModeFromPolicy(parsed.value);
+      continue;
+    }
+
+    if (arg === "--provider") {
+      const parsed = parseProviderId(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      providerId = parsed.value;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(providerPrefix)) {
+      const parsed = parseProviderId(arg.slice(providerPrefix.length));
+      if (!parsed.ok) return parsed;
+      providerId = parsed.value;
+      continue;
+    }
+
+    if (arg === "--model") {
+      const parsed = parseModel(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      model = parsed.value;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(modelPrefix)) {
+      const parsed = parseModel(arg.slice(modelPrefix.length));
+      if (!parsed.ok) return parsed;
+      model = parsed.value;
       continue;
     }
 
@@ -316,5 +372,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
     ...(reportFile !== undefined ? { reportFile } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
+    ...(providerId !== undefined ? { providerId } : {}),
+    ...(model !== undefined ? { model } : {}),
   });
 }

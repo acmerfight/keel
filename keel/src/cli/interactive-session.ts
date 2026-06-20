@@ -46,7 +46,7 @@ export type InteractiveResolvedProvider =
     })
   | (InteractiveResolvedProviderBase & {
       readonly providerId: "deepseek";
-      readonly costModel: CostModel;
+      readonly costModel: CostModel | null;
     })
   | (InteractiveResolvedProviderBase & {
       readonly providerId: "kimi";
