@@ -253,7 +253,12 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           },
           forceExit: runtime.forceExit,
           resolveProvider: (message) =>
-            resolveInteractiveProvider(message, runtime),
+            resolveInteractiveProvider(message, runtime, {
+              ...(cliArgs.providerId !== undefined
+                ? { providerId: cliArgs.providerId }
+                : {}),
+              ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
+            }),
           requireKnownCostModel,
           printAgentEvents: (stream) => printAgentEvents(stream, runtime),
           formatCostReport,
@@ -285,7 +290,12 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
     abortController.abort();
   };
   try {
-    const resolved = resolveProvider(userMessage, runtime);
+    const resolved = resolveProvider(userMessage, runtime, {
+      ...(cliArgs.providerId !== undefined
+        ? { providerId: cliArgs.providerId }
+        : {}),
+      ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
+    });
     runtime.onSigint(abort);
 
     const workspace = runtime.cwd();
