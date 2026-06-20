@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: 'Review Keel changes against the project documentation. Use for `$code-review`, `$code-review PR #123`, `review this branch`, or `客观 review 当前 PR`. Do not edit files. Read the relevant repo docs first, prioritize correctness/regression/test/safety findings, cite exact files and lines, include a structured merge recommendation, and post the final review as a PR comment when the target is a GitHub PR.'
+description: 'Review Keel changes against the project documentation. Use for `$code-review`, `$code-review PR #123`, GitHub PR review URLs, `review this branch`, or `客观 review 当前 PR`. Do not edit files. Read the relevant repo docs first, prioritize correctness/regression/test/safety findings, cite exact files and lines, include a structured merge recommendation, and post the final review as a PR comment when the target is a GitHub PR.'
 ---
 
 # Code Review
@@ -13,6 +13,7 @@ If the review recommends `Merge now` and the user asks to merge, use `$merge-pr 
 - `$code-review`
 - `$code-review PR #123`
 - `$code-review origin/main...HEAD`
+- `review https://github.com/acmerfight/keel/pull/123`
 - `review this branch`
 
 If the target is omitted, infer it only when the current thread or git state has one unambiguous review target. Otherwise ask for the PR, branch, commit range, or file set.

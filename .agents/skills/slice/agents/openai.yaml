@@ -1,4 +1,4 @@
 interface:
   display_name: "Slice"
-  short_description: "Run the standard Keel PR slice workflow."
+  short_description: "Run a bounded Keel PR slice without research rerouting."
   default_prompt: "$slice #<issue-or-slice>"
