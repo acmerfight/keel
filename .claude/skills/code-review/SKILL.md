@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: 'Review Keel changes against the project documentation. Use for `/code-review`, `/code-review PR #123`, `review this branch`, or `客观 review 当前 PR`. Do not edit files. Read the relevant repo docs first, prioritize correctness/regression/test/safety findings, cite exact files and lines, and separate findings from questions and summary.'
+description: 'Review Keel changes against the project documentation. Use for `/code-review`, `/code-review PR #123`, `review this branch`, or `客观 review 当前 PR`. Do not edit files. Read the relevant repo docs first, prioritize correctness/regression/test/safety findings, cite exact files and lines, separate findings from questions and summary, and post the final review as a PR comment when the target is a GitHub PR.'
 argument-hint: "[target]"
 user-invocable: true
 ---
@@ -38,6 +38,15 @@ Read only the docs needed for the touched area. Do not duplicate the rules in th
 5. Check safety boundaries, provider/tool protocol contracts, session/state persistence, cost/accounting, and abort/rollback behavior when touched.
 6. For docs or skill-only changes, review invocation syntax, host-specific paths, metadata validity, and alignment with the authoritative docs.
 7. Treat submodules as read-only references unless the review target explicitly includes a submodule change.
+
+## PR Comment
+
+When the target is a GitHub PR, post the final review as one PR comment after completing the review.
+
+- Use `gh pr comment <number> --body-file <file>` when GitHub CLI auth is available.
+- If the PR number is inferred, verify it with `gh pr view` before commenting.
+- If GitHub auth or network access is unavailable, say that the PR comment could not be posted and include the exact review text in the final answer.
+- Do not post duplicate comments for the same completed review.
 
 ## Output
 
