@@ -49,7 +49,13 @@ function close(server: Server): Promise<void> {
   });
 }
 
-function sseTextReplyWithUsage(text: string): string {
+function sseTextReplyWithUsage(
+  text: string,
+  usage: {
+    readonly promptTokens: number;
+    readonly completionTokens: number;
+  } = { promptTokens: 10, completionTokens: 3 },
+): string {
   return [
     `data: ${JSON.stringify({
       choices: [{ delta: { content: text } }],
@@ -57,8 +63,8 @@ function sseTextReplyWithUsage(text: string): string {
     `data: ${JSON.stringify({
       choices: [{ delta: {}, finish_reason: "stop" }],
       usage: {
-        prompt_tokens: 10,
-        completion_tokens: 3,
+        prompt_tokens: usage.promptTokens,
+        completion_tokens: usage.completionTokens,
       },
     })}\n\n`,
     "data: [DONE]\n\n",
@@ -267,7 +273,125 @@ describe("CLI Run Report", () => {
     }
   });
 
-  test(`Given Qwen is configured with an unsupported cost model,
+  test(`Given Qwen is selected with a per-request tiered model,
+    When the CLI writes a run report,
+    Then the report cost uses the request's input-token tier`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-qwen-plus-report-"),
+    );
+    const reportPath = join(workspace, "report.json");
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(
+          sseTextReplyWithUsage("Hello from Qwen Plus.", {
+            promptTokens: 300_000,
+            completionTokens: 100_000,
+          }),
+        );
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["--report", reportPath, "hello"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "qwen",
+          DASHSCOPE_API_KEY: "test-key",
+          QWEN_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          QWEN_MODEL: "qwen3.7-plus",
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Hello from Qwen Plus.\n");
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.provider).toBe("qwen");
+      expect(report.model).toBe("qwen3.7-plus");
+      expect(report.usage.inputTokens).toBe(300_000);
+      expect(report.costUsd).toBeCloseTo(0.84);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given Qwen Flash crosses its higher per-request input-token tier,
+    When the CLI writes a run report,
+    Then the report cost uses the Qwen Flash high-tier pricing`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-qwen-flash-report-"),
+    );
+    const reportPath = join(workspace, "report.json");
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(
+          sseTextReplyWithUsage("Hello from Qwen Flash.", {
+            promptTokens: 300_000,
+            completionTokens: 10_000,
+          }),
+        );
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["--report", reportPath, "hello"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "qwen",
+          DASHSCOPE_API_KEY: "test-key",
+          QWEN_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          QWEN_MODEL: "qwen3.6-flash",
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Hello from Qwen Flash.\n");
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.provider).toBe("qwen");
+      expect(report.model).toBe("qwen3.6-flash");
+      expect(report.usage.inputTokens).toBe(300_000);
+      expect(report.costUsd).toBeCloseTo(0.34);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given Qwen is configured with an unknown cost model,
     When the CLI is asked to write a run report,
     Then it rejects the run before writing misleading cost data`, async () => {
     // Given
@@ -281,7 +405,7 @@ describe("CLI Run Report", () => {
         env: {
           KEEL_PROVIDER: "qwen",
           DASHSCOPE_API_KEY: "test-key",
-          QWEN_MODEL: "qwen3.7-plus",
+          QWEN_MODEL: "qwen-unknown",
         },
       });
 
@@ -289,7 +413,7 @@ describe("CLI Run Report", () => {
       expect(result.exitCode).not.toBe(0);
       expect(result.stdout).toBe("");
       expect(result.stderr).toBe(
-        'Error: cost tracking is only supported for Qwen model "qwen3.7-max"; configured QWEN_MODEL="qwen3.7-plus".\n',
+        'Error: cost tracking is only supported for known Qwen model pricing; configured QWEN_MODEL="qwen-unknown".\n',
       );
       await expect(readFile(reportPath, "utf8")).rejects.toMatchObject({
         code: "ENOENT",

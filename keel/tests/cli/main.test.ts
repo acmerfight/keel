@@ -1614,10 +1614,10 @@ describe("CLI Main", () => {
       env: {
         KEEL_PROVIDER: "qwen",
         DASHSCOPE_API_KEY: "test-key",
-        QWEN_MODEL: "qwen3.7-plus",
+        QWEN_MODEL: "qwen-unknown",
       },
       stderr:
-        'Error: cost tracking is only supported for Qwen model "qwen3.7-max"; configured QWEN_MODEL="qwen3.7-plus".\n',
+        'Error: cost tracking is only supported for known Qwen model pricing; configured QWEN_MODEL="qwen-unknown".\n',
     },
   ])(`Given $provider has no supported cost model,
     When the CLI main is asked to track cost,

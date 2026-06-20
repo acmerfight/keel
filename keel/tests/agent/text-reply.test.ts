@@ -43,6 +43,7 @@ function workspace(): string {
 }
 
 const budgetModel: CostModel = {
+  type: "fixed",
   uncachedInputPerMillionTokens: 1,
   cachedInputPerMillionTokens: 0,
   outputPerMillionTokens: 0,

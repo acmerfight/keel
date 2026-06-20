@@ -23,9 +23,28 @@ function freshSignal(): AbortSignal {
 }
 
 const budgetModel: CostModel = {
+  type: "fixed",
   uncachedInputPerMillionTokens: 1,
   cachedInputPerMillionTokens: 0.5,
   outputPerMillionTokens: 2,
+};
+
+const tieredBudgetModel: CostModel = {
+  type: "input-token-tiers",
+  tiers: [
+    {
+      startsAboveInputTokens: 0,
+      uncachedInputPerMillionTokens: 0.4,
+      cachedInputPerMillionTokens: 0.04,
+      outputPerMillionTokens: 1.6,
+    },
+    {
+      startsAboveInputTokens: 256_000,
+      uncachedInputPerMillionTokens: 1.2,
+      cachedInputPerMillionTokens: 0.12,
+      outputPerMillionTokens: 4.8,
+    },
+  ],
 };
 
 describe("Cost Budget", () => {
@@ -164,6 +183,78 @@ describe("Cost Budget", () => {
         "new value\n",
       );
       expect(events).toContainEqual({ type: "text", text: "Done." });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a tiered model request crosses the higher input-token tier,
+    When the high-tier cost exceeds the session budget,
+    Then the agent stops before changing files`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cost-budget-"));
+    await writeFile(join(workspace, "note.txt"), "old value\n", "utf8");
+    const provider: LLMProvider = {
+      id: "high-tier-tool-call",
+      async *stream() {
+        yield {
+          type: "tool_call",
+          id: "edit_note",
+          tool: "edit",
+          path: "note.txt",
+          oldString: "old",
+          newString: "new",
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 300_000,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 300_000,
+            outputTokens: 0,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "edit note",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          costTracking: {
+            model: tieredBudgetModel,
+            maxCostUsd: 0.2,
+          },
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "old value\n",
+      );
+      expect(events).toContainEqual({
+        type: "end",
+        usage: {
+          inputTokens: 300_000,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 300_000,
+          outputTokens: 0,
+        },
+        turns: 1,
+        stopReason: "cost_budget",
+        cost: {
+          spentUsd: 0.36,
+          maxUsd: 0.2,
+          budgetExceeded: true,
+        },
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
