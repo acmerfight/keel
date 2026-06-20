@@ -14,11 +14,8 @@ import { runAgent } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import {
   createFakeProvider,
-  fakeEditResponse,
-  fakeGrepResponse,
-  fakeReadResponse,
   fakeResponse,
-  fakeWriteResponse,
+  fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../src/llm/types.ts";
 
@@ -47,7 +44,10 @@ describe("File Editing", () => {
     // Given
     const workspace = await createWorkspace();
     const provider = createFakeProvider([
-      fakeWriteResponse("config.json", '{"created":true}\n'),
+      fakeToolResponse("write", {
+        path: "config.json",
+        content: '{"created":true}\n',
+      }),
       fakeResponse("Created config.json."),
     ]);
 
@@ -290,7 +290,7 @@ describe("File Editing", () => {
     // Given
     const workspace = await createWorkspace();
     const provider = createFakeProvider([
-      fakeWriteResponse("created.txt", "content\n"),
+      fakeToolResponse("write", { path: "created.txt", content: "content\n" }),
     ]);
     await rm(workspace, { recursive: true, force: true });
 
@@ -319,7 +319,11 @@ describe("File Editing", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
     const provider = createFakeProvider([
-      fakeEditResponse("note.txt", "old", "new"),
+      fakeToolResponse("edit", {
+        path: "note.txt",
+        oldString: "old",
+        newString: "new",
+      }),
       fakeResponse("Done."),
     ]);
 
@@ -750,7 +754,11 @@ describe("File Editing", () => {
     await writeFile(outsidePath, "do not change old\n", "utf8");
     let secondTurnMessages: readonly Message[] = [];
     const provider = createFakeProvider([
-      fakeEditResponse(outsidePath, "old", "new"),
+      fakeToolResponse("edit", {
+        path: outsidePath,
+        oldString: "old",
+        newString: "new",
+      }),
       fakeResponse("Outside path rejected."),
     ]);
 
@@ -920,7 +928,11 @@ describe("File Editing", () => {
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
     let secondTurnMessages: readonly Message[] = [];
     const provider = createFakeProvider([
-      fakeEditResponse("note.txt", "", "x"),
+      fakeToolResponse("edit", {
+        path: "note.txt",
+        oldString: "",
+        newString: "x",
+      }),
       fakeResponse("Cannot replace empty text."),
     ]);
 
@@ -1080,7 +1092,11 @@ describe("File Editing", () => {
     await symlink(outsidePath, join(workspace, "link.txt"));
     let secondTurnMessages: readonly Message[] = [];
     const provider = createFakeProvider([
-      fakeEditResponse("link.txt", "old", "new"),
+      fakeToolResponse("edit", {
+        path: "link.txt",
+        oldString: "old",
+        newString: "new",
+      }),
       fakeResponse("Symlink path rejected."),
     ]);
 
@@ -1293,8 +1309,8 @@ describe("File Editing", () => {
     let secondTurnMessages: readonly Message[] = [];
     let thirdTurnMessages: readonly Message[] = [];
     const provider = createFakeProvider([
-      fakeReadResponse("note.txt", undefined, { offset: 3 }),
-      fakeReadResponse("note.txt", undefined, { offset: 1, limit: 1 }),
+      fakeToolResponse("read", { path: "note.txt", offset: 3 }),
+      fakeToolResponse("read", { path: "note.txt", offset: 1, limit: 1 }),
       fakeResponse("done"),
     ]);
     const recordingProvider: LLMProvider = {
@@ -1809,8 +1825,8 @@ describe("File Editing", () => {
       "utf8",
     );
     const provider = createFakeProvider([
-      fakeGrepResponse("target"),
-      fakeReadResponse("app.ts"),
+      fakeToolResponse("grep", { pattern: "target" }),
+      fakeToolResponse("read", { path: "app.ts" }),
       fakeResponse("Inspected app.ts."),
     ]);
 
@@ -1953,7 +1969,9 @@ describe("File Editing", () => {
     await writeFile(join(workspace, "app.ts"), "const target = true;\n");
     const abortController = new AbortController();
     abortController.abort();
-    const provider = createFakeProvider([fakeGrepResponse("target")]);
+    const provider = createFakeProvider([
+      fakeToolResponse("grep", { pattern: "target" }),
+    ]);
 
     try {
       // When / Then
@@ -2484,7 +2502,11 @@ describe("File Editing", () => {
     await writeFile(join(workspace, "note.txt"), "old then old\n", "utf8");
     let secondTurnMessages: readonly Message[] = [];
     const provider = createFakeProvider([
-      fakeEditResponse("note.txt", "old", "new"),
+      fakeToolResponse("edit", {
+        path: "note.txt",
+        oldString: "old",
+        newString: "new",
+      }),
       fakeResponse("Need more context."),
     ]);
 
@@ -2585,8 +2607,16 @@ describe("File Editing", () => {
     await writeFile(join(workspace, "a.txt"), "hello wrold\n", "utf8");
     await writeFile(join(workspace, "b.txt"), "goodby world\n", "utf8");
     const provider = createFakeProvider([
-      fakeEditResponse("a.txt", "wrold", "world"),
-      fakeEditResponse("b.txt", "goodby", "goodbye"),
+      fakeToolResponse("edit", {
+        path: "a.txt",
+        oldString: "wrold",
+        newString: "world",
+      }),
+      fakeToolResponse("edit", {
+        path: "b.txt",
+        oldString: "goodby",
+        newString: "goodbye",
+      }),
       fakeResponse("Fixed both files."),
     ]);
 
@@ -2628,8 +2658,12 @@ describe("File Editing", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "app.ts"), "const x = nul;\n", "utf8");
     const provider = createFakeProvider([
-      fakeReadResponse("app.ts"),
-      fakeEditResponse("app.ts", "nul", "null"),
+      fakeToolResponse("read", { path: "app.ts" }),
+      fakeToolResponse("edit", {
+        path: "app.ts",
+        oldString: "nul",
+        newString: "null",
+      }),
       fakeResponse("Fixed the null typo."),
     ]);
 

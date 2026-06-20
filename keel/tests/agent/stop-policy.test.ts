@@ -15,10 +15,8 @@ import {
 import type { CostModel } from "../../src/core/cost.ts";
 import {
   createFakeProvider,
-  fakeEditResponse,
-  fakeGrepResponse,
-  fakeReadResponse,
   fakeResponse,
+  fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../src/llm/types.ts";
 
@@ -87,8 +85,16 @@ describe("Agent Stopping", () => {
     await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
     await writeFile(join(workspace, "b.txt"), "old b\n", "utf8");
     const provider = createFakeProvider([
-      fakeEditResponse("a.txt", "old", "new"),
-      fakeEditResponse("b.txt", "old", "new"),
+      fakeToolResponse("edit", {
+        path: "a.txt",
+        oldString: "old",
+        newString: "new",
+      }),
+      fakeToolResponse("edit", {
+        path: "b.txt",
+        oldString: "old",
+        newString: "new",
+      }),
       fakeResponse(
         "Round limit reached: a.txt is updated, b.txt still needs the same edit.",
       ),
@@ -272,8 +278,16 @@ describe("Agent Stopping", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
     const provider = createFakeProvider([
-      fakeEditResponse("a.txt", "old", "new"),
-      fakeEditResponse("a.txt", "old a", "rogue"),
+      fakeToolResponse("edit", {
+        path: "a.txt",
+        oldString: "old",
+        newString: "new",
+      }),
+      fakeToolResponse("edit", {
+        path: "a.txt",
+        oldString: "old a",
+        newString: "rogue",
+      }),
     ]);
 
     try {
@@ -318,7 +332,11 @@ describe("Agent Stopping", () => {
           : { type: "continue" },
     };
     const provider = createFakeProvider([
-      fakeEditResponse("a.txt", "old", "new"),
+      fakeToolResponse("edit", {
+        path: "a.txt",
+        oldString: "old",
+        newString: "new",
+      }),
       fakeResponse("Never reached."),
     ]);
 
@@ -436,7 +454,11 @@ describe("Agent Stopping", () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "original\n", "utf8");
-    const sameFailingEdit = fakeEditResponse("note.txt", "missing", "patched");
+    const sameFailingEdit = fakeToolResponse("edit", {
+      path: "note.txt",
+      oldString: "missing",
+      newString: "patched",
+    });
     const provider = createFakeProvider(
       Array.from({ length: 16 }, () => sameFailingEdit),
     );
@@ -477,12 +499,12 @@ describe("Agent Stopping", () => {
     await writeFile(join(workspace, "a.txt"), "alpha\n", "utf8");
     await writeFile(join(workspace, "b.txt"), "beta\n", "utf8");
     const provider = createFakeProvider([
-      fakeReadResponse("a.txt"),
-      fakeReadResponse("b.txt"),
-      fakeGrepResponse("alpha"),
-      fakeGrepResponse("beta"),
-      fakeReadResponse("a.txt", undefined, { limit: 1 }),
-      fakeReadResponse("b.txt", undefined, { limit: 1 }),
+      fakeToolResponse("read", { path: "a.txt" }),
+      fakeToolResponse("read", { path: "b.txt" }),
+      fakeToolResponse("grep", { pattern: "alpha" }),
+      fakeToolResponse("grep", { pattern: "beta" }),
+      fakeToolResponse("read", { path: "a.txt", limit: 1 }),
+      fakeToolResponse("read", { path: "b.txt", limit: 1 }),
       fakeResponse("All done."),
     ]);
 
@@ -518,7 +540,7 @@ describe("Agent Stopping", () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "a.txt"), "alpha\n", "utf8");
-    const sameRead = fakeReadResponse("a.txt");
+    const sameRead = fakeToolResponse("read", { path: "a.txt" });
     const provider = createFakeProvider(
       Array.from({ length: 100 }, () => sameRead),
     );
@@ -558,7 +580,7 @@ describe("Agent Stopping", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "a.txt"), "alpha\n", "utf8");
     const sharedPolicy = repeatedToolCallPolicy();
-    const sameRead = fakeReadResponse("a.txt");
+    const sameRead = fakeToolResponse("read", { path: "a.txt" });
     const firstProvider = createFakeProvider([
       sameRead,
       sameRead,
@@ -611,7 +633,7 @@ describe("Agent Stopping", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "a.txt"), "alpha\n", "utf8");
     const messages: Message[] = [{ role: "user", content: "first task" }];
-    const sameRead = fakeReadResponse("a.txt");
+    const sameRead = fakeToolResponse("read", { path: "a.txt" });
     const firstProvider = createFakeProvider([
       sameRead,
       sameRead,
