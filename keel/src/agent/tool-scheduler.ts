@@ -1,6 +1,8 @@
 import type { ToolCall } from "../llm/types.ts";
 import type { ToolConcurrency } from "../tools/builtin.ts";
 
+export const PARALLEL_TOOL_CALL_LIMIT = 10;
+
 export interface ScheduledToolCall {
   readonly toolCall: ToolCall;
   readonly concurrency: ToolConcurrency;
@@ -23,6 +25,11 @@ export interface ExecuteParallelToolCallsOptions<Result> {
   readonly execute: (toolCall: ToolCall) => Promise<Result>;
 }
 
+interface IndexedParallelToolCallResult<Result> {
+  readonly index: number;
+  readonly result: ParallelToolCallResult<Result>;
+}
+
 export function canExecuteToolCallsInParallel(
   toolCalls: readonly ScheduledToolCall[],
 ): boolean {
@@ -38,27 +45,48 @@ export async function executeParallelToolCallsInSourceOrder<Result>(
     throw new Error("Cannot execute an exclusive tool call batch in parallel");
   }
 
-  const settlements = await Promise.allSettled(
-    options.toolCalls.map(({ toolCall }) => options.execute(toolCall)),
+  const results: IndexedParallelToolCallResult<Result>[] = [];
+  let nextIndex = 0;
+
+  const executeNext = async (): Promise<void> => {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex++;
+      const scheduled = options.toolCalls[index];
+      if (scheduled === undefined) {
+        return;
+      }
+
+      try {
+        results.push({
+          index,
+          result: {
+            status: "fulfilled",
+            toolCall: scheduled.toolCall,
+            result: await options.execute(scheduled.toolCall),
+          },
+        });
+      } catch (reason) {
+        results.push({
+          index,
+          result: {
+            status: "rejected",
+            toolCall: scheduled.toolCall,
+            reason,
+          },
+        });
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(PARALLEL_TOOL_CALL_LIMIT, options.toolCalls.length) },
+      executeNext,
+    ),
   );
 
-  return settlements.map((settlement, index) => {
-    const scheduled = options.toolCalls[index];
-    /* v8 ignore next 3: Promise.allSettled preserves the input array length. */
-    if (scheduled === undefined) {
-      throw new Error("Missing scheduled tool call for parallel result");
-    }
-    if (settlement.status === "fulfilled") {
-      return {
-        status: "fulfilled",
-        toolCall: scheduled.toolCall,
-        result: settlement.value,
-      };
-    }
-    return {
-      status: "rejected",
-      toolCall: scheduled.toolCall,
-      reason: settlement.reason,
-    };
-  });
+  return results
+    .sort((left, right) => left.index - right.index)
+    .map(({ result }) => result);
 }

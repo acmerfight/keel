@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   canExecuteToolCallsInParallel,
   executeParallelToolCallsInSourceOrder,
+  PARALLEL_TOOL_CALL_LIMIT,
   type ScheduledToolCall,
 } from "../../src/agent/tool-scheduler.ts";
 import type { ToolCall } from "../../src/llm/types.ts";
@@ -44,6 +45,14 @@ const editCall: ToolCall = {
   oldString: "before",
   newString: "after",
 };
+
+function readCall(index: number): ToolCall {
+  return {
+    id: `read_${index}`,
+    tool: "read",
+    path: `file-${index}.txt`,
+  };
+}
 
 describe("tool scheduler", () => {
   test(`Given every scheduled tool call is parallel-safe,
@@ -99,6 +108,40 @@ describe("tool scheduler", () => {
       },
     ]);
     expect(completed).toEqual(["done"]);
+  });
+
+  test(`Given more parallel-safe tool calls than the concurrency limit,
+    When the scheduler executes the batch,
+    Then it bounds active work while preserving source-order results`, async () => {
+    const scheduledToolCalls: readonly ScheduledToolCall[] = Array.from(
+      { length: PARALLEL_TOOL_CALL_LIMIT + 2 },
+      (_, index) => ({
+        toolCall: readCall(index),
+        concurrency: { kind: "parallel-safe" },
+      }),
+    );
+    let active = 0;
+    let maxActive = 0;
+
+    const results = await executeParallelToolCallsInSourceOrder({
+      toolCalls: scheduledToolCalls,
+      execute: async (toolCall) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await Promise.resolve();
+        active--;
+        return `${toolCall.id}:result`;
+      },
+    });
+
+    expect(maxActive).toBe(PARALLEL_TOOL_CALL_LIMIT);
+    expect(results).toEqual(
+      scheduledToolCalls.map(({ toolCall }) => ({
+        status: "fulfilled",
+        toolCall,
+        result: `${toolCall.id}:result`,
+      })),
+    );
   });
 
   test(`Given a scheduled tool batch contains an exclusive call,
