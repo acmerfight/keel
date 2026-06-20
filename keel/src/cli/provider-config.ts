@@ -134,6 +134,7 @@ const ZERO_USAGE = {
 };
 
 const ZERO_COST_MODEL: CostModel = {
+  type: "fixed",
   uncachedInputPerMillionTokens: 0,
   cachedInputPerMillionTokens: 0,
   outputPerMillionTokens: 0,
@@ -351,7 +352,7 @@ export function requireKnownCostModel(resolved: ResolvedProvider): CostModel {
     case "qwen":
       if (resolved.costModel !== null) return resolved.costModel;
       return providerConfigError(
-        `Error: cost tracking is only supported for Qwen model "qwen3.7-max"; configured QWEN_MODEL="${resolved.model}".`,
+        `Error: cost tracking is only supported for known Qwen model pricing; configured QWEN_MODEL="${resolved.model}".`,
       );
   }
 }

@@ -579,14 +579,14 @@ describe("CLI Text Reply", () => {
     );
   });
 
-  test(`Given Qwen is configured with an unsupported cost model,
+  test(`Given Qwen is configured with an unknown cost model,
     When user runs the CLI with a max cost,
     Then the CLI rejects cost tracking before contacting the provider`, async () => {
     // Given
     const env = {
       KEEL_PROVIDER: "qwen",
       DASHSCOPE_API_KEY: "test-key",
-      QWEN_MODEL: "qwen3.7-plus",
+      QWEN_MODEL: "qwen-unknown",
     };
 
     // When
@@ -596,7 +596,7 @@ describe("CLI Text Reply", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stdout).toBe("");
     expect(result.stderr).toBe(
-      'Error: cost tracking is only supported for Qwen model "qwen3.7-max"; configured QWEN_MODEL="qwen3.7-plus".\n',
+      'Error: cost tracking is only supported for known Qwen model pricing; configured QWEN_MODEL="qwen-unknown".\n',
     );
   });
 

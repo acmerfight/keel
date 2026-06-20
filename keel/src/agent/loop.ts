@@ -1,4 +1,4 @@
-import { type CostModel, calculateCostUsd } from "../core/cost.ts";
+import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
 import { KeelError } from "../core/error.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
@@ -191,13 +191,12 @@ function finishAgentTurn(
 }
 
 function buildCostReport(
-  usage: Usage,
+  spentUsd: number,
   costTracking: CostTrackingOptions | undefined,
 ): CostReport | undefined {
   if (costTracking === undefined) {
     return undefined;
   }
-  const spentUsd = calculateCostUsd(usage, costTracking.model);
   const budgetExceeded =
     costTracking.maxCostUsd !== undefined && spentUsd > costTracking.maxCostUsd;
   return {
@@ -206,6 +205,41 @@ function buildCostReport(
       ? { maxUsd: costTracking.maxCostUsd }
       : {}),
     budgetExceeded,
+  };
+}
+
+interface RunAccounting {
+  readonly totalUsage: Usage;
+  readonly totalCostUsd: number;
+}
+
+function emptyRunAccounting(): RunAccounting {
+  return {
+    totalUsage: {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 0,
+      outputTokens: 0,
+    },
+    totalCostUsd: 0,
+  };
+}
+
+function addRequestAccounting(
+  accounting: RunAccounting,
+  requestUsage: Usage,
+  costTracking: CostTrackingOptions | undefined,
+): RunAccounting {
+  return {
+    totalUsage: addUsage(accounting.totalUsage, requestUsage),
+    totalCostUsd:
+      costTracking === undefined
+        ? accounting.totalCostUsd
+        : accounting.totalCostUsd +
+          calculateRequestCostBatchUsd(
+            { requests: [{ usage: requestUsage }] },
+            costTracking.model,
+          ),
   };
 }
 
@@ -310,11 +344,12 @@ interface CompactionConfig {
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
   readonly contextCompaction: ContextCompactionOptions | undefined;
+  readonly costTracking: CostTrackingOptions | undefined;
 }
 
 type CompactionState = {
   contextAccounting: ContextCompactionAccountingSnapshot | undefined;
-  totalUsage: Usage;
+  accounting: RunAccounting;
 };
 
 async function attemptContextCompaction(
@@ -342,7 +377,11 @@ async function attemptContextCompaction(
     state.contextAccounting = undefined;
     streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
   }
-  state.totalUsage = addUsage(state.totalUsage, result.usage);
+  state.accounting = addRequestAccounting(
+    state.accounting,
+    result.usage,
+    config.costTracking,
+  );
   return result;
 }
 
@@ -498,15 +537,11 @@ export async function* runAgentTurn(
     systemPrompt,
     signal,
     contextCompaction: options.contextCompaction,
+    costTracking,
   };
   const state: CompactionState = {
     contextAccounting: undefined,
-    totalUsage: {
-      inputTokens: 0,
-      cachedInputTokens: 0,
-      uncachedInputTokens: 0,
-      outputTokens: 0,
-    },
+    accounting: emptyRunAccounting(),
   };
 
   for (let completedTurns = 1; ; completedTurns++) {
@@ -518,8 +553,12 @@ export async function* runAgentTurn(
       signal,
       allowBash,
     });
-    state.totalUsage = addUsage(state.totalUsage, turnResult.usage);
-    const cost = buildCostReport(state.totalUsage, costTracking);
+    state.accounting = addRequestAccounting(
+      state.accounting,
+      turnResult.usage,
+      costTracking,
+    );
+    const cost = buildCostReport(state.accounting.totalCostUsd, costTracking);
 
     const decision = stopPolicy.shouldStopAfterTurn({
       completedTurns,
@@ -535,7 +574,7 @@ export async function* runAgentTurn(
       }
       yield {
         type: "end",
-        usage: state.totalUsage,
+        usage: state.accounting.totalUsage,
         turns: completedTurns,
         stopReason: decision.reason,
         ...(cost !== undefined ? { cost } : {}),
@@ -562,11 +601,18 @@ export async function* runAgentTurn(
           appendSessionLedgerMessage(sessionLedger, combinedReply),
         );
       }
-      state.totalUsage = addUsage(state.totalUsage, wrapUpTurn.usage);
-      const finalCost = buildCostReport(state.totalUsage, costTracking);
+      state.accounting = addRequestAccounting(
+        state.accounting,
+        wrapUpTurn.usage,
+        costTracking,
+      );
+      const finalCost = buildCostReport(
+        state.accounting.totalCostUsd,
+        costTracking,
+      );
       yield {
         type: "end",
-        usage: state.totalUsage,
+        usage: state.accounting.totalUsage,
         turns: completedTurns + 1,
         stopReason: decision.reason,
         ...(finalCost !== undefined ? { cost: finalCost } : {}),
@@ -581,7 +627,7 @@ export async function* runAgentTurn(
       }
       yield {
         type: "end",
-        usage: state.totalUsage,
+        usage: state.accounting.totalUsage,
         turns: completedTurns,
         stopReason: "completed",
         ...(cost !== undefined ? { cost } : {}),

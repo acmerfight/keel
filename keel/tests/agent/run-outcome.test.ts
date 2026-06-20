@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
-import { runAgent } from "../../src/agent/loop.ts";
+import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
 import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
@@ -14,7 +14,7 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
-import type { LLMProvider } from "../../src/llm/types.ts";
+import type { LLMProvider, Message } from "../../src/llm/types.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 
@@ -45,9 +45,28 @@ async function createWorkspace(): Promise<string> {
 }
 
 const budgetModel: CostModel = {
+  type: "fixed",
   uncachedInputPerMillionTokens: 1,
   cachedInputPerMillionTokens: 0.5,
   outputPerMillionTokens: 2,
+};
+
+const tieredBudgetModel: CostModel = {
+  type: "input-token-tiers",
+  tiers: [
+    {
+      startsAboveInputTokens: 0,
+      uncachedInputPerMillionTokens: 0.4,
+      cachedInputPerMillionTokens: 0.04,
+      outputPerMillionTokens: 1.6,
+    },
+    {
+      startsAboveInputTokens: 256_000,
+      uncachedInputPerMillionTokens: 1.2,
+      cachedInputPerMillionTokens: 0.12,
+      outputPerMillionTokens: 4.8,
+    },
+  ],
 };
 
 describe("Run Outcome Reporting", () => {
@@ -165,6 +184,212 @@ describe("Run Outcome Reporting", () => {
         turns: 1,
         stopReason: "cost_budget",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a tiered model handles multiple low-tier provider requests,
+    When the run reports its final cost,
+    Then each request is priced by its own input-token tier`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "hello\n", "utf8");
+    let turn = 0;
+    const provider: LLMProvider = {
+      id: "tiered-multi-request-cost",
+      async *stream() {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 200_000,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 200_000,
+              outputTokens: 0,
+            },
+          };
+          return;
+        }
+        yield { type: "text", text: "Done." };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 100_000,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 100_000,
+            outputTokens: 0,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "read the note",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          costTracking: { model: tieredBudgetModel },
+        }),
+      );
+
+      // Then
+      const finalEvent = endEvent(events);
+      expect(finalEvent.usage.inputTokens).toBe(300_000);
+      expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
+      expect(finalEvent.cost?.budgetExceeded).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given proactive compaction adds a low-tier provider request,
+    When the run reports its final cost,
+    Then the compaction request is included without using aggregate tier selection`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Earlier task context ".repeat(2_000) },
+      { role: "assistant", content: "Earlier progress.", toolCalls: [] },
+      { role: "user", content: "Continue now." },
+    ];
+    let request = 0;
+    const provider: LLMProvider = {
+      id: "tiered-compaction-cost",
+      async *stream() {
+        request++;
+        if (request === 1) {
+          yield { type: "text", text: "Compacted earlier work." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 200_000,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 200_000,
+              outputTokens: 0,
+            },
+          };
+          return;
+        }
+        yield { type: "text", text: "Done." };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 100_000,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 100_000,
+            outputTokens: 0,
+          },
+        };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: process.cwd(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        costTracking: { model: tieredBudgetModel },
+        contextCompaction: {
+          contextWindowTokens: 100,
+          reserveTokens: 0,
+          keepRecentTokens: 1,
+        },
+      }),
+    );
+
+    // Then
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "context_compacted" }),
+    );
+    const finalEvent = endEvent(events);
+    expect(finalEvent.usage.inputTokens).toBe(300_000);
+    expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
+    expect(finalEvent.cost?.budgetExceeded).toBe(false);
+  });
+
+  test(`Given turn-limit wrap-up adds a low-tier provider request,
+    When the run reports its final cost,
+    Then the wrap-up request is included without using aggregate tier selection`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "hello\n", "utf8");
+    let request = 0;
+    const provider: LLMProvider = {
+      id: "tiered-wrap-up-cost",
+      async *stream(options) {
+        request++;
+        if (request === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 200_000,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 200_000,
+              outputTokens: 0,
+            },
+          };
+          return;
+        }
+        expect(options.toolChoice).toBe("none");
+        yield { type: "text", text: "Need to stop before reading note.txt." };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 100_000,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 100_000,
+            outputTokens: 0,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "read the note",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: maxTurnFallbackPolicy(1),
+          costTracking: { model: tieredBudgetModel },
+        }),
+      );
+
+      // Then
+      const finalEvent = endEvent(events);
+      expect(finalEvent.turns).toBe(2);
+      expect(finalEvent.stopReason).toBe("turn_limit");
+      expect(finalEvent.usage.inputTokens).toBe(300_000);
+      expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
+      expect(finalEvent.cost?.budgetExceeded).toBe(false);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
