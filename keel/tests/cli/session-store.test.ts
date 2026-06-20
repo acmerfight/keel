@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
+  acquireSessionLock,
   createSessionStore,
   ensureSessionCanBeCreated,
   persistSessionMessages,
@@ -600,6 +601,78 @@ describe("Session Store", () => {
       ).toThrow(SessionStoreError);
     } finally {
       await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a session lock is already held,
+    When the same session lock is acquired again,
+    Then it fails closed until the original lock is released`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const firstLock = acquireSessionLock({
+      sessionId: "active",
+      runtime: runtime(home),
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        acquireSessionLock({
+          sessionId: "active",
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow(SessionStoreError);
+    } finally {
+      firstLock.release();
+    }
+
+    try {
+      // Then
+      const secondLock = acquireSessionLock({
+        sessionId: "active",
+        runtime: runtime(home, 2),
+      });
+      secondLock.release();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a previous process left a stale session lock,
+    When the same session lock is acquired again,
+    Then the store recovers the stale lock and acquires a fresh one`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const lockPath = join(home, "sessions", "stale", "active.lock");
+    await mkdir(lockPath, { recursive: true });
+    await writeFile(
+      join(lockPath, "owner.json"),
+      `${JSON.stringify({
+        pid: 999_999_999,
+        token: "stale",
+        createdAt: "1970-01-01T00:00:00.000Z",
+      })}\n`,
+      "utf8",
+    );
+
+    try {
+      // When
+      const lock = acquireSessionLock({
+        sessionId: "stale",
+        runtime: runtime(home, 1),
+      });
+
+      // Then
+      expect(lock.lockPath).toBe(lockPath);
+      expect(() =>
+        acquireSessionLock({
+          sessionId: "stale",
+          runtime: runtime(home, 2),
+        }),
+      ).toThrow(SessionStoreError);
+      lock.release();
+    } finally {
       await rm(home, { recursive: true, force: true });
     }
   });

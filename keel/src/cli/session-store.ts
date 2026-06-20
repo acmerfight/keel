@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   closeSync,
@@ -6,6 +7,7 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -18,6 +20,8 @@ import { isToolName, toolCallFromParsedArguments } from "../tools/registry.ts";
 
 const SESSION_SCHEMA_VERSION = 1;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+const SESSION_LOCK_DIRECTORY_NAME = "active.lock";
+const SESSION_LOCK_OWNER_FILE_NAME = "owner.json";
 
 const persistedToolCallSchema = z
   .object({
@@ -117,6 +121,14 @@ const schemaVersionProbeSchema = z
   })
   .passthrough();
 
+const sessionLockOwnerSchema = z
+  .object({
+    pid: z.number().int().positive(),
+    token: z.string(),
+    createdAt: z.string(),
+  })
+  .strict();
+
 const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   appendRecordSchema,
   replaceRecordSchema,
@@ -125,6 +137,7 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
 type RawMessage = z.infer<typeof messageSchema>;
 type RawSessionHeaderRecord = z.infer<typeof sessionHeaderSchema>;
 type RawSessionMutationRecord = z.infer<typeof sessionMutationRecordSchema>;
+type SessionLockOwner = z.infer<typeof sessionLockOwnerSchema>;
 
 interface SessionHeaderRecord {
   readonly schemaVersion: 1;
@@ -171,6 +184,11 @@ export interface SessionState {
   readonly messages: readonly Message[];
 }
 
+export interface SessionLock {
+  readonly lockPath: string;
+  readonly release: () => void;
+}
+
 export class SessionStoreError extends Error {}
 
 function sessionStoreError(message: string): never {
@@ -200,12 +218,132 @@ function validateSessionId(sessionId: string): void {
   }
 }
 
-function sessionFilePath(
+function sessionDirectoryPath(
   runtime: SessionStoreRuntime,
   sessionId: string,
 ): string {
   validateSessionId(sessionId);
-  return join(sessionHome(runtime), "sessions", sessionId, "ledger.jsonl");
+  return join(sessionHome(runtime), "sessions", sessionId);
+}
+
+function sessionFilePath(
+  runtime: SessionStoreRuntime,
+  sessionId: string,
+): string {
+  return join(sessionDirectoryPath(runtime, sessionId), "ledger.jsonl");
+}
+
+function sessionLockPath(
+  runtime: SessionStoreRuntime,
+  sessionId: string,
+): string {
+  return join(
+    sessionDirectoryPath(runtime, sessionId),
+    SESSION_LOCK_DIRECTORY_NAME,
+  );
+}
+
+function sessionLockOwnerPath(lockPath: string): string {
+  return join(lockPath, SESSION_LOCK_OWNER_FILE_NAME);
+}
+
+function readSessionLockOwner(lockPath: string): SessionLockOwner | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(sessionLockOwnerPath(lockPath), "utf8"));
+  } catch {
+    return null;
+  }
+  const parsed = sessionLockOwnerSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !hasNodeErrorCode(error, "ESRCH");
+  }
+}
+
+function removeStaleSessionLock(lockPath: string): boolean {
+  const owner = readSessionLockOwner(lockPath);
+  if (owner === null || processIsAlive(owner.pid)) {
+    return false;
+  }
+  try {
+    rmSync(lockPath, { recursive: true, force: true });
+    return true;
+  } catch (error) {
+    sessionStoreError(
+      `Error: cannot remove stale session lock ${lockPath}: ${errorMessage(error)}`,
+    );
+  }
+}
+
+function releaseSessionLock(lockPath: string, token: string): void {
+  const owner = readSessionLockOwner(lockPath);
+  if (owner === null || owner.token !== token) {
+    return;
+  }
+  try {
+    rmSync(lockPath, { recursive: true, force: true });
+  } catch (error) {
+    sessionStoreError(
+      `Error: cannot release session lock ${lockPath}: ${errorMessage(error)}`,
+    );
+  }
+}
+
+export function acquireSessionLock(options: {
+  readonly sessionId: string;
+  readonly runtime: SessionStoreRuntime;
+}): SessionLock {
+  const lockPath = sessionLockPath(options.runtime, options.sessionId);
+  const token = randomUUID();
+  for (;;) {
+    try {
+      mkdirSync(dirname(lockPath), { recursive: true, mode: 0o700 });
+      mkdirSync(lockPath, { mode: 0o700 });
+    } catch (error) {
+      if (hasNodeErrorCode(error, "EEXIST")) {
+        if (removeStaleSessionLock(lockPath)) {
+          continue;
+        }
+        sessionStoreError(
+          `Error: session "${options.sessionId}" is already active. Stop the other Keel process before using it again.`,
+        );
+      }
+      sessionStoreError(
+        `Error: cannot acquire session lock ${lockPath}: ${errorMessage(error)}`,
+      );
+    }
+
+    try {
+      writeFileSync(
+        sessionLockOwnerPath(lockPath),
+        `${JSON.stringify({
+          pid: process.pid,
+          token,
+          createdAt: isoTimestamp(options.runtime),
+        })}\n`,
+        { encoding: "utf8", flag: "wx", mode: 0o600 },
+      );
+    } catch (error) {
+      rmSync(lockPath, { recursive: true, force: true });
+      sessionStoreError(
+        `Error: cannot write session lock ${lockPath}: ${errorMessage(error)}`,
+      );
+    }
+
+    return {
+      lockPath,
+      release: () => {
+        releaseSessionLock(lockPath, token);
+      },
+    };
+  }
 }
 
 export function ensureSessionCanBeCreated(options: {

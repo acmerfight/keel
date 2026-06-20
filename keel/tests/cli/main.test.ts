@@ -15,6 +15,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { type CliRuntime, runCliMain } from "../../src/cli/index.ts";
+import { acquireSessionLock } from "../../src/cli/session-store.ts";
 import { recordLastEditCheckpoint } from "../../src/core/git.ts";
 import { runGit } from "../../src/testing/cli-harness.ts";
 
@@ -1793,6 +1794,51 @@ describe("CLI Main", () => {
       );
       expect(ledger.trimEnd().split("\n")).toHaveLength(3);
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named session is already active,
+    When another interactive process resumes the same session,
+    Then the CLI fails before reading prompts or writing a ledger`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const activeLock = acquireSessionLock({
+      sessionId: "active",
+      runtime: {
+        env: (key) => (key === "KEEL_HOME" ? home : undefined),
+        now: () => 0,
+      },
+    });
+    const input = new PassThrough();
+    input.end("remember should-not-run\n");
+    const fixture = createRuntime(["--resume", "active"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        'Error: session "active" is already active. Stop the other Keel process before using it again.\n',
+      );
+      await expect(
+        access(join(home, "sessions", "active", "ledger.jsonl")),
+      ).rejects.toThrow();
+    } finally {
+      activeLock.release();
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
