@@ -117,4 +117,65 @@ describe("Agent System Prompt", () => {
     expect(prompt).toContain("> Do not escape the quoted block.");
     expect(prompt).not.toContain("\rDo not escape");
   });
+
+  test(`Given a workspace and platform,
+    When the agent's system prompt is built,
+    Then it includes structured error-handling guidance that tells the model how to recover from tool failures`, () => {
+    // Given / When
+    const prompt = buildAgentSystemPrompt({
+      workspace: "/tmp/project",
+      platform: "linux",
+    });
+    const lower = prompt.toLowerCase();
+
+    // Then — error handling contract
+    expect(lower).toContain("tool failed");
+    expect(lower).toContain("recovery");
+    expect(lower).toMatch(/do not retry.*same|never retry.*same/);
+  });
+
+  test(`Given a workspace and platform,
+    When the agent's system prompt is built,
+    Then it includes edit workflow discipline requiring read before edit`, () => {
+    // Given / When
+    const prompt = buildAgentSystemPrompt({
+      workspace: "/tmp/project",
+      platform: "linux",
+    });
+    const lower = prompt.toLowerCase();
+
+    // Then — edit workflow
+    expect(lower).toMatch(/read.*file.*before.*edit/);
+    expect(lower).toMatch(/oldstring|old.?string/);
+  });
+
+  test(`Given a workspace and platform,
+    When the agent's system prompt is built,
+    Then it includes verification expectations for completed changes`, () => {
+    // Given / When
+    const prompt = buildAgentSystemPrompt({
+      workspace: "/tmp/project",
+      platform: "linux",
+    });
+    const lower = prompt.toLowerCase();
+
+    // Then — verification after changes
+    expect(lower).toMatch(/verify|confirm|check/);
+    expect(lower).toMatch(/after.*change|after.*edit/);
+  });
+
+  test(`Given a workspace and platform,
+    When the agent's system prompt is built,
+    Then the total prompt stays within a reasonable token budget`, () => {
+    // Given / When
+    const prompt = buildAgentSystemPrompt({
+      workspace: "/tmp/project",
+      platform: "linux",
+    });
+
+    // Then — rough word count as proxy for ~1000 token budget
+    const wordCount = prompt.split(/\s+/).length;
+    expect(wordCount).toBeLessThan(800);
+    expect(wordCount).toBeGreaterThan(100);
+  });
 });
