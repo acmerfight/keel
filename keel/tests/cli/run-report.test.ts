@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-import { runCli } from "../../src/testing/cli-harness.ts";
+import { runCli, runCliProcess } from "../../src/testing/cli-harness.ts";
 
 const runReportSchema = z.object({
   schemaVersion: z.literal(1),
@@ -50,6 +50,29 @@ function close(server: Server): Promise<void> {
       }
       resolve();
     });
+  });
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
   });
 }
 
@@ -170,6 +193,53 @@ describe("CLI Run Report", () => {
       );
       expect(report.costUsd).toBe(0);
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a user wants machine-readable interactive session metrics,
+    When the interactive CLI finishes multiple prompts with --report,
+    Then a structured report file records the whole session`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-report-"));
+    const reportPath = join(workspace, "session-report.json");
+    const { child, result } = runCliProcess(["--report", reportPath], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
+      stdin: "pipe",
+    });
+
+    try {
+      // When
+      child.stdin?.end("remember alpha\nwhat did I ask you to remember?\n");
+
+      // Then
+      const exit = await withTimeout(
+        result,
+        5000,
+        "interactive CLI did not finish after stdin closed",
+      );
+      expect(exit.exitCode).toBe(0);
+      expect(exit.stderr).toBe("");
+      expect(exit.stdout).toContain("Remembered: remember alpha\n");
+      expect(exit.stdout).toContain("Earlier you said: remember alpha\n");
+
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.provider).toBe("fake");
+      expect(report.model).toBe("fake");
+      expect(report.turns).toBe(2);
+      expect(report.stopReason).toBe("completed");
+      expect(report.usage).toEqual({
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 0,
+        outputTokens: 0,
+      });
+      expect(report.costUsd).toBe(0);
+    } finally {
+      child.kill("SIGKILL");
       await rm(workspace, { recursive: true, force: true });
     }
   });

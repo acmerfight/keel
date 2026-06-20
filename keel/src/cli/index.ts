@@ -136,12 +136,6 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
       runtime.writeStderr(`${USAGE}\n`);
       return 1;
     }
-    if (cliArgs.reportFile !== undefined) {
-      runtime.writeStderr(
-        "Error: --report is only supported for one-shot runs.\n",
-      );
-      return 1;
-    }
     if (cliArgs.bashMode === "ask" && runtime.input.isTTY !== true) {
       runtime.writeStderr(
         "Error: --bash-policy ask requires a real TTY so approvals cannot be read from piped input. Use --bash-policy deny or --bash-policy trusted for non-TTY runs.\n",
@@ -229,7 +223,8 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           };
         }
         const projectInstructions = loadProjectInstructions(workspace);
-        await runInteractiveSession({
+        const startedAt = runtime.now();
+        const interactiveResult = await runInteractiveSession({
           cliArgs,
           workspace,
           platform: runtime.platform,
@@ -263,6 +258,17 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           printAgentEvents: (stream) => printAgentEvents(stream, runtime),
           formatCostReport,
         });
+        if (
+          cliArgs.reportFile !== undefined &&
+          interactiveResult.report !== undefined
+        ) {
+          writeRunReport(cliArgs.reportFile, {
+            provider: interactiveResult.report.provider,
+            model: interactiveResult.report.model,
+            end: interactiveResult.report.end,
+            durationMs: runtime.now() - startedAt,
+          });
+        }
       } finally {
         sessionLock?.release();
       }

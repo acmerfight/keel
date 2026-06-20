@@ -27,6 +27,20 @@ const ZERO_COST_MODEL: CostModel = {
   outputPerMillionTokens: 0,
 };
 
+const EXPENSIVE_USAGE: Usage = {
+  inputTokens: 2_000_000,
+  cachedInputTokens: 0,
+  uncachedInputTokens: 2_000_000,
+  outputTokens: 0,
+};
+
+const ONE_DOLLAR_PER_MILLION_INPUT: CostModel = {
+  type: "fixed",
+  uncachedInputPerMillionTokens: 1,
+  cachedInputPerMillionTokens: 0,
+  outputPerMillionTokens: 0,
+};
+
 class ForcedExit extends Error {
   readonly code: number;
 
@@ -173,6 +187,128 @@ describe("Interactive Session", () => {
     expect(stderr).toBe("Cost: $0\n");
     expect(resolvedProviders).toBe(1);
     expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given an interactive session cost limit is exhausted,
+    When more prompt input is already queued,
+    Then the session stops before starting another model turn`, async () => {
+    // Given
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        providerCalls++;
+        yield { type: "text", text: "expensive answer" };
+        yield { type: "stop", usage: EXPENSIVE_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "trusted", maxCostUsd: 1 },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ONE_DOLLAR_PER_MILLION_INPUT,
+      }),
+      requireKnownCostModel: () => ONE_DOLLAR_PER_MILLION_INPUT,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(2)} exceeded=${String(
+          cost.budgetExceeded,
+        )}\n`,
+    });
+
+    // When
+    input.end("first prompt\nsecond prompt\n");
+
+    // Then
+    await session;
+    expect(providerCalls).toBe(1);
+    expect(stderr).toBe("Cost: 2.00 exceeded=true\n");
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given an interactive report is requested but no end event is returned,
+    When the user finishes a prompt,
+    Then no session report is produced`, async () => {
+    // Given
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        yield { type: "text", text: "answer" };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "trusted", reportFile: "session.json" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          }
+        }
+        return undefined;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("hello\n");
+
+    // Then
+    const result = await session;
+    expect(stdout).toBe("answer\n");
+    expect(result.report).toBeUndefined();
   });
 
   test(`Given an interactive assistant turn is still working,
@@ -2335,6 +2471,214 @@ describe("Interactive Session", () => {
     expect(stdout).toBe("First done\n");
     expect(stderr).toContain("Context compacted: manual");
     expect(stderr).toContain("Cost: 0.005000 / 0.01 exceeded=false\n");
+  });
+
+  test(`Given manual compaction runs during a report-only interactive session,
+    When user enters /compact,
+    Then compaction cost is included without printing a budget report`, async () => {
+    // Given
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    let requestTurn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Report checkpoint summary." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 30,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 30,
+              outputTokens: 10,
+            },
+          };
+          return;
+        }
+
+        requestTurn++;
+        yield { type: "text", text: "First done" };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const costModel: CostModel = {
+      type: "fixed",
+      uncachedInputPerMillionTokens: 100,
+      cachedInputPerMillionTokens: 0,
+      outputPerMillionTokens: 200,
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled", reportFile: "session.json" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => costModel,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (requestTurn === 1) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: (cost, maxUsd) =>
+        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(2)} exceeded=${cost.budgetExceeded}\n`,
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.write("/compact\n");
+    input.end();
+
+    // Then
+    const result = await session;
+    expect(stdout).toBe("First done\n");
+    expect(stderr).toContain("Context compacted: manual");
+    expect(stderr).not.toContain("Cost:");
+    expect(result.report?.end.stopReason).toBe("completed");
+    expect(result.report?.end.usage).toEqual({
+      inputTokens: 30,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 30,
+      outputTokens: 10,
+    });
+    expect(result.report?.end.cost.spentUsd).toBeCloseTo(0.005);
+  });
+
+  test(`Given manual compaction exhausts an interactive session cost limit,
+    When more prompt input is already queued,
+    Then the session report records a cost budget stop`, async () => {
+    // Given
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    let requestTurn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Costed checkpoint summary." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 30,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 30,
+              outputTokens: 10,
+            },
+          };
+          return;
+        }
+
+        requestTurn++;
+        yield { type: "text", text: "First done" };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const costModel: CostModel = {
+      type: "fixed",
+      uncachedInputPerMillionTokens: 100,
+      cachedInputPerMillionTokens: 0,
+      outputPerMillionTokens: 200,
+    };
+    const session = runInteractiveSession({
+      cliArgs: {
+        bashMode: "disabled",
+        maxCostUsd: 0.001,
+        reportFile: "session.json",
+      },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => costModel,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (requestTurn === 1) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: (cost, maxUsd) =>
+        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(3)} exceeded=${cost.budgetExceeded}\n`,
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.write("/compact\n");
+    input.write("second prompt\n");
+    input.end();
+
+    // Then
+    const result = await session;
+    expect(requestTurn).toBe(1);
+    expect(stdout).toBe("First done\n");
+    expect(stderr).toContain("Context compacted: manual");
+    expect(stderr).toContain("Cost: 0.005000 / 0.001 exceeded=true\n");
+    expect(result.report?.end.stopReason).toBe("cost_budget");
+    expect(result.report?.end.cost.spentUsd).toBeCloseTo(0.005);
   });
 
   test(`Given manual compaction cost model resolution fails,
