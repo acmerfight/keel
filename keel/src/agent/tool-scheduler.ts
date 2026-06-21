@@ -25,6 +25,16 @@ export interface ExecuteParallelToolCallsOptions<Result> {
   readonly execute: (toolCall: ToolCall) => Promise<Result>;
 }
 
+export type ToolCallExecutionSegment =
+  | {
+      readonly kind: "parallel";
+      readonly toolCalls: readonly ScheduledToolCall[];
+    }
+  | {
+      readonly kind: "single";
+      readonly toolCall: ScheduledToolCall;
+    };
+
 interface IndexedParallelToolCallResult<Result> {
   readonly index: number;
   readonly result: ParallelToolCallResult<Result>;
@@ -36,6 +46,46 @@ export function canExecuteToolCallsInParallel(
   return toolCalls.every(
     ({ concurrency }) => concurrency.kind === "parallel-safe",
   );
+}
+
+export function planToolCallExecutionSegments(
+  toolCalls: readonly ScheduledToolCall[],
+): readonly ToolCallExecutionSegment[] {
+  const segments: ToolCallExecutionSegment[] = [];
+  let pendingParallelToolCalls: ScheduledToolCall[] = [];
+
+  const flushPendingParallelToolCalls = (): void => {
+    if (pendingParallelToolCalls.length > 1) {
+      segments.push({
+        kind: "parallel",
+        toolCalls: pendingParallelToolCalls,
+      });
+    } else {
+      for (const toolCall of pendingParallelToolCalls) {
+        segments.push({
+          kind: "single",
+          toolCall,
+        });
+      }
+    }
+    pendingParallelToolCalls = [];
+  };
+
+  for (const toolCall of toolCalls) {
+    if (toolCall.concurrency.kind === "parallel-safe") {
+      pendingParallelToolCalls.push(toolCall);
+      continue;
+    }
+
+    flushPendingParallelToolCalls();
+    segments.push({
+      kind: "single",
+      toolCall,
+    });
+  }
+
+  flushPendingParallelToolCalls();
+  return segments;
 }
 
 export async function executeParallelToolCallsInSourceOrder<Result>(
