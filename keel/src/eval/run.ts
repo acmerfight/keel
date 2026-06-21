@@ -171,12 +171,17 @@ function readRunReport(reportPath: string): RunReport | null {
 async function runTrial(
   task: EvalTask,
   cliEntry: string,
+  selection: EvalProviderSelection,
 ): Promise<TrialResult> {
   return withTrialWorkspace(task, async (workDir, metaDir) => {
     const reportPath = join(metaDir, "report.json");
     const cliArgs = [
       ...process.execArgv,
       cliEntry,
+      ...(selection.providerId !== undefined
+        ? ["--provider", selection.providerId]
+        : []),
+      ...(selection.model !== undefined ? ["--model", selection.model] : []),
       ...(task.allowBash ? ["--allow-bash"] : []),
       ...(task.maxCostUsd !== undefined
         ? ["--max-cost", String(task.maxCostUsd)]
@@ -251,6 +256,11 @@ interface ResultLine {
   readonly report?: RunReport;
 }
 
+interface EvalProviderSelection {
+  readonly providerId?: string;
+  readonly model?: string;
+}
+
 function appendResultLine(outFile: string, line: ResultLine): void {
   mkdirSync(dirname(outFile), { recursive: true });
   appendFileSync(outFile, `${JSON.stringify(line)}\n`, "utf8");
@@ -261,6 +271,8 @@ export interface EvalCommandArgs {
   readonly outFile: string;
   readonly trials: number;
   readonly taskId?: string;
+  readonly providerId?: string;
+  readonly model?: string;
   readonly check: boolean;
   readonly cliEntry: string;
 }
@@ -310,7 +322,12 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
   for (const task of tasks) {
     let passes = 0;
     for (let trial = 1; trial <= args.trials; trial++) {
-      const result = await runTrial(task, args.cliEntry);
+      const result = await runTrial(task, args.cliEntry, {
+        ...(args.providerId !== undefined
+          ? { providerId: args.providerId }
+          : {}),
+        ...(args.model !== undefined ? { model: args.model } : {}),
+      });
       const pass = result.outcome === "verified";
       if (pass) passes++;
       appendResultLine(args.outFile, {

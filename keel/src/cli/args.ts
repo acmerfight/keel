@@ -12,6 +12,8 @@ interface EvalCliArgs {
   readonly outFile: string;
   readonly trials: number;
   readonly taskId?: string;
+  readonly providerId?: CliProviderId;
+  readonly model?: string;
   readonly check: boolean;
 }
 
@@ -48,7 +50,7 @@ function parseError(message: string): ParseResult<never> {
 export const USAGE = [
   "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] <message>",
   "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id>]",
-  "       keel eval [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
+  "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
   "       keel /undo",
   "",
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
@@ -129,7 +131,11 @@ function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
   let outFile = "eval-results.jsonl";
   let trials = 1;
   let taskId: string | undefined;
+  let providerId: CliProviderId | undefined;
+  let model: string | undefined;
   let check = false;
+  const providerPrefix = "--provider=";
+  const modelPrefix = "--model=";
 
   let skipNext = false;
   for (const [index, arg] of args.entries()) {
@@ -166,6 +172,32 @@ function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
       skipNext = true;
       continue;
     }
+    if (arg === "--provider") {
+      const parsed = parseProviderId(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      providerId = parsed.value;
+      skipNext = true;
+      continue;
+    }
+    if (arg.startsWith(providerPrefix)) {
+      const parsed = parseProviderId(arg.slice(providerPrefix.length));
+      if (!parsed.ok) return parsed;
+      providerId = parsed.value;
+      continue;
+    }
+    if (arg === "--model") {
+      const parsed = parseModel(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      model = parsed.value;
+      skipNext = true;
+      continue;
+    }
+    if (arg.startsWith(modelPrefix)) {
+      const parsed = parseModel(arg.slice(modelPrefix.length));
+      if (!parsed.ok) return parsed;
+      model = parsed.value;
+      continue;
+    }
     if (arg === "--check") {
       check = true;
       continue;
@@ -180,6 +212,8 @@ function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
     outFile,
     trials,
     ...(taskId !== undefined ? { taskId } : {}),
+    ...(providerId !== undefined ? { providerId } : {}),
+    ...(model !== undefined ? { model } : {}),
     check,
   });
 }

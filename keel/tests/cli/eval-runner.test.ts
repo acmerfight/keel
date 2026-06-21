@@ -11,6 +11,12 @@ const resultLineSchema = z.object({
   trial: z.number().int().positive(),
   pass: z.boolean(),
   outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
+  report: z
+    .object({
+      provider: z.string(),
+      model: z.string(),
+    })
+    .optional(),
 });
 
 interface TaskFixture {
@@ -399,6 +405,74 @@ describe("Eval Runner", () => {
       expect(exitCode).toBe(0);
       expect(await readResultLines(outFile)).toMatchObject([
         { taskId: "task-options", pass: true, outcome: "verified" },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the eval command selects a provider and model,
+    When the eval runner executes a trial,
+    Then it passes the provider and model flags into the CLI run`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    await createTask(suiteDir, "provider-selection", {
+      prompt: "record provider args",
+      verify: [
+        "node -e '",
+        'const { readFileSync } = require("node:fs");',
+        'const args = JSON.parse(readFileSync("agent-args.json", "utf8"));',
+        'const provider = args.indexOf("--provider");',
+        'const model = args.indexOf("--model");',
+        'if (provider < 0 || args[provider + 1] !== "qwen") process.exit(1);',
+        'if (model < 0 || args[model + 1] !== "qwen3.7-plus") process.exit(1);',
+        "'\n",
+      ].join(" "),
+      solution: "printf '[]' > agent-args.json\n",
+    });
+    const cliEntry = join(root, "record-args-cli.js");
+    await writeFile(
+      cliEntry,
+      [
+        "import { writeFileSync } from 'node:fs';",
+        "const args = process.argv.slice(2);",
+        "const reportIndex = args.indexOf('--report');",
+        "writeFileSync('agent-args.json', JSON.stringify(args), 'utf8');",
+        "writeFileSync(args[reportIndex + 1], JSON.stringify({",
+        "  schemaVersion: 1,",
+        "  provider: 'qwen',",
+        "  model: 'qwen3.7-plus',",
+        "  turns: 1,",
+        "  stopReason: 'completed',",
+        "  usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 },",
+        "  durationMs: 1,",
+        "  costUsd: 0",
+        "}), 'utf8');",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        providerId: "qwen",
+        model: "qwen3.7-plus",
+        check: false,
+        cliEntry,
+      });
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(await readResultLines(outFile)).toMatchObject([
+        {
+          taskId: "provider-selection",
+          pass: true,
+          outcome: "verified",
+          report: { provider: "qwen", model: "qwen3.7-plus" },
+        },
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });

@@ -100,6 +100,10 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
       outFile: cliArgs.outFile,
       trials: cliArgs.trials,
       ...(cliArgs.taskId !== undefined ? { taskId: cliArgs.taskId } : {}),
+      ...(cliArgs.providerId !== undefined
+        ? { providerId: cliArgs.providerId }
+        : {}),
+      ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
       check: cliArgs.check,
       cliEntry: runtime.cliEntry,
     });
