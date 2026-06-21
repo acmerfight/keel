@@ -2,6 +2,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rm,
@@ -46,6 +47,9 @@ describe("Write Tool", () => {
       expect(result.content).toBe("Wrote config.json");
       expect(await readFile(join(workspace, "config.json"), "utf8")).toBe(
         '{"ok":true}\n',
+      );
+      expect(await readdir(workspace)).toEqual(
+        expect.not.arrayContaining([expect.stringContaining(".keel-write-")]),
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
