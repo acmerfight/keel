@@ -9,6 +9,15 @@ import {
   resolveInteractiveProvider,
   resolveProvider,
 } from "../../src/cli/provider-config.ts";
+import type { LLMEvent } from "../../src/llm/types.ts";
+
+async function collect(stream: AsyncIterable<LLMEvent>): Promise<LLMEvent[]> {
+  const events: LLMEvent[] = [];
+  for await (const event of stream) {
+    events.push(event);
+  }
+  return events;
+}
 
 function runtime(env: Record<string, string>): ProviderConfigRuntime {
   return {
@@ -17,6 +26,168 @@ function runtime(env: Record<string, string>): ProviderConfigRuntime {
 }
 
 describe("Provider Config", () => {
+  test(`Given the fake provider receives the apply patch demo prompt,
+    When it streams through the read and patch turns,
+    Then it requests apply_patch and reports the final patch reply`, async () => {
+    // Given
+    const resolved = resolveProvider(
+      "apply patch demo",
+      runtime({ KEEL_PROVIDER: "fake" }),
+    );
+
+    // When
+    const readEvents = await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [],
+        signal: new AbortController().signal,
+      }),
+    );
+    const patchEvents = await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [
+          {
+            role: "tool",
+            toolCallId: "fake_read_before_patch",
+            content: "export const value = 1;\n",
+          },
+        ],
+        signal: new AbortController().signal,
+      }),
+    );
+    const finalEvents = await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [
+          {
+            role: "tool",
+            toolCallId: "fake_apply_patch",
+            content: "Applied patch:\nM src.ts\nA docs/note.md",
+          },
+        ],
+        signal: new AbortController().signal,
+      }),
+    );
+
+    // Then
+    expect(readEvents).toContainEqual({
+      type: "tool_call",
+      id: "fake_read_before_patch",
+      tool: "read",
+      path: "src.ts",
+    });
+    expect(patchEvents).toContainEqual({
+      type: "tool_call",
+      id: "fake_apply_patch",
+      tool: "apply_patch",
+      patch: [
+        "*** Begin Patch",
+        "*** Update File: src.ts",
+        "@@",
+        "-export const value = 1;",
+        "+export const value = 2;",
+        "*** Add File: docs/note.md",
+        "+patched",
+        "*** End Patch",
+      ].join("\n"),
+    });
+    expect(finalEvents).toContainEqual({
+      type: "text",
+      text: "Applied patch",
+    });
+  });
+
+  test(`Given the fake provider cannot read the apply patch demo target,
+    When it receives the failed read result,
+    Then it returns the tool failure instead of requesting apply_patch`, async () => {
+    // Given
+    const resolved = resolveProvider(
+      "apply patch demo",
+      runtime({ KEEL_PROVIDER: "fake" }),
+    );
+    await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [],
+        signal: new AbortController().signal,
+      }),
+    );
+
+    // When
+    const events = await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [
+          {
+            role: "tool",
+            toolCallId: "fake_read_before_patch",
+            content: "Tool failed: read failed: file not found: src.ts",
+          },
+        ],
+        signal: new AbortController().signal,
+      }),
+    );
+
+    // Then
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Tool failed: read failed: file not found: src.ts",
+    });
+  });
+
+  test(`Given the fake provider receives an apply_patch failure,
+    When it streams the final patch turn,
+    Then it returns the tool failure text`, async () => {
+    // Given
+    const resolved = resolveProvider(
+      "apply patch demo",
+      runtime({ KEEL_PROVIDER: "fake" }),
+    );
+    await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [],
+        signal: new AbortController().signal,
+      }),
+    );
+    await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [
+          {
+            role: "tool",
+            toolCallId: "fake_read_before_patch",
+            content: "export const value = 1;\n",
+          },
+        ],
+        signal: new AbortController().signal,
+      }),
+    );
+
+    // When
+    const events = await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [
+          {
+            role: "tool",
+            toolCallId: "fake_apply_patch",
+            content:
+              "Tool failed: apply_patch failed: expected lines not found",
+          },
+        ],
+        signal: new AbortController().signal,
+      }),
+    );
+
+    // Then
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Tool failed: apply_patch failed: expected lines not found",
+    });
+  });
+
   test(`Given the fake provider uses default config,
     When provider config is resolved,
     Then context compaction is not enabled`, () => {

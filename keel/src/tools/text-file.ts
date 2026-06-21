@@ -80,11 +80,19 @@ const BINARY_EXTENSIONS = new Set([
   ".zst",
 ]);
 
+type TextFileCommand = "apply_patch" | "edit" | "read";
+type EditableTextFileCommand = Exclude<TextFileCommand, "read">;
+
+function binaryFileAction(command: TextFileCommand): string {
+  if (command === "apply_patch") return "patched";
+  return command === "edit" ? "edited" : "read";
+}
+
 export function binaryFileError(
-  command: "edit" | "read",
+  command: TextFileCommand,
   filePath: string,
 ): KeelError {
-  const action = command === "edit" ? "edited" : "read";
+  const action = binaryFileAction(command);
   return new KeelError(
     "tool_binary_file",
     `${command} failed: binary file is not supported: ${filePath}`,
@@ -142,7 +150,7 @@ export function isBinarySample(filePath: string, sample: Uint8Array): boolean {
 }
 
 export function decodeUtf8(
-  command: "edit" | "read",
+  command: TextFileCommand,
   filePath: string,
   decoder: TextDecoder,
   input?: Uint8Array,
@@ -161,6 +169,7 @@ export interface EditableTextFile {
 }
 
 export interface ReadEditableTextFileOptions {
+  readonly command?: EditableTextFileCommand;
   readonly maxBytes: number;
   readonly tooLargeError: (observedBytes: number) => KeelError;
 }
@@ -199,18 +208,19 @@ export function readEditableTextFileWithMetadata(
   filePath: string,
   options: ReadEditableTextFileOptions,
 ): EditableTextFile {
+  const command = options.command ?? "edit";
   const bytes = readFileCapped(targetPath, options.maxBytes);
   if (bytes.length > options.maxBytes) {
     throw options.tooLargeError(bytes.length);
   }
   const sample = bytes.subarray(0, BINARY_SAMPLE_BYTES);
   if (isBinarySample(targetPath, sample) || hasBinaryControlBytes(bytes)) {
-    throw binaryFileError("edit", filePath);
+    throw binaryFileError(command, filePath);
   }
 
   return {
     content: decodeUtf8(
-      "edit",
+      command,
       filePath,
       new TextDecoder("utf-8", { fatal: true }),
       bytes,

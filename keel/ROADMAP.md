@@ -35,8 +35,8 @@ before every pick, and re-triage this file when reality changes.
 What a user can do today:
 
 - `keel "<message>"` — one-shot agent run: streamed text, multi-round tool
-  calls (read / ls / glob / grep / edit / write / bash), recoverable tool errors with
-  LLM-facing recovery hints, tool progress on stderr, graceful stop with
+  calls (read / ls / glob / grep / edit / write / apply_patch / bash),
+  recoverable tool errors with LLM-facing recovery hints, tool progress on stderr, graceful stop with
   a progress summary when the 64-turn limit is exhausted.
 - `keel` — interactive in-process session: sequential follow-up messages
   reuse prior user / assistant / tool context from the same terminal run;
@@ -65,7 +65,8 @@ What a user can do today:
 - `keel eval [--check] [--trials <n>]` — run a repeatable harness eval suite
   from `evals/tasks`, with per-trial JSONL results and reference-solution
   verifier checks.
-- `keel /undo` — restore the last edit checkpoint.
+- `keel /undo` — restore the last edit, created file, or apply_patch batch
+  checkpoint.
 - `keel --doctor` — environment check.
 
 Known limits that shape the priorities below:
@@ -90,8 +91,9 @@ Known limits that shape the priorities below:
   containing `edit`, `write`, or `bash` currently falls back to sequential
   execution; there is no resource-aware mixed-batch scheduler yet.
 - Edit remains single-replacement per tool call (or `replaceAll` for one
-  target string). Keel has fuzzy matching for common copy/paste drift, but no
-  multi-edit-per-file operation or enforced read-before-edit policy.
+  target string). Keel has fuzzy matching for common copy/paste drift,
+  enforced read-before-edit for updates, and an initial apply_patch path for
+  coordinated Add/Update patches, but no broad multi-edit-per-file operation.
 - Eval results compare keel across versions; cross-agent comparisons are
   intentionally deferred until the core coding loop is more complete and the
   suite has a larger real-task corpus.
@@ -155,10 +157,10 @@ Codex/Claude Code — or directly moves the eval numbers.
 
 - **Edit reliability.** ✅ Partial (2026-06): single-target edit now handles
   line-ending drift, trailing whitespace, smart punctuation, common
-  indentation, and `replaceAll`. Remaining gaps are multi-edit per file,
-  enforced read-before-edit, stronger stale-context recovery, and an
-  apply-patch/diff strategy for larger changes. Edit success rate is a
-  tracked eval sub-metric.
+  indentation, `replaceAll`, enforced read-before-edit, and an initial
+  apply_patch Add/Update strategy for coordinated larger changes. Remaining
+  gaps are broader multi-edit per file, stronger stale-context recovery, and
+  fuller diff semantics. Edit success rate is a tracked eval sub-metric.
 - **Project context injection** — ✅ Partial (2026-06): root `AGENTS.md` is
   loaded into the system prompt with safety checks. Remaining work is support
   for nested or alternate project-instruction files when that becomes a real
@@ -179,8 +181,8 @@ Codex/Claude Code — or directly moves the eval numbers.
 - **Bash approval hardening** — richer command parsing/risk
   classification, safer prefix approvals beyond exact command + cwd,
   and persistent approval rules. OS sandboxing remains P2.
-- **Whole-task undo** — `/undo` restores only the last edit checkpoint;
-  a failed task should roll back as a unit.
+- **Whole-task undo** — `/undo` restores the last edit, created file, or
+  apply_patch batch checkpoint; a failed task should roll back as a unit.
 
 ## P2 — After the replacement works
 

@@ -45,6 +45,12 @@ export const writeToolArgumentsSchema = z
   })
   .strict();
 
+export const applyPatchToolArgumentsSchema = z
+  .object({
+    patch: z.string(),
+  })
+  .strict();
+
 export const bashToolArgumentsSchema = z
   .object({
     command: z.string(),

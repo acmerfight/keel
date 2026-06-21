@@ -467,7 +467,7 @@ describe("CLI File Editing", () => {
           (tool: { readonly function?: { readonly name?: string } }) =>
             tool.function?.name,
         ),
-      ).toEqual(["read", "ls", "glob", "grep", "edit", "write"]);
+      ).toEqual(["read", "ls", "glob", "grep", "edit", "write", "apply_patch"]);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -544,6 +544,7 @@ describe("CLI File Editing", () => {
         "grep",
         "edit",
         "write",
+        "apply_patch",
       ]);
 
       const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
@@ -611,6 +612,7 @@ describe("CLI File Editing", () => {
         "grep",
         "edit",
         "write",
+        "apply_patch",
         "bash",
       ]);
     } finally {
@@ -793,6 +795,7 @@ describe("CLI File Editing", () => {
         "grep",
         "edit",
         "write",
+        "apply_patch",
       ]);
 
       const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);

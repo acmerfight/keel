@@ -144,6 +144,11 @@ export function createReadVisibilityState(): ReadVisibilityState {
     if (execution.ok && execution.mutatedTargetPath !== undefined) {
       visibleTargetPaths.delete(execution.mutatedTargetPath);
     }
+    if (execution.ok && execution.mutatedTargetPaths !== undefined) {
+      for (const targetPath of execution.mutatedTargetPaths) {
+        visibleTargetPaths.delete(targetPath);
+      }
+    }
   };
   return {
     hasRead: (targetPath) => visibleTargetPaths.has(targetPath),

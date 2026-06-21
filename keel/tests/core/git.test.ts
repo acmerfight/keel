@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
+  recordLastBatchCheckpoint,
   recordLastCreateCheckpoint,
   recordLastEditCheckpoint,
   restoreLastEditCheckpoint,
@@ -97,6 +98,322 @@ describe("Git Checkpoints", () => {
       expect(
         (await git(workspace, ["diff", "--cached", "--name-only"])).stdout,
       ).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a batch checkpoint records updates and creates,
+    When the checkpoint is restored,
+    Then every file is returned to its pre-batch state`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-batch-");
+    const firstPath = join(workspace, "first.txt");
+    const secondPath = join(workspace, "second.txt");
+    const createdPath = join(workspace, "nested", "created.txt");
+    await mkdir(dirname(createdPath), { recursive: true });
+    await writeFile(firstPath, "first new\n", "utf8");
+    await writeFile(secondPath, "second new\n", "utf8");
+    await writeFile(createdPath, "created\n", "utf8");
+
+    try {
+      // When
+      const record = recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath: firstPath,
+            beforeContent: "first old\n",
+            afterContent: "first new\n",
+          },
+          {
+            operation: "edit",
+            filePath: secondPath,
+            beforeContent: "second old\n",
+            afterContent: "second new\n",
+          },
+          {
+            operation: "create",
+            filePath: createdPath,
+            afterContent: "created\n",
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        filePath: "3 files",
+      });
+      expect(await readFile(firstPath, "utf8")).toBe("first old\n");
+      expect(await readFile(secondPath, "utf8")).toBe("second old\n");
+      await expect(readFile(createdPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a batch checkpoint created file was already removed,
+    When the checkpoint is restored,
+    Then edited files are restored and the missing created file stays absent`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-batch-missing-");
+    const editedPath = join(workspace, "edited.txt");
+    const createdPath = join(workspace, "created.txt");
+    await writeFile(editedPath, "new\n", "utf8");
+    await writeFile(createdPath, "created\n", "utf8");
+
+    try {
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath: editedPath,
+            beforeContent: "old\n",
+            afterContent: "new\n",
+          },
+          {
+            operation: "create",
+            filePath: createdPath,
+            afterContent: "created\n",
+          },
+        ],
+      });
+      await rm(createdPath);
+
+      // When
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        filePath: "2 files",
+      });
+      expect(await readFile(editedPath, "utf8")).toBe("old\n");
+      await expect(readFile(createdPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a batch checkpoint target was changed after recording,
+    When the checkpoint is restored,
+    Then undo is blocked before restoring any batch file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-batch-blocked-");
+    const editedPath = join(workspace, "edited.txt");
+    const createdPath = join(workspace, "created.txt");
+    await writeFile(editedPath, "new\n", "utf8");
+    await writeFile(createdPath, "created\n", "utf8");
+
+    try {
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath: editedPath,
+            beforeContent: "old\n",
+            afterContent: "new\n",
+          },
+          {
+            operation: "create",
+            filePath: createdPath,
+            afterContent: "created\n",
+          },
+        ],
+      });
+      await writeFile(createdPath, "user change\n", "utf8");
+
+      // When
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "created.txt",
+        message: "Cannot undo created.txt: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(editedPath, "utf8")).toBe("new\n");
+      expect(await readFile(createdPath, "utf8")).toBe("user change\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a batch checkpoint is recorded for a path outside the git root,
+    When the checkpoint is written,
+    Then Keel ignores it`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const outsideDirectory = await mkdtemp(join(tmpdir(), "keel-git-outside-"));
+    const outsideFile = join(outsideDirectory, "created.txt");
+    await writeFile(outsideFile, "created\n", "utf8");
+
+    try {
+      // When
+      const result = recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "create",
+            filePath: outsideFile,
+            afterContent: "created\n",
+          },
+        ],
+      });
+
+      // Then
+      expect(result).toEqual({ written: false });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outsideDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an empty batch checkpoint is recorded,
+    When the checkpoint is written,
+    Then Keel ignores it`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+
+    try {
+      // When
+      const result = recordLastBatchCheckpoint({
+        workspace,
+        operations: [],
+      });
+
+      // Then
+      expect(result).toEqual({ written: false });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a batch checkpoint edit target changed after recording,
+    When the checkpoint is restored,
+    Then undo is blocked before restoring any batch file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-batch-edit-blocked-");
+    const editedPath = join(workspace, "edited.txt");
+    const createdPath = join(workspace, "created.txt");
+    await writeFile(editedPath, "new\n", "utf8");
+    await writeFile(createdPath, "created\n", "utf8");
+
+    try {
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath: editedPath,
+            beforeContent: "old\n",
+            afterContent: "new\n",
+          },
+          {
+            operation: "create",
+            filePath: createdPath,
+            afterContent: "created\n",
+          },
+        ],
+      });
+      await writeFile(editedPath, "user change\n", "utf8");
+
+      // When
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "edited.txt",
+        message: "Cannot undo edited.txt: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(editedPath, "utf8")).toBe("user change\n");
+      expect(await readFile(createdPath, "utf8")).toBe("created\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a batch checkpoint edit target was deleted after recording,
+    When the checkpoint is restored,
+    Then undo is blocked before restoring any batch file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-batch-edit-missing-");
+    const editedPath = join(workspace, "edited.txt");
+    await writeFile(editedPath, "new\n", "utf8");
+
+    try {
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath: editedPath,
+            beforeContent: "old\n",
+            afterContent: "new\n",
+          },
+        ],
+      });
+      await rm(editedPath);
+
+      // When
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "edited.txt",
+        message: "Cannot undo edited.txt: Refusing to overwrite user changes.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a batch checkpoint created target is now a symlink,
+    When the checkpoint is restored,
+    Then undo is blocked before removing the symlink`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-batch-symlink-");
+    const createdPath = join(workspace, "created.txt");
+    const targetPath = join(workspace, "target.txt");
+    await writeFile(createdPath, "created\n", "utf8");
+    await writeFile(targetPath, "target\n", "utf8");
+
+    try {
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "create",
+            filePath: createdPath,
+            afterContent: "created\n",
+          },
+        ],
+      });
+      await rm(createdPath);
+      await symlink("target.txt", createdPath);
+
+      // When
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "created.txt",
+        message: "Cannot undo created.txt: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(targetPath, "utf8")).toBe("target\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

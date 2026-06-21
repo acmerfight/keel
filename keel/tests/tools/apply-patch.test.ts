@@ -1,0 +1,834 @@
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, test } from "vitest";
+import type { KeelErrorCode } from "../../src/core/error.ts";
+import { createGitWorkspace } from "../../src/testing/cli-harness.ts";
+import { executeApplyPatch } from "../../src/tools/apply-patch.ts";
+
+async function createWorkspace(): Promise<string> {
+  return mkdtemp(join(tmpdir(), "keel-apply-patch-tool-"));
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function expectApplyPatchError(
+  action: () => unknown,
+  code: KeelErrorCode,
+  message: string,
+  recovery?: string,
+): void {
+  try {
+    action();
+    throw new Error("Expected apply_patch tool to throw");
+  } catch (error) {
+    expect(error).toMatchObject({
+      name: "KeelError",
+      code,
+      message: expect.stringContaining(message),
+      ...(recovery !== undefined
+        ? { recovery: expect.stringContaining(recovery) }
+        : {}),
+    });
+  }
+}
+
+describe("Apply Patch Tool", () => {
+  test(`Given a patch updates one read file and creates another file,
+    When apply_patch validates and applies the patch,
+    Then it writes every file and returns all mutated targets`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-");
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "src.ts"), "export const value = 1;\n");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: src.ts",
+      "@@",
+      "-export const value = 1;",
+      "+export const value = 2;",
+      "*** Add File: docs/note.md",
+      "+# Note",
+      "+",
+      "+created by patch",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) => targetPath === join(workspacePath, "src.ts"),
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nM src.ts\nA docs/note.md");
+      expect(result.targetPaths).toEqual([
+        join(workspacePath, "src.ts"),
+        join(workspacePath, "docs", "note.md"),
+      ]);
+      expect(await readFile(join(workspace, "src.ts"), "utf8")).toBe(
+        "export const value = 2;\n",
+      );
+      expect(await readFile(join(workspace, "docs", "note.md"), "utf8")).toBe(
+        "# Note\n\ncreated by patch\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch updates a UTF-8 BOM file and adds content ending with a blank line,
+    When apply_patch writes both targets,
+    Then it preserves the BOM and does not append an extra newline`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "bom.txt"), "\uFEFFold\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: bom.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** Add File: trailing.txt",
+      "+line",
+      "+",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "bom.txt"),
+        },
+      });
+
+      // Then
+      expect(await readFile(join(workspace, "bom.txt"), "utf8")).toBe(
+        "\uFEFFnew\n",
+      );
+      expect(await readFile(join(workspace, "trailing.txt"), "utf8")).toBe(
+        "line\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch has one valid change followed by one invalid change,
+    When apply_patch prevalidates the whole patch,
+    Then it rejects the patch without writing any file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "first.txt"), "alpha\n", "utf8");
+    await writeFile(join(workspace, "second.txt"), "bravo\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: first.txt",
+      "@@",
+      "-alpha",
+      "+ALPHA",
+      "*** Update File: second.txt",
+      "@@",
+      "-missing",
+      "+MISSING",
+      "*** Add File: created.txt",
+      "+created",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "first.txt") ||
+                targetPath === join(workspacePath, "second.txt"),
+            },
+          }),
+        "tool_patch_hunk_not_found",
+        "expected lines not found in second.txt",
+      );
+      expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
+        "alpha\n",
+      );
+      expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
+        "bravo\n",
+      );
+      expect(await pathExists(join(workspace, "created.txt"))).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch updates a file with CRLF line endings,
+    When apply_patch applies the hunk,
+    Then it preserves the file's existing line ending style`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "win.txt"), "alpha\r\nbravo\r\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: win.txt",
+      "@@",
+      "-alpha",
+      "-bravo",
+      "+alpha",
+      "+charlie",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "win.txt"),
+        },
+      });
+
+      // Then
+      expect(await readFile(join(workspace, "win.txt"), "utf8")).toBe(
+        "alpha\r\ncharlie\r\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch replacement inserts lines without a newline inside the matched span,
+    When apply_patch applies the hunk,
+    Then it uses the nearest existing line ending or defaults to LF`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "after.txt"), "old\nsuffix", "utf8");
+    await writeFile(join(workspace, "before.txt"), "prefix\r\nold", "utf8");
+    await writeFile(join(workspace, "forward.txt"), "old suffix\n", "utf8");
+    await writeFile(join(workspace, "backward.txt"), "prefix\nabc old", "utf8");
+    await writeFile(join(workspace, "none.txt"), "old", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: after.txt",
+      "@@",
+      "-old",
+      "+new",
+      "+line",
+      "*** Update File: before.txt",
+      "@@",
+      "-old",
+      "+new",
+      "+line",
+      "*** Update File: forward.txt",
+      "@@",
+      "-old",
+      "+new",
+      "+line",
+      "*** Update File: backward.txt",
+      "@@",
+      "-old",
+      "+new",
+      "+line",
+      "*** Update File: none.txt",
+      "@@",
+      "-old",
+      "+new",
+      "+line",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "after.txt") ||
+            targetPath === join(workspacePath, "before.txt") ||
+            targetPath === join(workspacePath, "forward.txt") ||
+            targetPath === join(workspacePath, "backward.txt") ||
+            targetPath === join(workspacePath, "none.txt"),
+        },
+      });
+
+      // Then
+      expect(await readFile(join(workspace, "after.txt"), "utf8")).toBe(
+        "new\nline\nsuffix",
+      );
+      expect(await readFile(join(workspace, "before.txt"), "utf8")).toBe(
+        "prefix\r\nnew\r\nline",
+      );
+      expect(await readFile(join(workspace, "forward.txt"), "utf8")).toBe(
+        "new\nline suffix\n",
+      );
+      expect(await readFile(join(workspace, "backward.txt"), "utf8")).toBe(
+        "prefix\nabc new\nline",
+      );
+      expect(await readFile(join(workspace, "none.txt"), "utf8")).toBe(
+        "new\nline",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch uses hunk context lines,
+    When apply_patch applies the hunk,
+    Then context lines locate the update without changing those lines`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(
+      join(workspace, "note.txt"),
+      "before\nold\nafter\n",
+      "utf8",
+    );
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: note.txt",
+      "@@",
+      " before",
+      "-old",
+      "+new",
+      " after",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "note.txt"),
+        },
+      });
+
+      // Then
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "before\nnew\nafter\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch update target has not been read,
+    When apply_patch validates the patch,
+    Then it rejects the update before writing any file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "old\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: note.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: () => false,
+            },
+          }),
+        "tool_file_not_read",
+        "file has not been read: note.txt",
+        'Use read(path: "note.txt")',
+      );
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe("old\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch update target is binary,
+    When apply_patch reads the target as editable text,
+    Then it reports an apply_patch binary-file failure`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "image.png"), Buffer.from([0x89, 0x50]));
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: image.png",
+      "@@",
+      "-old",
+      "+new",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "image.png"),
+            },
+          }),
+        "tool_binary_file",
+        "apply_patch failed: binary file is not supported: image.png",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch update target is too large,
+    When apply_patch reads the target as editable text,
+    Then it reports the apply_patch file size limit`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "large.txt"), "x".repeat(10_485_761));
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: large.txt",
+      "@@",
+      "-x",
+      "+y",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "large.txt"),
+            },
+          }),
+        "tool_file_too_large",
+        "file is too large: large.txt",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given malformed patch syntax,
+    When apply_patch parses the patch,
+    Then it reports a recoverable patch error for the invalid operation`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const cases = [
+      {
+        patch: "*** Begin Patch\n*** End Patch",
+        code: "tool_invalid_patch",
+        message: "patch contains no file operations",
+      },
+      {
+        patch: "not a patch",
+        code: "tool_invalid_patch",
+        message: "patch must start with",
+      },
+      {
+        patch: "*** Begin Patch\n*** Add File: \n+content\n*** End Patch",
+        code: "tool_invalid_patch",
+        message: "patch file header is missing a path",
+      },
+      {
+        patch: "*** Begin Patch\n*** Add File: empty.txt\n*** End Patch",
+        code: "tool_invalid_patch",
+        message: "has no content lines",
+      },
+      {
+        patch: "*** Begin Patch\n*** Delete File: old.txt\n*** End Patch",
+        code: "tool_unsupported_patch_operation",
+        message: "Delete File is not supported",
+      },
+      {
+        patch:
+          "*** Begin Patch\n*** Add File: bad.txt\nmissing prefix\n*** End Patch",
+        code: "tool_invalid_patch",
+        message: "contains a line without + prefix",
+      },
+      {
+        patch:
+          "*** Begin Patch\n*** Update File: bad.txt\nmissing hunk\n*** End Patch",
+        code: "tool_invalid_patch",
+        message: "is missing a hunk header",
+      },
+      {
+        patch:
+          "*** Begin Patch\n*** Update File: bad.txt\n@@\nunchanged\n*** End Patch",
+        code: "tool_invalid_patch",
+        message: "has an invalid line",
+      },
+      {
+        patch:
+          "*** Begin Patch\n*** Update File: bad.txt\n@@\n+new\n*** End Patch",
+        code: "tool_invalid_patch",
+        message: "has no old lines",
+      },
+      {
+        patch:
+          "*** Begin Patch\n*** Update File: renamed.txt\n*** Move to: new.txt\n*** End Patch",
+        code: "tool_unsupported_patch_operation",
+        message: "Move to is not supported",
+      },
+      {
+        patch: "*** Begin Patch\n*** Update File: bad.txt\n*** End Patch",
+        code: "tool_invalid_patch",
+        message: "has no hunks",
+      },
+      {
+        patch: "*** Begin Patch\n*** Unknown File: bad.txt\n*** End Patch",
+        code: "tool_invalid_patch",
+        message: "invalid patch header",
+      },
+    ] satisfies readonly {
+      readonly patch: string;
+      readonly code: KeelErrorCode;
+      readonly message: string;
+    }[];
+
+    try {
+      for (const invalid of cases) {
+        // When / Then
+        expectApplyPatchError(
+          () => executeApplyPatch(workspace, invalid.patch),
+          invalid.code,
+          invalid.message,
+        );
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch update target is a directory,
+    When apply_patch validates the update target,
+    Then it rejects the target as not a file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await mkdir(join(workspace, "src"));
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: src",
+      "@@",
+      "-old",
+      "+new",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "src"),
+            },
+          }),
+        "tool_not_file",
+        "not a file: src",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch update target resolves through a symlink to an ignored file,
+    When apply_patch validates the real target,
+    Then it rejects the ignored update target`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, ".gitignore"), "private/\n", "utf8");
+    await mkdir(join(workspace, "private"));
+    await writeFile(join(workspace, "private", "secret.txt"), "old\n", "utf8");
+    await symlink("private/secret.txt", join(workspace, "visible.txt"));
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: visible.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "private", "secret.txt"),
+            },
+          }),
+        "tool_path_ignored",
+        "ignored path: visible.txt",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch hunk matches more than one location,
+    When apply_patch validates the update,
+    Then it rejects the ambiguous patch without writing the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "repeat.txt"), "same\nsame\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: repeat.txt",
+      "@@",
+      "-same",
+      "+different",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "repeat.txt"),
+            },
+          }),
+        "tool_patch_hunk_not_found",
+        "expected lines are not unique in repeat.txt",
+      );
+      expect(await readFile(join(workspace, "repeat.txt"), "utf8")).toBe(
+        "same\nsame\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch targets the same file more than once,
+    When apply_patch validates the prepared operations,
+    Then it rejects the duplicate target before writing the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "note.txt"), "old\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: note.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** Update File: note.txt",
+      "@@",
+      "-old",
+      "+newer",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "note.txt"),
+            },
+          }),
+        "tool_invalid_patch",
+        "multiple operations target note.txt",
+      );
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe("old\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch add target already exists,
+    When apply_patch validates the patch,
+    Then it rejects the patch without clobbering the existing file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "existing.txt"), "keep\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: existing.txt",
+      "+replace",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () => executeApplyPatch(workspace, patch),
+        "tool_file_exists",
+        "file already exists: existing.txt",
+      );
+      expect(await readFile(join(workspace, "existing.txt"), "utf8")).toBe(
+        "keep\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch add target resolves through a symlink to a gitignored directory after an earlier add,
+    When apply_patch validates the real target,
+    Then it rejects the ignored path and rolls back the earlier add`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, ".gitignore"), "private/\n", "utf8");
+    await mkdir(join(workspace, "private"));
+    await symlink("private", join(workspace, "link"));
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: created.txt",
+      "+created",
+      "*** Add File: link/secret.txt",
+      "+secret",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () => executeApplyPatch(workspace, patch),
+        "tool_path_ignored",
+        "ignored path: link/secret.txt",
+      );
+      await expect(
+        readFile(join(workspace, "private", "secret.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(
+        readFile(join(workspace, "created.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch add target resolves through a symlink to a gitignored directory after an earlier update,
+    When apply_patch rejects the later add during execution,
+    Then it rolls back the earlier update`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, ".gitignore"), "private/\n", "utf8");
+    await writeFile(join(workspace, "note.txt"), "old\n", "utf8");
+    await mkdir(join(workspace, "private"));
+    await symlink("private", join(workspace, "link"));
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: note.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** Add File: link/secret.txt",
+      "+secret",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "note.txt"),
+            },
+          }),
+        "tool_path_ignored",
+        "ignored path: link/secret.txt",
+      );
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe("old\n");
+      await expect(
+        readFile(join(workspace, "private", "secret.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch add target resolves through a symlink outside the workspace after an earlier valid update,
+    When apply_patch validates the real parent,
+    Then it rejects the escape before writing any patch operation`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    const outside = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "old\n", "utf8");
+    await symlink(outside, join(workspace, "outside"));
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: note.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** Add File: outside/secret.txt",
+      "+secret",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "note.txt"),
+            },
+          }),
+        "tool_path_outside_workspace",
+        "outside the workspace",
+      );
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe("old\n");
+      await expect(
+        readFile(join(outside, "secret.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+});
