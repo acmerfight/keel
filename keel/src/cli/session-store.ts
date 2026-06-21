@@ -6,6 +6,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   realpathSync,
   rmSync,
   statSync,
@@ -27,6 +28,8 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const SESSION_LOCK_DIRECTORY_NAME = "active.lock";
 const SESSION_LOCK_OWNER_FILE_NAME = "owner.json";
 const SESSION_LEDGER_RESUME_MAX_BYTES = 32 * 1024 * 1024;
+const SESSION_LEDGER_SNAPSHOT_THRESHOLD_BYTES = 16 * 1024 * 1024;
+const SESSION_LEDGER_HEADER_READ_MAX_BYTES = 64 * 1024;
 
 const persistedToolCallSchema = z
   .object({
@@ -144,6 +147,26 @@ const inputConsumedRecordSchema = z
   })
   .strict();
 
+const queuedInputSchema = z
+  .object({
+    id: z.string(),
+    timestamp: z.string(),
+    sequence: z.number().int().nonnegative(),
+    line: z.string(),
+  })
+  .strict();
+
+const snapshotRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("snapshot"),
+    timestamp: z.string(),
+    reason: z.literal("size_threshold"),
+    messages: z.array(messageSchema),
+    pendingInputs: z.array(queuedInputSchema),
+  })
+  .strict();
+
 const schemaVersionProbeSchema = z
   .object({
     schemaVersion: z.number().int(),
@@ -163,9 +186,11 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   replaceRecordSchema,
   inputAdmittedRecordSchema,
   inputConsumedRecordSchema,
+  snapshotRecordSchema,
 ]);
 
 type RawMessage = z.infer<typeof messageSchema>;
+type RawSessionQueuedInput = z.infer<typeof queuedInputSchema>;
 type RawSessionHeaderRecord = z.infer<typeof sessionHeaderSchema>;
 type RawSessionMutationRecord = z.infer<typeof sessionMutationRecordSchema>;
 type SessionLockOwner = z.infer<typeof sessionLockOwnerSchema>;
@@ -212,11 +237,21 @@ interface InputConsumedSessionRecord {
   readonly inputIds: readonly string[];
 }
 
+interface SnapshotSessionRecord {
+  readonly schemaVersion: 1;
+  readonly type: "snapshot";
+  readonly timestamp: string;
+  readonly reason: "size_threshold";
+  readonly messages: readonly Message[];
+  readonly pendingInputs: readonly SessionQueuedInput[];
+}
+
 type SessionMutationRecord =
   | AppendSessionRecord
   | ReplaceSessionRecord
   | InputAdmittedSessionRecord
-  | InputConsumedSessionRecord;
+  | InputConsumedSessionRecord
+  | SnapshotSessionRecord;
 
 interface SessionRecords {
   readonly header: SessionHeaderRecord;
@@ -230,12 +265,15 @@ export interface SessionStoreRuntime {
   readonly now: () => number;
 }
 
+const sessionReplayStateKey: unique symbol = Symbol("sessionReplayState");
+
 export interface SessionState {
   readonly id: string;
   readonly filePath: string;
   readonly workspace: string;
   readonly messages: readonly Message[];
   readonly pendingInputs: readonly SessionQueuedInput[];
+  readonly [sessionReplayStateKey]: SessionReplayState;
 }
 
 export interface SessionQueuedInput {
@@ -243,6 +281,16 @@ export interface SessionQueuedInput {
   readonly timestamp: string;
   readonly sequence: number;
   readonly line: string;
+}
+
+interface SessionReplayState {
+  readonly messages: Message[];
+  readonly pendingInputsById: Map<string, SessionQueuedInput>;
+}
+
+interface SnapshotSearchResult {
+  readonly index: number;
+  readonly record: SnapshotSessionRecord;
 }
 
 export interface SessionLock {
@@ -527,6 +575,17 @@ function appendConsumedInputIds(
   return { ...record, consumedInputIds: [...inputIds] };
 }
 
+function toSessionQueuedInput(
+  input: RawSessionQueuedInput,
+): SessionQueuedInput {
+  return {
+    id: input.id,
+    timestamp: input.timestamp,
+    sequence: input.sequence,
+    line: input.line,
+  };
+}
+
 function toSessionMutationRecord(
   record: RawSessionMutationRecord,
 ): SessionMutationRecord {
@@ -568,6 +627,15 @@ function toSessionMutationRecord(
         type: "input_consumed",
         timestamp: record.timestamp,
         inputIds: [...record.inputIds],
+      };
+    case "snapshot":
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "snapshot",
+        timestamp: record.timestamp,
+        reason: "size_threshold",
+        messages: record.messages.map(toMessage),
+        pendingInputs: record.pendingInputs.map(toSessionQueuedInput),
       };
   }
 }
@@ -632,10 +700,9 @@ function formatByteCount(bytes: number): string {
   return `${bytes.toLocaleString("en-US")} bytes`;
 }
 
-function assertSessionLedgerWithinResumeLimit(filePath: string): void {
-  let ledgerSize: number;
+function sessionLedgerSize(filePath: string): number {
   try {
-    ledgerSize = statSync(filePath).size;
+    return statSync(filePath).size;
   } catch (error) {
     if (hasNodeErrorCode(error, "ENOENT")) {
       sessionStoreError(`Error: session ledger not found at ${filePath}.`);
@@ -644,40 +711,189 @@ function assertSessionLedgerWithinResumeLimit(filePath: string): void {
       `Error: cannot inspect session ledger ${filePath}: ${errorMessage(error)}`,
     );
   }
+}
 
-  if (ledgerSize > SESSION_LEDGER_RESUME_MAX_BYTES) {
-    sessionStoreError(
-      `Error: cannot load session ledger ${filePath}: ledger is too large to resume safely (${formatByteCount(ledgerSize)}; limit ${formatByteCount(SESSION_LEDGER_RESUME_MAX_BYTES)}). Start a new session with --session <new-id>, or inspect and archive this ledger manually if you need its old context.`,
-    );
+function sessionLedgerReadError(filePath: string, error: unknown): never {
+  /* v8 ignore next 3: stat succeeds before reads; ENOENT here requires a filesystem race. */
+  if (hasNodeErrorCode(error, "ENOENT")) {
+    sessionStoreError(`Error: session ledger not found at ${filePath}.`);
+  }
+  sessionStoreError(
+    `Error: cannot read session ledger ${filePath}: ${errorMessage(error)}`,
+  );
+}
+
+function oversizedSessionLedgerError(
+  filePath: string,
+  ledgerSize: number,
+): never {
+  sessionStoreError(
+    `Error: cannot load session ledger ${filePath}: ledger is too large to resume safely (${formatByteCount(ledgerSize)}; limit ${formatByteCount(SESSION_LEDGER_RESUME_MAX_BYTES)}), and no bounded snapshot was found in the final ${formatByteCount(SESSION_LEDGER_RESUME_MAX_BYTES)}. Start a new session with --session <new-id>, or inspect and archive this ledger manually if you need its old context.`,
+  );
+}
+
+function readSessionLedgerContent(filePath: string): string {
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch (error) {
+    return sessionLedgerReadError(filePath, error);
   }
 }
 
-function readSessionRecords(filePath: string): SessionRecords {
-  assertSessionLedgerWithinResumeLimit(filePath);
-  let content: string;
+function readSessionLedgerRange(
+  filePath: string,
+  start: number,
+  length: number,
+): string {
+  let fd: number | undefined;
   try {
-    content = readFileSync(filePath, "utf8");
+    fd = openSync(filePath, "r");
+    const buffer = Buffer.alloc(length);
+    const bytesRead = readSync(fd, buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead).toString("utf8");
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      sessionStoreError(`Error: session ledger not found at ${filePath}.`);
+    return sessionLedgerReadError(filePath, error);
+  } finally {
+    if (fd !== undefined) {
+      closeSync(fd);
     }
+  }
+}
+
+function splitSessionJsonLines(content: string): readonly string[] {
+  return content.split("\n").filter((line) => line !== "");
+}
+
+function readSessionHeaderLine(filePath: string, ledgerSize: number): string {
+  const sample = readSessionLedgerRange(
+    filePath,
+    0,
+    Math.min(ledgerSize, SESSION_LEDGER_HEADER_READ_MAX_BYTES),
+  );
+  const newlineIndex = sample.indexOf("\n");
+  const headerLine =
+    newlineIndex === -1 ? sample : sample.slice(0, newlineIndex);
+  if (headerLine === "") {
     sessionStoreError(
-      `Error: cannot read session ledger ${filePath}: ${errorMessage(error)}`,
+      `Error: cannot load session ledger ${filePath}: ledger has no session header.`,
     );
   }
-  const lines = content.split("\n").filter((line) => line !== "");
+  return headerLine;
+}
+
+function readCompleteTailSessionJsonLines(
+  filePath: string,
+  ledgerSize: number,
+): readonly string[] {
+  const tailStart = Math.max(0, ledgerSize - SESSION_LEDGER_RESUME_MAX_BYTES);
+  const readStart = tailStart === 0 ? 0 : tailStart - 1;
+  const tail = readSessionLedgerRange(
+    filePath,
+    readStart,
+    ledgerSize - readStart,
+  );
+  if (tail.startsWith("\n")) {
+    return splitSessionJsonLines(tail.slice(1));
+  }
+
+  const firstNewlineIndex = tail.indexOf("\n");
+  if (firstNewlineIndex === -1) {
+    return [];
+  }
+  return splitSessionJsonLines(tail.slice(firstNewlineIndex + 1));
+}
+
+function parseSnapshotSessionMutationRecord(
+  line: string,
+): SnapshotSessionRecord | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(line);
+  } catch {
+    return null;
+  }
+
+  const parsed = sessionMutationRecordSchema.safeParse(raw);
+  if (!parsed.success) {
+    return null;
+  }
+  const record = toSessionMutationRecord(parsed.data);
+  return record.type === "snapshot" ? record : null;
+}
+
+function findLatestSnapshotRecord(
+  tailLines: readonly string[],
+): SnapshotSearchResult | null {
+  for (const [index, line] of [...tailLines.entries()].reverse()) {
+    const record = parseSnapshotSessionMutationRecord(line);
+    if (record !== null) {
+      return { index, record };
+    }
+  }
+  return null;
+}
+
+function parseSessionRecordsFromLines(
+  filePath: string,
+  lines: readonly string[],
+): SessionRecords {
   const [headerLine, ...mutationLines] = lines;
   if (headerLine === undefined) {
     sessionStoreError(
       `Error: cannot load session ledger ${filePath}: ledger has no session header.`,
     );
   }
+
   return {
     header: parseSessionHeaderRecord(filePath, headerLine, 1),
     mutations: mutationLines.map((line, index) =>
       parseSessionMutationRecord(filePath, line, index + 2),
     ),
   };
+}
+
+function readOversizedSessionRecords(
+  filePath: string,
+  ledgerSize: number,
+): SessionRecords {
+  const header = parseSessionHeaderRecord(
+    filePath,
+    readSessionHeaderLine(filePath, ledgerSize),
+    1,
+  );
+  const tailLines = readCompleteTailSessionJsonLines(filePath, ledgerSize);
+  const snapshot = findLatestSnapshotRecord(tailLines);
+  if (snapshot === null) {
+    oversizedSessionLedgerError(filePath, ledgerSize);
+  }
+
+  return {
+    header,
+    mutations: [
+      snapshot.record,
+      ...tailLines
+        .slice(snapshot.index + 1)
+        .map((line, index) =>
+          parseSessionMutationRecord(
+            filePath,
+            line,
+            snapshot.index + index + 2,
+          ),
+        ),
+    ],
+  };
+}
+
+function readSessionRecords(filePath: string): SessionRecords {
+  const ledgerSize = sessionLedgerSize(filePath);
+  if (ledgerSize > SESSION_LEDGER_RESUME_MAX_BYTES) {
+    return readOversizedSessionRecords(filePath, ledgerSize);
+  }
+
+  return parseSessionRecordsFromLines(
+    filePath,
+    splitSessionJsonLines(readSessionLedgerContent(filePath)),
+  );
 }
 
 function formatNestedSessionStoreError(error: SessionStoreError): string {
@@ -799,6 +1015,41 @@ function pendingInputsInReplayOrder(
   });
 }
 
+function sessionStateFromReplay(options: {
+  readonly id: string;
+  readonly filePath: string;
+  readonly workspace: string;
+  readonly messages: readonly Message[];
+  readonly pendingInputsById: ReadonlyMap<string, SessionQueuedInput>;
+}): SessionState {
+  const messages = [...options.messages];
+  const pendingInputsById = new Map(options.pendingInputsById);
+  const replayState = {
+    messages: [...messages],
+    pendingInputsById,
+  };
+  const session = {
+    [sessionReplayStateKey]: replayState,
+    id: options.id,
+    filePath: options.filePath,
+    workspace: options.workspace,
+    messages,
+    pendingInputs: pendingInputsInReplayOrder(pendingInputsById),
+  };
+  return session;
+}
+
+function replayStateForSession(session: SessionState): SessionReplayState {
+  return session[sessionReplayStateKey];
+}
+
+function replaceReplayMessages(
+  state: SessionReplayState,
+  messages: readonly Message[],
+): void {
+  state.messages.splice(0, state.messages.length, ...messages);
+}
+
 function consumeReplayInputs(
   pendingInputsById: Map<string, SessionQueuedInput>,
   consumedInputIds: readonly string[] | undefined,
@@ -827,6 +1078,28 @@ function sessionRecordWithConsumedInputIds(
     return record;
   }
   return { ...record, consumedInputIds: [...consumedInputIds] };
+}
+
+function appendSessionSnapshotIfNeeded(options: {
+  readonly session: SessionState;
+  readonly runtime: SessionStoreRuntime;
+}): void {
+  if (
+    sessionLedgerSize(options.session.filePath) <=
+    SESSION_LEDGER_SNAPSHOT_THRESHOLD_BYTES
+  ) {
+    return;
+  }
+
+  const replayState = replayStateForSession(options.session);
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "snapshot",
+    timestamp: isoTimestamp(options.runtime),
+    reason: "size_threshold",
+    messages: [...replayState.messages],
+    pendingInputs: pendingInputsInReplayOrder(replayState.pendingInputsById),
+  });
 }
 
 function parseProviderVisibleMessages(
@@ -899,13 +1172,13 @@ export function createSessionStore(options: {
     createdAt: isoTimestamp(options.runtime),
     workspace,
   });
-  return {
+  return sessionStateFromReplay({
     id: options.sessionId,
     filePath,
     workspace,
     messages: [],
-    pendingInputs: [],
-  };
+    pendingInputsById: new Map(),
+  });
 }
 
 export function resumeSessionStore(options: {
@@ -959,17 +1232,24 @@ export function resumeSessionStore(options: {
       case "input_consumed":
         consumeReplayInputs(pendingInputsById, record.inputIds);
         break;
+      case "snapshot":
+        messages = [...record.messages];
+        pendingInputsById.clear();
+        for (const input of record.pendingInputs) {
+          pendingInputsById.set(input.id, input);
+        }
+        break;
     }
   }
   validateCompletedTranscript(options.sessionId, messages, "resume");
 
-  return {
+  return sessionStateFromReplay({
     id: options.sessionId,
     filePath,
     workspace: expectedWorkspace,
     messages,
-    pendingInputs: pendingInputsInReplayOrder(pendingInputsById),
-  };
+    pendingInputsById,
+  });
 }
 
 export function persistSessionMessages(options: {
@@ -989,10 +1269,18 @@ export function persistSessionMessages(options: {
   const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
 
   if (messageArraysEqual(currentMessages, options.previousMessages)) {
+    replaceReplayMessages(
+      replayStateForSession(options.session),
+      currentMessages,
+    );
     if (consumedInputIds.length > 0) {
       consumeSessionQueuedInputs({
         session: options.session,
         inputIds: consumedInputIds,
+        runtime: options.runtime,
+      });
+      appendSessionSnapshotIfNeeded({
+        session: options.session,
         runtime: options.runtime,
       });
     }
@@ -1014,6 +1302,13 @@ export function persistSessionMessages(options: {
         consumedInputIds,
       ),
     );
+    const replayState = replayStateForSession(options.session);
+    replaceReplayMessages(replayState, currentMessages);
+    consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
+    appendSessionSnapshotIfNeeded({
+      session: options.session,
+      runtime: options.runtime,
+    });
     return [...currentMessages];
   }
 
@@ -1030,6 +1325,13 @@ export function persistSessionMessages(options: {
       consumedInputIds,
     ),
   );
+  const replayState = replayStateForSession(options.session);
+  replaceReplayMessages(replayState, currentMessages);
+  consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
   return [...currentMessages];
 }
 
@@ -1053,6 +1355,10 @@ export function persistSessionQueuedInput(options: {
     sequence: queuedInput.sequence,
     line: queuedInput.line,
   });
+  replayStateForSession(options.session).pendingInputsById.set(
+    queuedInput.id,
+    queuedInput,
+  );
   return queuedInput;
 }
 
@@ -1071,4 +1377,8 @@ export function consumeSessionQueuedInputs(options: {
     timestamp: isoTimestamp(options.runtime),
     inputIds,
   });
+  consumeReplayInputs(
+    replayStateForSession(options.session).pendingInputsById,
+    inputIds,
+  );
 }

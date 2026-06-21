@@ -2118,6 +2118,88 @@ describe("CLI Main", () => {
     }
   });
 
+  test(`Given the user resumes an oversized session with a bounded snapshot,
+    When queued input is restored from that snapshot,
+    Then the CLI runs it against the snapshotted transcript`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const ledgerPath = join(
+      home,
+      "sessions",
+      "snapshot-queued",
+      "ledger.jsonl",
+    );
+    await mkdir(join(home, "sessions", "snapshot-queued"), {
+      recursive: true,
+    });
+    await writeFile(
+      ledgerPath,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        type: "session",
+        id: "snapshot-queued",
+        createdAt: "1970-01-01T00:00:00.000Z",
+        workspace: ledgerWorkspace,
+      })}\n`,
+      "utf8",
+    );
+    await truncate(ledgerPath, 32 * 1024 * 1024 + 1);
+    await writeFile(
+      ledgerPath,
+      `\n${JSON.stringify({
+        schemaVersion: 1,
+        type: "snapshot",
+        timestamp: "1970-01-01T00:00:00.001Z",
+        reason: "size_threshold",
+        messages: [
+          { role: "user", content: "remember alpha" },
+          {
+            role: "assistant",
+            content: "Remembered: remember alpha",
+            toolCalls: [],
+          },
+        ],
+        pendingInputs: [
+          {
+            id: "snapshot-question",
+            timestamp: "1970-01-01T00:00:00.002Z",
+            sequence: 2,
+            line: "what did I ask you to remember?",
+          },
+        ],
+      })}\n`,
+      { encoding: "utf8", flag: "a" },
+    );
+    const input = new PassThrough();
+    input.end();
+    const fixture = createRuntime(["--resume", "snapshot-queued"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Earlier you said: remember alpha\n");
+      expect(fixture.stderr()).toBe("");
+      const ledger = await readFile(ledgerPath, "utf8");
+      expect(ledger).toContain('"consumedInputIds":["snapshot-question"]');
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a named interactive session receives multiple prompts,
     When the prompts complete in one process,
     Then all completed turns are persisted to the same ledger`, async () => {
