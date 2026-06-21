@@ -3,6 +3,7 @@ import {
   canExecuteToolCallsInParallel,
   executeParallelToolCallsInSourceOrder,
   PARALLEL_TOOL_CALL_LIMIT,
+  planToolCallExecutionSegments,
   type ScheduledToolCall,
 } from "../../src/agent/tool-scheduler.ts";
 import type { ToolCall } from "../../src/llm/types.ts";
@@ -167,5 +168,44 @@ describe("tool scheduler", () => {
     ).rejects.toThrow(
       "Cannot execute an exclusive tool call batch in parallel",
     );
+  });
+
+  test(`Given read-only calls surround exclusive barriers,
+    When the scheduler plans execution segments,
+    Then it batches adjacent reads and keeps lone calls on the direct path`, () => {
+    const slowScheduled: ScheduledToolCall = {
+      toolCall: slowRead,
+      concurrency: { kind: "parallel-safe" },
+    };
+    const fastScheduled: ScheduledToolCall = {
+      toolCall: fastRead,
+      concurrency: { kind: "parallel-safe" },
+    };
+    const editScheduled: ScheduledToolCall = {
+      toolCall: editCall,
+      concurrency: {
+        kind: "exclusive",
+        reason: "May mutate workspace files.",
+      },
+    };
+    const loneReadScheduled: ScheduledToolCall = {
+      toolCall: readCall(1),
+      concurrency: { kind: "parallel-safe" },
+    };
+
+    expect(
+      planToolCallExecutionSegments([
+        slowScheduled,
+        fastScheduled,
+        editScheduled,
+        loneReadScheduled,
+        editScheduled,
+      ]),
+    ).toEqual([
+      { kind: "parallel", toolCalls: [slowScheduled, fastScheduled] },
+      { kind: "single", toolCall: editScheduled },
+      { kind: "single", toolCall: loneReadScheduled },
+      { kind: "single", toolCall: editScheduled },
+    ]);
   });
 });
