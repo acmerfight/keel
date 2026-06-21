@@ -27,6 +27,24 @@ export interface RecordLastCreateCheckpointOptions {
   readonly afterContent: string;
 }
 
+export type RecordLastBatchCheckpointOperation =
+  | {
+      readonly operation: "edit";
+      readonly filePath: string;
+      readonly beforeContent: string;
+      readonly afterContent: string;
+    }
+  | {
+      readonly operation: "create";
+      readonly filePath: string;
+      readonly afterContent: string;
+    };
+
+export interface RecordLastBatchCheckpointOptions {
+  readonly workspace: string;
+  readonly operations: readonly RecordLastBatchCheckpointOperation[];
+}
+
 export interface RecordLastEditCheckpointResult {
   readonly written: boolean;
 }
@@ -84,13 +102,45 @@ const createCheckpointSchema = z
   })
   .strict();
 
+const batchCheckpointOperationSchema = z.union([
+  z
+    .object({
+      operation: z.literal("edit"),
+      relativePath: z.string().min(1),
+      beforeContent: z.string(),
+      afterContent: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal("create"),
+      relativePath: z.string().min(1),
+      afterContent: z.string(),
+    })
+    .strict(),
+]);
+
+const batchCheckpointSchema = z
+  .object({
+    version: z.literal(3),
+    operation: z.literal("batch"),
+    gitRoot: z.string().min(1),
+    operations: z.array(batchCheckpointOperationSchema).min(1),
+    createdAt: z.string().min(1),
+  })
+  .strict();
+
 const checkpointSchema = z.union([
   editCheckpointSchema,
   createCheckpointSchema,
+  batchCheckpointSchema,
 ]);
 
 type LastEditCheckpoint = z.infer<typeof checkpointSchema>;
 type PersistedCheckpoint = z.input<typeof checkpointSchema>;
+type PersistedBatchCheckpointOperation = z.input<
+  typeof batchCheckpointOperationSchema
+>;
 
 function gitOutput(workspace: string, args: readonly string[]): string | null {
   try {
@@ -205,6 +255,16 @@ function skippedCheckpointRecord(
   return { written: false };
 }
 
+function skippedBatchCheckpointRecord(
+  options: RecordLastBatchCheckpointOptions,
+  error: string,
+): RecordLastEditCheckpointResult {
+  debugLog(
+    `undo checkpoint write skipped: workspace=${options.workspace} operations=${options.operations.length} error=${error}`,
+  );
+  return { written: false };
+}
+
 export function recordLastEditCheckpoint(
   options: RecordLastEditCheckpointOptions,
 ): RecordLastEditCheckpointResult {
@@ -275,13 +335,172 @@ export function recordLastCreateCheckpoint(
   }
 }
 
-function blockedRestore(
-  checkpoint: LastEditCheckpoint,
-): RestoreLastEditCheckpointResult {
+export function recordLastBatchCheckpoint(
+  options: RecordLastBatchCheckpointOptions,
+): RecordLastEditCheckpointResult {
+  try {
+    const gitWorkspace = findGitWorkspace(options.workspace);
+    if (gitWorkspace === null) {
+      return skippedBatchCheckpointRecord(options, "git workspace unavailable");
+    }
+
+    const operations: PersistedBatchCheckpointOperation[] = [];
+    for (const operation of options.operations) {
+      const relativePath = normalizeRelativePath(
+        gitWorkspace.root,
+        operation.filePath,
+      );
+      if (relativePath === null) {
+        return skippedBatchCheckpointRecord(
+          options,
+          "file path unavailable or outside git root",
+        );
+      }
+
+      if (operation.operation === "edit") {
+        operations.push({
+          operation: "edit",
+          relativePath,
+          beforeContent: operation.beforeContent,
+          afterContent: operation.afterContent,
+        });
+      } else {
+        operations.push({
+          operation: "create",
+          relativePath,
+          afterContent: operation.afterContent,
+        });
+      }
+    }
+
+    if (operations.length === 0) {
+      return skippedBatchCheckpointRecord(options, "empty batch checkpoint");
+    }
+
+    writeCheckpoint(gitWorkspace.checkpointPath, {
+      version: 3,
+      operation: "batch",
+      gitRoot: gitWorkspace.root,
+      operations,
+      createdAt: new Date().toISOString(),
+    });
+
+    return { written: true };
+  } catch (error) {
+    /* v8 ignore next 1: checkpoint writes can fail from filesystem races or permissions. */
+    return skippedBatchCheckpointRecord(options, String(error));
+  }
+}
+
+function blockedRestore(checkpoint: {
+  readonly relativePath: string;
+}): RestoreLastEditCheckpointResult {
   return {
     status: "blocked",
     filePath: checkpoint.relativePath,
     message: `Cannot undo ${checkpoint.relativePath}: Refusing to overwrite user changes.`,
+  };
+}
+
+type BatchCheckpoint = Extract<
+  LastEditCheckpoint,
+  { readonly operation: "batch" }
+>;
+
+type ResolvedBatchRestoreOperation =
+  | {
+      readonly operation: "edit";
+      readonly restorePath: string;
+      readonly beforeContent: string;
+    }
+  | {
+      readonly operation: "create";
+      readonly filePath: string;
+      readonly exists: boolean;
+    };
+
+function checkpointTargetPath(gitRoot: string, relativePath: string): string {
+  const filePath = resolve(gitRoot, relativePath);
+  if (!isInside(gitRoot, filePath)) {
+    throw new KeelError(
+      "tool_unavailable",
+      "undo failed: checkpoint is invalid",
+    );
+  }
+  return filePath;
+}
+
+function validateBatchRestoreOperation(
+  gitRoot: string,
+  operation: BatchCheckpoint["operations"][number],
+): ResolvedBatchRestoreOperation | RestoreLastEditCheckpointResult {
+  const filePath = checkpointTargetPath(gitRoot, operation.relativePath);
+  if (operation.operation === "create") {
+    const targetStat = lstatIfPossible(filePath);
+    if (targetStat === null) {
+      return { operation: "create", filePath, exists: false };
+    }
+    if (targetStat.isSymbolicLink()) {
+      return blockedRestore(operation);
+    }
+    const restorePath = realpathIfPossible(filePath);
+    /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
+    if (restorePath === null || !isInside(gitRoot, restorePath)) {
+      return blockedRestore(operation);
+    }
+    const currentContent = readFileIfPossible(restorePath);
+    if (currentContent !== operation.afterContent) {
+      return blockedRestore(operation);
+    }
+    return { operation: "create", filePath, exists: true };
+  }
+
+  const restorePath = realpathIfPossible(filePath);
+  if (restorePath === null || !isInside(gitRoot, restorePath)) {
+    return blockedRestore(operation);
+  }
+  const currentContent = readFileIfPossible(restorePath);
+  if (currentContent !== operation.afterContent) {
+    return blockedRestore(operation);
+  }
+  return {
+    operation: "edit",
+    restorePath,
+    beforeContent: operation.beforeContent,
+  };
+}
+
+function isRestoreResult(
+  value: ResolvedBatchRestoreOperation | RestoreLastEditCheckpointResult,
+): value is RestoreLastEditCheckpointResult {
+  return "status" in value;
+}
+
+function restoreBatchCheckpoint(
+  checkpoint: BatchCheckpoint,
+  gitWorkspace: GitWorkspace,
+): RestoreLastEditCheckpointResult {
+  const operations: ResolvedBatchRestoreOperation[] = [];
+  for (const operation of checkpoint.operations) {
+    const validated = validateBatchRestoreOperation(
+      gitWorkspace.root,
+      operation,
+    );
+    if (isRestoreResult(validated)) return validated;
+    operations.push(validated);
+  }
+
+  for (const operation of operations.toReversed()) {
+    if (operation.operation === "create") {
+      if (operation.exists) rmSync(operation.filePath);
+    } else {
+      writeFileSync(operation.restorePath, operation.beforeContent, "utf8");
+    }
+  }
+  rmSync(gitWorkspace.checkpointPath, { force: true });
+  return {
+    status: "restored",
+    filePath: `${checkpoint.operations.length} files`,
   };
 }
 
@@ -298,13 +517,14 @@ export function restoreLastEditCheckpoint(
     return { status: "none", message: "Nothing to undo." };
   }
 
-  const filePath = resolve(gitWorkspace.root, checkpoint.relativePath);
-  if (!isInside(gitWorkspace.root, filePath)) {
-    throw new KeelError(
-      "tool_unavailable",
-      "undo failed: checkpoint is invalid",
-    );
+  if (checkpoint.operation === "batch") {
+    return restoreBatchCheckpoint(checkpoint, gitWorkspace);
   }
+
+  const filePath = checkpointTargetPath(
+    gitWorkspace.root,
+    checkpoint.relativePath,
+  );
 
   if (checkpoint.operation === "create") {
     const targetStat = lstatIfPossible(filePath);

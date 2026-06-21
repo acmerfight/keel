@@ -10,13 +10,16 @@ const recoverableToolErrorCodes = [
   "tool_file_too_large",
   "tool_invalid_pattern",
   "tool_invalid_ls_options",
+  "tool_invalid_patch",
   "tool_not_file",
   "tool_not_directory",
   "tool_old_string_not_found",
   "tool_old_string_not_unique",
   "tool_path_ignored",
   "tool_path_outside_workspace",
+  "tool_patch_hunk_not_found",
   "tool_read_offset_out_of_range",
+  "tool_unsupported_patch_operation",
 ] as const;
 
 export type RecoverableToolErrorCode =

@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
+import { executeApplyPatch } from "./apply-patch.ts";
 import { executeBash } from "./bash.ts";
 import { executeEdit } from "./edit.ts";
 import { executeGlob } from "./glob.ts";
@@ -7,6 +8,7 @@ import { executeGrep } from "./grep.ts";
 import { executeLs } from "./ls.ts";
 import { executeRead } from "./read.ts";
 import {
+  applyPatchToolArgumentsSchema,
   bashToolArgumentsSchema,
   editToolArgumentsSchema,
   globToolArgumentsSchema,
@@ -83,6 +85,7 @@ export interface ToolExecution {
   readonly ok: boolean;
   readonly readTargetPath?: string;
   readonly mutatedTargetPath?: string;
+  readonly mutatedTargetPaths?: readonly string[];
 }
 
 type BuiltinToolExecution<Args> = (
@@ -545,6 +548,44 @@ const writeTool = defineTool({
   },
 });
 
+const applyPatchTool = defineTool({
+  name: "apply_patch",
+  description: [
+    "Apply one patch containing workspace file additions and updates.",
+    "Patch format: *** Begin Patch, then one or more *** Add File: <path> or *** Update File: <path> sections, then *** End Patch.",
+    "Use when: making coordinated changes across multiple files after reading every file that will be updated.",
+    "Do not use when: deleting, renaming, changing file modes, or editing binary files.",
+    "On failure: read the current target files and regenerate the patch with exact context.",
+  ].join("\n"),
+  args: toolArgs(applyPatchToolArgumentsSchema, {
+    patch: stringArg({
+      required: true,
+      description:
+        "Full apply_patch text. Supports Add File and Update File sections only.",
+    }),
+  }),
+  permission: { kind: "none" },
+  output: { kind: "text" },
+  display: {
+    formatLabel: () => "apply_patch",
+  },
+  risk: { kind: "workspace-write", destructive: true },
+  concurrency: {
+    kind: "exclusive",
+    reason: "May mutate multiple workspace files.",
+  },
+  execute: ({ workspace, readBeforeEdit }, args) => {
+    const result = executeApplyPatch(workspace, args.patch, {
+      ...(readBeforeEdit !== undefined ? { readBeforeEdit } : {}),
+    });
+    return {
+      content: result.content,
+      ok: true,
+      mutatedTargetPaths: result.targetPaths,
+    };
+  },
+});
+
 const bashTool = defineTool({
   name: "bash",
   description: [
@@ -613,5 +654,6 @@ export const builtinTools = [
   grepTool,
   editTool,
   writeTool,
+  applyPatchTool,
   bashTool,
 ] as const;

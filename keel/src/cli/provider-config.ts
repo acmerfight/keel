@@ -27,6 +27,11 @@ interface CliWriteRequest {
   readonly content: string;
 }
 
+interface CliPatchRequest {
+  readonly readPath: string;
+  readonly patch: string;
+}
+
 export interface ProviderConfigRuntime {
   readonly env: (key: string) => string | undefined;
 }
@@ -178,6 +183,23 @@ function parseCliWriteDemo(message: string): CliWriteRequest | null {
   return { path, content: '{"created":true}\n' };
 }
 
+function parseCliPatchDemo(message: string): CliPatchRequest | null {
+  if (message !== "apply patch demo") return null;
+  return {
+    readPath: "src.ts",
+    patch: [
+      "*** Begin Patch",
+      "*** Update File: src.ts",
+      "@@",
+      "-export const value = 1;",
+      "+export const value = 2;",
+      "*** Add File: docs/note.md",
+      "+patched",
+      "*** End Patch",
+    ].join("\n"),
+  };
+}
+
 const ZERO_USAGE = {
   inputTokens: 0,
   cachedInputTokens: 0,
@@ -198,6 +220,52 @@ function kimiCostModel(model: string): CostModel | null {
 }
 
 function createCliFakeProvider(userMessage: string): LLMProvider {
+  const patch = parseCliPatchDemo(userMessage);
+  if (patch !== null) {
+    let turn = 0;
+    return {
+      id: "fake",
+      async *stream(options) {
+        turn++;
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "fake_read_before_patch",
+            tool: "read",
+            path: patch.readPath,
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        const toolContent = options.messages.findLast(
+          (m) => m.role === "tool",
+        )?.content;
+        if (turn === 2) {
+          if (toolContent?.startsWith("Tool failed:")) {
+            yield { type: "text", text: toolContent };
+            yield { type: "stop", usage: ZERO_USAGE };
+            return;
+          }
+          yield {
+            type: "tool_call",
+            id: "fake_apply_patch",
+            tool: "apply_patch",
+            patch: patch.patch,
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        const reply = toolContent?.startsWith("Tool failed:")
+          ? toolContent
+          : "Applied patch";
+        yield { type: "text", text: reply };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+  }
+
   const edit = parseCliEditDemo(userMessage);
   const write = parseCliWriteDemo(userMessage);
   if (edit === null) {

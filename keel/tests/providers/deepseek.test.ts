@@ -3854,6 +3854,7 @@ describe("DeepSeek Provider", () => {
         "grep",
         "edit",
         "write",
+        "apply_patch",
       ]);
     } finally {
       await closeServer(captureServer);
@@ -3954,6 +3955,7 @@ describe("DeepSeek Provider", () => {
         "grep",
         "edit",
         "write",
+        "apply_patch",
         "bash",
       ]);
       const bashToolDefinition = parsed.tools?.find(
@@ -4145,6 +4147,7 @@ describe("DeepSeek Provider", () => {
         "grep",
         "edit",
         "write",
+        "apply_patch",
         "bash",
       ]);
       for (const tool of parsed.tools) {
