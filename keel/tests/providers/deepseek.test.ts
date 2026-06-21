@@ -1689,8 +1689,7 @@ describe("DeepSeek Provider", () => {
                 id: "edit_1",
                 tool: "edit",
                 path: "src/index.ts",
-                oldString: "old",
-                newString: "new",
+                edits: [{ oldText: "old", newText: "new" }],
               },
             ],
           },
@@ -1912,8 +1911,7 @@ describe("DeepSeek Provider", () => {
       ),
       {
         path: "src/index.ts",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       },
     );
     const writeToolCalls = objectProperty(
@@ -3107,16 +3105,14 @@ describe("DeepSeek Provider", () => {
         id: "call_edit_0",
         tool: "edit",
         path: "one.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       },
       {
         type: "tool_call",
         id: "call_edit_1",
         tool: "edit",
         path: "two.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       },
       {
         type: "stop",
@@ -3156,8 +3152,7 @@ describe("DeepSeek Provider", () => {
         id: "call_edit_1",
         tool: "edit",
         path: "note.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       },
       {
         type: "stop",

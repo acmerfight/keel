@@ -8,10 +8,14 @@ import type {
 import { builtinTools } from "./builtin.ts";
 
 interface OpenAICompatibleToolParameter {
-  readonly type: "string" | "integer" | "object" | "boolean";
+  readonly type: "string" | "integer" | "object" | "boolean" | "array";
   readonly description?: string;
   readonly minimum?: number;
   readonly maximum?: number;
+  readonly items?: OpenAICompatibleToolParameter;
+  readonly properties?: Record<string, OpenAICompatibleToolParameter>;
+  readonly required?: readonly string[];
+  readonly additionalProperties?: false;
 }
 
 interface OpenAICompatibleToolParameters {
@@ -20,6 +24,10 @@ interface OpenAICompatibleToolParameters {
   readonly required: readonly string[];
   readonly additionalProperties: false;
 }
+
+type NormalizedArgumentValue =
+  | { readonly kind: "omit" }
+  | { readonly kind: "value"; readonly value: unknown };
 
 export interface OpenAICompatibleToolDefinition {
   readonly type: "function";
@@ -51,10 +59,6 @@ type ToolArgsOf<Tool> = Tool extends {
   ? z.infer<Schema>
   : never;
 
-export type ToolArgsFor<Name extends ToolName> = ToolArgsOf<
-  BuiltinToolForName<Name>
->;
-
 type ToolCallFor<Tool> = Tool extends unknown
   ? {
       readonly id: string;
@@ -65,6 +69,11 @@ type ToolCallFor<Tool> = Tool extends unknown
 export type ToolCall = {
   readonly [Tool in RegisteredBuiltinTool as Tool["name"]]: ToolCallFor<Tool>;
 }[ToolName];
+
+export interface ToolCallInput {
+  readonly id: string;
+  readonly tool: ToolName;
+}
 
 const builtinToolNames: ReadonlySet<string> = new Set(
   builtinTools.map((tool) => tool.name),
@@ -87,6 +96,7 @@ function builtinToolForName<Name extends ToolName>(
   const tool = builtinTools.find((candidate) =>
     isBuiltinToolForName(candidate, name),
   );
+  /* v8 ignore next 3: ToolName is derived from builtinTools. */
   if (tool !== undefined) {
     return tool;
   }
@@ -106,6 +116,93 @@ function toolArgField(
   return null;
 }
 
+function objectField(input: object, key: string): unknown {
+  for (const [name, value] of Object.entries(input)) {
+    if (name === key) return value;
+  }
+  return undefined;
+}
+
+function normalizeLegacyEditArguments(parsedArguments: object): object {
+  const path = objectField(parsedArguments, "path");
+  const oldString = objectField(parsedArguments, "oldString");
+  const newString = objectField(parsedArguments, "newString");
+  const replaceAll = objectField(parsedArguments, "replaceAll");
+  if (
+    typeof path !== "string" ||
+    typeof oldString !== "string" ||
+    typeof newString !== "string"
+  ) {
+    return parsedArguments;
+  }
+  if (
+    replaceAll !== undefined &&
+    replaceAll !== null &&
+    typeof replaceAll !== "boolean"
+  ) {
+    return parsedArguments;
+  }
+  return {
+    path,
+    edits: [
+      {
+        oldText: oldString,
+        newText: newString,
+        ...(typeof replaceAll === "boolean" ? { replaceAll } : {}),
+      },
+    ],
+  };
+}
+
+function normalizeArgumentValue(
+  field: ToolArgDefinition,
+  value: unknown,
+): NormalizedArgumentValue {
+  if (value === null && !field.required) {
+    return { kind: "omit" };
+  }
+
+  if (field.type === "array" && Array.isArray(value)) {
+    const itemDefinition = field.items;
+    return {
+      kind: "value",
+      value: value.map((item) => {
+        const normalizedItem = normalizeArgumentValue(itemDefinition, item);
+        /* v8 ignore next 3: current array item definitions are required; this protects future optional item schemas. */
+        return normalizedItem.kind === "omit"
+          ? undefined
+          : normalizedItem.value;
+      }),
+    };
+  }
+
+  if (
+    field.type === "object" &&
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  ) {
+    const normalized: Record<string, unknown> = {};
+    for (const [name, propertyValue] of Object.entries(value)) {
+      const property = field.properties[name];
+      if (property === undefined) {
+        normalized[name] = propertyValue;
+        continue;
+      }
+      const normalizedProperty = normalizeArgumentValue(
+        property,
+        propertyValue,
+      );
+      if (normalizedProperty.kind === "value") {
+        normalized[name] = normalizedProperty.value;
+      }
+    }
+    return { kind: "value", value: normalized };
+  }
+
+  return { kind: "value", value };
+}
+
 function normalizeParsedArguments(
   tool: RegisteredBuiltinTool,
   parsedArguments: unknown,
@@ -118,26 +215,73 @@ function normalizeParsedArguments(
     return parsedArguments;
   }
 
+  const toolNormalized =
+    toolArgField(tool, "path") !== null && toolArgField(tool, "edits") !== null
+      ? normalizeLegacyEditArguments(parsedArguments)
+      : parsedArguments;
+
   const normalized: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(parsedArguments)) {
+  for (const [name, value] of Object.entries(toolNormalized)) {
     const field = toolArgField(tool, name);
-    if (field !== null && !field.required && value === null) {
+    if (field === null) {
+      normalized[name] = value;
       continue;
     }
-    normalized[name] = value;
+    const normalizedValue = normalizeArgumentValue(field, value);
+    if (normalizedValue.kind === "value") {
+      normalized[name] = normalizedValue.value;
+    }
   }
   return normalized;
+}
+
+function rawToolCallArguments(
+  toolCall: ToolCallInput,
+): Record<string, unknown> {
+  const args: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(toolCall)) {
+    if (name !== "id" && name !== "tool") {
+      args[name] = value;
+    }
+  }
+  return args;
 }
 
 function toOpenAICompatibleToolParameter(
   field: ToolArgDefinition,
 ): OpenAICompatibleToolParameter {
-  return {
-    type: field.type,
-    description: field.description,
-    ...(field.minimum !== undefined ? { minimum: field.minimum } : {}),
-    ...(field.maximum !== undefined ? { maximum: field.maximum } : {}),
-  };
+  switch (field.type) {
+    case "string":
+    case "integer":
+    case "boolean":
+      return {
+        type: field.type,
+        description: field.description,
+        ...(field.minimum !== undefined ? { minimum: field.minimum } : {}),
+        ...(field.maximum !== undefined ? { maximum: field.maximum } : {}),
+      };
+    case "array":
+      return {
+        type: field.type,
+        description: field.description,
+        items: toOpenAICompatibleToolParameter(field.items),
+      };
+    case "object":
+      return {
+        type: field.type,
+        description: field.description,
+        properties: Object.fromEntries(
+          Object.entries(field.properties).map(([name, property]) => [
+            name,
+            toOpenAICompatibleToolParameter(property),
+          ]),
+        ),
+        required: Object.entries(field.properties)
+          .filter(([, property]) => property.required)
+          .map(([name]) => name),
+        additionalProperties: false,
+      };
+  }
 }
 
 function toOpenAICompatibleToolDefinition(
@@ -196,12 +340,26 @@ export function toolCallFromParsedArguments(
   return toolCall;
 }
 
+export function normalizeToolCall(toolCall: ToolCallInput): ToolCall | null {
+  return toolCallFromParsedArguments(
+    toolCall.id,
+    toolCall.tool,
+    rawToolCallArguments(toolCall),
+  );
+}
+
 export function executeBuiltinToolCall(
   context: BuiltinToolExecutionContext,
   toolCall: ToolCall,
 ): ToolExecution | Promise<ToolExecution> {
-  const tool = builtinToolForName(toolCall.tool);
-  return tool.executeCall(context, toolCall);
+  const normalizedToolCall =
+    toolCall.tool === "edit" ? normalizeToolCall(toolCall) : toolCall;
+  /* v8 ignore next 3: ToolCall values are registry-derived; this protects custom entrypoints that bypass parsing. */
+  if (normalizedToolCall === null) {
+    throw new Error(`Invalid builtin tool call for ${toolCall.tool}`);
+  }
+  const tool = builtinToolForName(normalizedToolCall.tool);
+  return tool.executeCall(context, normalizedToolCall);
 }
 
 export function toolCallConcurrency(toolCall: ToolCall): ToolConcurrency {

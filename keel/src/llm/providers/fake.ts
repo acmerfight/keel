@@ -1,4 +1,4 @@
-import type { ToolArgsFor, ToolName } from "../../tools/registry.ts";
+import type { ToolName } from "../../tools/registry.ts";
 import {
   toolCallArguments,
   toolCallFromParsedArguments,
@@ -38,7 +38,7 @@ export function fakeResponse(
 
 export function fakeToolResponse<Name extends ToolName>(
   tool: Name,
-  args: ToolArgsFor<Name>,
+  args: Record<string, unknown>,
   usage: Usage = ZERO_USAGE,
 ): FakeResponse {
   const toolCall = toolCallFromParsedArguments(

@@ -288,6 +288,10 @@ interface SessionReplayState {
   readonly pendingInputsById: Map<string, SessionQueuedInput>;
 }
 
+type ObjectValue =
+  | { readonly exists: false }
+  | { readonly exists: true; readonly value: unknown };
+
 interface SnapshotSearchResult {
   readonly index: number;
   readonly record: SnapshotSessionRecord;
@@ -908,17 +912,52 @@ function formatResumeSessionLoadError(error: unknown): string {
   return formatNestedSessionStoreError(error);
 }
 
-function toolCallArgumentsEqual(
-  left: Record<string, unknown>,
-  right: Record<string, unknown>,
-): boolean {
+function objectValue(input: object, key: string): ObjectValue {
+  for (const [name, value] of Object.entries(input)) {
+    if (name === key) {
+      return { exists: true, value };
+    }
+  }
+  /* v8 ignore next: same-tool canonical args share field names; this guards future schema drift. */
+  return { exists: false };
+}
+
+function stableValuesEqual(left: unknown, right: unknown): boolean {
+  if (
+    left === null ||
+    right === null ||
+    typeof left !== "object" ||
+    typeof right !== "object"
+  ) {
+    return left === right;
+  }
+
+  if (Array.isArray(left) || Array.isArray(right)) {
+    /* v8 ignore next 3: same-tool canonical args keep stable field types; this guards future schema drift. */
+    if (!Array.isArray(left) || !Array.isArray(right)) {
+      return false;
+    }
+    return (
+      left.length === right.length &&
+      left.every((item, index) => stableValuesEqual(item, right[index]))
+    );
+  }
+
   const leftEntries = Object.entries(left);
   if (leftEntries.length !== Object.keys(right).length) {
     return false;
   }
-  return leftEntries.every(
-    ([key, value]) => Object.hasOwn(right, key) && value === right[key],
-  );
+  return leftEntries.every(([key, value]) => {
+    const rightValue = objectValue(right, key);
+    return rightValue.exists && stableValuesEqual(value, rightValue.value);
+  });
+}
+
+function toolCallArgumentsEqual(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+): boolean {
+  return stableValuesEqual(left, right);
 }
 
 function toolCallsEqual(left: ToolCall, right: ToolCall): boolean {

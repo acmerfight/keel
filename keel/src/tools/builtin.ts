@@ -20,13 +20,31 @@ import {
 } from "./tool-arguments.ts";
 import { executeWrite } from "./write.ts";
 
-export interface ToolArgDefinition {
-  readonly type: "string" | "integer" | "boolean";
+interface ToolArgDefinitionBase {
   readonly description: string;
   readonly required: boolean;
+}
+
+interface ScalarToolArgDefinition extends ToolArgDefinitionBase {
+  readonly type: "string" | "integer" | "boolean";
   readonly minimum?: number;
   readonly maximum?: number;
 }
+
+interface ArrayToolArgDefinition extends ToolArgDefinitionBase {
+  readonly type: "array";
+  readonly items: ToolArgDefinition;
+}
+
+interface ObjectToolArgDefinition extends ToolArgDefinitionBase {
+  readonly type: "object";
+  readonly properties: Readonly<Record<string, ToolArgDefinition>>;
+}
+
+export type ToolArgDefinition =
+  | ScalarToolArgDefinition
+  | ArrayToolArgDefinition
+  | ObjectToolArgDefinition;
 
 type ToolArgShape = z.ZodRawShape;
 
@@ -167,6 +185,25 @@ function isToolArgValue(field: ToolArgDefinition, value: unknown): boolean {
       return typeof value === "number" && Number.isInteger(value);
     case "boolean":
       return typeof value === "boolean";
+    case "array":
+      if (!Array.isArray(value)) return false;
+      return value.every((item) => isToolArgValue(field.items, item));
+    case "object":
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return false;
+      }
+      for (const [propertyName, property] of Object.entries(field.properties)) {
+        const propertyValue = objectFieldValue(value, propertyName);
+        if (!propertyValue.exists) {
+          if (property.required) return false;
+          continue;
+        }
+        if (!isToolArgValue(property, propertyValue.value)) return false;
+      }
+      for (const propertyName of Object.keys(value)) {
+        if (field.properties[propertyName] === undefined) return false;
+      }
+      return true;
   }
 }
 
@@ -284,6 +321,30 @@ function booleanArg(options: ToolArgOptions): ToolArgDefinition {
     type: "boolean",
     description: options.description,
     required: options.required,
+  };
+}
+
+function arrayArg(
+  options: ToolArgOptions & { readonly items: ToolArgDefinition },
+): ToolArgDefinition {
+  return {
+    type: "array",
+    description: options.description,
+    required: options.required,
+    items: options.items,
+  };
+}
+
+function objectArg(
+  options: ToolArgOptions & {
+    readonly properties: Readonly<Record<string, ToolArgDefinition>>;
+  },
+): ToolArgDefinition {
+  return {
+    type: "object",
+    description: options.description,
+    required: options.required,
+    properties: options.properties,
   };
 }
 
@@ -458,31 +519,43 @@ const grepTool = defineTool({
 const editTool = defineTool({
   name: "edit",
   description: [
-    "Replace text in an existing workspace file. oldString should be copied from the current file content and identify one target unless replaceAll is true.",
+    "Replace text in an existing workspace file. Each edits[].oldText should be copied from the current file content and identify one target unless that edit's replaceAll is true.",
     "Use when: changing an existing file after read confirmed the exact target text.",
-    "Do not use when: creating a new file (use write), or when you have not read the file and would be guessing oldString from memory.",
-    "For single-target edits, Keel can correct harmless line-ending, trailing-space, smart-punctuation, and common-indentation differences while preserving unrelated file bytes.",
+    "When changing multiple separate locations in the same file, use one edit call with multiple entries in edits[]. Each edit is matched against the original file, not after earlier edits are applied.",
+    "Do not use when: creating a new file (use write), or when you have not read the file and would be guessing oldText from memory.",
+    "For non-replaceAll edits, Keel can correct harmless line-ending, trailing-space, smart-punctuation, and common-indentation differences while preserving unrelated file bytes.",
     "Large generated files, bundles, and logs may exceed the edit safety limit; inspect them with grep/read and use a targeted external command when appropriate.",
-    "On failure: if the string is not found, read the file and retry with the exact current text; if it appears more than once, include more surrounding lines in oldString to make it unique.",
+    "On failure: if the string is not found, read the file and retry with the exact current text; if it appears more than once, include more surrounding lines in oldText to make it unique.",
   ].join("\n"),
   args: toolArgs(editToolArgumentsSchema, {
     path: stringArg({
       required: true,
       description: "Workspace-relative file path to edit.",
     }),
-    oldString: stringArg({
+    edits: arrayArg({
       required: true,
       description:
-        "Text to replace. Copy it from read output; by default it must identify one target.",
-    }),
-    newString: stringArg({
-      required: true,
-      description: "Replacement text.",
-    }),
-    replaceAll: booleanArg({
-      required: false,
-      description:
-        "When true, replace every exact occurrence of oldString. Defaults to false, which requires oldString to identify one target.",
+        "One or more targeted replacements. Each oldText is matched against the original file content. Non-replaceAll edits must be unique and all matched regions must be non-overlapping.",
+      items: objectArg({
+        required: true,
+        description: "One targeted replacement inside the file.",
+        properties: {
+          oldText: stringArg({
+            required: true,
+            description:
+              "Text to replace. Copy it from read output; by default it must identify one target.",
+          }),
+          newText: stringArg({
+            required: true,
+            description: "Replacement text.",
+          }),
+          replaceAll: booleanArg({
+            required: false,
+            description:
+              "When true, replace every exact occurrence of oldText for this edit. Defaults to false, which requires oldText to identify one target.",
+          }),
+        },
+      }),
     }),
   }),
   permission: { kind: "none" },
@@ -496,18 +569,14 @@ const editTool = defineTool({
     reason: "May mutate workspace files.",
   },
   execute: ({ workspace, readBeforeEdit }, args) => {
-    const result = executeEdit(
-      workspace,
-      args.path,
-      args.oldString,
-      args.newString,
-      {
-        ...(args.replaceAll !== undefined
-          ? { replaceAll: args.replaceAll }
-          : {}),
-        ...(readBeforeEdit !== undefined ? { readBeforeEdit } : {}),
-      },
-    );
+    const edits = args.edits.map((edit) => ({
+      oldText: edit.oldText,
+      newText: edit.newText,
+      ...(edit.replaceAll !== undefined ? { replaceAll: edit.replaceAll } : {}),
+    }));
+    const result = executeEdit(workspace, args.path, edits, {
+      ...(readBeforeEdit !== undefined ? { readBeforeEdit } : {}),
+    });
     return {
       content: result.content,
       ok: true,

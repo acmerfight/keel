@@ -29,12 +29,18 @@ export const grepToolArgumentsSchema = z
   })
   .strict();
 
+const editReplacementArgumentsSchema = z
+  .object({
+    oldText: z.string(),
+    newText: z.string(),
+    replaceAll: z.boolean().optional(),
+  })
+  .strict();
+
 export const editToolArgumentsSchema = z
   .object({
     path: z.string(),
-    oldString: z.string(),
-    newString: z.string(),
-    replaceAll: z.boolean().optional(),
+    edits: z.array(editReplacementArgumentsSchema),
   })
   .strict();
 

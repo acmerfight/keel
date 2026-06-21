@@ -491,9 +491,7 @@ describe("Session Store", () => {
             id: "edit_all",
             tool: "edit",
             path: "src/index.ts",
-            oldString: "old",
-            newString: "new",
-            replaceAll: true,
+            edits: [{ oldText: "old", newText: "new", replaceAll: true }],
           },
           {
             id: "write_file",
@@ -566,8 +564,7 @@ describe("Session Store", () => {
             id: "edit_minimal",
             tool: "edit",
             path: "src/index.ts",
-            oldString: "old",
-            newString: "new",
+            edits: [{ oldText: "old", newText: "new" }],
           },
           { id: "bash_minimal", tool: "bash", command: "echo ok" },
         ],
@@ -669,6 +666,185 @@ describe("Session Store", () => {
         timestamp: "1970-01-01T00:00:00.003Z",
         reason: "turn",
         messages: [followUp],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a completed edit tool call is resumed from disk,
+    When the same structural transcript receives a follow-up message,
+    Then the store compares nested canonical arguments and appends only the new message`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const messages: readonly Message[] = [
+      { role: "user", content: "update settings" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "edit_settings",
+            tool: "edit",
+            path: "settings.ts",
+            edits: [
+              { oldText: "timeout = 1000", newText: "timeout = 2500" },
+              { oldText: "retries = 2", newText: "retries = 5" },
+            ],
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "edit_settings",
+        content: "Edited settings.ts",
+      },
+      { role: "assistant", content: "Updated settings.", toolCalls: [] },
+    ];
+    const followUp = { role: "user" as const, content: "thanks" };
+
+    try {
+      const session = createSessionStore({
+        sessionId: "edit-tool-prefix",
+        workspace,
+        runtime: runtime(home),
+      });
+      persistSessionMessages({
+        session,
+        previousMessages: [],
+        currentMessages: messages,
+        runtime: runtime(home, 1),
+        reason: "turn",
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "edit-tool-prefix",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // When
+      persistSessionMessages({
+        session: resumed,
+        previousMessages: resumed.messages,
+        currentMessages: [...messages, followUp],
+        runtime: runtime(home, 3),
+        reason: "turn",
+      });
+
+      // Then
+      const ledgerLines = (await readFile(resumed.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerLines).toHaveLength(3);
+      expect(ledgerLines[2]).toEqual({
+        schemaVersion: 1,
+        type: "append",
+        timestamp: "1970-01-01T00:00:00.003Z",
+        reason: "turn",
+        messages: [followUp],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a resumed edit tool call has different nested arguments,
+    When the changed transcript is persisted,
+    Then the store replaces the transcript instead of treating it as an append`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const persistedMessages: readonly Message[] = [
+      { role: "user", content: "update settings" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "edit_settings",
+            tool: "edit",
+            path: "settings.ts",
+            edits: [{ oldText: "timeout = 1000", newText: "timeout = 2500" }],
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "edit_settings",
+        content: "Edited settings.ts",
+      },
+    ];
+    const changedMessages: readonly Message[] = [
+      { role: "user", content: "update settings" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "edit_settings",
+            tool: "edit",
+            path: "settings.ts",
+            edits: [
+              {
+                oldText: "timeout = 1000",
+                newText: "timeout = 2500",
+                replaceAll: true,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "edit_settings",
+        content: "Edited settings.ts",
+      },
+    ];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "edit-tool-replace",
+        workspace,
+        runtime: runtime(home),
+      });
+      persistSessionMessages({
+        session,
+        previousMessages: [],
+        currentMessages: persistedMessages,
+        runtime: runtime(home, 1),
+        reason: "turn",
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "edit-tool-replace",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // When
+      persistSessionMessages({
+        session: resumed,
+        previousMessages: resumed.messages,
+        currentMessages: changedMessages,
+        runtime: runtime(home, 3),
+        reason: "turn",
+      });
+
+      // Then
+      const ledgerLines = (await readFile(resumed.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerLines).toHaveLength(3);
+      expect(ledgerLines[2]).toEqual({
+        schemaVersion: 1,
+        type: "replace",
+        timestamp: "1970-01-01T00:00:00.003Z",
+        reason: "turn",
+        messages: changedMessages,
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

@@ -457,6 +457,61 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given the assistant edits two locations in one file,
+    When the agent handles one multi-edit tool call,
+    Then both locations are updated on disk`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(
+      join(workspace, "settings.ts"),
+      "export const timeoutMs = 30000;\nexport const retryCount = 2;\n",
+      "utf8",
+    );
+    const provider = createFakeProvider([
+      fakeToolResponse("read", { path: "settings.ts" }),
+      fakeToolResponse("edit", {
+        path: "settings.ts",
+        edits: [
+          {
+            oldText: "export const timeoutMs = 30000;",
+            newText: "export const timeoutMs = 45000;",
+          },
+          {
+            oldText: "export const retryCount = 2;",
+            newText: "export const retryCount = 3;",
+          },
+        ],
+      }),
+      fakeResponse("Updated both settings."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "update timeout and retry count",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "settings.ts"), "utf8")).toBe(
+        "export const timeoutMs = 45000;\nexport const retryCount = 3;\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Updated both settings.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the assistant reads and edits the same file in one response,
     When the agent handles those tool calls,
     Then the edit is rejected because the read result was not visible yet`, async () => {
