@@ -1,23 +1,36 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
+import {
+  createGitWorkspace,
+  runGit as git,
+} from "../../src/testing/cli-harness.ts";
 
 type PathLike = Parameters<typeof import("node:fs").realpathSync>[0];
+type FsModule = typeof import("node:fs");
 
 interface FsOverrides {
   readonly lstatSync?: (
     path: PathLike,
   ) => ReturnType<typeof import("node:fs").lstatSync>;
+  readonly linkSync?: FsModule["linkSync"];
   readonly mkdirSync?: (path: PathLike) => void;
   readonly realpathSync?: (path: PathLike) => string;
-  readonly writeFileSync?: (
-    path: PathLike,
-    data: string,
-    options?: unknown,
-  ) => void;
+  readonly rmSync?: FsModule["rmSync"];
+  readonly writeFileSync?: FsModule["writeFileSync"];
 }
+
+const DEBUG_ENV_KEY = "KEEL_DEBUG";
 
 function errno(code: string): Error & { readonly code: string } {
   return Object.assign(new Error(code), { code });
@@ -51,6 +64,25 @@ async function withWriteWorkspace(
   }
 }
 
+async function checkpointPath(workspace: string): Promise<string> {
+  const result = await git(workspace, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "keel/last-edit-checkpoint.json",
+  ]);
+  return result.stdout.trim();
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function importWriteWithFs(
   overrides: FsOverrides,
 ): Promise<typeof import("../../src/tools/write.ts")> {
@@ -66,13 +98,20 @@ describe("Write Tool Race Handling", () => {
     vi.resetModules();
   });
 
-  test(`Given the target appears after write validation,
-    When the write tool reaches exclusive file creation,
-    Then it reports a recoverable file-exists error`, async () => {
+  test(`Given the target appears after temporary write content is durable,
+    When the write tool publishes the new file,
+    Then it reports a recoverable file-exists error and leaves the target unchanged`, async () => {
     await withWriteWorkspace(async (workspace) => {
       // Given
+      const targetPath = join(workspace, "race.txt");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
       const { executeWrite } = await importWriteWithFs({
-        writeFileSync: () => {
+        linkSync: (_existingPath, newPath) => {
+          actualFs.writeFileSync(newPath, "user content\n", {
+            encoding: "utf8",
+            flag: "wx",
+          });
           throw errno("EEXIST");
         },
       });
@@ -82,6 +121,10 @@ describe("Write Tool Race Handling", () => {
         () => executeWrite(workspace, "race.txt", "content\n"),
         "tool_file_exists",
         "file already exists",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe("user content\n");
+      expect(await readdir(workspace)).toEqual(
+        expect.not.arrayContaining([expect.stringContaining(".keel-write-")]),
       );
     });
   });
@@ -153,13 +196,97 @@ describe("Write Tool Race Handling", () => {
     });
   });
 
-  test(`Given exclusive file creation reports a parent path collision,
+  test(`Given the filesystem fails after writing partial bytes for a new file,
+    When the write tool cannot finish creation,
+    Then no final target, temp file, or create checkpoint remains`, async () => {
+    const workspace = await createGitWorkspace("keel-write-race-");
+    const targetPath = join(workspace, "partial.txt");
+    const checkpoint = await checkpointPath(workspace);
+
+    try {
+      // Given
+      const originalError = errno("EIO");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const { executeWrite } = await importWriteWithFs({
+        writeFileSync: (path, _data, options) => {
+          actualFs.writeFileSync(path, "partial", options);
+          throw originalError;
+        },
+      });
+
+      // When / Then
+      expect(() =>
+        executeWrite(workspace, "partial.txt", "complete\n"),
+      ).toThrow(originalError);
+      await expect(readFile(targetPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await pathExists(checkpoint)).toBe(false);
+      expect(await readdir(workspace)).toEqual(
+        expect.not.arrayContaining([expect.stringContaining(".keel-write-")]),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given debug logging is enabled and temp cleanup fails after create publish,
+    When the write tool finishes the create,
+    Then it reports cleanup metadata without failing or logging file contents`, async () => {
+    const workspace = await createGitWorkspace("keel-write-race-");
+    const targetPath = join(await realpath(workspace), "created.txt");
+    const previousDebug = process.env[DEBUG_ENV_KEY];
+    process.env[DEBUG_ENV_KEY] = "1";
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      // Given
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const { executeWrite } = await importWriteWithFs({
+        rmSync: (path, options) => {
+          if (String(path).includes(".keel-write-")) {
+            throw errno("EACCES");
+          }
+          return actualFs.rmSync(path, options);
+        },
+      });
+
+      // When
+      const result = executeWrite(workspace, "created.txt", "secret\n");
+
+      // Then
+      expect(result.content).toBe("Wrote created.txt");
+      expect(await readFile(targetPath, "utf8")).toBe("secret\n");
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining("write temp cleanup failed"),
+      );
+      const debugOutput = stderr.mock.calls
+        .map((call) => call.map(String).join(" "))
+        .join("\n");
+      expect(debugOutput).toContain(`targetPath=${targetPath}`);
+      expect(debugOutput).toContain(".keel-write-");
+      expect(debugOutput).toContain("error=");
+      expect(debugOutput).not.toContain("secret");
+    } finally {
+      stderr.mockRestore();
+      if (previousDebug === undefined) {
+        delete process.env[DEBUG_ENV_KEY];
+      } else {
+        process.env[DEBUG_ENV_KEY] = previousDebug;
+      }
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given publishing the created file reports a parent path collision,
     When the write tool normalizes the write failure,
     Then it reports a recoverable not-directory error`, async () => {
     await withWriteWorkspace(async (workspace) => {
       // Given
       const { executeWrite } = await importWriteWithFs({
-        writeFileSync: () => {
+        linkSync: () => {
           throw errno("ENOTDIR");
         },
       });

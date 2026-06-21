@@ -1,7 +1,8 @@
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { KeelError } from "../core/error.ts";
 import { recordLastCreateCheckpoint } from "../core/git.ts";
+import { createTextFileAtomically } from "./atomic-write.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
 import {
@@ -61,7 +62,7 @@ export function executeWrite(
   }
 
   try {
-    writeFileSync(targetPath, content, { encoding: "utf8", flag: "wx" });
+    createTextFileAtomically(targetPath, content);
   } catch (error) {
     if (isErrnoException(error) && error.code === "EEXIST") {
       throw new KeelError(
