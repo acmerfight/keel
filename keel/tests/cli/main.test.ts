@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -1981,8 +1982,8 @@ describe("CLI Main", () => {
   });
 
   test(`Given the user starts and resumes a named interactive session,
-    When a follow-up prompt is sent after process restart,
-    Then the provider receives the prior transcript as context`, async () => {
+    When follow-up prompts are sent after process restart,
+    Then the provider receives the prior transcript and persists queued input`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
     const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
@@ -2001,7 +2002,7 @@ describe("CLI Main", () => {
     try {
       const firstExitCode = await runCliMain(firstRun.runtime);
       const secondInput = new PassThrough();
-      secondInput.end("what did I ask you to remember?\n");
+      secondInput.end("what did I ask you to remember?\nremember beta\n");
       const secondRun = createRuntime(["--resume=demo"], {
         cwd: workspace,
         env: {
@@ -2019,9 +2020,97 @@ describe("CLI Main", () => {
       expect(firstExitCode).toBe(0);
       expect(firstRun.stdout()).toBe("Remembered: remember alpha\n");
       expect(secondExitCode).toBe(0);
-      expect(secondRun.stdout()).toBe("Earlier you said: remember alpha\n");
+      expect(secondRun.stdout()).toContain(
+        "Earlier you said: remember alpha\n",
+      );
+      expect(secondRun.stdout()).toContain("Remembered: remember beta\n");
       expect(firstRun.stderr()).toBe("");
       expect(secondRun.stderr()).toBe("");
+      const ledgerLines = (
+        await readFile(join(home, "sessions", "demo", "ledger.jsonl"), "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const admittedInput = ledgerLines.find(
+        (line) => line.type === "input_admitted",
+      );
+      expect(admittedInput).toMatchObject({
+        type: "input_admitted",
+        line: "remember beta",
+      });
+      const consumingAppend = ledgerLines.find((line) =>
+        Array.isArray(line.consumedInputIds),
+      );
+      expect(consumingAppend).toMatchObject({
+        type: "append",
+        consumedInputIds: [admittedInput.id],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named session has queued input from an interrupted process,
+    When the user resumes with no new stdin,
+    Then the queued input runs once and is marked consumed`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await mkdir(join(home, "sessions", "queued"), { recursive: true });
+    await writeFile(
+      join(home, "sessions", "queued", "ledger.jsonl"),
+      `${[
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "session",
+          id: "queued",
+          createdAt: "1970-01-01T00:00:00.000Z",
+          workspace: ledgerWorkspace,
+        }),
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "input_admitted",
+          timestamp: "1970-01-01T00:00:00.001Z",
+          id: "queued-input-1",
+          sequence: 2,
+          line: "remember queued",
+        }),
+      ].join("\n")}\n`,
+      "utf8",
+    );
+    const input = new PassThrough();
+    input.end();
+    const fixture = createRuntime(["--resume", "queued"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Remembered: remember queued\n");
+      expect(fixture.stderr()).toBe("");
+      const ledgerLines = (
+        await readFile(join(home, "sessions", "queued", "ledger.jsonl"), "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerLines[2]).toMatchObject({
+        type: "append",
+        consumedInputIds: ["queued-input-1"],
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -2058,7 +2147,25 @@ describe("CLI Main", () => {
         join(home, "sessions", "multi-turn", "ledger.jsonl"),
         "utf8",
       );
-      expect(ledger.trimEnd().split("\n")).toHaveLength(3);
+      const ledgerLines = ledger
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerLines).toHaveLength(4);
+      const admittedInput = ledgerLines.find(
+        (line) => line.type === "input_admitted",
+      );
+      expect(admittedInput).toMatchObject({
+        type: "input_admitted",
+        line: "what did I ask you to remember?",
+      });
+      const consumingAppend = ledgerLines.find((line) =>
+        Array.isArray(line.consumedInputIds),
+      );
+      expect(consumingAppend).toMatchObject({
+        type: "append",
+        consumedInputIds: [admittedInput.id],
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

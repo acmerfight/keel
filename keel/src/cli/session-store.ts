@@ -99,6 +99,8 @@ const sessionHeaderSchema = z
   })
   .strict();
 
+const consumedInputIdsSchema = z.array(z.string());
+
 const appendRecordSchema = z
   .object({
     schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
@@ -106,6 +108,7 @@ const appendRecordSchema = z
     timestamp: z.string(),
     reason: z.literal("turn"),
     messages: z.array(messageSchema),
+    consumedInputIds: consumedInputIdsSchema.optional(),
   })
   .strict();
 
@@ -116,6 +119,27 @@ const replaceRecordSchema = z
     timestamp: z.string(),
     reason: z.enum(["turn", "compaction"]),
     messages: z.array(messageSchema),
+    consumedInputIds: consumedInputIdsSchema.optional(),
+  })
+  .strict();
+
+const inputAdmittedRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("input_admitted"),
+    timestamp: z.string(),
+    id: z.string(),
+    sequence: z.number().int().nonnegative(),
+    line: z.string(),
+  })
+  .strict();
+
+const inputConsumedRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("input_consumed"),
+    timestamp: z.string(),
+    inputIds: consumedInputIdsSchema,
   })
   .strict();
 
@@ -136,6 +160,8 @@ const sessionLockOwnerSchema = z
 const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   appendRecordSchema,
   replaceRecordSchema,
+  inputAdmittedRecordSchema,
+  inputConsumedRecordSchema,
 ]);
 
 type RawMessage = z.infer<typeof messageSchema>;
@@ -157,6 +183,7 @@ interface AppendSessionRecord {
   readonly timestamp: string;
   readonly reason: "turn";
   readonly messages: readonly Message[];
+  readonly consumedInputIds?: readonly string[];
 }
 
 interface ReplaceSessionRecord {
@@ -165,9 +192,30 @@ interface ReplaceSessionRecord {
   readonly timestamp: string;
   readonly reason: "turn" | "compaction";
   readonly messages: readonly Message[];
+  readonly consumedInputIds?: readonly string[];
 }
 
-type SessionMutationRecord = AppendSessionRecord | ReplaceSessionRecord;
+interface InputAdmittedSessionRecord {
+  readonly schemaVersion: 1;
+  readonly type: "input_admitted";
+  readonly timestamp: string;
+  readonly id: string;
+  readonly sequence: number;
+  readonly line: string;
+}
+
+interface InputConsumedSessionRecord {
+  readonly schemaVersion: 1;
+  readonly type: "input_consumed";
+  readonly timestamp: string;
+  readonly inputIds: readonly string[];
+}
+
+type SessionMutationRecord =
+  | AppendSessionRecord
+  | ReplaceSessionRecord
+  | InputAdmittedSessionRecord
+  | InputConsumedSessionRecord;
 
 interface SessionRecords {
   readonly header: SessionHeaderRecord;
@@ -186,6 +234,14 @@ export interface SessionState {
   readonly filePath: string;
   readonly workspace: string;
   readonly messages: readonly Message[];
+  readonly pendingInputs: readonly SessionQueuedInput[];
+}
+
+export interface SessionQueuedInput {
+  readonly id: string;
+  readonly timestamp: string;
+  readonly sequence: number;
+  readonly line: string;
 }
 
 export interface SessionLock {
@@ -452,25 +508,65 @@ function toSessionHeaderRecord(
   };
 }
 
+function appendConsumedInputIds(
+  record: AppendSessionRecord,
+  inputIds: readonly string[] | undefined,
+): AppendSessionRecord;
+function appendConsumedInputIds(
+  record: ReplaceSessionRecord,
+  inputIds: readonly string[] | undefined,
+): ReplaceSessionRecord;
+function appendConsumedInputIds(
+  record: AppendSessionRecord | ReplaceSessionRecord,
+  inputIds: readonly string[] | undefined,
+): AppendSessionRecord | ReplaceSessionRecord {
+  if (inputIds === undefined) {
+    return record;
+  }
+  return { ...record, consumedInputIds: [...inputIds] };
+}
+
 function toSessionMutationRecord(
   record: RawSessionMutationRecord,
 ): SessionMutationRecord {
   switch (record.type) {
     case "append":
-      return {
-        schemaVersion: SESSION_SCHEMA_VERSION,
-        type: "append",
-        timestamp: record.timestamp,
-        reason: "turn",
-        messages: record.messages.map(toMessage),
-      };
+      return appendConsumedInputIds(
+        {
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          type: "append",
+          timestamp: record.timestamp,
+          reason: "turn",
+          messages: record.messages.map(toMessage),
+        },
+        record.consumedInputIds,
+      );
     case "replace":
+      return appendConsumedInputIds(
+        {
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          type: "replace",
+          timestamp: record.timestamp,
+          reason: record.reason,
+          messages: record.messages.map(toMessage),
+        },
+        record.consumedInputIds,
+      );
+    case "input_admitted":
       return {
         schemaVersion: SESSION_SCHEMA_VERSION,
-        type: "replace",
+        type: "input_admitted",
         timestamp: record.timestamp,
-        reason: record.reason,
-        messages: record.messages.map(toMessage),
+        id: record.id,
+        sequence: record.sequence,
+        line: record.line,
+      };
+    case "input_consumed":
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "input_consumed",
+        timestamp: record.timestamp,
+        inputIds: [...record.inputIds],
       };
   }
 }
@@ -648,6 +744,65 @@ function hasMessagePrefix(
   });
 }
 
+function uniqueInputIds(inputIds: readonly string[]): readonly string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const inputId of inputIds) {
+    if (seen.has(inputId)) {
+      continue;
+    }
+    seen.add(inputId);
+    unique.push(inputId);
+  }
+  return unique;
+}
+
+function pendingInputsInReplayOrder(
+  pendingInputsById: ReadonlyMap<string, SessionQueuedInput>,
+): readonly SessionQueuedInput[] {
+  return [...pendingInputsById.values()].sort((left, right) => {
+    const sequenceDelta = left.sequence - right.sequence;
+    if (sequenceDelta !== 0) {
+      return sequenceDelta;
+    }
+    const timestampDelta = left.timestamp.localeCompare(right.timestamp);
+    if (timestampDelta !== 0) {
+      return timestampDelta;
+    }
+    return left.id.localeCompare(right.id);
+  });
+}
+
+function consumeReplayInputs(
+  pendingInputsById: Map<string, SessionQueuedInput>,
+  consumedInputIds: readonly string[] | undefined,
+): void {
+  if (consumedInputIds === undefined) {
+    return;
+  }
+  for (const inputId of consumedInputIds) {
+    pendingInputsById.delete(inputId);
+  }
+}
+
+function sessionRecordWithConsumedInputIds(
+  record: AppendSessionRecord,
+  consumedInputIds: readonly string[],
+): AppendSessionRecord;
+function sessionRecordWithConsumedInputIds(
+  record: ReplaceSessionRecord,
+  consumedInputIds: readonly string[],
+): ReplaceSessionRecord;
+function sessionRecordWithConsumedInputIds(
+  record: AppendSessionRecord | ReplaceSessionRecord,
+  consumedInputIds: readonly string[],
+): AppendSessionRecord | ReplaceSessionRecord {
+  if (consumedInputIds.length === 0) {
+    return record;
+  }
+  return { ...record, consumedInputIds: [...consumedInputIds] };
+}
+
 function parseProviderVisibleMessages(
   sessionId: string,
   messages: readonly Message[],
@@ -723,6 +878,7 @@ export function createSessionStore(options: {
     filePath,
     workspace,
     messages: [],
+    pendingInputs: [],
   };
 }
 
@@ -755,13 +911,27 @@ export function resumeSessionStore(options: {
   }
 
   let messages: Message[] = [];
+  const pendingInputsById = new Map<string, SessionQueuedInput>();
   for (const record of records.mutations) {
     switch (record.type) {
       case "append":
         messages = [...messages, ...record.messages];
+        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         break;
       case "replace":
         messages = [...record.messages];
+        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
+        break;
+      case "input_admitted":
+        pendingInputsById.set(record.id, {
+          id: record.id,
+          timestamp: record.timestamp,
+          sequence: record.sequence,
+          line: record.line,
+        });
+        break;
+      case "input_consumed":
+        consumeReplayInputs(pendingInputsById, record.inputIds);
         break;
     }
   }
@@ -772,6 +942,7 @@ export function resumeSessionStore(options: {
     filePath,
     workspace: expectedWorkspace,
     messages,
+    pendingInputs: pendingInputsInReplayOrder(pendingInputsById),
   };
 }
 
@@ -781,6 +952,7 @@ export function persistSessionMessages(options: {
   readonly currentMessages: readonly Message[];
   readonly runtime: SessionStoreRuntime;
   readonly reason: SessionPersistenceReason;
+  readonly consumedInputIds?: readonly string[];
 }): readonly Message[] {
   const currentMessages = parseProviderVisibleMessages(
     options.session.id,
@@ -788,29 +960,89 @@ export function persistSessionMessages(options: {
     "persist",
   );
   validateCompletedTranscript(options.session.id, currentMessages, "persist");
+  const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
 
   if (messageArraysEqual(currentMessages, options.previousMessages)) {
+    if (consumedInputIds.length > 0) {
+      consumeSessionQueuedInputs({
+        session: options.session,
+        inputIds: consumedInputIds,
+        runtime: options.runtime,
+      });
+    }
     return [...options.previousMessages];
   }
 
   if (hasMessagePrefix(currentMessages, options.previousMessages)) {
     const messages = currentMessages.slice(options.previousMessages.length);
-    appendJsonLine(options.session.filePath, {
-      schemaVersion: SESSION_SCHEMA_VERSION,
-      type: "append",
-      timestamp: isoTimestamp(options.runtime),
-      reason: "turn",
-      messages,
-    });
+    appendJsonLine(
+      options.session.filePath,
+      sessionRecordWithConsumedInputIds(
+        {
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          type: "append",
+          timestamp: isoTimestamp(options.runtime),
+          reason: "turn",
+          messages,
+        },
+        consumedInputIds,
+      ),
+    );
     return [...currentMessages];
   }
 
+  appendJsonLine(
+    options.session.filePath,
+    sessionRecordWithConsumedInputIds(
+      {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "replace",
+        timestamp: isoTimestamp(options.runtime),
+        reason: options.reason,
+        messages: [...currentMessages],
+      },
+      consumedInputIds,
+    ),
+  );
+  return [...currentMessages];
+}
+
+export function persistSessionQueuedInput(options: {
+  readonly session: SessionState;
+  readonly sequence: number;
+  readonly line: string;
+  readonly runtime: SessionStoreRuntime;
+}): SessionQueuedInput {
+  const queuedInput = {
+    id: randomUUID(),
+    timestamp: isoTimestamp(options.runtime),
+    sequence: options.sequence,
+    line: options.line,
+  };
   appendJsonLine(options.session.filePath, {
     schemaVersion: SESSION_SCHEMA_VERSION,
-    type: "replace",
-    timestamp: isoTimestamp(options.runtime),
-    reason: options.reason,
-    messages: [...currentMessages],
+    type: "input_admitted",
+    timestamp: queuedInput.timestamp,
+    id: queuedInput.id,
+    sequence: queuedInput.sequence,
+    line: queuedInput.line,
   });
-  return [...currentMessages];
+  return queuedInput;
+}
+
+export function consumeSessionQueuedInputs(options: {
+  readonly session: SessionState;
+  readonly inputIds: readonly string[];
+  readonly runtime: SessionStoreRuntime;
+}): void {
+  const inputIds = uniqueInputIds(options.inputIds);
+  if (inputIds.length === 0) {
+    return;
+  }
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "input_consumed",
+    timestamp: isoTimestamp(options.runtime),
+    inputIds,
+  });
 }

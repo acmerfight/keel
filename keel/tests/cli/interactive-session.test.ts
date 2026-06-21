@@ -2,9 +2,17 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { setImmediate } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runInteractiveSession } from "../../src/cli/interactive-session.ts";
+import {
+  createSessionStore,
+  persistSessionMessages,
+  persistSessionQueuedInput,
+  resumeSessionStore,
+  type SessionQueuedInput,
+} from "../../src/cli/session-store.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import {
   createFakeProvider,
@@ -254,6 +262,330 @@ describe("Interactive Session", () => {
     expect(providerCalls).toBe(1);
     expect(stderr).toBe("Cost: 2.00 exceeded=true\n");
     expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given a named session resumes with queued input from an interrupted run,
+    When stdin closes before new input arrives,
+    Then the queued input runs once and is consumed with the persisted turn`, async () => {
+    // Given
+    const pendingInput: SessionQueuedInput = {
+      id: "queued-follow-up",
+      timestamp: "1970-01-01T00:00:00.001Z",
+      sequence: 7,
+      line: "continue with beta",
+    };
+    const observedUserContexts: string[][] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        observedUserContexts.push(
+          options.messages
+            .filter((message) => message.role === "user")
+            .map((message) => message.content),
+        );
+        yield { type: "text", text: "Queued turn done." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const consumedInputIds: string[][] = [];
+    let persistedMessages: readonly Message[] = [];
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialQueuedInputs: [pendingInput],
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionMessages: (messages, _reason, inputIds) => {
+        persistedMessages = [...messages];
+        consumedInputIds.push([...inputIds]);
+      },
+    });
+    input.end();
+
+    // When / Then
+    await withTimeout(session, 5000, "resumed queued input was not processed");
+    expect(stdout).toBe("Queued turn done.\n");
+    expect(observedUserContexts).toEqual([["continue with beta"]]);
+    expect(consumedInputIds).toEqual([["queued-follow-up"]]);
+    expect(persistedMessages).toEqual([
+      { role: "user", content: "continue with beta" },
+      { role: "assistant", content: "Queued turn done.", toolCalls: [] },
+    ]);
+  });
+
+  test(`Given a named session resumes with blank queued input,
+    When stdin closes before new input arrives,
+    Then the blank input is consumed without starting a model turn`, async () => {
+    // Given
+    const pendingInput: SessionQueuedInput = {
+      id: "blank-queued-input",
+      timestamp: "1970-01-01T00:00:00.001Z",
+      sequence: 8,
+      line: "   ",
+    };
+    const consumedInputIds: string[][] = [];
+    const input = new PassThrough();
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialQueuedInputs: [pendingInput],
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        throw new Error("blank queued input should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => undefined,
+      formatCostReport: () => "",
+      consumeQueuedInputs: (inputIds) => {
+        consumedInputIds.push([...inputIds]);
+      },
+    });
+    input.end();
+
+    // When
+    await withTimeout(session, 5000, "blank queued input was not consumed");
+
+    // Then
+    expect(consumedInputIds).toEqual([["blank-queued-input"]]);
+  });
+
+  test(`Given a queued prompt is typed while a named session turn is running,
+    When the process stops before the turn transcript is persisted,
+    Then the queued prompt is durable and resumes exactly once`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-inbox-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    let now = 0;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? home : undefined),
+      now: () => now,
+    };
+    const session = createSessionStore({
+      sessionId: "durable-inbox",
+      workspace,
+      runtime,
+    });
+    let persistedMessages: readonly Message[] = session.messages;
+    const crash = new Error("simulated process stop");
+    const firstProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        yield {
+          type: "tool_call",
+          id: "durable_inbox_read",
+          tool: "read",
+          path: "package.json",
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const firstInput = new PassThrough();
+    const firstRun = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      initialMessages: session.messages,
+      initialQueuedInputs: session.pendingInputs,
+      input: firstInput,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider: firstProvider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        for await (const event of stream) {
+          if (event.type === "tool_start") {
+            now = 1;
+            firstInput.write("continue after restart\n");
+            await setImmediate();
+            firstInput.end();
+            throw crash;
+          }
+        }
+        return undefined;
+      },
+      formatCostReport: () => "",
+      persistQueuedInput: (input) =>
+        persistSessionQueuedInput({
+          session,
+          sequence: input.sequence,
+          line: input.line,
+          runtime,
+        }),
+      persistSessionMessages: (messages, reason, consumedInputIds) => {
+        now = 2;
+        persistedMessages = persistSessionMessages({
+          session,
+          previousMessages: persistedMessages,
+          currentMessages: messages,
+          runtime,
+          reason,
+          consumedInputIds,
+        });
+      },
+    });
+
+    try {
+      firstInput.write("start slow tool\n");
+      await expect(firstRun).rejects.toThrow("simulated process stop");
+
+      const ledgerAfterCrash = (await readFile(session.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerAfterCrash).toHaveLength(2);
+      expect(ledgerAfterCrash[1]).toMatchObject({
+        type: "input_admitted",
+        line: "continue after restart",
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "durable-inbox",
+        workspace,
+        runtime,
+      });
+      expect(resumed.messages).toEqual([]);
+      expect(resumed.pendingInputs).toHaveLength(1);
+
+      const observedUserContexts: string[][] = [];
+      const secondProvider: LLMProvider = {
+        id: "fake",
+        async *stream(options) {
+          observedUserContexts.push(
+            options.messages
+              .filter((message) => message.role === "user")
+              .map((message) => message.content),
+          );
+          yield { type: "text", text: "Recovered queued prompt." };
+          yield { type: "stop", usage: ZERO_USAGE };
+        },
+      };
+      const secondInput = new PassThrough();
+      let resumedPersistedMessages: readonly Message[] = resumed.messages;
+      const secondRun = runInteractiveSession({
+        cliArgs: { bashMode: "disabled" },
+        workspace,
+        platform: process.platform,
+        initialMessages: resumed.messages,
+        initialQueuedInputs: resumed.pendingInputs,
+        input: secondInput,
+        writeStdout: () => {},
+        writeStderr: () => {},
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => ({
+          provider: secondProvider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        }),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async (stream) => {
+          let finalEnd:
+            | Extract<AgentEvent, { readonly type: "end" }>
+            | undefined;
+          for await (const event of stream) {
+            if (event.type === "end") {
+              finalEnd = event;
+            }
+          }
+          return finalEnd;
+        },
+        formatCostReport: () => "",
+        persistSessionMessages: (messages, reason, consumedInputIds) => {
+          now = 3;
+          resumedPersistedMessages = persistSessionMessages({
+            session: resumed,
+            previousMessages: resumedPersistedMessages,
+            currentMessages: messages,
+            runtime,
+            reason,
+            consumedInputIds,
+          });
+        },
+      });
+      secondInput.end();
+
+      // When
+      await withTimeout(
+        secondRun,
+        5000,
+        "durable queued prompt was not resumed",
+      );
+      const finalResume = resumeSessionStore({
+        sessionId: "durable-inbox",
+        workspace,
+        runtime,
+      });
+
+      // Then
+      expect(observedUserContexts).toEqual([["continue after restart"]]);
+      expect(finalResume.pendingInputs).toEqual([]);
+      expect(finalResume.messages).toEqual([
+        { role: "user", content: "continue after restart" },
+        {
+          role: "assistant",
+          content: "Recovered queued prompt.",
+          toolCalls: [],
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given an interactive report is requested but no end event is returned,
