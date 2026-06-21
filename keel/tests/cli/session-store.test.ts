@@ -5,6 +5,7 @@ import {
   readFile,
   realpath,
   rm,
+  truncate,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1447,6 +1448,89 @@ describe("Session Store", () => {
           runtime: runtime(home),
         }),
       ).toThrow(SessionStoreError);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the session ledger path cannot be inspected,
+    When the session is resumed,
+    Then the store fails closed before reading ledger bytes`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    await mkdir(join(home, "sessions"), { recursive: true });
+    await writeFile(join(home, "sessions", "blocked"), "not a directory");
+
+    try {
+      // When
+      let resumeError: unknown;
+      try {
+        resumeSessionStore({
+          sessionId: "blocked",
+          workspace,
+          runtime: runtime(home),
+        });
+      } catch (error) {
+        resumeError = error;
+      }
+
+      // Then
+      expect(resumeError).toBeInstanceOf(SessionStoreError);
+      if (!(resumeError instanceof Error)) {
+        throw new Error("Expected resume to throw an Error");
+      }
+      expect(resumeError.message).toContain(
+        'Error: cannot resume session "blocked": cannot inspect session ledger',
+      );
+      expect(resumeError.message).not.toContain("cannot read session ledger");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a persisted session ledger is larger than the resume cap,
+    When the session is resumed,
+    Then the store reports recovery guidance before parsing JSONL records`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const ledgerPath = join(home, "sessions", "huge", "ledger.jsonl");
+    await mkdir(join(home, "sessions", "huge"), { recursive: true });
+    await writeFile(
+      ledgerPath,
+      `${headerLine("huge", workspace)}\n{not-json`,
+      "utf8",
+    );
+    await truncate(ledgerPath, 32 * 1024 * 1024 + 1);
+
+    try {
+      // When
+      let resumeError: unknown;
+      try {
+        resumeSessionStore({
+          sessionId: "huge",
+          workspace,
+          runtime: runtime(home),
+        });
+      } catch (error) {
+        resumeError = error;
+      }
+
+      // Then
+      expect(resumeError).toBeInstanceOf(SessionStoreError);
+      if (!(resumeError instanceof Error)) {
+        throw new Error("Expected resume to throw an Error");
+      }
+      expect(resumeError.message).toContain(
+        'Error: cannot resume session "huge": cannot load session ledger',
+      );
+      expect(resumeError.message).toContain(
+        "ledger is too large to resume safely",
+      );
+      expect(resumeError.message).not.toContain("not valid JSON");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
