@@ -13,6 +13,9 @@ export interface ExecuteToolCallOptions {
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
   readonly bashPermission?: BashPermissionPolicy;
+  readonly readBeforeEdit?: {
+    readonly hasRead: (targetPath: string) => boolean;
+  };
 }
 
 export type { ToolExecution } from "./builtin.ts";

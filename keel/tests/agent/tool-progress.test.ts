@@ -37,6 +37,7 @@ describe("Tool Progress", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
     const provider = createFakeProvider([
+      fakeToolResponse("read", { path: "note.txt" }),
       fakeToolResponse("edit", {
         path: "note.txt",
         oldString: "old",

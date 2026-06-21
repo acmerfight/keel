@@ -21,6 +21,10 @@ export interface ReadOptions {
   readonly limit?: number | undefined;
 }
 
+interface ReadToolResult extends ToolResult {
+  readonly targetPath: string;
+}
+
 interface NormalizedReadOptions {
   readonly offset: number;
   readonly limit: number;
@@ -272,7 +276,7 @@ export function executeRead(
   workspace: string,
   filePath: string,
   options: ReadOptions = {},
-): ToolResult {
+): ReadToolResult {
   const { workspacePath, requestedPath, targetPath } = resolveWorkspaceTarget(
     workspace,
     filePath,
@@ -308,7 +312,10 @@ export function executeRead(
       throw binaryFileError("read", filePath);
     }
 
-    return { content: readTextWindow(fd, filePath, normalizedOptions) };
+    return {
+      content: readTextWindow(fd, filePath, normalizedOptions),
+      targetPath,
+    };
   } finally {
     closeSync(fd);
   }

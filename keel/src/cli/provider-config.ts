@@ -242,6 +242,25 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
       if (turn === 1) {
         yield {
           type: "tool_call",
+          id: "fake_read_before_edit",
+          tool: "read",
+          path: edit.path,
+        };
+        yield { type: "stop", usage: ZERO_USAGE };
+        return;
+      }
+
+      const toolContent = options.messages.findLast(
+        (m) => m.role === "tool",
+      )?.content;
+      if (turn === 2) {
+        if (toolContent?.startsWith("Tool failed:")) {
+          yield { type: "text", text: toolContent };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield {
+          type: "tool_call",
           id: "fake_edit",
           tool: "edit",
           path: edit.path,
@@ -252,9 +271,6 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
         return;
       }
 
-      const toolContent = options.messages.findLast(
-        (m) => m.role === "tool",
-      )?.content;
       const reply = toolContent?.startsWith("Tool failed:")
         ? toolContent
         : `Edited ${edit.path}`;
