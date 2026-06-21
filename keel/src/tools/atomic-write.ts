@@ -2,12 +2,14 @@ import {
   closeSync,
   fchmodSync,
   fsyncSync,
+  linkSync,
   openSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { debugLog } from "../core/logger.ts";
 
 export interface AtomicWriteTextFileOptions {
   readonly mode: number;
@@ -67,4 +69,42 @@ export function writeTextFileAtomically(
     rmSync(tempPath, { force: true });
     throw error;
   }
+}
+
+export function createTextFileAtomically(
+  targetPath: string,
+  content: string,
+): void {
+  const parentPath = dirname(targetPath);
+  const tempPath = join(
+    parentPath,
+    `.keel-write-${process.pid}-${Date.now()}-${crypto.randomUUID()}.tmp`,
+  );
+
+  let fd: number | null = null;
+  try {
+    fd = openSync(tempPath, "wx", 0o666);
+    writeFileSync(fd, content, "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
+    // Hard-link publish preserves no-clobber create semantics; rename would
+    // atomically replace an existing target.
+    linkSync(tempPath, targetPath);
+  } catch (error) {
+    if (fd !== null) {
+      closeSync(fd);
+    }
+    rmSync(tempPath, { force: true });
+    throw error;
+  }
+
+  try {
+    rmSync(tempPath, { force: true });
+  } catch (error) {
+    debugLog(
+      `write temp cleanup failed: targetPath=${targetPath} tempPath=${tempPath} error=${String(error)}`,
+    );
+  }
+  syncDirectoryBestEffort(parentPath);
 }
