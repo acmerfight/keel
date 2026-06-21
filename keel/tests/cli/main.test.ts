@@ -6,6 +6,7 @@ import {
   realpath,
   rm,
   symlink,
+  truncate,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -2260,6 +2261,61 @@ describe("CLI Main", () => {
       expect(fixture.stderr()).toContain(
         'Error: cannot resume session "broken"',
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user resumes a session ledger larger than the resume cap,
+    When the CLI main starts,
+    Then it reports recovery guidance before parsing the ledger`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const ledgerPath = join(home, "sessions", "huge", "ledger.jsonl");
+    await mkdir(join(home, "sessions", "huge"), { recursive: true });
+    await writeFile(
+      ledgerPath,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        type: "session",
+        id: "huge",
+        createdAt: "1970-01-01T00:00:00.000Z",
+        workspace,
+      })}\n{not-json`,
+      "utf8",
+    );
+    await truncate(ledgerPath, 32 * 1024 * 1024 + 1);
+    const input = new PassThrough();
+    input.end("this should not run\n");
+    const fixture = createRuntime(["--resume", "huge"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain(
+        `Error: cannot resume session "huge": cannot load session ledger ${ledgerPath}: ledger is too large to resume safely`,
+      );
+      expect(fixture.stderr()).toContain(
+        "33,554,433 bytes; limit 33,554,432 bytes",
+      );
+      expect(fixture.stderr()).toContain(
+        "Start a new session with --session <new-id>",
+      );
+      expect(fixture.stderr()).not.toContain("not valid JSON");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
