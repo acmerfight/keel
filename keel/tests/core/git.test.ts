@@ -16,6 +16,7 @@ import {
   recordLastBatchCheckpoint,
   recordLastCreateCheckpoint,
   recordLastEditCheckpoint,
+  recordLastTaskCheckpoint,
   restoreLastEditCheckpoint,
 } from "../../src/core/git.ts";
 import {
@@ -65,6 +66,28 @@ describe("Git Checkpoints", () => {
 
       // Then
       expect(record).toEqual({ written: false });
+      expect(restore).toEqual({ status: "none", message: "Nothing to undo." });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a task checkpoint has no operations,
+    When recording the checkpoint,
+    Then no checkpoint is written`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-empty-task-");
+
+    try {
+      // When
+      const result = recordLastTaskCheckpoint({
+        workspace,
+        operations: [],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toEqual({ written: false });
       expect(restore).toEqual({ status: "none", message: "Nothing to undo." });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -151,6 +174,89 @@ describe("Git Checkpoints", () => {
       expect(await readFile(firstPath, "utf8")).toBe("first old\n");
       expect(await readFile(secondPath, "utf8")).toBe("second old\n");
       await expect(readFile(createdPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one task edits the same file twice,
+    When the task checkpoint is restored,
+    Then the file returns to its original content`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-task-edit-");
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "final\n", "utf8");
+
+    try {
+      // When
+      const record = recordLastTaskCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath,
+            beforeContent: "old\n",
+            afterContent: "middle\n",
+          },
+          {
+            operation: "edit",
+            filePath,
+            beforeContent: "middle\n",
+            afterContent: "final\n",
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        filePath: "note.txt",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one task creates and then edits the same file,
+    When the task checkpoint is restored,
+    Then the file is removed`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-task-create-");
+    const filePath = join(workspace, "created.txt");
+    await writeFile(filePath, "final\n", "utf8");
+
+    try {
+      // When
+      const record = recordLastTaskCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "create",
+            filePath,
+            afterContent: "initial\n",
+          },
+          {
+            operation: "edit",
+            filePath,
+            beforeContent: "initial\n",
+            afterContent: "final\n",
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        filePath: "created.txt",
+      });
+      await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
         code: "ENOENT",
       });
     } finally {

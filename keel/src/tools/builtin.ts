@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { RecordLastBatchCheckpointOperation } from "../core/git.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeApplyPatch } from "./apply-patch.ts";
 import { executeBash } from "./bash.ts";
@@ -86,6 +87,7 @@ export interface ToolExecution {
   readonly readTargetPath?: string;
   readonly mutatedTargetPath?: string;
   readonly mutatedTargetPaths?: readonly string[];
+  readonly checkpointOperations?: readonly RecordLastBatchCheckpointOperation[];
 }
 
 type BuiltinToolExecution<Args> = (
@@ -510,6 +512,7 @@ const editTool = defineTool({
       content: result.content,
       ok: true,
       mutatedTargetPath: result.targetPath,
+      checkpointOperations: [result.checkpointOperation],
     };
   },
 });
@@ -544,7 +547,12 @@ const writeTool = defineTool({
   },
   execute: ({ workspace }, args) => {
     const result = executeWrite(workspace, args.path, args.content);
-    return { content: result.content, ok: true };
+    return {
+      content: result.content,
+      ok: true,
+      mutatedTargetPath: result.targetPath,
+      checkpointOperations: [result.checkpointOperation],
+    };
   },
 });
 
@@ -582,6 +590,7 @@ const applyPatchTool = defineTool({
       content: result.content,
       ok: true,
       mutatedTargetPaths: result.targetPaths,
+      checkpointOperations: result.checkpointOperations,
     };
   },
 });
