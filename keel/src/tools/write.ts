@@ -1,7 +1,10 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { KeelError } from "../core/error.ts";
-import { recordLastCreateCheckpoint } from "../core/git.ts";
+import {
+  type RecordLastBatchCheckpointOperation,
+  recordLastCreateCheckpoint,
+} from "../core/git.ts";
 import { createTextFileAtomically } from "./atomic-write.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
@@ -9,6 +12,11 @@ import {
   isInsideWorkspace,
   resolveWorkspaceCreateTarget,
 } from "./workspace-path.ts";
+
+interface WriteToolResult extends ToolResult {
+  readonly targetPath: string;
+  readonly checkpointOperation: RecordLastBatchCheckpointOperation;
+}
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
@@ -26,7 +34,7 @@ export function executeWrite(
   workspace: string,
   filePath: string,
   content: string,
-): ToolResult {
+): WriteToolResult {
   const { workspacePath, targetPath, parentPath } =
     resolveWorkspaceCreateTarget(workspace, filePath, "write");
 
@@ -81,11 +89,20 @@ export function executeWrite(
     throw error;
   }
 
+  const createdPath = realpathSync(targetPath);
   recordLastCreateCheckpoint({
     workspace: workspacePath,
-    filePath: targetPath,
+    filePath: createdPath,
     afterContent: content,
   });
 
-  return { content: `Wrote ${filePath}` };
+  return {
+    content: `Wrote ${filePath}`,
+    targetPath: createdPath,
+    checkpointOperation: {
+      operation: "create",
+      filePath: createdPath,
+      afterContent: content,
+    },
+  };
 }

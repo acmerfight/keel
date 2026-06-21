@@ -33,6 +33,7 @@ interface ExecuteApplyPatchOptions {
 
 interface ApplyPatchToolResult extends ToolResult {
   readonly targetPaths: readonly string[];
+  readonly checkpointOperations: readonly RecordLastBatchCheckpointOperation[];
 }
 
 type ParsedPatchOperation =
@@ -666,7 +667,7 @@ function checkpointOperationFor(
   if (operation.kind === "add") {
     return {
       operation: "create",
-      filePath: operation.targetPath,
+      filePath: realpathSync(operation.targetPath),
       afterContent: operation.afterContent,
     };
   }
@@ -700,13 +701,15 @@ export function executeApplyPatch(
     throw error;
   }
 
+  const checkpointOperations = prepared.map(checkpointOperationFor);
   recordLastBatchCheckpoint({
     workspace,
-    operations: prepared.map(checkpointOperationFor),
+    operations: checkpointOperations,
   });
 
   return {
     content: ["Applied patch:", ...prepared.map(summaryLine)].join("\n"),
     targetPaths: prepared.map((operation) => operation.targetPath),
+    checkpointOperations,
   };
 }

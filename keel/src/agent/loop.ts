@@ -1,5 +1,9 @@
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
 import { KeelError } from "../core/error.ts";
+import {
+  type RecordLastBatchCheckpointOperation,
+  recordLastTaskCheckpoint,
+} from "../core/git.ts";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
@@ -102,6 +106,9 @@ export interface RunAgentTurnOptions {
   readonly bashPermission?: BashPermissionPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly readVisibility?: ReadVisibilityState;
+  readonly recordCheckpointOperations?: (
+    operations: readonly RecordLastBatchCheckpointOperation[],
+  ) => void;
   readonly drainInjectedUserMessages?: () =>
     | readonly InjectedUserMessage[]
     | Promise<readonly InjectedUserMessage[]>;
@@ -704,6 +711,13 @@ export async function* runAgentTurn(
       toolCall: ToolCall,
       execution: ToolExecution,
     ): void => {
+      if (
+        execution.ok &&
+        execution.checkpointOperations !== undefined &&
+        execution.checkpointOperations.length > 0
+      ) {
+        options.recordCheckpointOperations?.(execution.checkpointOperations);
+      }
       applySessionLedger(
         appendSessionLedgerMessage(sessionLedger, {
           role: "tool",
@@ -762,23 +776,36 @@ export async function* runAgent(
 ): AsyncGenerator<AgentEvent> {
   const messages: Message[] = [{ role: "user", content: options.userMessage }];
   const readVisibility = createReadVisibilityState();
-  yield* runAgentTurn({
-    workspace: options.workspace,
-    provider: options.provider,
-    messages,
-    systemPrompt: options.systemPrompt,
-    signal: options.signal,
-    allowBash: options.allowBash,
-    stopPolicy: options.stopPolicy,
-    readVisibility,
-    ...(options.costTracking !== undefined
-      ? { costTracking: options.costTracking }
-      : {}),
-    ...(options.bashPermission !== undefined
-      ? { bashPermission: options.bashPermission }
-      : {}),
-    ...(options.contextCompaction !== undefined
-      ? { contextCompaction: options.contextCompaction }
-      : {}),
-  });
+  const checkpointOperations: RecordLastBatchCheckpointOperation[] = [];
+  try {
+    yield* runAgentTurn({
+      workspace: options.workspace,
+      provider: options.provider,
+      messages,
+      systemPrompt: options.systemPrompt,
+      signal: options.signal,
+      allowBash: options.allowBash,
+      stopPolicy: options.stopPolicy,
+      readVisibility,
+      recordCheckpointOperations: (operations) => {
+        checkpointOperations.push(...operations);
+      },
+      ...(options.costTracking !== undefined
+        ? { costTracking: options.costTracking }
+        : {}),
+      ...(options.bashPermission !== undefined
+        ? { bashPermission: options.bashPermission }
+        : {}),
+      ...(options.contextCompaction !== undefined
+        ? { contextCompaction: options.contextCompaction }
+        : {}),
+    });
+  } finally {
+    if (checkpointOperations.length > 1) {
+      recordLastTaskCheckpoint({
+        workspace: options.workspace,
+        operations: checkpointOperations,
+      });
+    }
+  }
 }
