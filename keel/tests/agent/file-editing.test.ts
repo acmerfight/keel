@@ -1,4 +1,5 @@
 import {
+  mkdir,
   mkdtemp,
   readFile,
   realpath,
@@ -16,12 +17,14 @@ import {
   runAgentTurn,
 } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
+import { restoreLastEditCheckpoint } from "../../src/core/git.ts";
 import {
   createFakeProvider,
   fakeResponse,
   fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../src/llm/types.ts";
+import { createGitWorkspace } from "../../src/testing/cli-harness.ts";
 
 async function collect(
   source: AsyncIterable<AgentEvent>,
@@ -3565,6 +3568,117 @@ describe("File Editing", () => {
         text: "Fixed both files.",
       });
       expect(events.filter((e) => e.type === "end")).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a task edits two files before the provider fails,
+    When the user restores the last checkpoint,
+    Then both completed edits are undone together`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-edit-failed-task-");
+    await writeFile(join(workspace, "a.txt"), "alpha old\n", "utf8");
+    await writeFile(join(workspace, "b.txt"), "beta old\n", "utf8");
+    const provider = createFakeProvider([
+      fakeToolResponse("read", { path: "a.txt" }),
+      fakeToolResponse("edit", {
+        path: "a.txt",
+        oldString: "old",
+        newString: "new",
+      }),
+      fakeToolResponse("read", { path: "b.txt" }),
+      fakeToolResponse("edit", {
+        path: "b.txt",
+        oldString: "old",
+        newString: "new",
+      }),
+    ]);
+
+    try {
+      // When
+      await expect(
+        collect(
+          runAgent({
+            workspace,
+            provider,
+            userMessage: "update both files",
+            systemPrompt: "You are a helpful assistant.",
+            signal: freshSignal(),
+            allowBash: false,
+            stopPolicy: defaultStopPolicy(),
+          }),
+        ),
+      ).rejects.toThrow("fake provider: script exhausted");
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        filePath: "2 files",
+      });
+      expect(await readFile(join(workspace, "a.txt"), "utf8")).toBe(
+        "alpha old\n",
+      );
+      expect(await readFile(join(workspace, "b.txt"), "utf8")).toBe(
+        "beta old\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a task creates through a symlink and edits through the real path,
+    When the user restores the last checkpoint,
+    Then the created file is removed as one task change`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-edit-symlink-task-");
+    await mkdir(join(workspace, "real"));
+    await symlink("real", join(workspace, "link"));
+    const provider = createFakeProvider([
+      fakeToolResponse("apply_patch", {
+        patch: [
+          "*** Begin Patch",
+          "*** Add File: link/note.txt",
+          "+initial",
+          "*** End Patch",
+        ].join("\n"),
+      }),
+      fakeToolResponse("read", { path: "real/note.txt" }),
+      fakeToolResponse("edit", {
+        path: "real/note.txt",
+        oldString: "initial",
+        newString: "final",
+      }),
+    ]);
+
+    try {
+      // When
+      await expect(
+        collect(
+          runAgent({
+            workspace,
+            provider,
+            userMessage: "create then update the file",
+            systemPrompt: "You are a helpful assistant.",
+            signal: freshSignal(),
+            allowBash: false,
+            stopPolicy: defaultStopPolicy(),
+          }),
+        ),
+      ).rejects.toThrow("fake provider: script exhausted");
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        filePath: "real/note.txt",
+      });
+      await expect(
+        readFile(join(workspace, "real", "note.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

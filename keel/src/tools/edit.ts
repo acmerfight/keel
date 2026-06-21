@@ -1,6 +1,9 @@
 import { statSync } from "node:fs";
 import { KeelError } from "../core/error.ts";
-import { recordLastEditCheckpoint } from "../core/git.ts";
+import {
+  type RecordLastBatchCheckpointOperation,
+  recordLastEditCheckpoint,
+} from "../core/git.ts";
 import { writeTextFileAtomically } from "./atomic-write.ts";
 import {
   type EditMatchSpan,
@@ -21,6 +24,7 @@ interface ExecuteEditOptions {
 
 interface EditToolResult extends ToolResult {
   readonly targetPath: string;
+  readonly checkpointOperation: RecordLastBatchCheckpointOperation;
 }
 
 const MAX_EDIT_FILE_BYTES = 10 * 1024 * 1024;
@@ -308,5 +312,14 @@ export function executeEdit(
     afterContent,
   });
 
-  return { content: `Edited ${filePath}`, targetPath };
+  return {
+    content: `Edited ${filePath}`,
+    targetPath,
+    checkpointOperation: {
+      operation: "edit",
+      filePath: targetPath,
+      beforeContent,
+      afterContent,
+    },
+  };
 }

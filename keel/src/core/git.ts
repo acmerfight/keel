@@ -392,6 +392,79 @@ export function recordLastBatchCheckpoint(
   }
 }
 
+function mergeTaskCheckpointOperations(
+  existing: RecordLastBatchCheckpointOperation,
+  next: RecordLastBatchCheckpointOperation,
+): RecordLastBatchCheckpointOperation {
+  if (existing.operation === "create") {
+    return {
+      operation: "create",
+      filePath: existing.filePath,
+      afterContent: next.afterContent,
+    };
+  }
+
+  return {
+    operation: "edit",
+    filePath: existing.filePath,
+    beforeContent: existing.beforeContent,
+    afterContent: next.afterContent,
+  };
+}
+
+function coalesceTaskCheckpointOperations(
+  checkpointOperations: readonly RecordLastBatchCheckpointOperation[],
+): readonly RecordLastBatchCheckpointOperation[] {
+  const operationByPath = new Map<string, RecordLastBatchCheckpointOperation>();
+
+  for (const operation of checkpointOperations) {
+    const existing = operationByPath.get(operation.filePath);
+    if (existing === undefined) {
+      operationByPath.set(operation.filePath, operation);
+      continue;
+    }
+
+    operationByPath.set(
+      operation.filePath,
+      mergeTaskCheckpointOperations(existing, operation),
+    );
+  }
+
+  return [...operationByPath.values()];
+}
+
+export function recordLastTaskCheckpoint(
+  options: RecordLastBatchCheckpointOptions,
+): RecordLastEditCheckpointResult {
+  const operations = coalesceTaskCheckpointOperations(options.operations);
+  if (operations.length === 0) {
+    return skippedBatchCheckpointRecord(options, "empty task checkpoint");
+  }
+
+  if (operations.length === 1) {
+    for (const operation of operations) {
+      if (operation.operation === "create") {
+        return recordLastCreateCheckpoint({
+          workspace: options.workspace,
+          filePath: operation.filePath,
+          afterContent: operation.afterContent,
+        });
+      }
+      return recordLastEditCheckpoint({
+        workspace: options.workspace,
+        filePath: operation.filePath,
+        beforeContent: operation.beforeContent,
+        afterContent: operation.afterContent,
+      });
+    }
+  }
+
+  return recordLastBatchCheckpoint({
+    workspace: options.workspace,
+    operations,
+  });
+}
+
 function blockedRestore(checkpoint: {
   readonly relativePath: string;
 }): RestoreLastEditCheckpointResult {

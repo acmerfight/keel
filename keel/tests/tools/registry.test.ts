@@ -171,6 +171,13 @@ describe("tool registry", () => {
         ok: true,
         content: "Applied patch:\nA note.txt",
         mutatedTargetPaths: [join(workspacePath, "note.txt")],
+        checkpointOperations: [
+          {
+            operation: "create",
+            filePath: join(workspacePath, "note.txt"),
+            afterContent: "created\n",
+          },
+        ],
       });
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "created\n",
