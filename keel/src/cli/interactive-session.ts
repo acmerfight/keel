@@ -22,6 +22,7 @@ import {
   formatContextCompactionReport,
   sanitizeStatusLineText,
 } from "./output.ts";
+import type { SessionQueuedInput } from "./session-store.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 type EndEventWithCost = EndEvent & { readonly cost: CostReport };
@@ -65,9 +66,16 @@ export interface InteractiveSessionOptions {
   readonly platform: NodeJS.Platform;
   readonly projectInstructions?: ProjectInstructions;
   readonly initialMessages?: readonly Message[];
+  readonly initialQueuedInputs?: readonly SessionQueuedInput[];
+  readonly persistQueuedInput?: (input: {
+    readonly sequence: number;
+    readonly line: string;
+  }) => SessionQueuedInput;
+  readonly consumeQueuedInputs?: (inputIds: readonly string[]) => void;
   readonly persistSessionMessages?: (
     messages: readonly Message[],
     reason: SessionPersistenceReason,
+    consumedInputIds: readonly string[],
   ) => void;
   readonly input: NodeJS.ReadableStream;
   readonly writeStdout: (text: string) => void;
@@ -97,7 +105,7 @@ export interface InteractiveSessionResult {
 }
 
 interface LineReader {
-  readonly readLine: () => Promise<string | null>;
+  readonly readLine: () => Promise<QueuedLine | null>;
   readonly readLineAfter: (
     sequence: number,
     signal: AbortSignal,
@@ -110,6 +118,7 @@ interface LineReader {
 interface QueuedLine {
   readonly sequence: number;
   readonly line: string;
+  readonly inputId?: string;
 }
 
 interface LineWaiter {
@@ -252,14 +261,63 @@ function buildSessionCostReport(
   };
 }
 
+function queuedLineFromSessionInput(input: SessionQueuedInput): QueuedLine {
+  return {
+    sequence: input.sequence,
+    line: input.line,
+    inputId: input.id,
+  };
+}
+
+function queuedLineWithInputId(
+  sequence: number,
+  line: string,
+  inputId: string | undefined,
+): QueuedLine {
+  if (inputId === undefined) {
+    return { sequence, line };
+  }
+  return { sequence, line, inputId };
+}
+
+function trimQueuedLine(queuedLine: QueuedLine): QueuedLine {
+  return queuedLineWithInputId(
+    queuedLine.sequence,
+    queuedLine.line.trim(),
+    queuedLine.inputId,
+  );
+}
+
+function queuedInputIds(lines: readonly QueuedLine[]): readonly string[] {
+  const inputIds: string[] = [];
+  for (const line of lines) {
+    if (line.inputId !== undefined) {
+      inputIds.push(line.inputId);
+    }
+  }
+  return inputIds;
+}
+
 function createLineReader(
   input: ReturnType<typeof createInterface>,
+  options: {
+    readonly initialQueuedInputs?: readonly SessionQueuedInput[];
+    readonly persistQueuedInput?: (input: {
+      readonly sequence: number;
+      readonly line: string;
+    }) => SessionQueuedInput;
+  },
 ): LineReader {
-  const queued: QueuedLine[] = [];
-  const waiters: Array<(line: string | null) => void> = [];
+  const queued: QueuedLine[] = (options.initialQueuedInputs ?? []).map(
+    queuedLineFromSessionInput,
+  );
+  const waiters: Array<(line: QueuedLine | null) => void> = [];
   const freshWaiters: LineWaiter[] = [];
   let closed = false;
-  let currentSequence = 0;
+  let currentSequence = queued.reduce(
+    (highest, queuedLine) => Math.max(highest, queuedLine.sequence),
+    0,
+  );
 
   // Approval answers must be typed after the approval prompt appears. The
   // sequence lets approval waits ignore already-queued user messages.
@@ -278,10 +336,23 @@ function createLineReader(
 
     const waiter = waiters.shift();
     if (waiter !== undefined) {
-      waiter(line);
+      waiter(queuedLine);
       return;
     }
-    queued.push(queuedLine);
+    const admittedInput =
+      line.trim() === ""
+        ? undefined
+        : options.persistQueuedInput?.({
+            sequence: queuedLine.sequence,
+            line: queuedLine.line,
+          });
+    queued.push(
+      queuedLineWithInputId(
+        queuedLine.sequence,
+        queuedLine.line,
+        admittedInput?.id,
+      ),
+    );
   });
 
   input.once("close", () => {
@@ -302,7 +373,7 @@ function createLineReader(
     readLine: () => {
       const queuedLine = queued.shift();
       if (queuedLine !== undefined) {
-        return Promise.resolve(queuedLine.line);
+        return Promise.resolve(queuedLine);
       }
       if (closed) {
         return Promise.resolve(null);
@@ -453,7 +524,14 @@ export async function runInteractiveSession(
     input: options.input,
     crlfDelay: Number.POSITIVE_INFINITY,
   });
-  const lineReader = createLineReader(input);
+  const lineReader = createLineReader(input, {
+    ...(options.initialQueuedInputs !== undefined
+      ? { initialQueuedInputs: options.initialQueuedInputs }
+      : {}),
+    ...(options.persistQueuedInput !== undefined
+      ? { persistQueuedInput: options.persistQueuedInput }
+      : {}),
+  });
   const bashPermission = interactiveBashPermissionPolicy(
     options.cliArgs.bashMode,
     lineReader,
@@ -470,6 +548,13 @@ export async function runInteractiveSession(
       return;
     }
     lineReader.restoreLines(lines);
+  };
+  const consumeQueuedInputLines = (lines: readonly QueuedLine[]) => {
+    const inputIds = queuedInputIds(lines);
+    if (inputIds.length === 0) {
+      return;
+    }
+    options.consumeQueuedInputs?.(inputIds);
   };
   const abortActiveTurn = () => {
     if (activeAbortController !== null) {
@@ -529,16 +614,21 @@ export async function runInteractiveSession(
   options.onSigint(abortActiveTurn);
   try {
     for (;;) {
-      const rawLine = await lineReader.readLine();
-      if (rawLine === null) break;
+      const rawInput = await lineReader.readLine();
+      if (rawInput === null) break;
+      const rawLine = rawInput.line;
       const userMessage = rawLine.trim();
-      if (userMessage === "") continue;
+      if (userMessage === "") {
+        consumeQueuedInputLines([rawInput]);
+        continue;
+      }
       const manualCompactCommand = parseManualCompactCommand(rawLine);
       if (manualCompactCommand !== null) {
         if (messages.length === 0 || resolved === null) {
           options.writeStderr(
             "Context compaction skipped: no conversation history to compact.\n",
           );
+          consumeQueuedInputLines([rawInput]);
           continue;
         }
         const compactAbortController = new AbortController();
@@ -558,7 +648,11 @@ export async function runInteractiveSession(
           activeAbortController = null;
         }
         if (!compactAbortController.signal.aborted) {
-          options.persistSessionMessages?.(messages, "compaction");
+          options.persistSessionMessages?.(
+            messages,
+            "compaction",
+            queuedInputIds([rawInput]),
+          );
         }
         if (compactCost?.budgetExceeded === true) {
           sessionStopReason = "cost_budget";
@@ -604,10 +698,7 @@ export async function runInteractiveSession(
           drainInjectedUserMessages: () => {
             const queuedLines = lineReader
               .drainLinesAfter(turnStartSequence)
-              .map((queuedLine) => ({
-                sequence: queuedLine.sequence,
-                line: queuedLine.line.trim(),
-              }))
+              .map(trimQueuedLine)
               .filter((queuedLine) => queuedLine.line !== "");
             if (deferRemainingInjectedInput) {
               deferredInputLines.push(...queuedLines);
@@ -644,7 +735,10 @@ export async function runInteractiveSession(
           continue;
         }
         restoreDrainedInput(deferredInputLines);
-        options.persistSessionMessages?.(messages, "turn");
+        options.persistSessionMessages?.(messages, "turn", [
+          ...queuedInputIds([rawInput]),
+          ...queuedInputIds(drainedInjectedLines),
+        ]);
         options.writeStdout("\n");
         const cumulativeCost =
           finalEnd === undefined ? undefined : recordTurnEnd(finalEnd);

@@ -30,11 +30,14 @@ import {
 import { assertEndEventHasCost, writeRunReport } from "./report.ts";
 import {
   acquireSessionLock,
+  consumeSessionQueuedInputs,
   createSessionStore,
   ensureSessionCanBeCreated,
   persistSessionMessages,
+  persistSessionQueuedInput,
   resumeSessionStore,
   type SessionLock,
+  type SessionQueuedInput,
   type SessionState,
   SessionStoreError,
 } from "./session-store.ts";
@@ -171,9 +174,18 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         let sessionPersistence:
           | {
               readonly initialMessages: readonly Message[];
+              readonly initialQueuedInputs: readonly SessionQueuedInput[];
+              readonly persistQueuedInput: (input: {
+                readonly sequence: number;
+                readonly line: string;
+              }) => SessionQueuedInput;
+              readonly consumeQueuedInputs: (
+                inputIds: readonly string[],
+              ) => void;
               readonly persistSessionMessages: (
                 messages: readonly Message[],
                 reason: SessionPersistenceReason,
+                consumedInputIds: readonly string[],
               ) => void;
             }
           | undefined;
@@ -181,9 +193,28 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           const resumedSession = session;
           sessionPersistence = {
             initialMessages: resumedSession.messages,
+            initialQueuedInputs: resumedSession.pendingInputs,
+            persistQueuedInput: (input: {
+              readonly sequence: number;
+              readonly line: string;
+            }) =>
+              persistSessionQueuedInput({
+                session: resumedSession,
+                sequence: input.sequence,
+                line: input.line,
+                runtime,
+              }),
+            consumeQueuedInputs: (inputIds: readonly string[]) => {
+              consumeSessionQueuedInputs({
+                session: resumedSession,
+                inputIds,
+                runtime,
+              });
+            },
             persistSessionMessages: (
               messages: readonly Message[],
               reason: SessionPersistenceReason,
+              consumedInputIds: readonly string[],
             ) => {
               persistedMessages = persistSessionMessages({
                 session: resumedSession,
@@ -191,33 +222,58 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
                 currentMessages: messages,
                 runtime,
                 reason,
+                consumedInputIds,
               });
             },
           };
         } else if (cliArgs.sessionId !== undefined) {
           const sessionId = cliArgs.sessionId;
+          const ensureActiveSession = (): SessionState => {
+            let activeSession = session;
+            if (activeSession === undefined) {
+              activeSession = createSessionStore({
+                sessionId,
+                workspace,
+                runtime,
+              });
+              session = activeSession;
+              persistedMessages = activeSession.messages;
+            }
+            return activeSession;
+          };
           sessionPersistence = {
             initialMessages: [],
+            initialQueuedInputs: [],
+            persistQueuedInput: (input: {
+              readonly sequence: number;
+              readonly line: string;
+            }) =>
+              persistSessionQueuedInput({
+                session: ensureActiveSession(),
+                sequence: input.sequence,
+                line: input.line,
+                runtime,
+              }),
+            consumeQueuedInputs: (inputIds: readonly string[]) => {
+              consumeSessionQueuedInputs({
+                session: ensureActiveSession(),
+                inputIds,
+                runtime,
+              });
+            },
             persistSessionMessages: (
               messages: readonly Message[],
               reason: SessionPersistenceReason,
+              consumedInputIds: readonly string[],
             ) => {
-              let activeSession = session;
-              if (activeSession === undefined) {
-                activeSession = createSessionStore({
-                  sessionId,
-                  workspace,
-                  runtime,
-                });
-                session = activeSession;
-                persistedMessages = activeSession.messages;
-              }
+              const activeSession = ensureActiveSession();
               persistedMessages = persistSessionMessages({
                 session: activeSession,
                 previousMessages: persistedMessages,
                 currentMessages: messages,
                 runtime,
                 reason,
+                consumedInputIds,
               });
             },
           };
