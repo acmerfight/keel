@@ -363,8 +363,7 @@ describe("File Editing", () => {
           id: "guessed_edit",
           tool: "edit",
           path: "note.txt",
-          oldString: "old",
-          newString: "new",
+          edits: [{ oldText: "old", newText: "new" }],
         };
         yield {
           type: "stop",
@@ -424,8 +423,7 @@ describe("File Editing", () => {
       fakeToolResponse("read", { path: "note.txt" }),
       fakeToolResponse("edit", {
         path: "note.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
       fakeResponse("Done."),
     ]);
@@ -550,8 +548,7 @@ describe("File Editing", () => {
           id: "same_turn_edit",
           tool: "edit",
           path: "note.txt",
-          oldString: "old",
-          newString: "new",
+          edits: [{ oldText: "old", newText: "new" }],
         };
         yield {
           type: "stop",
@@ -644,8 +641,7 @@ describe("File Editing", () => {
             id: "first_edit",
             tool: "edit",
             path: "note.txt",
-            oldString: "alpha",
-            newString: "one",
+            edits: [{ oldText: "alpha", newText: "one" }],
           };
           yield {
             type: "stop",
@@ -666,8 +662,7 @@ describe("File Editing", () => {
             id: "second_edit",
             tool: "edit",
             path: "note.txt",
-            oldString: "beta",
-            newString: "two",
+            edits: [{ oldText: "beta", newText: "two" }],
           };
           yield {
             type: "stop",
@@ -796,8 +791,7 @@ describe("File Editing", () => {
             id: "edit_after_compaction",
             tool: "edit",
             path: "note.txt",
-            oldString: "old",
-            newString: "new",
+            edits: [{ oldText: "old", newText: "new" }],
           };
           yield {
             type: "stop",
@@ -918,8 +912,7 @@ describe("File Editing", () => {
             id: "replayed_edit",
             tool: "edit",
             path: "note.txt",
-            oldString: "old",
-            newString: "new",
+            edits: [{ oldText: "old", newText: "new" }],
           };
           yield {
             type: "stop",
@@ -1017,9 +1010,7 @@ describe("File Editing", () => {
             id: "replace_all_edit",
             tool: "edit",
             path: "note.txt",
-            oldString: "old",
-            newString: "new",
-            replaceAll: true,
+            edits: [{ oldText: "old", newText: "new", replaceAll: true }],
           };
           yield {
             type: "stop",
@@ -1137,16 +1128,14 @@ describe("File Editing", () => {
             id: "first_edit",
             tool: "edit",
             path: "first.txt",
-            oldString: "old",
-            newString: "new",
+            edits: [{ oldText: "old", newText: "new" }],
           };
           yield {
             type: "tool_call",
             id: "second_edit",
             tool: "edit",
             path: "second.txt",
-            oldString: "old",
-            newString: "new",
+            edits: [{ oldText: "old", newText: "new" }],
           };
           yield {
             type: "stop",
@@ -1274,16 +1263,14 @@ describe("File Editing", () => {
             id: "missing_edit",
             tool: "edit",
             path: "first.txt",
-            oldString: "missing",
-            newString: "new",
+            edits: [{ oldText: "missing", newText: "new" }],
           };
           yield {
             type: "tool_call",
             id: "second_edit",
             tool: "edit",
             path: "second.txt",
-            oldString: "old",
-            newString: "new",
+            edits: [{ oldText: "old", newText: "new" }],
           };
           yield {
             type: "stop",
@@ -1403,16 +1390,14 @@ describe("File Editing", () => {
             id: "empty_file_edit",
             tool: "edit",
             path: "empty.txt",
-            oldString: "",
-            newString: "created\n",
+            edits: [{ oldText: "", newText: "created\n" }],
           };
           yield {
             type: "tool_call",
             id: "second_edit",
             tool: "edit",
             path: "second.txt",
-            oldString: "old",
-            newString: "new",
+            edits: [{ oldText: "old", newText: "new" }],
           };
           yield {
             type: "stop",
@@ -1607,8 +1592,7 @@ describe("File Editing", () => {
             id: "edit_second",
             tool: "edit",
             path: "second.txt",
-            oldString: "second new",
-            newString: "second final",
+            edits: [{ oldText: "second new", newText: "second final" }],
           };
           yield {
             type: "stop",
@@ -1685,8 +1669,7 @@ describe("File Editing", () => {
     const provider = createFakeProvider([
       fakeToolResponse("edit", {
         path: outsidePath,
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
       fakeResponse("Outside path rejected."),
     ]);
@@ -1771,8 +1754,7 @@ describe("File Editing", () => {
             id: "wrong_edit",
             tool: "edit",
             path: "note.txt",
-            oldString: "missing",
-            newString: "new",
+            edits: [{ oldText: "missing", newText: "new" }],
           };
           yield {
             type: "stop",
@@ -1794,8 +1776,7 @@ describe("File Editing", () => {
             id: "correct_edit",
             tool: "edit",
             path: "note.txt",
-            oldString: "world",
-            newString: "there",
+            edits: [{ oldText: "world", newText: "there" }],
           };
           yield {
             type: "stop",
@@ -1881,8 +1862,7 @@ describe("File Editing", () => {
     const provider = createFakeProvider([
       fakeToolResponse("edit", {
         path: "note.txt",
-        oldString: "",
-        newString: "x",
+        edits: [{ oldText: "", newText: "x" }],
       }),
       fakeResponse("Cannot replace empty text."),
     ]);
@@ -1966,8 +1946,7 @@ describe("File Editing", () => {
             id: "missing_edit",
             tool: "edit",
             path: "missing.txt",
-            oldString: "world",
-            newString: "there",
+            edits: [{ oldText: "world", newText: "there" }],
           };
           yield {
             type: "stop",
@@ -1989,8 +1968,7 @@ describe("File Editing", () => {
             id: "correct_edit",
             tool: "edit",
             path: "note.txt",
-            oldString: "world",
-            newString: "there",
+            edits: [{ oldText: "world", newText: "there" }],
           };
           yield {
             type: "stop",
@@ -2067,8 +2045,7 @@ describe("File Editing", () => {
     const provider = createFakeProvider([
       fakeToolResponse("edit", {
         path: "link.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
       fakeResponse("Symlink path rejected."),
     ]);
@@ -3265,8 +3242,7 @@ describe("File Editing", () => {
             id: "ignored_edit",
             tool: "edit",
             path: "secret.env",
-            oldString: "sk-leaked-123",
-            newString: "new-key",
+            edits: [{ oldText: "sk-leaked-123", newText: "new-key" }],
           };
           yield {
             type: "stop",
@@ -3478,8 +3454,7 @@ describe("File Editing", () => {
       fakeToolResponse("read", { path: "note.txt" }),
       fakeToolResponse("edit", {
         path: "note.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
       fakeResponse("Need more context."),
     ]);
@@ -3545,8 +3520,7 @@ describe("File Editing", () => {
           id: "broken_edit",
           tool: "edit",
           path: "note.txt",
-          oldString: "old",
-          newString: "new",
+          edits: [{ oldText: "old", newText: "new" }],
         };
       },
     };
@@ -3586,13 +3560,11 @@ describe("File Editing", () => {
       fakeToolResponse("read", { path: "b.txt" }),
       fakeToolResponse("edit", {
         path: "a.txt",
-        oldString: "wrold",
-        newString: "world",
+        edits: [{ oldText: "wrold", newText: "world" }],
       }),
       fakeToolResponse("edit", {
         path: "b.txt",
-        oldString: "goodby",
-        newString: "goodbye",
+        edits: [{ oldText: "goodby", newText: "goodbye" }],
       }),
       fakeResponse("Fixed both files."),
     ]);
@@ -3639,14 +3611,12 @@ describe("File Editing", () => {
       fakeToolResponse("read", { path: "a.txt" }),
       fakeToolResponse("edit", {
         path: "a.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
       fakeToolResponse("read", { path: "b.txt" }),
       fakeToolResponse("edit", {
         path: "b.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
     ]);
 
@@ -3702,8 +3672,7 @@ describe("File Editing", () => {
       fakeToolResponse("read", { path: "real/note.txt" }),
       fakeToolResponse("edit", {
         path: "real/note.txt",
-        oldString: "initial",
-        newString: "final",
+        edits: [{ oldText: "initial", newText: "final" }],
       }),
     ]);
 
@@ -3749,8 +3718,7 @@ describe("File Editing", () => {
       fakeToolResponse("read", { path: "app.ts" }),
       fakeToolResponse("edit", {
         path: "app.ts",
-        oldString: "nul",
-        newString: "null",
+        edits: [{ oldText: "nul", newText: "null" }],
       }),
       fakeResponse("Fixed the null typo."),
     ]);

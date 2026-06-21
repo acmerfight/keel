@@ -116,44 +116,6 @@ function toolArgField(
   return null;
 }
 
-function objectField(input: object, key: string): unknown {
-  for (const [name, value] of Object.entries(input)) {
-    if (name === key) return value;
-  }
-  return undefined;
-}
-
-function normalizeLegacyEditArguments(parsedArguments: object): object {
-  const path = objectField(parsedArguments, "path");
-  const oldString = objectField(parsedArguments, "oldString");
-  const newString = objectField(parsedArguments, "newString");
-  const replaceAll = objectField(parsedArguments, "replaceAll");
-  if (
-    typeof path !== "string" ||
-    typeof oldString !== "string" ||
-    typeof newString !== "string"
-  ) {
-    return parsedArguments;
-  }
-  if (
-    replaceAll !== undefined &&
-    replaceAll !== null &&
-    typeof replaceAll !== "boolean"
-  ) {
-    return parsedArguments;
-  }
-  return {
-    path,
-    edits: [
-      {
-        oldText: oldString,
-        newText: newString,
-        ...(typeof replaceAll === "boolean" ? { replaceAll } : {}),
-      },
-    ],
-  };
-}
-
 function normalizeArgumentValue(
   field: ToolArgDefinition,
   value: unknown,
@@ -215,13 +177,8 @@ function normalizeParsedArguments(
     return parsedArguments;
   }
 
-  const toolNormalized =
-    toolArgField(tool, "path") !== null && toolArgField(tool, "edits") !== null
-      ? normalizeLegacyEditArguments(parsedArguments)
-      : parsedArguments;
-
   const normalized: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(toolNormalized)) {
+  for (const [name, value] of Object.entries(parsedArguments)) {
     const field = toolArgField(tool, name);
     if (field === null) {
       normalized[name] = value;

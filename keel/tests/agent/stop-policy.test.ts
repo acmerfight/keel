@@ -69,8 +69,7 @@ function wrapUpBoundaryProvider(summary: string): LLMProvider {
         id: "edit_a",
         tool: "edit",
         path: "a.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       };
       yield { type: "stop", usage: ZERO_USAGE };
     },
@@ -91,13 +90,11 @@ describe("Agent Stopping", () => {
       }),
       fakeToolResponse("edit", {
         path: "a.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
       fakeToolResponse("edit", {
         path: "b.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
       fakeResponse(
         "Round limit reached: a.txt is updated, b.txt still needs the same edit.",
@@ -159,8 +156,7 @@ describe("Agent Stopping", () => {
           id: "edit_a",
           tool: "edit",
           path: "a.txt",
-          oldString: "old",
-          newString: "new",
+          edits: [{ oldText: "old", newText: "new" }],
         };
         yield { type: "stop", usage: ZERO_USAGE };
       },
@@ -284,13 +280,11 @@ describe("Agent Stopping", () => {
     const provider = createFakeProvider([
       fakeToolResponse("edit", {
         path: "a.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
       fakeToolResponse("edit", {
         path: "a.txt",
-        oldString: "old a",
-        newString: "rogue",
+        edits: [{ oldText: "old a", newText: "rogue" }],
       }),
     ]);
 
@@ -338,8 +332,7 @@ describe("Agent Stopping", () => {
     const provider = createFakeProvider([
       fakeToolResponse("edit", {
         path: "a.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
       fakeResponse("Never reached."),
     ]);
@@ -391,8 +384,7 @@ describe("Agent Stopping", () => {
           id: "edit_note",
           tool: "edit",
           path: "note.txt",
-          oldString: "old",
-          newString: "new",
+          edits: [{ oldText: "old", newText: "new" }],
         };
         yield {
           type: "stop",
@@ -460,8 +452,7 @@ describe("Agent Stopping", () => {
     await writeFile(join(workspace, "note.txt"), "original\n", "utf8");
     const sameFailingEdit = fakeToolResponse("edit", {
       path: "note.txt",
-      oldString: "missing",
-      newString: "patched",
+      edits: [{ oldText: "missing", newText: "patched" }],
     });
     const provider = createFakeProvider(
       Array.from({ length: 16 }, () => sameFailingEdit),
