@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { builtinTools } from "../../src/tools/builtin.ts";
@@ -5,6 +8,7 @@ import type { OpenAICompatibleToolDefinition } from "../../src/tools/registry.ts
 import {
   isToolName,
   openAICompatibleTools,
+  type ToolName,
   toolCallArguments,
   toolCallCanonicalArguments,
   toolCallFromParsedArguments,
@@ -20,6 +24,22 @@ type ProviderField = {
 
 type ProviderParameter =
   OpenAICompatibleToolDefinition["function"]["parameters"]["properties"][string];
+type RegisteredBuiltinTool = (typeof builtinTools)[number];
+
+function builtinToolByName<Name extends ToolName>(
+  name: Name,
+): Extract<RegisteredBuiltinTool, { readonly name: Name }> {
+  const tool = builtinTools.find(
+    (
+      candidate,
+    ): candidate is Extract<RegisteredBuiltinTool, { readonly name: Name }> =>
+      candidate.name === name,
+  );
+  if (tool === undefined) {
+    throw new Error(`Expected builtin tool ${name} to be registered`);
+  }
+  return tool;
+}
 
 function inclusiveIntegerMinimum(
   schemaField: z.core.JSONSchema.JSONSchema,
@@ -114,18 +134,63 @@ function providerDefinitionFromBuiltinTool(
 }
 
 describe("tool registry", () => {
+  test(`Given apply_patch receives an add-only patch through the builtin registry,
+    When the call has no read-before-edit state,
+    Then the tool writes the new file and returns every mutated target`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-registry-patch-"));
+    const workspacePath = await realpath(workspace);
+    const applyPatchTool = builtinToolByName("apply_patch");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: note.txt",
+      "+created",
+      "*** End Patch",
+    ].join("\n");
+    const call = toolCallFromParsedArguments("call_patch", "apply_patch", {
+      patch,
+    });
+    if (call === null) {
+      throw new Error("Expected apply_patch call to parse");
+    }
+    expect(applyPatchTool.name).toBe("apply_patch");
+
+    try {
+      // When
+      const result = await applyPatchTool.executeCall(
+        {
+          workspace,
+          signal: new AbortController().signal,
+          allowBash: false,
+        },
+        call,
+      );
+
+      // Then
+      expect(result).toEqual({
+        ok: true,
+        content: "Applied patch:\nA note.txt",
+        mutatedTargetPaths: [join(workspacePath, "note.txt")],
+      });
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "created\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given builtin tools declare display contracts,
     When labels and approval prompts are rendered,
     Then each tool has explicit user-visible text without generic fallback`, () => {
-    const [
-      readTool,
-      lsTool,
-      globTool,
-      grepTool,
-      editTool,
-      writeTool,
-      bashTool,
-    ] = builtinTools;
+    const readTool = builtinToolByName("read");
+    const lsTool = builtinToolByName("ls");
+    const globTool = builtinToolByName("glob");
+    const grepTool = builtinToolByName("grep");
+    const editTool = builtinToolByName("edit");
+    const writeTool = builtinToolByName("write");
+    const applyPatchTool = builtinToolByName("apply_patch");
+    const bashTool = builtinToolByName("bash");
 
     expect(readTool.display.formatLabel({ path: "src/index.ts" })).toBe(
       "read src/index.ts",
@@ -154,6 +219,11 @@ describe("tool registry", () => {
     expect(
       writeTool.display.formatLabel({ path: "new.ts", content: "new" }),
     ).toBe("write new.ts");
+    expect(
+      applyPatchTool.display.formatLabel({
+        patch: "*** Begin Patch\n*** End Patch",
+      }),
+    ).toBe("apply_patch");
     expect(bashTool.display.formatLabel({ command: "pnpm test" })).toBe(
       "bash pnpm test",
     );
@@ -178,6 +248,7 @@ describe("tool registry", () => {
       "grep",
       "edit",
       "write",
+      "apply_patch",
       "bash",
     ]);
     expect(new Set(names).size).toBe(names.length);
@@ -258,6 +329,18 @@ describe("tool registry", () => {
         hasExecute: true,
       },
       {
+        name: "apply_patch",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-write", destructive: true },
+        concurrency: {
+          kind: "exclusive",
+          reason: "May mutate multiple workspace files.",
+        },
+        hasFormatLabel: true,
+        hasExecute: true,
+      },
+      {
         name: "bash",
         permission: "approval",
         output: "text",
@@ -275,7 +358,7 @@ describe("tool registry", () => {
   test(`Given builtin tool execution receives a matching call without required arguments,
     When the registry-owned execution guard validates the call,
     Then it rejects the malformed internal call before reaching the tool executor`, () => {
-    const [readTool] = builtinTools;
+    const readTool = builtinToolByName("read");
     expect(readTool.name).toBe("read");
 
     expect(() =>
@@ -293,7 +376,7 @@ describe("tool registry", () => {
   test(`Given builtin tool execution receives a matching call with an invalid argument type,
     When the registry-owned execution guard validates the call,
     Then it rejects the malformed internal call before tool-specific validation runs`, () => {
-    const [readTool] = builtinTools;
+    const readTool = builtinToolByName("read");
     const malformedCall = {
       id: "call_read",
       tool: "read",
@@ -317,7 +400,7 @@ describe("tool registry", () => {
   test(`Given builtin tool execution receives an integer argument with a fractional value,
     When the registry-owned execution guard validates the call,
     Then it rejects the malformed internal call before tool-specific validation runs`, () => {
-    const bashTool = builtinTools[6];
+    const bashTool = builtinToolByName("bash");
     const malformedCall = {
       id: "call_bash",
       tool: "bash",
@@ -341,7 +424,7 @@ describe("tool registry", () => {
   test(`Given builtin tool execution receives a matching call with an explicit undefined optional argument,
     When the registry-owned execution guard validates the call,
     Then it treats the optional argument as absent`, async () => {
-    const bashTool = builtinTools[6];
+    const bashTool = builtinToolByName("bash");
     const callWithAbsentOptional = {
       id: "call_bash",
       tool: "bash",
@@ -369,7 +452,7 @@ describe("tool registry", () => {
   test(`Given builtin tool execution receives a matching call with an explicit null optional argument,
     When the registry-owned execution guard validates the internal call,
     Then it rejects the malformed call instead of widening the ToolCall type`, () => {
-    const bashTool = builtinTools[6];
+    const bashTool = builtinToolByName("bash");
     const malformedCall = {
       id: "call_bash",
       tool: "bash",
@@ -393,7 +476,7 @@ describe("tool registry", () => {
   test(`Given registry-derived builtin call helpers receive malformed internal calls,
     When they validate the call before deriving labels or canonical arguments,
     Then they reject missing required fields`, () => {
-    const [readTool] = builtinTools;
+    const readTool = builtinToolByName("read");
     const malformedCall = { id: "call_read", tool: "read" };
     expect(readTool.name).toBe("read");
 
@@ -430,6 +513,7 @@ describe("tool registry", () => {
         required: ["path", "oldString", "newString"],
       },
       write: { fields: ["path", "content"], required: ["path", "content"] },
+      apply_patch: { fields: ["patch"], required: ["patch"] },
       bash: { fields: ["command", "timeoutMs"], required: ["command"] },
     });
   });
@@ -545,6 +629,7 @@ describe("tool registry", () => {
       "grep",
       "edit",
       "write",
+      "apply_patch",
     ]);
   });
 
@@ -560,6 +645,7 @@ describe("tool registry", () => {
       "grep",
       "edit",
       "write",
+      "apply_patch",
       "bash",
     ]);
   });

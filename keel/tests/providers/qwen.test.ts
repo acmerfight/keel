@@ -350,6 +350,7 @@ describe("Qwen Provider", () => {
       "grep",
       "edit",
       "write",
+      "apply_patch",
     ]);
     expect(events).toEqual([
       { type: "text", text: "Hello from Qwen." },

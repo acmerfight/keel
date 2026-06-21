@@ -1434,6 +1434,187 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given the assistant patches multiple files after reading the update targets,
+    When the agent handles the apply_patch tool call,
+    Then all patch changes are visible before the assistant replies`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "src.ts"), "export const value = 1;\n");
+    const provider = createFakeProvider([
+      fakeToolResponse("read", { path: "src.ts" }),
+      fakeToolResponse("apply_patch", {
+        patch: [
+          "*** Begin Patch",
+          "*** Update File: src.ts",
+          "@@",
+          "-export const value = 1;",
+          "+export const value = 2;",
+          "*** Add File: docs/note.md",
+          "+patched",
+          "*** End Patch",
+        ].join("\n"),
+      }),
+      fakeResponse("Applied the patch."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "patch src.ts and create docs/note.md",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "src.ts"), "utf8")).toBe(
+        "export const value = 2;\n",
+      );
+      expect(await readFile(join(workspace, "docs", "note.md"), "utf8")).toBe(
+        "patched\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Applied the patch.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given apply_patch updates multiple files in one tool call,
+    When the assistant tries to edit one patched file without rereading it,
+    Then the follow-up edit is rejected until that file is read again`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "first.txt"), "first old\n", "utf8");
+    await writeFile(join(workspace, "second.txt"), "second old\n", "utf8");
+    let turn = 0;
+    let finalTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "apply-patch-invalidates-all-files",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_first",
+            tool: "read",
+            path: "first.txt",
+          };
+          yield {
+            type: "tool_call",
+            id: "read_second",
+            tool: "read",
+            path: "second.txt",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "patch_both",
+            tool: "apply_patch",
+            patch: [
+              "*** Begin Patch",
+              "*** Update File: first.txt",
+              "@@",
+              "-first old",
+              "+first new",
+              "*** Update File: second.txt",
+              "@@",
+              "-second old",
+              "+second new",
+              "*** End Patch",
+            ].join("\n"),
+          };
+          yield {
+            type: "tool_call",
+            id: "edit_second",
+            tool: "edit",
+            path: "second.txt",
+            oldString: "second new",
+            newString: "second final",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        finalTurnMessages = options.messages;
+        yield { type: "text", text: "Patch applied; edit needs a reread." };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "patch both files then refine second.txt",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
+        "first new\n",
+      );
+      expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
+        "second new\n",
+      );
+      const toolMessages = finalTurnMessages.filter(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "edit_second",
+      );
+      expect(toolMessages[0]?.content).toContain(
+        "file has not been read: second.txt",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Patch applied; edit needs a reread.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the assistant requests an edit outside the workspace,
     When the agent handles the edit,
     Then the failure is reported and the outside file is unchanged`, async () => {

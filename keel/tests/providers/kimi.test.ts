@@ -1001,6 +1001,7 @@ describe("Kimi Provider", () => {
       "grep",
       "edit",
       "write",
+      "apply_patch",
     ]);
   });
 
@@ -1049,6 +1050,7 @@ describe("Kimi Provider", () => {
       "grep",
       "edit",
       "write",
+      "apply_patch",
       "bash",
     ]);
   });
