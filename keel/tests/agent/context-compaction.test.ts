@@ -227,8 +227,7 @@ describe("Context Compaction", () => {
             id: "edit_note",
             tool: "edit",
             path: "note.txt",
-            oldString: "old",
-            newString: "new",
+            edits: [{ oldText: "old", newText: "new" }],
           },
           {
             id: "write_log",
@@ -255,9 +254,11 @@ describe("Context Compaction", () => {
     if (editToolCall?.tool !== "edit") {
       throw new Error("test setup expected an edit tool call");
     }
-    Object.assign(editToolCall, {
-      newString: "mutated ".repeat(80),
-    });
+    const [edit] = editToolCall.edits;
+    if (edit === undefined) {
+      throw new Error("test setup expected one edit");
+    }
+    Object.assign(edit, { newText: "mutated ".repeat(80) });
 
     // When
     const shouldCompact = shouldCompactBeforeRequest(
@@ -287,8 +288,7 @@ describe("Context Compaction", () => {
             id: "edit_note",
             tool: "edit",
             path: "note.txt",
-            oldString: "old",
-            newString: "new",
+            edits: [{ oldText: "old", newText: "new" }],
           },
         ],
       },
@@ -309,9 +309,11 @@ describe("Context Compaction", () => {
     if (editToolCall?.tool !== "edit") {
       throw new Error("test setup expected an edit tool call");
     }
-    Object.assign(editToolCall, {
-      replaceAll: true,
-    });
+    const [edit] = editToolCall.edits;
+    if (edit === undefined) {
+      throw new Error("test setup expected one edit");
+    }
+    Object.assign(edit, { replaceAll: true });
 
     // When
     const shouldCompact = shouldCompactBeforeRequest(
@@ -460,8 +462,7 @@ describe("Context Compaction", () => {
         id: "edit_note",
         tool: "edit",
         path: "notes.txt",
-        oldString: "todo",
-        newString: "done",
+        edits: [{ oldText: "todo", newText: "done" }],
       },
       {
         id: "write_log",

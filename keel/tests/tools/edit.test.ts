@@ -160,6 +160,131 @@ describe("Edit Tool", () => {
     }
   });
 
+  test(`Given one file has multiple independent targets,
+    When the edit tool receives multiple edits,
+    Then it updates every target with one checkpoint operation`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "settings.ts"),
+      "export const timeoutMs = 30000;\nexport const retryCount = 2;\n",
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(workspace, "settings.ts", [
+        {
+          oldText: "export const timeoutMs = 30000;",
+          newText: "export const timeoutMs = 45000;",
+        },
+        {
+          oldText: "export const retryCount = 2;",
+          newText: "export const retryCount = 3;",
+        },
+      ]);
+
+      // Then
+      expect(result.content).toBe("Edited settings.ts");
+      expect(result.checkpointOperation).toMatchObject({
+        operation: "edit",
+      });
+      expect(await readFile(join(workspace, "settings.ts"), "utf8")).toBe(
+        "export const timeoutMs = 45000;\nexport const retryCount = 3;\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one edit in a multi-edit request is stale,
+    When the edit tool validates the request,
+    Then it rejects the request and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const original =
+      "export const timeoutMs = 30000;\nexport const retryCount = 2;\n";
+    await writeFile(join(workspace, "settings.ts"), original, "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () =>
+          executeEdit(workspace, "settings.ts", [
+            {
+              oldText: "export const timeoutMs = 30000;",
+              newText: "export const timeoutMs = 45000;",
+            },
+            {
+              oldText: "export const retryCount = 4;",
+              newText: "export const retryCount = 3;",
+            },
+          ]),
+        "tool_old_string_not_found",
+        "old string not found",
+      );
+      expect(await readFile(join(workspace, "settings.ts"), "utf8")).toBe(
+        original,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two edits target overlapping text,
+    When the edit tool validates the request,
+    Then it rejects the request and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const original = "one\ntwo\nthree\n";
+    await writeFile(join(workspace, "note.txt"), original, "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () =>
+          executeEdit(workspace, "note.txt", [
+            { oldText: "one\ntwo\n", newText: "ONE\nTWO\n" },
+            { oldText: "two\nthree\n", newText: "TWO\nTHREE\n" },
+          ]),
+        "tool_edit_overlap",
+        "overlap",
+      );
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        original,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two edits target the same exact span,
+    When the edit tool sorts and validates the request,
+    Then it rejects the duplicate target before writing`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const original = "alpha\nbeta\n";
+    await writeFile(join(workspace, "note.txt"), original, "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () =>
+          executeEdit(workspace, "note.txt", [
+            { oldText: "alpha", newText: "ALPHA" },
+            { oldText: "alpha", newText: "Alpha" },
+          ]),
+        "tool_edit_overlap",
+        "overlap",
+      );
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        original,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an editable file has permissions wider than the process umask,
     When the edit tool atomically replaces the file,
     Then it preserves the original file mode`, async () => {

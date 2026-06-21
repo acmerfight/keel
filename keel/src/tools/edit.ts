@@ -15,6 +15,12 @@ import { readEditableTextFileWithMetadata } from "./text-file.ts";
 import type { ToolResult } from "./types.ts";
 import { resolveWorkspaceTarget } from "./workspace-path.ts";
 
+export interface EditReplacement {
+  readonly oldText: string;
+  readonly newText: string;
+  readonly replaceAll?: boolean;
+}
+
 interface ExecuteEditOptions {
   readonly replaceAll?: boolean;
   readonly readBeforeEdit?: {
@@ -39,6 +45,21 @@ type NormalizedText =
       readonly text: string;
       readonly sourceIndexByNormalizedIndex: readonly number[];
     };
+
+interface NormalizedEditReplacement {
+  readonly editIndex: number;
+  readonly oldText: string;
+  readonly newText: string;
+  readonly normalizedOldText: string;
+  readonly normalizedNewText: string;
+  readonly replaceAll: boolean;
+}
+
+interface MatchedReplacement {
+  readonly editIndex: number;
+  readonly span: EditMatchSpan;
+  readonly replacement: string;
+}
 
 function countLines(content: string): number {
   let lineCount = 1;
@@ -156,50 +177,188 @@ function withUtf8Bom(content: string, hasUtf8Bom: boolean): string {
   return hasUtf8Bom ? `\uFEFF${content}` : content;
 }
 
-function replaceAllNormalized(
-  content: string,
-  normalized: NormalizedText,
-  matches: readonly EditMatchSpan[],
-  newString: string,
-): string {
-  const parts: string[] = [];
-  let start = 0;
-  for (const match of matches) {
-    const sourceMatch = originalSpan(normalized, match, content.length);
-    parts.push(
-      content.slice(start, sourceMatch.index),
-      sourceSpanReplacement(newString, sourceLineEnding(content, sourceMatch)),
-    );
-    start = sourceMatch.index + sourceMatch.length;
-  }
-  parts.push(content.slice(start));
-  return parts.join("");
+function singleReplacement(
+  oldText: string,
+  newText: string,
+  options: ExecuteEditOptions,
+): EditReplacement {
+  return {
+    oldText,
+    newText,
+    ...(options.replaceAll !== undefined
+      ? { replaceAll: options.replaceAll }
+      : {}),
+  };
 }
 
-export function executeEdit(
-  workspace: string,
-  filePath: string,
-  oldString: string,
-  newString: string,
-  options: ExecuteEditOptions = {},
-): EditToolResult {
-  if (oldString === "") {
+function normalizeEditReplacements(
+  edits: readonly EditReplacement[],
+): readonly NormalizedEditReplacement[] {
+  if (edits.length === 0) {
     throw new KeelError(
       "tool_empty_old_string",
-      "edit failed: old string is empty",
-      "Provide the exact text to replace. Use read to find the target text first.",
-    );
-  }
-  const normalizedOldString = normalizeLineEndings(oldString);
-  const normalizedNewString = normalizeLineEndings(newString);
-  if (normalizedOldString === normalizedNewString) {
-    throw new KeelError(
-      "tool_edit_no_op",
-      "edit failed: old string and new string are identical",
-      "Change newString to the desired replacement text, or skip the edit if no change is needed.",
+      "edit failed: edits is empty",
+      "Provide at least one edit with oldText copied from read output.",
     );
   }
 
+  const normalized: NormalizedEditReplacement[] = [];
+  let editIndex = 0;
+  for (const edit of edits) {
+    if (edit.oldText === "") {
+      throw new KeelError(
+        "tool_empty_old_string",
+        `edit failed: old string is empty in edits[${editIndex}]`,
+        "Provide the exact text to replace. Use read to find the target text first.",
+      );
+    }
+    const normalizedOldText = normalizeLineEndings(edit.oldText);
+    const normalizedNewText = normalizeLineEndings(edit.newText);
+    if (normalizedOldText === normalizedNewText) {
+      throw new KeelError(
+        "tool_edit_no_op",
+        `edit failed: old string and new string are identical in edits[${editIndex}]`,
+        "Change newText to the desired replacement text, or skip the edit if no change is needed.",
+      );
+    }
+    normalized.push({
+      editIndex,
+      oldText: edit.oldText,
+      newText: edit.newText,
+      normalizedOldText,
+      normalizedNewText,
+      replaceAll: edit.replaceAll === true,
+    });
+    editIndex++;
+  }
+  return normalized;
+}
+
+function matchedReplacementsForEdit(
+  content: string,
+  normalizedContent: NormalizedText,
+  edit: NormalizedEditReplacement,
+  filePath: string,
+): readonly MatchedReplacement[] {
+  if (edit.replaceAll) {
+    const matches = locateExactEditSpans(
+      normalizedContent.text,
+      edit.normalizedOldText,
+    );
+    if (matches.length === 0) {
+      const lineCount = countLines(content);
+      throw new KeelError(
+        "tool_old_string_not_found",
+        `edit failed: old string not found in ${filePath} (${lineCount} lines) for edits[${edit.editIndex}]`,
+        `Use read(path: "${filePath}") to view the current file content, then retry edit with the exact text from the file.`,
+      );
+    }
+    return matches.map((match) => {
+      const span = originalSpan(normalizedContent, match, content.length);
+      return {
+        editIndex: edit.editIndex,
+        span,
+        replacement: sourceSpanReplacement(
+          edit.newText,
+          sourceLineEnding(content, span),
+        ),
+      };
+    });
+  }
+
+  const matchResult = locateUniqueEditSpan(
+    normalizedContent.text,
+    edit.normalizedOldText,
+  );
+  if (matchResult.status === "not_found") {
+    const lineCount = countLines(content);
+    throw new KeelError(
+      "tool_old_string_not_found",
+      `edit failed: old string not found in ${filePath} (${lineCount} lines) for edits[${edit.editIndex}]`,
+      `Use read(path: "${filePath}") to view the current file content, then retry edit with the exact text from the file.`,
+    );
+  }
+  if (matchResult.status === "not_unique") {
+    throw new KeelError(
+      "tool_old_string_not_unique",
+      `edit failed: old string appears ${matchResult.occurrenceCount} times in ${filePath} for edits[${edit.editIndex}]`,
+      "Include more surrounding context in oldText to make the match unique, or set replaceAll when every occurrence should change.",
+    );
+  }
+  const span = originalSpan(
+    normalizedContent,
+    matchResult.match,
+    content.length,
+  );
+  return [
+    {
+      editIndex: edit.editIndex,
+      span,
+      replacement: sourceSpanReplacement(
+        edit.newText,
+        sourceLineEnding(content, span),
+      ),
+    },
+  ];
+}
+
+function sortedMatchedReplacements(
+  edits: readonly NormalizedEditReplacement[],
+  content: string,
+  normalizedContent: NormalizedText,
+  filePath: string,
+): readonly MatchedReplacement[] {
+  const matched: MatchedReplacement[] = [];
+  for (const edit of edits) {
+    matched.push(
+      ...matchedReplacementsForEdit(content, normalizedContent, edit, filePath),
+    );
+  }
+
+  const sorted = matched.toSorted((left, right) => {
+    if (left.span.index !== right.span.index) {
+      return left.span.index - right.span.index;
+    }
+    return left.editIndex - right.editIndex;
+  });
+  let previous: MatchedReplacement | null = null;
+  for (const current of sorted) {
+    if (
+      previous !== null &&
+      previous.span.index + previous.span.length > current.span.index
+    ) {
+      throw new KeelError(
+        "tool_edit_overlap",
+        `edit failed: edits[${previous.editIndex}] and edits[${current.editIndex}] overlap in ${filePath}`,
+        "Merge overlapping or nested changes into one edit, or target disjoint regions.",
+      );
+    }
+    previous = current;
+  }
+  return sorted;
+}
+
+function applyMatchedReplacements(
+  content: string,
+  replacements: readonly MatchedReplacement[],
+): string {
+  let updated = content;
+  for (const replacement of replacements.toReversed()) {
+    updated =
+      updated.slice(0, replacement.span.index) +
+      replacement.replacement +
+      updated.slice(replacement.span.index + replacement.span.length);
+  }
+  return updated;
+}
+
+function executeEditBatch(
+  workspace: string,
+  filePath: string,
+  edits: readonly EditReplacement[],
+  options: ExecuteEditOptions = {},
+): EditToolResult {
+  const normalizedEdits = normalizeEditReplacements(edits);
   const { workspacePath, requestedPath, targetPath } = resolveWorkspaceTarget(
     workspace,
     filePath,
@@ -244,61 +403,15 @@ export function executeEdit(
   });
   const content = file.content;
   const normalizedContent = normalizeWithSourceMap(content);
-  let updated: string;
-
-  if (options.replaceAll === true) {
-    const matches = locateExactEditSpans(
-      normalizedContent.text,
-      normalizedOldString,
-    );
-    if (matches.length === 0) {
-      const lineCount = countLines(content);
-      throw new KeelError(
-        "tool_old_string_not_found",
-        `edit failed: old string not found in ${filePath} (${lineCount} lines)`,
-        `Use read(path: "${filePath}") to view the current file content, then retry edit with the exact text from the file.`,
-      );
-    }
-    updated = replaceAllNormalized(
+  const updated = applyMatchedReplacements(
+    content,
+    sortedMatchedReplacements(
+      normalizedEdits,
       content,
       normalizedContent,
-      matches,
-      newString,
-    );
-  } else {
-    const matchResult = locateUniqueEditSpan(
-      normalizedContent.text,
-      normalizedOldString,
-    );
-    if (matchResult.status === "not_found") {
-      const lineCount = countLines(content);
-      throw new KeelError(
-        "tool_old_string_not_found",
-        `edit failed: old string not found in ${filePath} (${lineCount} lines)`,
-        `Use read(path: "${filePath}") to view the current file content, then retry edit with the exact text from the file.`,
-      );
-    }
-    if (matchResult.status === "not_unique") {
-      throw new KeelError(
-        "tool_old_string_not_unique",
-        `edit failed: old string appears ${matchResult.occurrenceCount} times in ${filePath}`,
-        "Include more surrounding context in oldString to make the match unique, or target a specific occurrence.",
-      );
-    }
-    const match = originalSpan(
-      normalizedContent,
-      matchResult.match,
-      content.length,
-    );
-    const replacement = sourceSpanReplacement(
-      newString,
-      sourceLineEnding(content, match),
-    );
-    updated =
-      content.slice(0, match.index) +
-      replacement +
-      content.slice(match.index + match.length);
-  }
+      filePath,
+    ),
+  );
 
   const beforeContent = withUtf8Bom(content, file.hasUtf8Bom);
   const afterContent = withUtf8Bom(updated, file.hasUtf8Bom);
@@ -322,4 +435,49 @@ export function executeEdit(
       afterContent,
     },
   };
+}
+
+export function executeEdit(
+  workspace: string,
+  filePath: string,
+  oldString: string,
+  newString: string,
+  options?: ExecuteEditOptions,
+): EditToolResult;
+export function executeEdit(
+  workspace: string,
+  filePath: string,
+  edits: readonly EditReplacement[],
+  options?: ExecuteEditOptions,
+): EditToolResult;
+export function executeEdit(
+  workspace: string,
+  filePath: string,
+  oldStringOrEdits: string | readonly EditReplacement[],
+  newStringOrOptions: string | ExecuteEditOptions = {},
+  maybeOptions: ExecuteEditOptions = {},
+): EditToolResult {
+  if (typeof oldStringOrEdits === "string") {
+    /* v8 ignore next 3: overload typing requires newString for legacy direct calls. */
+    if (typeof newStringOrOptions !== "string") {
+      throw new Error("edit invariant violated: newString is required");
+    }
+    return executeEditBatch(
+      workspace,
+      filePath,
+      [singleReplacement(oldStringOrEdits, newStringOrOptions, maybeOptions)],
+      maybeOptions,
+    );
+  }
+
+  /* v8 ignore next 3: overload typing disallows a string where batch options belong. */
+  if (typeof newStringOrOptions === "string") {
+    throw new Error("edit invariant violated: batch options are invalid");
+  }
+  return executeEditBatch(
+    workspace,
+    filePath,
+    oldStringOrEdits,
+    newStringOrOptions,
+  );
 }

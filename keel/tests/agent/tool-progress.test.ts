@@ -119,8 +119,7 @@ describe("Tool Progress", () => {
           id: "fake_tool_call_1",
           tool: "edit",
           path: "note.txt",
-          oldString: "missing",
-          newString: "new",
+          edits: [{ oldText: "missing", newText: "new" }],
         },
         ok: false,
       });
@@ -128,6 +127,57 @@ describe("Tool Progress", () => {
         type: "text",
         text: "The text was not found.",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit call has no replacement entries,
+    When the agent executes the tool call,
+    Then it reports a recoverable tool failure instead of aborting the turn`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
+    const provider = createFakeProvider([
+      fakeToolResponse("edit", {
+        path: "note.txt",
+        edits: [],
+      }),
+      fakeResponse("I need at least one replacement."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "replace the word",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "tool_end",
+        toolCall: {
+          id: "fake_tool_call_1",
+          tool: "edit",
+          path: "note.txt",
+          edits: [],
+        },
+        ok: false,
+      });
+      expect(events).toContainEqual({
+        type: "text",
+        text: "I need at least one replacement.",
+      });
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello world\n",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
