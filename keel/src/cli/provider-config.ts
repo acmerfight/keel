@@ -160,12 +160,12 @@ function parseCliEditDemo(message: string): CliEditRequest | null {
   const withIndex = body.indexOf(withToken);
   if (withIndex < 0) return null;
 
-  const newStringStart = withIndex + withToken.length;
-  const inIndex = body.indexOf(inToken, newStringStart);
+  const newTextStart = withIndex + withToken.length;
+  const inIndex = body.indexOf(inToken, newTextStart);
   if (inIndex < 0) return null;
 
   const oldText = body.slice(0, withIndex);
-  const newText = body.slice(newStringStart, inIndex);
+  const newText = body.slice(newTextStart, inIndex);
   const path = body.slice(inIndex + inToken.length);
 
   if (oldText === "" || newText === "" || path === "") return null;

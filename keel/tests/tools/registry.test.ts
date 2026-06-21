@@ -809,32 +809,25 @@ describe("tool registry", () => {
     });
   });
 
-  test(`Given a legacy edit call returns replaceAll as null,
+  test(`Given a provider returns removed legacy edit arguments,
     When the registry parses the call,
-    Then the call is normalized to one edit entry without replaceAll`, () => {
+    Then the strict edit schema rejects it instead of converting it`, () => {
     const parsed = toolCallFromParsedArguments("call_edit", "edit", {
       path: "src/index.ts",
       oldString: "old",
       newString: "new",
-      replaceAll: null,
     });
 
-    expect(parsed).toEqual({
-      id: "call_edit",
-      tool: "edit",
-      path: "src/index.ts",
-      edits: [{ oldText: "old", newText: "new" }],
-    });
+    expect(parsed).toBeNull();
   });
 
-  test(`Given a legacy edit call returns replaceAll with the wrong type,
+  test(`Given a provider returns top-level replaceAll with an edit call,
     When the registry parses the call,
-    Then the call is rejected instead of guessing intent`, () => {
+    Then the strict edit schema rejects it instead of guessing intent`, () => {
     const parsed = toolCallFromParsedArguments("call_edit", "edit", {
       path: "src/index.ts",
-      oldString: "old",
-      newString: "new",
-      replaceAll: "true",
+      edits: [{ oldText: "old", newText: "new" }],
+      replaceAll: true,
     });
 
     expect(parsed).toBeNull();

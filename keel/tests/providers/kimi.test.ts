@@ -482,8 +482,7 @@ describe("Kimi Provider", () => {
                       editToolCallDelta(
                         JSON.stringify({
                           path: "note.txt",
-                          oldString: "old",
-                          newString: "new",
+                          edits: [{ oldText: "old", newText: "new" }],
                         }),
                       ),
                     ],
@@ -883,7 +882,7 @@ describe("Kimi Provider", () => {
                       editToolCallDelta(
                         JSON.stringify({
                           path: "note.txt",
-                          oldString: "old",
+                          edits: [{ oldText: "old" }],
                         }),
                       ),
                     ],

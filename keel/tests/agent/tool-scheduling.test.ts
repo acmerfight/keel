@@ -151,8 +151,7 @@ describe("Tool Scheduling", () => {
             id: "update_note",
             tool: "edit",
             path: "note.txt",
-            oldString: "before",
-            newString: "after",
+            edits: [{ oldText: "before", newText: "after" }],
           };
           yield {
             type: "tool_call",
@@ -256,8 +255,7 @@ describe("Tool Scheduling", () => {
             id: "update_note",
             tool: "edit",
             path: "note.txt",
-            oldString: "before",
-            newString: "after",
+            edits: [{ oldText: "before", newText: "after" }],
           };
           yield {
             type: "tool_call",
@@ -361,16 +359,14 @@ describe("Tool Scheduling", () => {
             id: "expand_alpha",
             tool: "edit",
             path: "note.txt",
-            oldString: "alpha",
-            newString: "alpha beta",
+            edits: [{ oldText: "alpha", newText: "alpha beta" }],
           };
           yield {
             type: "tool_call",
             id: "expand_beta",
             tool: "edit",
             path: "note.txt",
-            oldString: "alpha beta",
-            newString: "alpha beta gamma",
+            edits: [{ oldText: "alpha beta", newText: "alpha beta gamma" }],
           };
           yield { type: "stop", usage: ZERO_USAGE };
           return;

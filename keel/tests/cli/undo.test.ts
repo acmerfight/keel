@@ -134,8 +134,7 @@ async function runTwoFileEditTask(workspace: string): Promise<void> {
         res.write(
           sseToolCall("call_edit_first", "edit", {
             path: "first.txt",
-            oldString: "old",
-            newString: "new",
+            edits: [{ oldText: "old", newText: "new" }],
           }),
         );
         res.write(sseToolFinish());
@@ -148,8 +147,7 @@ async function runTwoFileEditTask(workspace: string): Promise<void> {
         res.write(
           sseToolCall("call_edit_second", "edit", {
             path: "second.txt",
-            oldString: "old",
-            newString: "new",
+            edits: [{ oldText: "old", newText: "new" }],
           }),
         );
         res.write(sseToolFinish());
