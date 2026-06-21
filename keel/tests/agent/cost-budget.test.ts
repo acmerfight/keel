@@ -134,6 +134,26 @@ describe("Cost Budget", () => {
           turn++;
           yield {
             type: "tool_call",
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 0,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 0,
+              outputTokens: 0,
+            },
+          };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          yield {
+            type: "tool_call",
             id: "edit_note",
             tool: "edit",
             path: "note.txt",

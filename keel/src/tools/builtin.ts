@@ -73,11 +73,16 @@ export interface BuiltinToolExecutionContext {
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
   readonly bashPermission?: BashPermissionPolicy;
+  readonly readBeforeEdit?: {
+    readonly hasRead: (targetPath: string) => boolean;
+  };
 }
 
 export interface ToolExecution {
   readonly content: string;
   readonly ok: boolean;
+  readonly readTargetPath?: string;
+  readonly mutatedTargetPath?: string;
 }
 
 type BuiltinToolExecution<Args> = (
@@ -321,7 +326,11 @@ const readTool = defineTool({
       offset: args.offset,
       limit: args.limit,
     });
-    return { content: result.content, ok: true };
+    return {
+      content: result.content,
+      ok: true,
+      readTargetPath: result.targetPath,
+    };
   },
 });
 
@@ -481,15 +490,24 @@ const editTool = defineTool({
     kind: "exclusive",
     reason: "May mutate workspace files.",
   },
-  execute: ({ workspace }, args) => {
+  execute: ({ workspace, readBeforeEdit }, args) => {
     const result = executeEdit(
       workspace,
       args.path,
       args.oldString,
       args.newString,
-      args.replaceAll !== undefined ? { replaceAll: args.replaceAll } : {},
+      {
+        ...(args.replaceAll !== undefined
+          ? { replaceAll: args.replaceAll }
+          : {}),
+        ...(readBeforeEdit !== undefined ? { readBeforeEdit } : {}),
+      },
     );
-    return { content: result.content, ok: true };
+    return {
+      content: result.content,
+      ok: true,
+      mutatedTargetPath: result.targetPath,
+    };
   },
 });
 

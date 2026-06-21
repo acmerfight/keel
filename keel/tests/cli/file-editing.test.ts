@@ -360,7 +360,7 @@ describe("CLI File Editing", () => {
         "hello new world\n",
       );
       expect(result.stdout).toBe("Edited note.txt\n");
-      expect(result.stderr).toBe("Tool: edit note.txt\n");
+      expect(result.stderr).toBe("Tool: read note.txt\nTool: edit note.txt\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -389,7 +389,7 @@ describe("CLI File Editing", () => {
         "hello new world\n",
       );
       expect(result.stdout).toBe("Edited note.txt\n");
-      expect(result.stderr).toBe("Tool: edit note.txt\n");
+      expect(result.stderr).toBe("Tool: read note.txt\nTool: edit note.txt\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -424,6 +424,11 @@ describe("CLI File Editing", () => {
 
         if (requestCount === 1) {
           capturedBody = body;
+          res.write(sseReadToolCall());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 20, completion_tokens: 5 }),
+          );
+        } else if (requestCount === 2) {
           res.write(sseEditToolCall());
           res.write(
             sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 8 }),
@@ -454,7 +459,7 @@ describe("CLI File Editing", () => {
         "hello new world\n",
       );
       expect(result.stdout).toBe("Done.\n");
-      expect(result.stderr).toBe("Tool: edit note.txt\n");
+      expect(result.stderr).toBe("Tool: read note.txt\nTool: edit note.txt\n");
 
       const request = JSON.parse(capturedBody);
       expect(
@@ -1128,6 +1133,11 @@ describe("CLI File Editing", () => {
         });
 
         if (requestCount === 1) {
+          res.write(sseReadToolCall());
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 20, completion_tokens: 5 }),
+          );
+        } else if (requestCount === 2) {
           res.write(sseMultipleEditToolCalls());
           res.write(
             sseEditToolFinish({ prompt_tokens: 30, completion_tokens: 8 }),
@@ -1156,11 +1166,13 @@ describe("CLI File Editing", () => {
       // Then
       expect(result.exitCode).toBe(0);
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
-        "hello new there\n",
+        "hello new world\n",
       );
       expect(result.stdout).toBe("Done.\n");
-      expect(result.stderr).toBe("Tool: edit note.txt\nTool: edit note.txt\n");
-      expect(requestCount).toBe(2);
+      expect(result.stderr).toBe(
+        "Tool: read note.txt\nTool: edit note.txt\nTool: edit note.txt\nTool failed: edit note.txt\n",
+      );
+      expect(requestCount).toBe(3);
       const secondRequest = requestWithMessagesSchema.parse(
         JSON.parse(secondRequestBody),
       );
@@ -1169,13 +1181,18 @@ describe("CLI File Editing", () => {
       ).toEqual([
         {
           role: "tool",
+          tool_call_id: "call_read",
+          content: "hello old world\n",
+        },
+        {
+          role: "tool",
           tool_call_id: "call_edit_0",
           content: "Edited note.txt",
         },
         {
           role: "tool",
           tool_call_id: "call_edit_1",
-          content: "Edited note.txt",
+          content: expect.stringContaining("file has not been read"),
         },
       ]);
     } finally {
@@ -1267,14 +1284,23 @@ describe("CLI File Editing", () => {
                     tool_calls: [
                       {
                         index: 0,
-                        id: "call_edit_a",
+                        id: "call_read_a",
                         type: "function",
                         function: {
-                          name: "edit",
+                          name: "read",
                           arguments: JSON.stringify({
                             path: "a.txt",
-                            oldString: "wrold",
-                            newString: "world",
+                          }),
+                        },
+                      },
+                      {
+                        index: 1,
+                        id: "call_read_b",
+                        type: "function",
+                        function: {
+                          name: "read",
+                          arguments: JSON.stringify({
+                            path: "b.txt",
                           }),
                         },
                       },
@@ -1303,6 +1329,19 @@ describe("CLI File Editing", () => {
                     tool_calls: [
                       {
                         index: 0,
+                        id: "call_edit_a",
+                        type: "function",
+                        function: {
+                          name: "edit",
+                          arguments: JSON.stringify({
+                            path: "a.txt",
+                            oldString: "wrold",
+                            newString: "world",
+                          }),
+                        },
+                      },
+                      {
+                        index: 1,
                         id: "call_edit_b",
                         type: "function",
                         function: {
@@ -1357,7 +1396,9 @@ describe("CLI File Editing", () => {
         "goodbye world\n",
       );
       expect(result.stdout).toBe("Fixed both files.\n");
-      expect(result.stderr).toBe("Tool: edit a.txt\nTool: edit b.txt\n");
+      expect(result.stderr).toBe(
+        "Tool: read a.txt\nTool: read b.txt\nTool: edit a.txt\nTool: edit b.txt\n",
+      );
       expect(requestCount).toBe(3);
     } finally {
       await close(server);

@@ -86,6 +86,9 @@ describe("Agent Stopping", () => {
     await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
     await writeFile(join(workspace, "b.txt"), "old b\n", "utf8");
     const provider = createFakeProvider([
+      fakeToolResponse("read", {
+        path: "a.txt",
+      }),
       fakeToolResponse("edit", {
         path: "a.txt",
         oldString: "old",
@@ -111,7 +114,7 @@ describe("Agent Stopping", () => {
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           allowBash: false,
-          stopPolicy: maxTurnFallbackPolicy(2),
+          stopPolicy: maxTurnFallbackPolicy(3),
         }),
       );
 

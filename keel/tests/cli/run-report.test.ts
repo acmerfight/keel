@@ -124,10 +124,10 @@ describe("CLI Run Report", () => {
       );
       expect(report.provider).toBe("fake");
       expect(report.model).toBe("fake");
-      expect(report.turns).toBe(2);
+      expect(report.turns).toBe(3);
       expect(report.stopReason).toBe("completed");
       expect(report.costUsd).toBe(0);
-      expect(result.stderr).toBe("Tool: edit note.txt\n");
+      expect(result.stderr).toBe("Tool: read note.txt\nTool: edit note.txt\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

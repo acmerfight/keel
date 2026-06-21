@@ -101,6 +101,7 @@ export interface RunAgentTurnOptions {
   readonly costTracking?: CostTrackingOptions;
   readonly bashPermission?: BashPermissionPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
+  readonly readVisibility?: ReadVisibilityState;
   readonly drainInjectedUserMessages?: () =>
     | readonly InjectedUserMessage[]
     | Promise<readonly InjectedUserMessage[]>;
@@ -126,6 +127,42 @@ interface AgentTurn {
   readonly text: string;
   readonly toolCalls: readonly ToolCall[];
   readonly usage: Usage;
+}
+
+export interface ReadVisibilityState {
+  readonly hasRead: (targetPath: string) => boolean;
+  readonly clear: () => void;
+  readonly applyImmediateMutation: (execution: ToolExecution) => void;
+  readonly applyVisibleToolExecutions: (
+    executions: readonly ToolExecution[],
+  ) => void;
+}
+
+export function createReadVisibilityState(): ReadVisibilityState {
+  const visibleTargetPaths = new Set<string>();
+  const applyMutation = (execution: ToolExecution): void => {
+    if (execution.ok && execution.mutatedTargetPath !== undefined) {
+      visibleTargetPaths.delete(execution.mutatedTargetPath);
+    }
+  };
+  return {
+    hasRead: (targetPath) => visibleTargetPaths.has(targetPath),
+    clear: () => visibleTargetPaths.clear(),
+    applyImmediateMutation: applyMutation,
+    applyVisibleToolExecutions: (executions) => {
+      for (const execution of executions) {
+        if (!execution.ok) continue;
+        applyMutation(execution);
+        if (execution.readTargetPath !== undefined) {
+          visibleTargetPaths.add(execution.readTargetPath);
+        }
+      }
+    },
+  };
+}
+
+export function clearReadVisibilityState(state: ReadVisibilityState): void {
+  state.clear();
 }
 
 function addUsage(left: Usage, right: Usage): Usage {
@@ -345,6 +382,7 @@ interface CompactionConfig {
   readonly signal: AbortSignal;
   readonly contextCompaction: ContextCompactionOptions | undefined;
   readonly costTracking: CostTrackingOptions | undefined;
+  readonly onContextCompacted?: () => void;
 }
 
 type CompactionState = {
@@ -376,6 +414,7 @@ async function attemptContextCompaction(
   if (result.compacted) {
     state.contextAccounting = undefined;
     streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
+    config.onContextCompacted?.();
   }
   state.accounting = addRequestAccounting(
     state.accounting,
@@ -529,15 +568,17 @@ export async function* runAgentTurn(
     sessionLedger = next;
     syncMessagesFromSessionLedger(messages, sessionLedger);
   };
-  const priorToolCalls = priorToolCallsFromMessages(
-    projectSessionLedgerToProviderMessages(sessionLedger),
-  );
+  const providerMessages =
+    projectSessionLedgerToProviderMessages(sessionLedger);
+  const priorToolCalls = priorToolCallsFromMessages(providerMessages);
+  const readVisibility = options.readVisibility ?? createReadVisibilityState();
   const config: CompactionConfig = {
     provider,
     systemPrompt,
     signal,
     contextCompaction: options.contextCompaction,
     costTracking,
+    onContextCompacted: () => clearReadVisibilityState(readVisibility),
   };
   const state: CompactionState = {
     contextAccounting: undefined,
@@ -648,6 +689,9 @@ export async function* runAgentTurn(
         toolCall,
         signal,
         allowBash,
+        readBeforeEdit: {
+          hasRead: readVisibility.hasRead,
+        },
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
 
@@ -665,6 +709,7 @@ export async function* runAgentTurn(
     };
 
     const scheduled = scheduledToolCalls(turnResult.toolCalls);
+    const completedToolExecutions: ToolExecution[] = [];
     for (const segment of planToolCallExecutionSegments(scheduled)) {
       if (segment.kind === "parallel") {
         for (const { toolCall } of segment.toolCalls) {
@@ -681,6 +726,8 @@ export async function* runAgentTurn(
           const { toolCall, result: execution } = result;
           yield { type: "tool_end", toolCall, ok: execution.ok };
           recordToolExecution(toolCall, execution);
+          readVisibility.applyImmediateMutation(execution);
+          completedToolExecutions.push(execution);
         }
       } else {
         const { toolCall } = segment.toolCall;
@@ -688,8 +735,11 @@ export async function* runAgentTurn(
         const execution = await executeTurnToolCall(toolCall);
         yield { type: "tool_end", toolCall, ok: execution.ok };
         recordToolExecution(toolCall, execution);
+        readVisibility.applyImmediateMutation(execution);
+        completedToolExecutions.push(execution);
       }
     }
+    readVisibility.applyVisibleToolExecutions(completedToolExecutions);
 
     if (drainInjectedUserMessages !== undefined && !signal.aborted) {
       applySessionLedger(
@@ -706,6 +756,7 @@ export async function* runAgent(
   options: RunAgentOptions,
 ): AsyncGenerator<AgentEvent> {
   const messages: Message[] = [{ role: "user", content: options.userMessage }];
+  const readVisibility = createReadVisibilityState();
   yield* runAgentTurn({
     workspace: options.workspace,
     provider: options.provider,
@@ -714,6 +765,7 @@ export async function* runAgent(
     signal: options.signal,
     allowBash: options.allowBash,
     stopPolicy: options.stopPolicy,
+    readVisibility,
     ...(options.costTracking !== undefined
       ? { costTracking: options.costTracking }
       : {}),
