@@ -14,6 +14,13 @@ import { resolveWorkspaceTarget } from "./workspace-path.ts";
 
 interface ExecuteEditOptions {
   readonly replaceAll?: boolean;
+  readonly readBeforeEdit?: {
+    readonly hasRead: (targetPath: string) => boolean;
+  };
+}
+
+interface EditToolResult extends ToolResult {
+  readonly targetPath: string;
 }
 
 const MAX_EDIT_FILE_BYTES = 10 * 1024 * 1024;
@@ -171,7 +178,7 @@ export function executeEdit(
   oldString: string,
   newString: string,
   options: ExecuteEditOptions = {},
-): ToolResult {
+): EditToolResult {
   if (oldString === "") {
     throw new KeelError(
       "tool_empty_old_string",
@@ -213,6 +220,16 @@ export function executeEdit(
       "tool_not_file",
       `edit failed: not a file: ${filePath}`,
       "The path is a directory, not a file. Specify a file path inside it.",
+    );
+  }
+  if (
+    options.readBeforeEdit !== undefined &&
+    !options.readBeforeEdit.hasRead(targetPath)
+  ) {
+    throw new KeelError(
+      "tool_file_not_read",
+      `edit failed: file has not been read: ${filePath}`,
+      `Use read(path: "${filePath}") to view the current file content, then retry edit with oldString copied from the read output.`,
     );
   }
 
@@ -291,5 +308,5 @@ export function executeEdit(
     afterContent,
   });
 
-  return { content: `Edited ${filePath}` };
+  return { content: `Edited ${filePath}`, targetPath };
 }

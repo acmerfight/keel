@@ -10,7 +10,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
-import { runAgent } from "../../src/agent/loop.ts";
+import {
+  createReadVisibilityState,
+  runAgent,
+  runAgentTurn,
+} from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import {
   createFakeProvider,
@@ -312,13 +316,109 @@ describe("File Editing", () => {
     });
   });
 
-  test(`Given a workspace file contains text to replace,
-    When user asks for the replacement,
+  test(`Given the assistant edits a file before reading it,
+    When the agent handles the edit tool call,
+    Then it asks the assistant to read the file first and leaves the file unchanged`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "edit-before-read",
+      async *stream(options) {
+        if (secondTurnMessages.length > 0) {
+          yield { type: "text", text: "I will read the file first." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (options.messages.some((message) => message.role === "tool")) {
+          secondTurnMessages = options.messages;
+          yield { type: "text", text: "I will read the file first." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        yield {
+          type: "tool_call",
+          id: "guessed_edit",
+          tool: "edit",
+          path: "note.txt",
+          oldString: "old",
+          newString: "new",
+        };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "replace the word",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello old world\n",
+      );
+      const toolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "guessed_edit",
+        content: expect.stringContaining("file has not been read"),
+      });
+      expect(toolMessage?.content).toContain("Recovery:");
+      expect(events).toContainEqual({
+        type: "text",
+        text: "I will read the file first.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the assistant reads a file before editing it,
+    When the read result is visible on the next turn,
     Then the file is updated on disk`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
     const provider = createFakeProvider([
+      fakeToolResponse("read", { path: "note.txt" }),
       fakeToolResponse("edit", {
         path: "note.txt",
         oldString: "old",
@@ -354,20 +454,20 @@ describe("File Editing", () => {
     }
   });
 
-  test(`Given the assistant requests replacing every exact occurrence in a file,
-    When the agent handles the edit tool call,
-    Then all occurrences are updated before the assistant replies`, async () => {
+  test(`Given the assistant reads and edits the same file in one response,
+    When the agent handles those tool calls,
+    Then the edit is rejected because the read result was not visible yet`, async () => {
     // Given
     const workspace = await createWorkspace();
-    await writeFile(join(workspace, "note.txt"), "old one\nold two\n", "utf8");
+    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
     let turn = 0;
     let secondTurnMessages: readonly Message[] = [];
     const provider: LLMProvider = {
-      id: "replace-all-edit",
+      id: "same-turn-read-edit",
       async *stream(options) {
         if (turn === 1) {
           secondTurnMessages = options.messages;
-          yield { type: "text", text: "Updated every occurrence." };
+          yield { type: "text", text: "I will retry after reading." };
           yield {
             type: "stop",
             usage: {
@@ -383,12 +483,17 @@ describe("File Editing", () => {
         turn++;
         yield {
           type: "tool_call",
-          id: "replace_all_edit",
+          id: "read_note",
+          tool: "read",
+          path: "note.txt",
+        };
+        yield {
+          type: "tool_call",
+          id: "same_turn_edit",
           tool: "edit",
           path: "note.txt",
           oldString: "old",
           newString: "new",
-          replaceAll: true,
         };
         yield {
           type: "stop",
@@ -399,6 +504,492 @@ describe("File Editing", () => {
             outputTokens: 1,
           },
         };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "replace the word",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello old world\n",
+      );
+      expect(
+        secondTurnMessages.filter((message) => message.role === "tool"),
+      ).toEqual([
+        {
+          role: "tool",
+          toolCallId: "read_note",
+          content: "hello old world\n",
+        },
+        {
+          role: "tool",
+          toolCallId: "same_turn_edit",
+          content: expect.stringContaining("file has not been read"),
+        },
+      ]);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "I will retry after reading.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the assistant already edited a file after reading it,
+    When it requests another edit without rereading,
+    Then the second edit is rejected and the first edit remains`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "alpha beta gamma\n", "utf8");
+    let turn = 0;
+    let fourthTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "reread-after-edit",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "first_edit",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "alpha",
+            newString: "one",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 2) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "second_edit",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "beta",
+            newString: "two",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        fourthTurnMessages = options.messages;
+        yield { type: "text", text: "I need to reread the file." };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "replace two words",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "one beta gamma\n",
+      );
+      const secondEditMessage = fourthTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "second_edit",
+      );
+      expect(secondEditMessage?.content).toContain("file has not been read");
+      expect(events).toContainEqual({
+        type: "text",
+        text: "I need to reread the file.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a previous read is compacted before the next model request,
+    When the assistant edits that file without rereading,
+    Then the edit is rejected and the file is unchanged`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    let turn = 0;
+    const messages: Message[] = [{ role: "user", content: "read note.txt" }];
+    const readVisibility = createReadVisibilityState();
+    let finalMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "compacted-read-before-edit",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "The note was read earlier." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          yield { type: "text", text: "Read note.txt." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 2) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "edit_after_compaction",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "old",
+            newString: "new",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        finalMessages = options.messages;
+        yield { type: "text", text: "I need to reread note.txt." };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          readVisibility,
+        }),
+      );
+      messages.push({ role: "user", content: "replace the word" });
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          readVisibility,
+          contextCompaction: {
+            contextWindowTokens: 1,
+            reserveTokens: 0,
+            keepRecentTokens: 1,
+          },
+        }),
+      );
+
+      // Then
+      expect(events.some((event) => event.type === "context_compacted")).toBe(
+        true,
+      );
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello old world\n",
+      );
+      const editMessage = finalMessages.find(
+        (message) =>
+          message.role === "tool" &&
+          message.toolCallId === "edit_after_compaction",
+      );
+      expect(editMessage?.content).toContain("file has not been read");
+      expect(events).toContainEqual({
+        type: "text",
+        text: "I need to reread note.txt.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given only replayed transcript text says a file was read,
+    When the assistant edits that file in a new agent turn,
+    Then the edit is rejected until a live read records the target`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    const messages: Message[] = [
+      { role: "user", content: "read note.txt" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_note",
+        content: "hello old world\n",
+      },
+      { role: "user", content: "replace old with new" },
+    ];
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "transcript-only-read",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "replayed_edit",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "old",
+            newString: "new",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        secondTurnMessages = options.messages;
+        yield { type: "text", text: "I need a fresh read." };
+        yield {
+          type: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello old world\n",
+      );
+      const editMessage = secondTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "replayed_edit",
+      );
+      expect(editMessage?.content).toContain("file has not been read");
+      expect(events).toContainEqual({
+        type: "text",
+        text: "I need a fresh read.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the assistant requests replacing every exact occurrence in a file,
+    When the agent handles the edit tool call,
+    Then all occurrences are updated before the assistant replies`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "old one\nold two\n", "utf8");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "replace-all-edit",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "replace_all_edit",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "old",
+            newString: "new",
+            replaceAll: true,
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 2) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield { type: "text", text: "Updated every occurrence." };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
       },
     };
 
@@ -423,6 +1014,11 @@ describe("File Editing", () => {
       expect(
         secondTurnMessages.filter((message) => message.role === "tool"),
       ).toEqual([
+        {
+          role: "tool",
+          toolCallId: "read_note",
+          content: "old one\nold two\n",
+        },
         {
           role: "tool",
           toolCallId: "replace_all_edit",
@@ -450,7 +1046,64 @@ describe("File Editing", () => {
     const provider: LLMProvider = {
       id: "multiple-edits",
       async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_first",
+            tool: "read",
+            path: "first.txt",
+          };
+          yield {
+            type: "tool_call",
+            id: "read_second",
+            tool: "read",
+            path: "second.txt",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
         if (turn === 1) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "first_edit",
+            tool: "edit",
+            path: "first.txt",
+            oldString: "old",
+            newString: "new",
+          };
+          yield {
+            type: "tool_call",
+            id: "second_edit",
+            tool: "edit",
+            path: "second.txt",
+            oldString: "old",
+            newString: "new",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 2) {
+          turn++;
           secondTurnMessages = options.messages;
           yield {
             type: "text",
@@ -467,33 +1120,6 @@ describe("File Editing", () => {
           };
           return;
         }
-
-        turn++;
-        yield {
-          type: "tool_call",
-          id: "first_edit",
-          tool: "edit",
-          path: "first.txt",
-          oldString: "old",
-          newString: "new",
-        };
-        yield {
-          type: "tool_call",
-          id: "second_edit",
-          tool: "edit",
-          path: "second.txt",
-          oldString: "old",
-          newString: "new",
-        };
-        yield {
-          type: "stop",
-          usage: {
-            inputTokens: 1,
-            cachedInputTokens: 0,
-            uncachedInputTokens: 1,
-            outputTokens: 1,
-          },
-        };
       },
     };
 
@@ -518,9 +1144,13 @@ describe("File Editing", () => {
       expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
         "second new\n",
       );
-      expect(
-        secondTurnMessages.filter((message) => message.role === "tool"),
-      ).toEqual([
+      const editMessages = secondTurnMessages.filter(
+        (message) =>
+          message.role === "tool" &&
+          (message.toolCallId === "first_edit" ||
+            message.toolCallId === "second_edit"),
+      );
+      expect(editMessages).toEqual([
         {
           role: "tool",
           toolCallId: "first_edit",
@@ -553,7 +1183,64 @@ describe("File Editing", () => {
     const provider: LLMProvider = {
       id: "mixed-multiple-edits",
       async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_first",
+            tool: "read",
+            path: "first.txt",
+          };
+          yield {
+            type: "tool_call",
+            id: "read_second",
+            tool: "read",
+            path: "second.txt",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
         if (turn === 1) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "missing_edit",
+            tool: "edit",
+            path: "first.txt",
+            oldString: "missing",
+            newString: "new",
+          };
+          yield {
+            type: "tool_call",
+            id: "second_edit",
+            tool: "edit",
+            path: "second.txt",
+            oldString: "old",
+            newString: "new",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 2) {
+          turn++;
           secondTurnMessages = options.messages;
           yield {
             type: "text",
@@ -570,33 +1257,6 @@ describe("File Editing", () => {
           };
           return;
         }
-
-        turn++;
-        yield {
-          type: "tool_call",
-          id: "missing_edit",
-          tool: "edit",
-          path: "first.txt",
-          oldString: "missing",
-          newString: "new",
-        };
-        yield {
-          type: "tool_call",
-          id: "second_edit",
-          tool: "edit",
-          path: "second.txt",
-          oldString: "old",
-          newString: "new",
-        };
-        yield {
-          type: "stop",
-          usage: {
-            inputTokens: 1,
-            cachedInputTokens: 0,
-            uncachedInputTokens: 1,
-            outputTokens: 1,
-          },
-        };
       },
     };
 
@@ -622,7 +1282,10 @@ describe("File Editing", () => {
         "second new\n",
       );
       const toolMessages = secondTurnMessages.filter(
-        (message) => message.role === "tool",
+        (message) =>
+          message.role === "tool" &&
+          (message.toolCallId === "missing_edit" ||
+            message.toolCallId === "second_edit"),
       );
       expect(toolMessages[0]).toMatchObject({
         role: "tool",
@@ -655,7 +1318,58 @@ describe("File Editing", () => {
     const provider: LLMProvider = {
       id: "empty-old-string-with-success",
       async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_second",
+            tool: "read",
+            path: "second.txt",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
         if (turn === 1) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "empty_file_edit",
+            tool: "edit",
+            path: "empty.txt",
+            oldString: "",
+            newString: "created\n",
+          };
+          yield {
+            type: "tool_call",
+            id: "second_edit",
+            tool: "edit",
+            path: "second.txt",
+            oldString: "old",
+            newString: "new",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 2) {
+          turn++;
           secondTurnMessages = options.messages;
           yield {
             type: "text",
@@ -672,33 +1386,6 @@ describe("File Editing", () => {
           };
           return;
         }
-
-        turn++;
-        yield {
-          type: "tool_call",
-          id: "empty_file_edit",
-          tool: "edit",
-          path: "empty.txt",
-          oldString: "",
-          newString: "created\n",
-        };
-        yield {
-          type: "tool_call",
-          id: "second_edit",
-          tool: "edit",
-          path: "second.txt",
-          oldString: "old",
-          newString: "new",
-        };
-        yield {
-          type: "stop",
-          usage: {
-            inputTokens: 1,
-            cachedInputTokens: 0,
-            uncachedInputTokens: 1,
-            outputTokens: 1,
-          },
-        };
       },
     };
 
@@ -722,7 +1409,10 @@ describe("File Editing", () => {
         "second new\n",
       );
       const toolMessages = secondTurnMessages.filter(
-        (message) => message.role === "tool",
+        (message) =>
+          message.role === "tool" &&
+          (message.toolCallId === "empty_file_edit" ||
+            message.toolCallId === "second_edit"),
       );
       expect(toolMessages[0]).toMatchObject({
         role: "tool",
@@ -819,6 +1509,26 @@ describe("File Editing", () => {
           turn++;
           yield {
             type: "tool_call",
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          yield {
+            type: "tool_call",
             id: "wrong_edit",
             tool: "edit",
             path: "note.txt",
@@ -837,7 +1547,7 @@ describe("File Editing", () => {
           return;
         }
 
-        if (turn === 1) {
+        if (turn === 2) {
           turn++;
           secondTurnMessages = options.messages;
           yield {
@@ -860,6 +1570,7 @@ describe("File Editing", () => {
           return;
         }
 
+        turn++;
         yield { type: "text", text: "Done." };
         yield {
           type: "stop",
@@ -889,7 +1600,8 @@ describe("File Editing", () => {
 
       // Then
       const toolMessage = secondTurnMessages.find(
-        (message) => message.role === "tool",
+        (message) =>
+          message.role === "tool" && message.toolCallId === "wrong_edit",
       );
       expect(toolMessage).toMatchObject({
         role: "tool",
@@ -907,12 +1619,12 @@ describe("File Editing", () => {
       expect(events).toContainEqual({
         type: "end",
         usage: {
-          inputTokens: 6,
+          inputTokens: 7,
           cachedInputTokens: 0,
-          uncachedInputTokens: 6,
-          outputTokens: 6,
+          uncachedInputTokens: 7,
+          outputTokens: 7,
         },
-        turns: 3,
+        turns: 4,
         stopReason: "completed",
       });
     } finally {
@@ -992,11 +1704,9 @@ describe("File Editing", () => {
           turn++;
           yield {
             type: "tool_call",
-            id: "missing_edit",
-            tool: "edit",
-            path: "missing.txt",
-            oldString: "world",
-            newString: "there",
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
           };
           yield {
             type: "stop",
@@ -1012,12 +1722,11 @@ describe("File Editing", () => {
 
         if (turn === 1) {
           turn++;
-          secondTurnMessages = options.messages;
           yield {
             type: "tool_call",
-            id: "correct_edit",
+            id: "missing_edit",
             tool: "edit",
-            path: "note.txt",
+            path: "missing.txt",
             oldString: "world",
             newString: "there",
           };
@@ -1033,6 +1742,30 @@ describe("File Editing", () => {
           return;
         }
 
+        if (turn === 2) {
+          turn++;
+          secondTurnMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "correct_edit",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "world",
+            newString: "there",
+          };
+          yield {
+            type: "stop",
+            usage: {
+              inputTokens: 3,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 3,
+              outputTokens: 3,
+            },
+          };
+          return;
+        }
+
+        turn++;
         yield { type: "text", text: "Done." };
         yield {
           type: "stop",
@@ -1062,7 +1795,8 @@ describe("File Editing", () => {
 
       // Then
       const toolMessage = secondTurnMessages.find(
-        (message) => message.role === "tool",
+        (message) =>
+          message.role === "tool" && message.toolCallId === "missing_edit",
       );
       expect(toolMessage).toMatchObject({
         role: "tool",
@@ -2502,6 +3236,7 @@ describe("File Editing", () => {
     await writeFile(join(workspace, "note.txt"), "old then old\n", "utf8");
     let secondTurnMessages: readonly Message[] = [];
     const provider = createFakeProvider([
+      fakeToolResponse("read", { path: "note.txt" }),
       fakeToolResponse("edit", {
         path: "note.txt",
         oldString: "old",
@@ -2536,11 +3271,12 @@ describe("File Editing", () => {
 
       // Then
       const toolMessage = secondTurnMessages.find(
-        (message) => message.role === "tool",
+        (message) =>
+          message.role === "tool" && message.toolCallId === "fake_tool_call_2",
       );
       expect(toolMessage).toMatchObject({
         role: "tool",
-        toolCallId: "fake_tool_call_1",
+        toolCallId: "fake_tool_call_2",
         content: expect.stringContaining("old string appears"),
       });
       expect(toolMessage?.content).toContain("Recovery:");
@@ -2607,6 +3343,8 @@ describe("File Editing", () => {
     await writeFile(join(workspace, "a.txt"), "hello wrold\n", "utf8");
     await writeFile(join(workspace, "b.txt"), "goodby world\n", "utf8");
     const provider = createFakeProvider([
+      fakeToolResponse("read", { path: "a.txt" }),
+      fakeToolResponse("read", { path: "b.txt" }),
       fakeToolResponse("edit", {
         path: "a.txt",
         oldString: "wrold",

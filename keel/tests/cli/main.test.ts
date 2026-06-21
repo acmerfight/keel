@@ -2753,7 +2753,9 @@ describe("CLI Main", () => {
         "hello new world\n",
       );
       expect(fixture.stdout()).toBe("Edited note.txt\n");
-      expect(fixture.stderr()).toBe("Tool: edit note.txt\n");
+      expect(fixture.stderr()).toBe(
+        "Tool: read note.txt\nTool: edit note.txt\n",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -2781,7 +2783,35 @@ describe("CLI Main", () => {
       );
       expect(fixture.stdout()).toContain("Tool failed:");
       expect(fixture.stderr()).toBe(
-        "Tool: edit note.txt\nTool failed: edit note.txt\n",
+        "Tool: read note.txt\nTool: edit note.txt\nTool failed: edit note.txt\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the fake provider cannot read the edit target,
+    When the CLI main runs the tool call,
+    Then it reports the failed read result without crashing`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-main-edit-missing-"),
+    );
+    const fixture = createRuntime(["replace old with new in missing.txt"], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("Tool failed:");
+      expect(fixture.stdout()).toContain("file not found");
+      expect(fixture.stderr()).toBe(
+        "Tool: read missing.txt\nTool failed: read missing.txt\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

@@ -4,7 +4,11 @@ import {
   compactMessages,
 } from "../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../agent/loop.ts";
-import { runAgentTurn } from "../agent/loop.ts";
+import {
+  clearReadVisibilityState,
+  createReadVisibilityState,
+  runAgentTurn,
+} from "../agent/loop.ts";
 import {
   buildAgentSystemPrompt,
   type ProjectInstructions,
@@ -610,6 +614,7 @@ export async function runInteractiveSession(
     sessionCostUsd += end.cost.spentUsd;
     return currentSessionCostReport();
   };
+  const readVisibility = createReadVisibilityState();
 
   options.onSigint(abortActiveTurn);
   try {
@@ -648,6 +653,7 @@ export async function runInteractiveSession(
           activeAbortController = null;
         }
         if (!compactAbortController.signal.aborted) {
+          clearReadVisibilityState(readVisibility);
           options.persistSessionMessages?.(
             messages,
             "compaction",
@@ -695,6 +701,7 @@ export async function runInteractiveSession(
           ...(resolved.contextCompaction !== undefined
             ? { contextCompaction: resolved.contextCompaction }
             : {}),
+          readVisibility,
           drainInjectedUserMessages: () => {
             const queuedLines = lineReader
               .drainLinesAfter(turnStartSequence)

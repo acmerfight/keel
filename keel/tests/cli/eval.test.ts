@@ -133,7 +133,7 @@ describe("CLI Eval", () => {
       expect(line?.report).toMatchObject({
         provider: "fake",
         model: "fake",
-        turns: 2,
+        turns: 3,
         stopReason: "completed",
       });
     } finally {

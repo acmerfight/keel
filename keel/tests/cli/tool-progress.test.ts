@@ -25,7 +25,7 @@ describe("CLI Tool Progress", () => {
         "hello new world\n",
       );
       expect(result.stdout).toBe("Edited note.txt\n");
-      expect(result.stderr).toBe("Tool: edit note.txt\n");
+      expect(result.stderr).toBe("Tool: read note.txt\nTool: edit note.txt\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -48,7 +48,7 @@ describe("CLI Tool Progress", () => {
 
       // Then
       expect(result.exitCode).toBe(0);
-      const escapedLabel = "edit note.txt\\nTool: edit forged.txt";
+      const escapedLabel = "read note.txt\\nTool: edit forged.txt";
       expect(result.stderr).toBe(
         `Tool: ${escapedLabel}\nTool failed: ${escapedLabel}\n`,
       );
@@ -78,7 +78,7 @@ describe("CLI Tool Progress", () => {
       // Then
       expect(result.exitCode).toBe(0);
       expect(result.stderr).not.toContain("\u001b");
-      expect(result.stderr).toContain("Tool: edit \\x1b[2Jnote.txt\n");
+      expect(result.stderr).toContain("Tool: read \\x1b[2Jnote.txt\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -128,9 +128,9 @@ describe("CLI Tool Progress", () => {
       // Then
       expect(result.exitCode).toBe(0);
       const lines = result.stderr.split("\n").filter((line) => line !== "");
-      expect(lines[0]).toBe("Tool: edit note.txt (failed)");
+      expect(lines[0]).toBe("Tool: read note.txt (failed)");
       expect(lines[0]).not.toMatch(/^Tool failed: /);
-      expect(lines[1]).toBe("Tool failed: edit note.txt (failed)");
+      expect(lines[1]).toBe("Tool failed: read note.txt (failed)");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -156,7 +156,7 @@ describe("CLI Tool Progress", () => {
         "hello world\n",
       );
       expect(result.stderr).toBe(
-        "Tool: edit note.txt\nTool failed: edit note.txt\n",
+        "Tool: read note.txt\nTool: edit note.txt\nTool failed: edit note.txt\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

@@ -136,6 +136,18 @@ describe("Tool Scheduling", () => {
           turn++;
           yield {
             type: "tool_call",
+            id: "read_note_before_edit",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          yield {
+            type: "tool_call",
             id: "update_note",
             tool: "edit",
             path: "note.txt",
@@ -152,6 +164,7 @@ describe("Tool Scheduling", () => {
           return;
         }
 
+        turn++;
         followUpMessages = options.messages;
         yield { type: "text", text: "Updated and checked the note." };
         yield { type: "stop", usage: ZERO_USAGE };
@@ -174,6 +187,8 @@ describe("Tool Scheduling", () => {
 
       // Then
       expect(toolEventTrace(events)).toEqual([
+        "read_note_before_edit:start",
+        "read_note_before_edit:end:true",
         "update_note:start",
         "update_note:end:true",
         "read_note:start",
@@ -184,10 +199,11 @@ describe("Tool Scheduling", () => {
       );
       const toolMessages = followUpMessages.filter(isToolMessage);
       expect(toolMessages.map((message) => message.toolCallId)).toEqual([
+        "read_note_before_edit",
         "update_note",
         "read_note",
       ]);
-      expect(toolMessages[1]?.content).toContain("after");
+      expect(toolMessages[2]?.content).toContain("after");
       expect(events).toContainEqual({
         type: "text",
         text: "Updated and checked the note.",
@@ -210,6 +226,18 @@ describe("Tool Scheduling", () => {
       id: "mixed-batch-provider",
       async *stream(options) {
         if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_note_initial",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (turn === 1) {
           turn++;
           yield {
             type: "tool_call",
@@ -246,6 +274,7 @@ describe("Tool Scheduling", () => {
           return;
         }
 
+        turn++;
         followUpMessages = options.messages;
         yield { type: "text", text: "Updated the note after inspection." };
         yield { type: "stop", usage: ZERO_USAGE };
@@ -268,6 +297,8 @@ describe("Tool Scheduling", () => {
 
       // Then
       expect(toolEventTrace(events)).toEqual([
+        "read_note_initial:start",
+        "read_note_initial:end:true",
         "read_note_before:start",
         "grep_todo:start",
         "read_note_before:end:true",
@@ -284,13 +315,14 @@ describe("Tool Scheduling", () => {
       );
       const toolMessages = followUpMessages.filter(isToolMessage);
       expect(toolMessages.map((message) => message.toolCallId)).toEqual([
+        "read_note_initial",
         "read_note_before",
         "grep_todo",
         "update_note",
         "read_note_after",
         "list_workspace",
       ]);
-      expect(toolMessages[3]?.content).toContain("after");
+      expect(toolMessages[4]?.content).toContain("after");
       expect(events).toContainEqual({
         type: "text",
         text: "Updated the note after inspection.",
@@ -300,9 +332,9 @@ describe("Tool Scheduling", () => {
     }
   });
 
-  test(`Given the assistant requests dependent edits to the same file in one turn,
+  test(`Given the assistant requests dependent edits to the same file after one read,
     When the batch includes workspace mutations,
-    Then each edit runs after the previous edit has changed the file`, async () => {
+    Then the second edit is rejected until the assistant rereads the file`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "alpha\n", "utf8");
@@ -311,6 +343,18 @@ describe("Tool Scheduling", () => {
       id: "dependent-edits-provider",
       async *stream() {
         if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (turn === 1) {
           turn++;
           yield {
             type: "tool_call",
@@ -353,13 +397,15 @@ describe("Tool Scheduling", () => {
 
       // Then
       expect(toolEventTrace(events)).toEqual([
+        "read_note:start",
+        "read_note:end:true",
         "expand_alpha:start",
         "expand_alpha:end:true",
         "expand_beta:start",
-        "expand_beta:end:true",
+        "expand_beta:end:false",
       ]);
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
-        "alpha beta gamma\n",
+        "alpha beta\n",
       );
       expect(events).toContainEqual({
         type: "text",

@@ -148,7 +148,7 @@ describe("CLI Output Sanitization", () => {
       // Then
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toContain(
-        "Tool: edit note\\u{202e}txt.kcab\\u{200b}.txt",
+        "Tool: read note\\u{202e}txt.kcab\\u{200b}.txt",
       );
       expect(result.stderr).not.toContain("\u202e");
       expect(result.stderr).not.toContain("\u200b");
@@ -174,7 +174,7 @@ describe("CLI Output Sanitization", () => {
       // Then
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toContain(
-        "Tool: edit note\\u{200f}mark\\u{61c}.txt",
+        "Tool: read note\\u{200f}mark\\u{61c}.txt",
       );
       expect(result.stderr).not.toContain("\u200f");
       expect(result.stderr).not.toContain("\u061c");
