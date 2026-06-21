@@ -26,6 +26,7 @@ const SESSION_SCHEMA_VERSION = 1;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const SESSION_LOCK_DIRECTORY_NAME = "active.lock";
 const SESSION_LOCK_OWNER_FILE_NAME = "owner.json";
+const SESSION_LEDGER_RESUME_MAX_BYTES = 32 * 1024 * 1024;
 
 const persistedToolCallSchema = z
   .object({
@@ -627,7 +628,32 @@ function parseSessionMutationRecord(
   return toSessionMutationRecord(parsed.data);
 }
 
+function formatByteCount(bytes: number): string {
+  return `${bytes.toLocaleString("en-US")} bytes`;
+}
+
+function assertSessionLedgerWithinResumeLimit(filePath: string): void {
+  let ledgerSize: number;
+  try {
+    ledgerSize = statSync(filePath).size;
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      sessionStoreError(`Error: session ledger not found at ${filePath}.`);
+    }
+    sessionStoreError(
+      `Error: cannot inspect session ledger ${filePath}: ${errorMessage(error)}`,
+    );
+  }
+
+  if (ledgerSize > SESSION_LEDGER_RESUME_MAX_BYTES) {
+    sessionStoreError(
+      `Error: cannot load session ledger ${filePath}: ledger is too large to resume safely (${formatByteCount(ledgerSize)}; limit ${formatByteCount(SESSION_LEDGER_RESUME_MAX_BYTES)}). Start a new session with --session <new-id>, or inspect and archive this ledger manually if you need its old context.`,
+    );
+  }
+}
+
 function readSessionRecords(filePath: string): SessionRecords {
+  assertSessionLedgerWithinResumeLimit(filePath);
   let content: string;
   try {
     content = readFileSync(filePath, "utf8");
