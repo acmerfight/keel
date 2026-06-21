@@ -742,16 +742,14 @@ describe("DeepSeek Provider", () => {
                           0,
                           JSON.stringify({
                             path: "one.txt",
-                            oldString: "old",
-                            newString: "new",
+                            edits: [{ oldText: "old", newText: "new" }],
                           }),
                         ),
                         editToolCallDelta(
                           1,
                           JSON.stringify({
                             path: "two.txt",
-                            oldString: "old",
-                            newString: "new",
+                            edits: [{ oldText: "old", newText: "new" }],
                           }),
                         ),
                       ],
@@ -997,8 +995,7 @@ describe("DeepSeek Provider", () => {
                           1,
                           JSON.stringify({
                             path: "note.txt",
-                            oldString: "old",
-                            newString: "new",
+                            edits: [{ oldText: "old", newText: "new" }],
                           }),
                         ),
                       ],
@@ -1210,8 +1207,7 @@ describe("DeepSeek Provider", () => {
                             name: "edit",
                             arguments: JSON.stringify({
                               path: "note.txt",
-                              oldString: "old",
-                              newString: "new",
+                              edits: [{ oldText: "old", newText: "new" }],
                             }),
                           },
                         },
@@ -1404,7 +1400,7 @@ describe("DeepSeek Provider", () => {
                           0,
                           JSON.stringify({
                             path: "note.txt",
-                            oldString: "old",
+                            edits: [{ oldText: "old" }],
                           }),
                         ),
                       ],

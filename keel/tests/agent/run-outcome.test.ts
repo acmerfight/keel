@@ -105,8 +105,7 @@ describe("Run Outcome Reporting", () => {
     const provider = createFakeProvider([
       fakeToolResponse("edit", {
         path: "note.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
       fakeResponse("Edited."),
     ]);
@@ -149,8 +148,7 @@ describe("Run Outcome Reporting", () => {
           id: "edit_note",
           tool: "edit",
           path: "note.txt",
-          oldString: "old",
-          newString: "new",
+          edits: [{ oldText: "old", newText: "new" }],
         };
         yield {
           type: "stop",
@@ -438,13 +436,11 @@ describe("Run Outcome Reporting", () => {
     const provider = createFakeProvider([
       fakeToolResponse("edit", {
         path: "a.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
       fakeToolResponse("edit", {
         path: "a.txt",
-        oldString: "new",
-        newString: "newer",
+        edits: [{ oldText: "new", newText: "newer" }],
       }),
       fakeResponse("Out of rounds: a.txt updated once, second change pending."),
     ]);

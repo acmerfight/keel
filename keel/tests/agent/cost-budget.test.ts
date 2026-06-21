@@ -62,8 +62,7 @@ describe("Cost Budget", () => {
           id: "edit_note",
           tool: "edit",
           path: "note.txt",
-          oldString: "old",
-          newString: "new",
+          edits: [{ oldText: "old", newText: "new" }],
         };
         yield {
           type: "stop",
@@ -157,8 +156,7 @@ describe("Cost Budget", () => {
             id: "edit_note",
             tool: "edit",
             path: "note.txt",
-            oldString: "old",
-            newString: "new",
+            edits: [{ oldText: "old", newText: "new" }],
           };
           yield {
             type: "stop",
@@ -222,8 +220,7 @@ describe("Cost Budget", () => {
           id: "edit_note",
           tool: "edit",
           path: "note.txt",
-          oldString: "old",
-          newString: "new",
+          edits: [{ oldText: "old", newText: "new" }],
         };
         yield {
           type: "stop",
@@ -294,16 +291,14 @@ describe("Cost Budget", () => {
           id: "first_edit",
           tool: "edit",
           path: "note.txt",
-          oldString: "old",
-          newString: "first",
+          edits: [{ oldText: "old", newText: "first" }],
         };
         yield {
           type: "tool_call",
           id: "second_edit",
           tool: "edit",
           path: "note.txt",
-          oldString: "old",
-          newString: "second",
+          edits: [{ oldText: "old", newText: "second" }],
         };
         yield {
           type: "stop",

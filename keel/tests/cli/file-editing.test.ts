@@ -85,8 +85,7 @@ function sseEditToolCall(): string {
                 name: "edit",
                 arguments: JSON.stringify({
                   path: "note.txt",
-                  oldString: "old",
-                  newString: "new",
+                  edits: [{ oldText: "old", newText: "new" }],
                 }),
               },
             },
@@ -272,8 +271,7 @@ function sseMultipleEditToolCalls(): string {
                 name: "edit",
                 arguments: JSON.stringify({
                   path: "note.txt",
-                  oldString: "old",
-                  newString: "new",
+                  edits: [{ oldText: "old", newText: "new" }],
                 }),
               },
             },
@@ -285,8 +283,7 @@ function sseMultipleEditToolCalls(): string {
                 name: "edit",
                 arguments: JSON.stringify({
                   path: "note.txt",
-                  oldString: "world",
-                  newString: "there",
+                  edits: [{ oldText: "world", newText: "there" }],
                 }),
               },
             },
@@ -1338,8 +1335,7 @@ describe("CLI File Editing", () => {
                           name: "edit",
                           arguments: JSON.stringify({
                             path: "a.txt",
-                            oldString: "wrold",
-                            newString: "world",
+                            edits: [{ oldText: "wrold", newText: "world" }],
                           }),
                         },
                       },
@@ -1351,8 +1347,7 @@ describe("CLI File Editing", () => {
                           name: "edit",
                           arguments: JSON.stringify({
                             path: "b.txt",
-                            oldString: "goodby",
-                            newString: "goodbye",
+                            edits: [{ oldText: "goodby", newText: "goodbye" }],
                           }),
                         },
                       },

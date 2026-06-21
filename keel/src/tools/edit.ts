@@ -22,7 +22,6 @@ export interface EditReplacement {
 }
 
 interface ExecuteEditOptions {
-  readonly replaceAll?: boolean;
   readonly readBeforeEdit?: {
     readonly hasRead: (targetPath: string) => boolean;
   };
@@ -175,20 +174,6 @@ function originalSpan(
 
 function withUtf8Bom(content: string, hasUtf8Bom: boolean): string {
   return hasUtf8Bom ? `\uFEFF${content}` : content;
-}
-
-function singleReplacement(
-  oldText: string,
-  newText: string,
-  options: ExecuteEditOptions,
-): EditReplacement {
-  return {
-    oldText,
-    newText,
-    ...(options.replaceAll !== undefined
-      ? { replaceAll: options.replaceAll }
-      : {}),
-  };
 }
 
 function normalizeEditReplacements(
@@ -392,7 +377,7 @@ function executeEditBatch(
     throw new KeelError(
       "tool_file_not_read",
       `edit failed: file has not been read: ${filePath}`,
-      `Use read(path: "${filePath}") to view the current file content, then retry edit with oldString copied from the read output.`,
+      `Use read(path: "${filePath}") to view the current file content, then retry edit with edits[].oldText copied from the read output.`,
     );
   }
 
@@ -440,44 +425,14 @@ function executeEditBatch(
 export function executeEdit(
   workspace: string,
   filePath: string,
-  oldString: string,
-  newString: string,
-  options?: ExecuteEditOptions,
-): EditToolResult;
-export function executeEdit(
-  workspace: string,
-  filePath: string,
   edits: readonly EditReplacement[],
   options?: ExecuteEditOptions,
 ): EditToolResult;
 export function executeEdit(
   workspace: string,
   filePath: string,
-  oldStringOrEdits: string | readonly EditReplacement[],
-  newStringOrOptions: string | ExecuteEditOptions = {},
-  maybeOptions: ExecuteEditOptions = {},
+  edits: readonly EditReplacement[],
+  options: ExecuteEditOptions = {},
 ): EditToolResult {
-  if (typeof oldStringOrEdits === "string") {
-    /* v8 ignore next 3: overload typing requires newString for legacy direct calls. */
-    if (typeof newStringOrOptions !== "string") {
-      throw new Error("edit invariant violated: newString is required");
-    }
-    return executeEditBatch(
-      workspace,
-      filePath,
-      [singleReplacement(oldStringOrEdits, newStringOrOptions, maybeOptions)],
-      maybeOptions,
-    );
-  }
-
-  /* v8 ignore next 3: overload typing disallows a string where batch options belong. */
-  if (typeof newStringOrOptions === "string") {
-    throw new Error("edit invariant violated: batch options are invalid");
-  }
-  return executeEditBatch(
-    workspace,
-    filePath,
-    oldStringOrEdits,
-    newStringOrOptions,
-  );
+  return executeEditBatch(workspace, filePath, edits, options);
 }

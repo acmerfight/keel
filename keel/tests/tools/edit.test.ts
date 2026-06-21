@@ -63,6 +63,16 @@ function expectEditError(
   }
 }
 
+function singleEdit(oldText: string, newText: string, replaceAll?: boolean) {
+  return [
+    {
+      oldText,
+      newText,
+      ...(replaceAll !== undefined ? { replaceAll } : {}),
+    },
+  ];
+}
+
 describe("Edit Tool", () => {
   test(`Given an edit target is larger than the file safety limit,
     When the edit tool validates the target,
@@ -76,7 +86,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "large.log", "old", "new"),
+        () => executeEdit(workspace, "large.log", singleEdit("old", "new")),
         "tool_file_too_large",
         "10,485,761 bytes; limit 10,485,760 bytes (10 MiB)",
         "Use grep or read a smaller region",
@@ -102,7 +112,9 @@ describe("Edit Tool", () => {
       await chmod(workspace, 0o555);
 
       // When / Then
-      expect(() => executeEdit(workspace, "note.txt", "old", "new")).toThrow();
+      expect(() =>
+        executeEdit(workspace, "note.txt", singleEdit("old", "new")),
+      ).toThrow();
       expect(await readFile(filePath, "utf8")).toBe("old value\n");
       await chmod(workspace, 0o755);
       expect(await pathExists(checkpoint)).toBe(false);
@@ -123,7 +135,9 @@ describe("Edit Tool", () => {
 
     try {
       // When / Then
-      expect(() => executeEdit(workspace, "note.txt", "old", "new")).toThrow();
+      expect(() =>
+        executeEdit(workspace, "note.txt", singleEdit("old", "new")),
+      ).toThrow();
       expect(await readFile(filePath, "utf8")).toBe("old value\n");
     } finally {
       await chmod(filePath, 0o644).catch(() => undefined);
@@ -142,7 +156,11 @@ describe("Edit Tool", () => {
 
     try {
       // When
-      const result = executeEdit(workspace, "note.txt", "old", "new");
+      const result = executeEdit(
+        workspace,
+        "note.txt",
+        singleEdit("old", "new"),
+      );
 
       // Then
       expect(result.content).toBe("Edited note.txt");
@@ -298,7 +316,7 @@ describe("Edit Tool", () => {
       // When
       const originalUmask = process.umask(0o077);
       try {
-        executeEdit(workspace, "note.txt", "old", "new");
+        executeEdit(workspace, "note.txt", singleEdit("old", "new"));
       } finally {
         process.umask(originalUmask);
       }
@@ -324,7 +342,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, outsidePath, "old", "new"),
+        () => executeEdit(workspace, outsidePath, singleEdit("old", "new")),
         "tool_path_outside_workspace",
         "outside the workspace",
       );
@@ -346,7 +364,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, outsidePath, "old", "new"),
+        () => executeEdit(workspace, outsidePath, singleEdit("old", "new")),
         "tool_path_outside_workspace",
         "outside the workspace",
       );
@@ -369,7 +387,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "link.txt", "old", "new"),
+        () => executeEdit(workspace, "link.txt", singleEdit("old", "new")),
         "tool_path_outside_workspace",
         "outside the workspace",
       );
@@ -391,7 +409,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "secret.txt", "old", "new"),
+        () => executeEdit(workspace, "secret.txt", singleEdit("old", "new")),
         "tool_path_ignored",
         "ignored path",
       );
@@ -419,7 +437,8 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "ignored-link.txt", "old", "new"),
+        () =>
+          executeEdit(workspace, "ignored-link.txt", singleEdit("old", "new")),
         "tool_path_ignored",
         "ignored path",
       );
@@ -443,7 +462,8 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "visible-link.txt", "old", "new"),
+        () =>
+          executeEdit(workspace, "visible-link.txt", singleEdit("old", "new")),
         "tool_path_ignored",
         "ignored path",
       );
@@ -467,7 +487,8 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "src/secret.txt", "old", "new"),
+        () =>
+          executeEdit(workspace, "src/secret.txt", singleEdit("old", "new")),
         "tool_path_ignored",
         "ignored path",
       );
@@ -495,7 +516,12 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "secret-dir/secret.txt", "old", "new"),
+        () =>
+          executeEdit(
+            workspace,
+            "secret-dir/secret.txt",
+            singleEdit("old", "new"),
+          ),
         "tool_path_ignored",
         "ignored path",
       );
@@ -517,7 +543,11 @@ describe("Edit Tool", () => {
 
     try {
       // When
-      const result = executeEdit(workspace, "keep.txt", "old", "new");
+      const result = executeEdit(
+        workspace,
+        "keep.txt",
+        singleEdit("old", "new"),
+      );
 
       // Then
       expect(result.content).toBe("Edited keep.txt");
@@ -545,8 +575,7 @@ describe("Edit Tool", () => {
       const result = executeEdit(
         workspace,
         "note.ts",
-        'const value = "old";\n',
-        'const value = "new";\n',
+        singleEdit('const value = "old";\n', 'const value = "new";\n'),
       );
 
       // Then
@@ -575,8 +604,7 @@ describe("Edit Tool", () => {
       const result = executeEdit(
         workspace,
         "note.ts",
-        "const value = old;\n",
-        "const value = new;\n",
+        singleEdit("const value = old;\n", "const value = new;\n"),
       );
 
       // Then
@@ -602,7 +630,11 @@ describe("Edit Tool", () => {
 
     try {
       // When
-      const result = executeEdit(workspace, "note.ts", "old", "new\nwrapped");
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        singleEdit("old", "new\nwrapped"),
+      );
 
       // Then
       expect(result.content).toBe("Edited note.ts");
@@ -627,7 +659,11 @@ describe("Edit Tool", () => {
 
     try {
       // When
-      const result = executeEdit(workspace, "note.ts", "old", "new\nwrapped");
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        singleEdit("old", "new\nwrapped"),
+      );
 
       // Then
       expect(result.content).toBe("Edited note.ts");
@@ -648,7 +684,11 @@ describe("Edit Tool", () => {
 
     try {
       // When
-      const result = executeEdit(workspace, "note.ts", "old", "new\r\nwrapped");
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        singleEdit("old", "new\r\nwrapped"),
+      );
 
       // Then
       expect(result.content).toBe("Edited note.ts");
@@ -678,8 +718,7 @@ describe("Edit Tool", () => {
       const result = executeEdit(
         workspace,
         "note.txt",
-        "title: old\n",
-        "title: new\n",
+        singleEdit("title: old\n", "title: new\n"),
       );
 
       // Then
@@ -704,9 +743,11 @@ describe("Edit Tool", () => {
 
     try {
       // When
-      const result = executeEdit(workspace, "note.txt", "old", "new", {
-        replaceAll: true,
-      });
+      const result = executeEdit(
+        workspace,
+        "note.txt",
+        singleEdit("old", "new", true),
+      );
 
       // Then
       expect(result.content).toBe("Edited note.txt");
@@ -741,9 +782,11 @@ describe("Edit Tool", () => {
       const result = executeEdit(
         workspace,
         "note.ts",
-        ["const first = old;", "next();", ""].join("\n"),
-        ["const first = new;", "next();", ""].join("\n"),
-        { replaceAll: true },
+        singleEdit(
+          ["const first = old;", "next();", ""].join("\n"),
+          ["const first = new;", "next();", ""].join("\n"),
+          true,
+        ),
       );
 
       // Then
@@ -776,9 +819,11 @@ describe("Edit Tool", () => {
 
     try {
       // When
-      const result = executeEdit(workspace, "note.ts", "old", "new\nwrapped", {
-        replaceAll: true,
-      });
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        singleEdit("old", "new\nwrapped", true),
+      );
 
       // Then
       expect(result.content).toBe("Edited note.ts");
@@ -800,7 +845,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "note.txt", "old", "new"),
+        () => executeEdit(workspace, "note.txt", singleEdit("old", "new")),
         "tool_old_string_not_unique",
         "old string appears 2 times",
       );
@@ -823,9 +868,11 @@ describe("Edit Tool", () => {
       // When / Then
       expectEditError(
         () =>
-          executeEdit(workspace, "note.txt", "missing", "new", {
-            replaceAll: true,
-          }),
+          executeEdit(
+            workspace,
+            "note.txt",
+            singleEdit("missing", "new", true),
+          ),
         "tool_old_string_not_found",
         "old string not found",
       );
@@ -847,7 +894,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "empty.txt", "missing", "new"),
+        () => executeEdit(workspace, "empty.txt", singleEdit("missing", "new")),
         "tool_old_string_not_found",
         "old string not found",
       );
@@ -867,7 +914,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "note.txt", "keep", "keep"),
+        () => executeEdit(workspace, "note.txt", singleEdit("keep", "keep")),
         "tool_edit_no_op",
         "old string and new string are identical",
       );
@@ -889,7 +936,12 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "note.txt", "keep me\r\n", "keep me\n"),
+        () =>
+          executeEdit(
+            workspace,
+            "note.txt",
+            singleEdit("keep me\r\n", "keep me\n"),
+          ),
         "tool_edit_no_op",
         "old string and new string are identical",
       );
@@ -924,8 +976,10 @@ describe("Edit Tool", () => {
       const result = executeEdit(
         workspace,
         "note.ts",
-        ["function oldValue() {", "  return value;", "}"].join("\n"),
-        ["function newValue() {", "  return next;", "}"].join("\n"),
+        singleEdit(
+          ["function oldValue() {", "  return value;", "}"].join("\n"),
+          ["function newValue() {", "  return next;", "}"].join("\n"),
+        ),
       );
 
       // Then
@@ -966,8 +1020,7 @@ describe("Edit Tool", () => {
       const result = executeEdit(
         workspace,
         "copy.ts",
-        "const label = “don’t wait…”;",
-        'const label = "done";',
+        singleEdit("const label = “don’t wait…”;", 'const label = "done";'),
       );
 
       // Then
@@ -998,7 +1051,11 @@ describe("Edit Tool", () => {
 
     try {
       // When
-      const result = executeEdit(workspace, "copy.ts", "don’t wait…", "go now");
+      const result = executeEdit(
+        workspace,
+        "copy.ts",
+        singleEdit("don’t wait…", "go now"),
+      );
 
       // Then
       expect(result.content).toBe("Edited copy.ts");
@@ -1031,8 +1088,10 @@ describe("Edit Tool", () => {
       const result = executeEdit(
         workspace,
         "copy.ts",
-        'const label = "range 1-5 - ready...";',
-        'const label = "range 1-10 - done";',
+        singleEdit(
+          'const label = "range 1-5 - ready...";',
+          'const label = "range 1-10 - done";',
+        ),
       );
 
       // Then
@@ -1059,7 +1118,11 @@ describe("Edit Tool", () => {
 
     try {
       // When
-      const result = executeEdit(workspace, "copy.txt", "range 1-5...", "done");
+      const result = executeEdit(
+        workspace,
+        "copy.txt",
+        singleEdit("range 1-5...", "done"),
+      );
 
       // Then
       expect(result.content).toBe("Edited copy.txt");
@@ -1088,8 +1151,10 @@ describe("Edit Tool", () => {
           executeEdit(
             workspace,
             "copy.ts",
-            'const label = "range 1—5";',
-            'const label = "range 1-10";',
+            singleEdit(
+              'const label = "range 1—5";',
+              'const label = "range 1-10";',
+            ),
           ),
         "tool_old_string_not_unique",
         "old string appears 2 times",
@@ -1111,7 +1176,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "copy.ts", ".", "!"),
+        () => executeEdit(workspace, "copy.ts", singleEdit(".", "!")),
         "tool_old_string_not_found",
         "old string not found",
       );
@@ -1130,7 +1195,11 @@ describe("Edit Tool", () => {
 
     try {
       // When
-      const result = executeEdit(workspace, "copy.txt", "...", "done");
+      const result = executeEdit(
+        workspace,
+        "copy.txt",
+        singleEdit("...", "done"),
+      );
 
       // Then
       expect(result.content).toBe("Edited copy.txt");
@@ -1157,9 +1226,11 @@ describe("Edit Tool", () => {
           executeEdit(
             workspace,
             "copy.ts",
-            'const label = "range 1-5";',
-            'const label = "range 1-10";',
-            { replaceAll: true },
+            singleEdit(
+              'const label = "range 1-5";',
+              'const label = "range 1-10";',
+              true,
+            ),
           ),
         "tool_old_string_not_found",
         "old string not found",
@@ -1186,8 +1257,10 @@ describe("Edit Tool", () => {
       const result = executeEdit(
         workspace,
         "note.ts",
-        ["  callOld();", "  finish();"].join("\n"),
-        ["    callNew();", "    finish();"].join("\n"),
+        singleEdit(
+          ["  callOld();", "  finish();"].join("\n"),
+          ["    callNew();", "    finish();"].join("\n"),
+        ),
       );
 
       // Then
@@ -1216,8 +1289,10 @@ describe("Edit Tool", () => {
       const result = executeEdit(
         workspace,
         "note.ts",
-        ["callOld();", "finish();"].join("\n"),
-        ["callNew();", "finish();"].join("\n"),
+        singleEdit(
+          ["callOld();", "finish();"].join("\n"),
+          ["callNew();", "finish();"].join("\n"),
+        ),
       );
 
       // Then
@@ -1245,8 +1320,10 @@ describe("Edit Tool", () => {
           executeEdit(
             workspace,
             "note.ts",
-            ["callOld();", "finish();", ""].join("\n"),
-            ["callNew();", "finish();", ""].join("\n"),
+            singleEdit(
+              ["callOld();", "finish();", ""].join("\n"),
+              ["callNew();", "finish();", ""].join("\n"),
+            ),
           ),
         "tool_old_string_not_found",
         "old string not found",
@@ -1273,8 +1350,10 @@ describe("Edit Tool", () => {
       const result = executeEdit(
         workspace,
         "note.ts",
-        ["callOld();", "finish();", ""].join("\n"),
-        ["callNew();", "finish();", ""].join("\n"),
+        singleEdit(
+          ["callOld();", "finish();", ""].join("\n"),
+          ["callNew();", "finish();", ""].join("\n"),
+        ),
       );
 
       // Then
@@ -1305,8 +1384,10 @@ describe("Edit Tool", () => {
       const result = executeEdit(
         workspace,
         "note.ts",
-        ["  callOld();", "", "  finish();"].join("\n"),
-        ["    callNew();", "", "    finish();"].join("\n"),
+        singleEdit(
+          ["  callOld();", "", "  finish();"].join("\n"),
+          ["    callNew();", "", "    finish();"].join("\n"),
+        ),
       );
 
       // Then
@@ -1343,8 +1424,10 @@ describe("Edit Tool", () => {
           executeEdit(
             workspace,
             "note.ts",
-            ["return old;", "next();"].join("\n"),
-            ["return new;", "next();"].join("\n"),
+            singleEdit(
+              ["return old;", "next();"].join("\n"),
+              ["return new;", "next();"].join("\n"),
+            ),
           ),
         "tool_old_string_not_unique",
         "old string appears 2 times",
@@ -1377,8 +1460,10 @@ describe("Edit Tool", () => {
           executeEdit(
             workspace,
             "note.ts",
-            ["return old;", "next();"].join("\n"),
-            ["return new;", "next();"].join("\n"),
+            singleEdit(
+              ["return old;", "next();"].join("\n"),
+              ["return new;", "next();"].join("\n"),
+            ),
           ),
         "tool_old_string_not_unique",
         "old string appears 2 times",
@@ -1399,7 +1484,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "notes", "old", "new"),
+        () => executeEdit(workspace, "notes", singleEdit("old", "new")),
         "tool_not_file",
         "not a file",
         "directory, not a file",
@@ -1421,7 +1506,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "image.png", "PNG", "text"),
+        () => executeEdit(workspace, "image.png", singleEdit("PNG", "text")),
         "tool_binary_file",
         "binary file",
         "cannot be edited as text",
@@ -1444,7 +1529,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "document.txt", "old", "new"),
+        () => executeEdit(workspace, "document.txt", singleEdit("old", "new")),
         "tool_binary_file",
         "binary file",
         "cannot be edited as text",
@@ -1469,7 +1554,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "image.txt", "RIFF", "text"),
+        () => executeEdit(workspace, "image.txt", singleEdit("RIFF", "text")),
         "tool_binary_file",
         "binary file",
         "cannot be edited as text",
@@ -1495,7 +1580,7 @@ describe("Edit Tool", () => {
     try {
       // When / Then
       expectEditError(
-        () => executeEdit(workspace, "invalid.txt", "old", "new"),
+        () => executeEdit(workspace, "invalid.txt", singleEdit("old", "new")),
         "tool_binary_file",
         "binary file",
         "cannot be edited as text",

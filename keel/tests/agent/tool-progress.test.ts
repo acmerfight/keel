@@ -40,8 +40,7 @@ describe("Tool Progress", () => {
       fakeToolResponse("read", { path: "note.txt" }),
       fakeToolResponse("edit", {
         path: "note.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
       fakeResponse("Done."),
     ]);
@@ -92,8 +91,7 @@ describe("Tool Progress", () => {
     const provider = createFakeProvider([
       fakeToolResponse("edit", {
         path: "note.txt",
-        oldString: "missing",
-        newString: "new",
+        edits: [{ oldText: "missing", newText: "new" }],
       }),
       fakeResponse("The text was not found."),
     ]);
