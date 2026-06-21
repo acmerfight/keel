@@ -24,8 +24,8 @@ import {
 } from "./session-ledger.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
 import {
-  canExecuteToolCallsInParallel,
   executeParallelToolCallsInSourceOrder,
+  planToolCallExecutionSegments,
   type ScheduledToolCall,
 } from "./tool-scheduler.ts";
 
@@ -651,41 +651,43 @@ export async function* runAgentTurn(
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
 
+    const recordToolExecution = (
+      toolCall: ToolCall,
+      execution: ToolExecution,
+    ): void => {
+      applySessionLedger(
+        appendSessionLedgerMessage(sessionLedger, {
+          role: "tool",
+          toolCallId: toolCall.id,
+          content: execution.content,
+        }),
+      );
+    };
+
     const scheduled = scheduledToolCalls(turnResult.toolCalls);
-    if (canExecuteToolCallsInParallel(scheduled)) {
-      for (const { toolCall } of scheduled) {
-        yield { type: "tool_start", toolCall };
-      }
-      const results = await executeParallelToolCallsInSourceOrder({
-        toolCalls: scheduled,
-        execute: executeTurnToolCall,
-      });
-      for (const result of results) {
-        if (result.status === "rejected") {
-          throw result.reason;
+    for (const segment of planToolCallExecutionSegments(scheduled)) {
+      if (segment.kind === "parallel") {
+        for (const { toolCall } of segment.toolCalls) {
+          yield { type: "tool_start", toolCall };
         }
-        const { toolCall, result: execution } = result;
-        yield { type: "tool_end", toolCall, ok: execution.ok };
-        applySessionLedger(
-          appendSessionLedgerMessage(sessionLedger, {
-            role: "tool",
-            toolCallId: toolCall.id,
-            content: execution.content,
-          }),
-        );
-      }
-    } else {
-      for (const toolCall of turnResult.toolCalls) {
+        const results = await executeParallelToolCallsInSourceOrder({
+          toolCalls: segment.toolCalls,
+          execute: executeTurnToolCall,
+        });
+        for (const result of results) {
+          if (result.status === "rejected") {
+            throw result.reason;
+          }
+          const { toolCall, result: execution } = result;
+          yield { type: "tool_end", toolCall, ok: execution.ok };
+          recordToolExecution(toolCall, execution);
+        }
+      } else {
+        const { toolCall } = segment.toolCall;
         yield { type: "tool_start", toolCall };
         const execution = await executeTurnToolCall(toolCall);
         yield { type: "tool_end", toolCall, ok: execution.ok };
-        applySessionLedger(
-          appendSessionLedgerMessage(sessionLedger, {
-            role: "tool",
-            toolCallId: toolCall.id,
-            content: execution.content,
-          }),
-        );
+        recordToolExecution(toolCall, execution);
       }
     }
 

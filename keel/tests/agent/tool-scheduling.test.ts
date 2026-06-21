@@ -197,6 +197,109 @@ describe("Tool Scheduling", () => {
     }
   });
 
+  test(`Given the assistant inspects files before and after editing in one turn,
+    When read-only calls are separated by a workspace mutation,
+    Then independent reads overlap on each side while the edit remains a barrier`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "note.txt"), "before\n", "utf8");
+    await writeFile(join(workspace, "todo.txt"), "todo: before\n", "utf8");
+    let turn = 0;
+    let followUpMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "mixed-batch-provider",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_note_before",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield {
+            type: "tool_call",
+            id: "grep_todo",
+            tool: "grep",
+            pattern: "todo",
+          };
+          yield {
+            type: "tool_call",
+            id: "update_note",
+            tool: "edit",
+            path: "note.txt",
+            oldString: "before",
+            newString: "after",
+          };
+          yield {
+            type: "tool_call",
+            id: "read_note_after",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield {
+            type: "tool_call",
+            id: "list_workspace",
+            tool: "ls",
+          };
+          yield { type: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        followUpMessages = options.messages;
+        yield { type: "text", text: "Updated the note after inspection." };
+        yield { type: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "inspect the workspace, update note.txt, and verify it",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(toolEventTrace(events)).toEqual([
+        "read_note_before:start",
+        "grep_todo:start",
+        "read_note_before:end:true",
+        "grep_todo:end:true",
+        "update_note:start",
+        "update_note:end:true",
+        "read_note_after:start",
+        "list_workspace:start",
+        "read_note_after:end:true",
+        "list_workspace:end:true",
+      ]);
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "after\n",
+      );
+      const toolMessages = followUpMessages.filter(isToolMessage);
+      expect(toolMessages.map((message) => message.toolCallId)).toEqual([
+        "read_note_before",
+        "grep_todo",
+        "update_note",
+        "read_note_after",
+        "list_workspace",
+      ]);
+      expect(toolMessages[3]?.content).toContain("after");
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Updated the note after inspection.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the assistant requests dependent edits to the same file in one turn,
     When the batch includes workspace mutations,
     Then each edit runs after the previous edit has changed the file`, async () => {
