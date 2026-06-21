@@ -15,11 +15,13 @@ import {
 } from "../../src/tools/registry.ts";
 
 type ProviderField = {
-  readonly type: "string" | "integer" | "boolean";
+  readonly type: "string" | "integer" | "boolean" | "array" | "object";
   readonly description: string;
   readonly required: boolean;
   readonly minimum?: number;
   readonly maximum?: number;
+  readonly items?: ProviderField;
+  readonly properties?: Readonly<Record<string, ProviderField>>;
 };
 
 type ProviderParameter =
@@ -82,7 +84,9 @@ function inclusiveIntegerMaximum(
   return undefined;
 }
 
-function validProviderValue(field: ProviderField): string | number | boolean {
+function validProviderValue(
+  field: ProviderField,
+): string | number | boolean | readonly unknown[] | Record<string, unknown> {
   switch (field.type) {
     case "string":
       return "value";
@@ -93,6 +97,23 @@ function validProviderValue(field: ProviderField): string | number | boolean {
       return field.minimum;
     case "boolean":
       return true;
+    case "array":
+      if (field.items === undefined) {
+        throw new Error("array provider field is missing items");
+      }
+      return [validProviderValue(field.items)];
+    case "object": {
+      if (field.properties === undefined) {
+        throw new Error("object provider field is missing properties");
+      }
+      const value: Record<string, unknown> = {};
+      for (const [name, property] of Object.entries(field.properties)) {
+        if (property.required) {
+          value[name] = validProviderValue(property);
+        }
+      }
+      return value;
+    }
   }
 }
 
@@ -102,6 +123,23 @@ function providerParameterFromField(field: ProviderField): ProviderParameter {
     description: field.description,
     ...(field.minimum !== undefined ? { minimum: field.minimum } : {}),
     ...(field.maximum !== undefined ? { maximum: field.maximum } : {}),
+    ...(field.items !== undefined
+      ? { items: providerParameterFromField(field.items) }
+      : {}),
+    ...(field.properties !== undefined
+      ? {
+          properties: Object.fromEntries(
+            Object.entries(field.properties).map(([name, property]) => [
+              name,
+              providerParameterFromField(property),
+            ]),
+          ),
+          required: Object.entries(field.properties)
+            .filter(([, property]) => property.required)
+            .map(([name]) => name),
+          additionalProperties: false,
+        }
+      : {}),
   };
 }
 
@@ -219,8 +257,7 @@ describe("tool registry", () => {
     expect(
       editTool.display.formatLabel({
         path: "a.ts",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       }),
     ).toBe("edit a.ts");
     expect(
@@ -495,6 +532,58 @@ describe("tool registry", () => {
     );
   });
 
+  test(`Given builtin edit execution receives malformed nested arguments,
+    When the registry-owned execution guard validates the call,
+    Then it rejects the malformed edit call before reaching the tool executor`, () => {
+    const editTool = builtinToolByName("edit");
+    const malformedCalls = [
+      {
+        id: "call_edit",
+        tool: "edit",
+        path: "note.txt",
+        edits: "not an array",
+      },
+      {
+        id: "call_edit",
+        tool: "edit",
+        path: "note.txt",
+        edits: [{ newText: "new" }],
+      },
+      {
+        id: "call_edit",
+        tool: "edit",
+        path: "note.txt",
+        edits: ["not an object"],
+      },
+      {
+        id: "call_edit",
+        tool: "edit",
+        path: "note.txt",
+        edits: [{ oldText: "old", newText: "new", replaceAll: "yes" }],
+      },
+      {
+        id: "call_edit",
+        tool: "edit",
+        path: "note.txt",
+        edits: [{ oldText: "old", newText: "new", note: "extra" }],
+      },
+    ];
+    expect(editTool.name).toBe("edit");
+
+    for (const malformedCall of malformedCalls) {
+      expect(() =>
+        editTool.executeCall(
+          {
+            workspace: ".",
+            signal: new AbortController().signal,
+            allowBash: false,
+          },
+          malformedCall,
+        ),
+      ).toThrow("Invalid builtin tool call for edit");
+    }
+  });
+
   test(`Given builtin tools declare their argument contracts,
     When the registry metadata is inspected,
     Then each tool lists its provider-visible arguments and required fields`, () => {
@@ -516,8 +605,8 @@ describe("tool registry", () => {
       glob: { fields: ["pattern", "path"], required: ["pattern"] },
       grep: { fields: ["pattern", "path"], required: ["pattern"] },
       edit: {
-        fields: ["path", "oldString", "newString", "replaceAll"],
-        required: ["path", "oldString", "newString"],
+        fields: ["path", "edits"],
+        required: ["path", "edits"],
       },
       write: { fields: ["path", "content"], required: ["path", "content"] },
       apply_patch: { fields: ["patch"], required: ["patch"] },
@@ -574,14 +663,18 @@ describe("tool registry", () => {
         expect(schemaField.type, `${tool.name}.${fieldName} type drift`).toBe(
           field.type,
         );
+        const expectedMinimum =
+          field.type === "integer" ? field.minimum : undefined;
+        const expectedMaximum =
+          field.type === "integer" ? field.maximum : undefined;
         expect(
           inclusiveIntegerMinimum(schemaField),
           `${tool.name}.${fieldName} minimum drift`,
-        ).toBe(field.minimum);
+        ).toBe(expectedMinimum);
         expect(
           inclusiveIntegerMaximum(schemaField),
           `${tool.name}.${fieldName} maximum drift`,
-        ).toBe(field.maximum);
+        ).toBe(expectedMaximum);
       }
     }
   });
@@ -682,27 +775,116 @@ describe("tool registry", () => {
 
   test(`Given a provider returns an edit call with replaceAll enabled,
     When the registry parses and serializes the call,
-    Then the replaceAll flag is preserved for tool execution`, () => {
+    Then the replaceAll flag is preserved inside the edit entry`, () => {
     const parsed = toolCallFromParsedArguments("call_edit", "edit", {
       path: "src/index.ts",
-      oldString: "old",
-      newString: "new",
-      replaceAll: true,
+      edits: [{ oldText: "old", newText: "new", replaceAll: true }],
     });
 
     expect(parsed).toEqual({
       id: "call_edit",
       tool: "edit",
       path: "src/index.ts",
-      oldString: "old",
-      newString: "new",
-      replaceAll: true,
+      edits: [{ oldText: "old", newText: "new", replaceAll: true }],
     });
     expect(parsed === null ? null : toolCallArguments(parsed)).toEqual({
       path: "src/index.ts",
+      edits: [{ oldText: "old", newText: "new", replaceAll: true }],
+    });
+  });
+
+  test(`Given a provider returns nested optional edit fields as null,
+    When the registry parses the call,
+    Then the null optional field is omitted from the edit entry`, () => {
+    const parsed = toolCallFromParsedArguments("call_edit", "edit", {
+      path: "src/index.ts",
+      edits: [{ oldText: "old", newText: "new", replaceAll: null }],
+    });
+
+    expect(parsed).toEqual({
+      id: "call_edit",
+      tool: "edit",
+      path: "src/index.ts",
+      edits: [{ oldText: "old", newText: "new" }],
+    });
+  });
+
+  test(`Given a legacy edit call returns replaceAll as null,
+    When the registry parses the call,
+    Then the call is normalized to one edit entry without replaceAll`, () => {
+    const parsed = toolCallFromParsedArguments("call_edit", "edit", {
+      path: "src/index.ts",
       oldString: "old",
       newString: "new",
-      replaceAll: true,
+      replaceAll: null,
+    });
+
+    expect(parsed).toEqual({
+      id: "call_edit",
+      tool: "edit",
+      path: "src/index.ts",
+      edits: [{ oldText: "old", newText: "new" }],
+    });
+  });
+
+  test(`Given a legacy edit call returns replaceAll with the wrong type,
+    When the registry parses the call,
+    Then the call is rejected instead of guessing intent`, () => {
+    const parsed = toolCallFromParsedArguments("call_edit", "edit", {
+      path: "src/index.ts",
+      oldString: "old",
+      newString: "new",
+      replaceAll: "true",
+    });
+
+    expect(parsed).toBeNull();
+  });
+
+  test(`Given an edit entry includes an unknown nested field,
+    When the registry parses the call,
+    Then the strict nested edit schema rejects the call`, () => {
+    const parsed = toolCallFromParsedArguments("call_edit", "edit", {
+      path: "src/index.ts",
+      edits: [{ oldText: "old", newText: "new", note: "extra" }],
+    });
+
+    expect(parsed).toBeNull();
+  });
+
+  test(`Given provider tools are requested,
+    When the edit schema is rendered for the model,
+    Then edit exposes one edits array of replacement objects`, () => {
+    const editTool = openAICompatibleTools(true).find(
+      (tool) => tool.function.name === "edit",
+    );
+    const { edits } = editTool?.function.parameters.properties ?? {};
+
+    expect(edits).toEqual({
+      type: "array",
+      description:
+        "One or more targeted replacements. Each oldText is matched against the original file content. Non-replaceAll edits must be unique and all matched regions must be non-overlapping.",
+      items: {
+        type: "object",
+        description: "One targeted replacement inside the file.",
+        properties: {
+          oldText: {
+            type: "string",
+            description:
+              "Text to replace. Copy it from read output; by default it must identify one target.",
+          },
+          newText: {
+            type: "string",
+            description: "Replacement text.",
+          },
+          replaceAll: {
+            type: "boolean",
+            description:
+              "When true, replace every exact occurrence of oldText for this edit. Defaults to false, which requires oldText to identify one target.",
+          },
+        },
+        required: ["oldText", "newText"],
+        additionalProperties: false,
+      },
     });
   });
 

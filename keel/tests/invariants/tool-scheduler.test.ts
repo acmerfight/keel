@@ -43,8 +43,7 @@ const editCall: ToolCall = {
   id: "edit_note",
   tool: "edit",
   path: "note.txt",
-  oldString: "before",
-  newString: "after",
+  edits: [{ oldText: "before", newText: "after" }],
 };
 
 function readCall(index: number): ToolCall {

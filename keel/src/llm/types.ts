@@ -28,9 +28,20 @@ interface ToolMessage {
 
 export type Message = UserMessage | AssistantMessage | ToolMessage;
 
+interface LegacyEditToolCallEvent {
+  readonly type: "tool_call";
+  readonly id: string;
+  readonly tool: "edit";
+  readonly path: string;
+  readonly oldString: string;
+  readonly newString: string;
+  readonly replaceAll?: boolean;
+}
+
 export type LLMEvent =
   | { readonly type: "text"; readonly text: string }
   | ({ readonly type: "tool_call" } & ToolCall)
+  | LegacyEditToolCallEvent
   | {
       readonly type: "provider_retry";
       readonly provider: string;

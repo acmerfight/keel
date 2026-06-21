@@ -18,8 +18,8 @@ import type {
 
 interface CliEditRequest {
   readonly path: string;
-  readonly oldString: string;
-  readonly newString: string;
+  readonly oldText: string;
+  readonly newText: string;
 }
 
 interface CliWriteRequest {
@@ -164,13 +164,13 @@ function parseCliEditDemo(message: string): CliEditRequest | null {
   const inIndex = body.indexOf(inToken, newStringStart);
   if (inIndex < 0) return null;
 
-  const oldString = body.slice(0, withIndex);
-  const newString = body.slice(newStringStart, inIndex);
+  const oldText = body.slice(0, withIndex);
+  const newText = body.slice(newStringStart, inIndex);
   const path = body.slice(inIndex + inToken.length);
 
-  if (oldString === "" || newString === "" || path === "") return null;
+  if (oldText === "" || newText === "" || path === "") return null;
 
-  return { path, oldString, newString };
+  return { path, oldText, newText };
 }
 
 function parseCliWriteDemo(message: string): CliWriteRequest | null {
@@ -332,8 +332,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
           id: "fake_edit",
           tool: "edit",
           path: edit.path,
-          oldString: edit.oldString,
-          newString: edit.newString,
+          edits: [{ oldText: edit.oldText, newText: edit.newText }],
         };
         yield { type: "stop", usage: ZERO_USAGE };
         return;

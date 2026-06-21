@@ -411,6 +411,39 @@ function stableJson(value: unknown): string {
     .join(",")}}`;
 }
 
+function stableClone(value: unknown): unknown {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(stableClone);
+  }
+  /* v8 ignore next 3: tool fingerprints are built from JSON-compatible canonical arguments. */
+  if (typeof value !== "object") {
+    return null;
+  }
+  const clone: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    clone[key] = stableClone(item);
+  }
+  return clone;
+}
+
+function stableRecordClone(
+  value: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const clone: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    clone[key] = stableClone(item);
+  }
+  return clone;
+}
+
 function stableValuesEqual(left: unknown, right: unknown): boolean {
   if (
     left === null ||
@@ -445,7 +478,7 @@ function toolCallFingerprintCache(
   return {
     id: toolCall.id,
     tool: toolCall.tool,
-    args: toolCallCanonicalArguments(toolCall),
+    args: stableRecordClone(toolCallCanonicalArguments(toolCall)),
   };
 }
 

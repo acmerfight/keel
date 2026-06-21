@@ -139,8 +139,7 @@ describe("DeepSeek Recorded Fixtures", () => {
           id: "call_00_stPO5gzpBGYPHQ4hSeAI6685",
           tool: "edit",
           path: "note.txt",
-          oldString: "old",
-          newString: "new",
+          edits: [{ oldText: "old", newText: "new" }],
         },
         {
           type: "stop",

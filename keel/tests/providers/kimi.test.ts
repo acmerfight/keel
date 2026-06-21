@@ -1272,8 +1272,7 @@ describe("Kimi Provider", () => {
         id: "call_kimi_edit",
         tool: "edit",
         path: "note.txt",
-        oldString: "old",
-        newString: "new",
+        edits: [{ oldText: "old", newText: "new" }],
       },
       {
         type: "stop",

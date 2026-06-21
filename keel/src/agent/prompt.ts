@@ -47,8 +47,8 @@ Tool strategy:
 - You may call multiple tools in one turn when they are independent reads. Batch grep, glob, ls, and read calls together.
 
 Edit workflow:
-- Always read a file before editing it. Base oldString on exact text from read output — never from memory or prior turns.
-- edit replaces one exact string that must appear exactly once (unless replaceAll is true). Include enough surrounding context in oldString to ensure uniqueness.
+- Always read a file before editing it. Base each edits[].oldText on exact text from read output — never from memory or prior turns.
+- edit replaces one or more exact strings in one file. Use multiple edits[] entries for separate changes in the same file. Each oldText must appear exactly once unless that edit's replaceAll is true. Include enough surrounding context in oldText to ensure uniqueness.
 - After editing, verify the change is correct: read the modified region or run a relevant command.
 - Make the smallest change that satisfies the request. Do not refactor unrelated code.
 
