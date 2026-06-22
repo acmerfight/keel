@@ -59,7 +59,7 @@ describe("Bash Commands", () => {
         } else {
           yield { type: "text", text: "I cannot run shell commands." };
         }
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -115,7 +115,7 @@ describe("Bash Commands", () => {
           secondTurnMessages = options.messages;
           yield { type: "text", text: "Created the file." };
         }
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -171,7 +171,7 @@ describe("Bash Commands", () => {
           secondTurnMessages = options.messages;
           yield { type: "text", text: "The command failed." };
         }
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -230,7 +230,7 @@ describe("Bash Commands", () => {
           secondTurnMessages = options.messages;
           yield { type: "text", text: "The command timed out." };
         }
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -278,7 +278,7 @@ describe("Bash Commands", () => {
           command: 'node -e ""',
           timeoutMs: 0,
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 

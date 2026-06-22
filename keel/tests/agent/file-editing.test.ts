@@ -104,6 +104,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -131,6 +132,7 @@ describe("File Editing", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -207,6 +209,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -229,6 +232,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 2,
               cachedInputTokens: 0,
@@ -242,6 +246,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "Created the generated config." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 3,
             cachedInputTokens: 0,
@@ -333,6 +338,7 @@ describe("File Editing", () => {
           yield { type: "text", text: "I will read the file first." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -348,6 +354,7 @@ describe("File Editing", () => {
           yield { type: "text", text: "I will read the file first." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -367,6 +374,7 @@ describe("File Editing", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -526,6 +534,7 @@ describe("File Editing", () => {
           yield { type: "text", text: "I will retry after reading." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -552,6 +561,7 @@ describe("File Editing", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -624,6 +634,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -645,6 +656,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -666,6 +678,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -680,6 +693,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "I need to reread the file." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -739,6 +753,7 @@ describe("File Editing", () => {
           yield { type: "text", text: "The note was read earlier." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -759,6 +774,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -774,6 +790,7 @@ describe("File Editing", () => {
           yield { type: "text", text: "Read note.txt." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -795,6 +812,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -809,6 +827,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "I need to reread note.txt." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -916,6 +935,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -930,6 +950,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "I need a fresh read." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -993,6 +1014,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1014,6 +1036,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1030,6 +1053,7 @@ describe("File Editing", () => {
           yield { type: "text", text: "Updated every occurrence." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1111,6 +1135,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1139,6 +1164,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1158,6 +1184,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1246,6 +1273,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1274,6 +1302,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1293,6 +1322,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1373,6 +1403,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1401,6 +1432,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1420,6 +1452,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1558,6 +1591,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1596,6 +1630,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1610,6 +1645,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "Patch applied; edit needs a reread." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -1737,6 +1773,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1758,6 +1795,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1780,6 +1818,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 2,
               cachedInputTokens: 0,
@@ -1794,6 +1833,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "Done." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 3,
             cachedInputTokens: 0,
@@ -1929,6 +1969,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -1950,6 +1991,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 2,
               cachedInputTokens: 0,
@@ -1972,6 +2014,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 3,
               cachedInputTokens: 0,
@@ -1986,6 +2029,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "Done." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 3,
             cachedInputTokens: 0,
@@ -2115,6 +2159,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -2129,6 +2174,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "done" };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -2196,6 +2242,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -2210,6 +2257,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "done" };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -2338,6 +2386,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -2359,6 +2408,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 2,
               cachedInputTokens: 0,
@@ -2373,6 +2423,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "done" };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 3,
             cachedInputTokens: 0,
@@ -2439,6 +2490,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -2460,6 +2512,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 2,
               cachedInputTokens: 0,
@@ -2474,6 +2527,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "done" };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 3,
             cachedInputTokens: 0,
@@ -2542,6 +2596,7 @@ describe("File Editing", () => {
           yield { type: "text", text: "Cannot read that binary file." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -2560,6 +2615,7 @@ describe("File Editing", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -2613,6 +2669,7 @@ describe("File Editing", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -2672,6 +2729,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -2693,6 +2751,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 2,
               cachedInputTokens: 0,
@@ -2707,6 +2766,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "Found it." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 3,
             cachedInputTokens: 0,
@@ -2830,6 +2890,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -2851,6 +2912,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 2,
               cachedInputTokens: 0,
@@ -2865,6 +2927,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "Search recovered." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 3,
             cachedInputTokens: 0,
@@ -2979,6 +3042,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -3001,6 +3065,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 2,
               cachedInputTokens: 0,
@@ -3015,6 +3080,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "Search recovered." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 3,
             cachedInputTokens: 0,
@@ -3097,6 +3163,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -3118,6 +3185,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 2,
               cachedInputTokens: 0,
@@ -3139,6 +3207,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 3,
               cachedInputTokens: 0,
@@ -3153,6 +3222,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "File boundary held." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 4,
             cachedInputTokens: 0,
@@ -3246,6 +3316,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -3267,6 +3338,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 2,
               cachedInputTokens: 0,
@@ -3288,6 +3360,7 @@ describe("File Editing", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 3,
               cachedInputTokens: 0,
@@ -3302,6 +3375,7 @@ describe("File Editing", () => {
         yield { type: "text", text: "Recovered after outside path." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 4,
             cachedInputTokens: 0,
@@ -3390,6 +3464,7 @@ describe("File Editing", () => {
           yield { type: "text", text: "Cannot read that text file." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -3408,6 +3483,7 @@ describe("File Editing", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,

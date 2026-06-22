@@ -115,6 +115,22 @@ describe("Qwen Provider", () => {
         capturedAuthorization = req.headers.authorization;
         const userMessage = parsed.messages[1]?.content;
 
+        if (userMessage === "length-limit") {
+          writeSseResponse(res, [
+            sseData({ choices: [{ delta: { content: "partial qwen" } }] }),
+            sseData({
+              choices: [{ delta: {}, finish_reason: "length" }],
+              usage: {
+                prompt_tokens: 12,
+                completion_tokens: 5,
+                prompt_tokens_details: { cached_tokens: 2 },
+              },
+            }),
+            "data: [DONE]\n\n",
+          ]);
+          return;
+        }
+
         if (userMessage === "invalid-json") {
           writeSseResponse(res, ["data: {not json}\n\n", "data: [DONE]\n\n"]);
           return;
@@ -356,11 +372,47 @@ describe("Qwen Provider", () => {
       { type: "text", text: "Hello from Qwen." },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 50,
           cachedInputTokens: 5,
           uncachedInputTokens: 45,
           outputTokens: 10,
+        },
+      },
+    ]);
+  });
+
+  test(`Given Qwen stops because the output token limit was reached,
+    When the provider reads finish_reason length,
+    Then it yields partial text and a length stop reason`, async () => {
+    // Given
+    const provider = createQwenProvider({
+      apiKey: "test-qwen-key",
+      baseUrl,
+      model: "qwen3.7-plus",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are Keel.",
+        messages: [{ role: "user", content: "length-limit" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      { type: "text", text: "partial qwen" },
+      {
+        type: "stop",
+        reason: "length",
+        usage: {
+          inputTokens: 12,
+          cachedInputTokens: 2,
+          uncachedInputTokens: 10,
+          outputTokens: 5,
         },
       },
     ]);
@@ -395,6 +447,7 @@ describe("Qwen Provider", () => {
       },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 100,
           cachedInputTokens: 25,
@@ -435,6 +488,7 @@ describe("Qwen Provider", () => {
       },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 100,
           cachedInputTokens: 25,

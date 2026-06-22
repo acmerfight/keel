@@ -66,6 +66,7 @@ describe("Cost Budget", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1_000_000,
             cachedInputTokens: 0,
@@ -139,6 +140,7 @@ describe("Cost Budget", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 0,
               cachedInputTokens: 0,
@@ -160,6 +162,7 @@ describe("Cost Budget", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1_000_000,
               cachedInputTokens: 0,
@@ -172,6 +175,7 @@ describe("Cost Budget", () => {
         yield { type: "text", text: "Done." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 0,
             cachedInputTokens: 0,
@@ -224,6 +228,7 @@ describe("Cost Budget", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 300_000,
             cachedInputTokens: 0,
@@ -302,6 +307,7 @@ describe("Cost Budget", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1_000_000,
             cachedInputTokens: 0,

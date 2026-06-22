@@ -3,7 +3,7 @@ import {
   isToolName,
   toolCallFromParsedArguments,
 } from "../../tools/registry.ts";
-import type { LLMEvent, Usage } from "../types.ts";
+import type { LLMEvent, LLMStopReason, Usage } from "../types.ts";
 import { transportError } from "./openai-compatible-retry.ts";
 
 interface OpenAICompatibleToolCallDelta {
@@ -196,6 +196,31 @@ function completePendingToolCall(
     .map(([, toolCall]) => parseToolCall(toolCall, providerName));
 }
 
+function finishReasonToStopReason(
+  finishReason: string | undefined,
+  providerName: string,
+  hasToolCallFragments: boolean,
+): LLMStopReason {
+  switch (finishReason) {
+    case "stop":
+    case "tool_calls":
+      return "stop";
+    case "length":
+      if (hasToolCallFragments) {
+        throw new KeelError(
+          "provider_protocol_error",
+          `${providerName} stream finished with length during a tool call`,
+        );
+      }
+      return "length";
+    default:
+      throw new KeelError(
+        "provider_protocol_error",
+        `${providerName} stream finished with reason: ${finishReason ?? "none"}`,
+      );
+  }
+}
+
 function* parseSseLine<Chunk extends OpenAICompatibleChunk>(
   line: string,
   state: OpenAICompatibleStreamState,
@@ -288,14 +313,11 @@ export function finalStreamEvents(
     );
   }
 
-  if (state.finishReason !== "tool_calls" && state.finishReason !== "stop") {
-    throw new KeelError(
-      "provider_protocol_error",
-      `${providerName} stream finished with reason: ${
-        state.finishReason ?? "none"
-      }`,
-    );
-  }
+  const reason = finishReasonToStopReason(
+    state.finishReason,
+    providerName,
+    state.finishReason === "length" && state.toolCalls.size > 0,
+  );
 
   const usage = state.usage;
   if (usage === null) {
@@ -305,5 +327,5 @@ export function finalStreamEvents(
     );
   }
 
-  return [...state.pendingToolCalls, { type: "stop", usage }];
+  return [...state.pendingToolCalls, { type: "stop", reason, usage }];
 }

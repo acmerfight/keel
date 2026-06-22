@@ -118,7 +118,7 @@ describe("File Discovery", () => {
             tool: "ls",
             path: "src/tools",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -131,13 +131,13 @@ describe("File Discovery", () => {
             tool: "read",
             path: "src/tools/edit.ts",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
         afterReadMessages = options.messages;
         yield { type: "text", text: "Listed and read the edit tool." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -202,7 +202,7 @@ describe("File Discovery", () => {
             tool: "glob",
             pattern: "**/*validator*.test.ts",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -215,13 +215,13 @@ describe("File Discovery", () => {
             tool: "read",
             path: "tests/validator.test.ts",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
         afterReadMessages = options.messages;
         yield { type: "text", text: "Found and read the validator test." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 

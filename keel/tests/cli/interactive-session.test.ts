@@ -138,7 +138,7 @@ describe("Interactive Session", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream() {
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -207,7 +207,7 @@ describe("Interactive Session", () => {
       async *stream() {
         providerCalls++;
         yield { type: "text", text: "expensive answer" };
-        yield { type: "stop", usage: EXPENSIVE_USAGE };
+        yield { type: "stop", reason: "stop", usage: EXPENSIVE_USAGE };
       },
     };
     const input = new PassThrough();
@@ -284,7 +284,7 @@ describe("Interactive Session", () => {
             .map((message) => message.content),
         );
         yield { type: "text", text: "Queued turn done." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -416,7 +416,7 @@ describe("Interactive Session", () => {
           tool: "read",
           path: "package.json",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const firstInput = new PassThrough();
@@ -506,7 +506,7 @@ describe("Interactive Session", () => {
               .map((message) => message.content),
           );
           yield { type: "text", text: "Recovered queued prompt." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         },
       };
       const secondInput = new PassThrough();
@@ -596,7 +596,7 @@ describe("Interactive Session", () => {
       id: "fake",
       async *stream() {
         yield { type: "text", text: "answer" };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -677,7 +677,7 @@ describe("Interactive Session", () => {
         } else {
           yield { type: "text", text: "Second saw prior context" };
         }
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -771,7 +771,7 @@ describe("Interactive Session", () => {
       async *stream(options) {
         observedMessages = options.messages;
         yield { type: "text", text: "Continuing from history." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -1121,7 +1121,7 @@ describe("Interactive Session", () => {
           secondTurnMessages = options.messages;
           yield { type: "text", text: "No approval." };
         }
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -1386,7 +1386,7 @@ describe("Interactive Session", () => {
           secondTurnMessages = options.messages;
           yield { type: "text", text: "Closed approval." };
         }
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     let stdout = "";
@@ -1486,7 +1486,7 @@ describe("Interactive Session", () => {
         } else {
           yield { type: "text", text: "Queued line kept." };
         }
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -1572,7 +1572,7 @@ describe("Interactive Session", () => {
         } else {
           yield { type: "text", text: "Queued follow-up." };
         }
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -1663,7 +1663,7 @@ describe("Interactive Session", () => {
         if (options.toolChoice === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "Deferred compact summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -1682,7 +1682,7 @@ describe("Interactive Session", () => {
         } else {
           yield { type: "text", text: "After compact done." };
         }
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -1787,7 +1787,7 @@ describe("Interactive Session", () => {
         if (options.toolChoice === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "Ordered deferred compact summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -1823,7 +1823,7 @@ describe("Interactive Session", () => {
                 : "After compact done.",
           };
         }
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -1934,7 +1934,7 @@ describe("Interactive Session", () => {
             path: "package.json",
             limit: 1,
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         if (turn === 2) {
@@ -1946,11 +1946,11 @@ describe("Interactive Session", () => {
               });
             });
           }
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         yield { type: "text", text: "Restored prompt." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -2043,11 +2043,11 @@ describe("Interactive Session", () => {
             tool: "bash",
             command: 'node -e "setTimeout(() => {}, 10000)"',
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         yield { type: "text", text: "Queued prompt restored." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -2138,7 +2138,7 @@ describe("Interactive Session", () => {
             path: "package.json",
             limit: 1,
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         if (streamCall === 2 || streamCall === 4) {
@@ -2153,14 +2153,14 @@ describe("Interactive Session", () => {
               });
             });
           }
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         yield {
           type: "text",
           text: streamCall === 5 ? "B done." : "C done.",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -2399,11 +2399,11 @@ describe("Interactive Session", () => {
               once: true,
             });
           });
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         yield { type: "text", text: "Second done" };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -2492,7 +2492,7 @@ describe("Interactive Session", () => {
             compactionPrompts.push(prompt.content);
           }
           yield { type: "text", text: "Summary of first turn." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -2500,7 +2500,7 @@ describe("Interactive Session", () => {
         observedRequestContexts.push(structuredClone([...options.messages]));
         if (requestTurn === 1) {
           yield { type: "text", text: "First done" };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         if (requestTurn === 2) {
@@ -2512,11 +2512,11 @@ describe("Interactive Session", () => {
               });
             });
           }
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         yield { type: "text", text: "Third done" };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -2614,7 +2614,7 @@ describe("Interactive Session", () => {
         if (options.toolChoice === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "Manual checkpoint summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -2624,7 +2624,7 @@ describe("Interactive Session", () => {
           type: "text",
           text: requestTurn === 1 ? "First done" : "Second done",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -2722,6 +2722,7 @@ describe("Interactive Session", () => {
           yield { type: "text", text: "Costed checkpoint summary." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 30,
               cachedInputTokens: 0,
@@ -2734,7 +2735,7 @@ describe("Interactive Session", () => {
 
         requestTurn++;
         yield { type: "text", text: "First done" };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -2821,6 +2822,7 @@ describe("Interactive Session", () => {
           yield { type: "text", text: "Report checkpoint summary." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 30,
               cachedInputTokens: 0,
@@ -2833,7 +2835,7 @@ describe("Interactive Session", () => {
 
         requestTurn++;
         yield { type: "text", text: "First done" };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -2925,6 +2927,7 @@ describe("Interactive Session", () => {
           yield { type: "text", text: "Costed checkpoint summary." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 30,
               cachedInputTokens: 0,
@@ -2937,7 +2940,7 @@ describe("Interactive Session", () => {
 
         requestTurn++;
         yield { type: "text", text: "First done" };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -3029,12 +3032,12 @@ describe("Interactive Session", () => {
         if (options.toolChoice === "none") {
           summaryRequests++;
           yield { type: "text", text: "Unexpected checkpoint summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
         yield { type: "text", text: "First done" };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -3118,7 +3121,7 @@ describe("Interactive Session", () => {
         if (options.toolChoice === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "Focused checkpoint summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -3128,7 +3131,7 @@ describe("Interactive Session", () => {
           type: "text",
           text: requestTurn === 1 ? "First done" : "Second done",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -3213,7 +3216,7 @@ describe("Interactive Session", () => {
         if (options.toolChoice === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "Whitespace checkpoint summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -3223,7 +3226,7 @@ describe("Interactive Session", () => {
           type: "text",
           text: requestTurn === 1 ? "First done" : "Second done",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -3299,7 +3302,7 @@ describe("Interactive Session", () => {
       async *stream(options) {
         observedRequestContexts.push(structuredClone([...options.messages]));
         yield { type: "text", text: "Hello done" };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -3378,11 +3381,11 @@ describe("Interactive Session", () => {
         requestTurn++;
         observedRequestContexts.push(structuredClone([...options.messages]));
         if (requestTurn === 1) {
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         yield { type: "text", text: "Second done" };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -3473,7 +3476,7 @@ describe("Interactive Session", () => {
           type: "text",
           text: requestTurn === 1 ? "First done" : "Second done",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -3570,7 +3573,7 @@ describe("Interactive Session", () => {
             });
           }
           yield { type: "text", text: "Cancelled manual summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -3580,7 +3583,7 @@ describe("Interactive Session", () => {
           type: "text",
           text: requestTurn === 1 ? "First done" : "Second done",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -3693,7 +3696,7 @@ describe("Interactive Session", () => {
           type: "text",
           text: requestTurn === 1 ? "First done" : "Second done",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -3778,7 +3781,7 @@ describe("Interactive Session", () => {
       async *stream(options) {
         observedRequestContexts.push(structuredClone([...options.messages]));
         yield { type: "text", text: "Normal answer" };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();
@@ -3916,7 +3919,7 @@ describe("Interactive Session", () => {
         });
         yield { type: "text", text: " Aborted" };
         await hangReleased;
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const input = new PassThrough();

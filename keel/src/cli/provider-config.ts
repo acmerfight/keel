@@ -232,7 +232,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
             tool: "read",
             path: patch.readPath,
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -242,7 +242,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
         if (turn === 2) {
           if (toolContent?.startsWith("Tool failed:")) {
             yield { type: "text", text: toolContent };
-            yield { type: "stop", usage: ZERO_USAGE };
+            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
             return;
           }
           yield {
@@ -251,7 +251,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
             tool: "apply_patch",
             patch: patch.patch,
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -259,7 +259,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
           ? toolContent
           : "Applied patch";
         yield { type: "text", text: reply };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
   }
@@ -284,7 +284,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
             path: write.path,
             content: write.content,
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -295,7 +295,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
           ? toolContent
           : `Created ${write.path}`;
         yield { type: "text", text: reply };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
   }
@@ -312,7 +312,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
           tool: "read",
           path: edit.path,
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         return;
       }
 
@@ -322,7 +322,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
       if (turn === 2) {
         if (toolContent?.startsWith("Tool failed:")) {
           yield { type: "text", text: toolContent };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         yield {
@@ -332,7 +332,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
           path: edit.path,
           edits: [{ oldText: edit.oldText, newText: edit.newText }],
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         return;
       }
 
@@ -340,7 +340,7 @@ function createCliFakeProvider(userMessage: string): LLMProvider {
         ? toolContent
         : `Edited ${edit.path}`;
       yield { type: "text", text: reply };
-      yield { type: "stop", usage: ZERO_USAGE };
+      yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
     },
   };
 }
@@ -359,7 +359,7 @@ function createInteractiveFakeProvider(): LLMProvider {
           ? `Earlier you said: ${previous}`
           : `Remembered: ${latest}`;
       yield { type: "text", text };
-      yield { type: "stop", usage: ZERO_USAGE };
+      yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
     },
   };
 }

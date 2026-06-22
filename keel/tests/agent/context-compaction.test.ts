@@ -141,11 +141,11 @@ describe("Context Compaction", () => {
       async *stream(options) {
         if (options.toolChoice === "none") {
           summaryRequested = true;
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         yield { type: "text", text: "Continued without compaction." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -795,7 +795,7 @@ describe("Context Compaction", () => {
       id: "unused-provider",
       async *stream() {
         providerCalled = true;
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -837,7 +837,7 @@ describe("Context Compaction", () => {
       id: "unused-provider",
       async *stream() {
         providerCalled = true;
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -903,7 +903,7 @@ describe("Context Compaction", () => {
       id: "safe-boundary-provider",
       async *stream() {
         yield { type: "text", text: "Earlier safe summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -967,7 +967,7 @@ describe("Context Compaction", () => {
         }
         summaryPrompt = options.messages[0]?.content ?? "";
         yield { type: "text", text: "Focused manual summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1010,7 +1010,7 @@ describe("Context Compaction", () => {
         }
         summaryPrompt = options.messages[0]?.content ?? "";
         yield { type: "text", text: "Manual summary without focus." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1044,7 +1044,7 @@ describe("Context Compaction", () => {
       id: "empty-summary-provider",
       async *stream() {
         yield { type: "text", text: "   " };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1093,7 +1093,7 @@ describe("Context Compaction", () => {
               ? "First checkpoint summary: alpha root cause and next step."
               : "Second checkpoint summary: preserve alpha state.",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1189,7 +1189,7 @@ describe("Context Compaction", () => {
               ? injectedSummary
               : "Second checkpoint summary after escaped tags.",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1269,7 +1269,7 @@ describe("Context Compaction", () => {
       async *stream(options) {
         summaryPrompt = options.messages[0]?.content ?? "";
         yield { type: "text", text: "Summary of user example." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1315,7 +1315,7 @@ describe("Context Compaction", () => {
       async *stream(options) {
         summaryPrompt = options.messages[0]?.content ?? "";
         yield { type: "text", text: "Summary of empty example." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1362,7 +1362,7 @@ describe("Context Compaction", () => {
       async *stream(options) {
         summaryPrompt = options.messages[0]?.content ?? "";
         yield { type: "text", text: "Summary after no-later checkpoint." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1400,7 +1400,7 @@ describe("Context Compaction", () => {
       id: "checkpoint-format-provider",
       async *stream() {
         yield { type: "text", text: "Provider visible summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1499,7 +1499,7 @@ describe("Context Compaction", () => {
           delayMs: 0,
         };
         yield { type: "text", text: "Tool context summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1543,7 +1543,7 @@ describe("Context Compaction", () => {
       async *stream(options) {
         summaryPrompt = options.messages[0]?.content ?? "";
         yield { type: "text", text: "Small budget summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1593,7 +1593,7 @@ describe("Context Compaction", () => {
           );
         }
         yield { type: "text", text: "Small window summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1634,7 +1634,7 @@ describe("Context Compaction", () => {
           tool: "read",
           path: "package.json",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1726,7 +1726,7 @@ describe("Context Compaction", () => {
             );
           }
           yield { type: "text", text: "Smaller summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -1738,7 +1738,7 @@ describe("Context Compaction", () => {
           );
         }
         yield { type: "text", text: "Finished after smaller summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1789,6 +1789,7 @@ describe("Context Compaction", () => {
           yield { type: "text", text: "Alpha summary." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 30,
               cachedInputTokens: 0,
@@ -1801,6 +1802,7 @@ describe("Context Compaction", () => {
         yield { type: "text", text: "Continued with compacted context." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 12,
             cachedInputTokens: 0,
@@ -1910,7 +1912,7 @@ describe("Context Compaction", () => {
       id: "tool-boundary-provider",
       async *stream() {
         yield { type: "text", text: "Tool result summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -1963,12 +1965,12 @@ describe("Context Compaction", () => {
             throw new Error("context compacted more than once");
           }
           yield { type: "text", text: "Large summary ".repeat(120) };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         finalRequestSeen = true;
         yield { type: "text", text: "Continued once." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -2012,7 +2014,7 @@ describe("Context Compaction", () => {
         if (options.toolChoice === "none") {
           summaryRequests++;
           yield { type: "text", text: "Unexpected proactive summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -2026,6 +2028,7 @@ describe("Context Compaction", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 20,
               cachedInputTokens: 0,
@@ -2040,6 +2043,7 @@ describe("Context Compaction", () => {
         yield { type: "text", text: "Finished without compaction." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 30,
             cachedInputTokens: 0,
@@ -2111,6 +2115,7 @@ describe("Context Compaction", () => {
           yield { type: "text", text: "Earlier usage summary." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 15,
               cachedInputTokens: 0,
@@ -2131,6 +2136,7 @@ describe("Context Compaction", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 25,
               cachedInputTokens: 0,
@@ -2151,6 +2157,7 @@ describe("Context Compaction", () => {
         yield { type: "text", text: "Recovered after accounted overflow." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 30,
             cachedInputTokens: 0,
@@ -2249,6 +2256,7 @@ describe("Context Compaction", () => {
           yield { type: "text", text: "Earlier task summary." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 20,
               cachedInputTokens: 0,
@@ -2262,6 +2270,7 @@ describe("Context Compaction", () => {
         yield { type: "text", text: "Finished after compaction." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 8,
             cachedInputTokens: 0,
@@ -2368,6 +2377,7 @@ describe("Context Compaction", () => {
           yield { type: "text", text: "Earlier setup summary." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 30,
               cachedInputTokens: 0,
@@ -2406,6 +2416,7 @@ describe("Context Compaction", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 10,
             cachedInputTokens: 0,
@@ -2548,7 +2559,7 @@ describe("Context Compaction", () => {
       async *stream(options) {
         if (options.toolChoice === "none") {
           yield { type: "text", text: "Earlier setup summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -2565,7 +2576,7 @@ describe("Context Compaction", () => {
           type: "text",
           text: "Continued after shrinking stale tool outputs.",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -2690,7 +2701,7 @@ describe("Context Compaction", () => {
       async *stream(options) {
         if (options.toolChoice === "none") {
           yield { type: "text", text: "Earlier setup summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -2720,7 +2731,7 @@ describe("Context Compaction", () => {
           type: "text",
           text: "Continued after shrinking consumed tool output.",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -2793,7 +2804,7 @@ describe("Context Compaction", () => {
           type: "text",
           text: "Summary includes the pasted log and baseline.",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -2876,7 +2887,7 @@ describe("Context Compaction", () => {
           type: "text",
           text: "Summary includes the consumed tool round.",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -2943,7 +2954,7 @@ describe("Context Compaction", () => {
       async *stream(options) {
         summaryPrompt = options.messages[0]?.content ?? "";
         yield { type: "text", text: "Older setup summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -3019,7 +3030,7 @@ describe("Context Compaction", () => {
       async *stream(options) {
         summaryPrompt = options.messages[0]?.content ?? "";
         yield { type: "text", text: "Older pending-work summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -3092,7 +3103,7 @@ describe("Context Compaction", () => {
       id: "split-turn-stray-tool-provider",
       async *stream() {
         yield { type: "text", text: "Older setup summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -3166,7 +3177,7 @@ describe("Context Compaction", () => {
       async *stream(options) {
         if (options.toolChoice === "none") {
           yield { type: "text", text: "Earlier setup summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -3196,7 +3207,7 @@ describe("Context Compaction", () => {
           type: "text",
           text: "Continued with the current tool output intact.",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -3293,7 +3304,7 @@ describe("Context Compaction", () => {
             type: "text",
             text: "Summary before unconsumed tool output.",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -3414,7 +3425,7 @@ describe("Context Compaction", () => {
             type: "text",
             text: "Summary before the queued steering tool result.",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -3443,7 +3454,7 @@ describe("Context Compaction", () => {
           type: "text",
           text: "Continued with queued steering and current tool output.",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -3548,7 +3559,7 @@ describe("Context Compaction", () => {
             type: "text",
             text: "Summary before the current multi-tool round.",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -3590,7 +3601,7 @@ describe("Context Compaction", () => {
           type: "text",
           text: "Continued with both current tool results intact.",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -3694,7 +3705,7 @@ describe("Context Compaction", () => {
             type: "text",
             text: "Summary before the sequential current tool suffix.",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -3711,7 +3722,7 @@ describe("Context Compaction", () => {
           type: "text",
           text: "Continued with the full sequential tool suffix.",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -3794,7 +3805,7 @@ describe("Context Compaction", () => {
       id: "already-compacted-tool-provider",
       async *stream() {
         yield { type: "text", text: "Earlier setup summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -3861,7 +3872,7 @@ describe("Context Compaction", () => {
       id: "marker-suffix-tool-provider",
       async *stream() {
         yield { type: "text", text: "Earlier setup summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -3933,7 +3944,7 @@ describe("Context Compaction", () => {
       id: "marker-text-tool-provider",
       async *stream() {
         yield { type: "text", text: "Earlier setup summary." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -3998,6 +4009,7 @@ describe("Context Compaction", () => {
           yield { type: "text", text: "The log was read; continue analysis." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 30,
               cachedInputTokens: 0,
@@ -4164,7 +4176,7 @@ describe("Context Compaction", () => {
         requestCount++;
         if (options.toolChoice === "none") {
           yield { type: "text", text: "Earlier task summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         throw new KeelError(
@@ -4216,7 +4228,7 @@ describe("Context Compaction", () => {
       async *stream(options) {
         if (options.toolChoice === "none") {
           yield { type: "text", text: "Earlier task summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -4229,7 +4241,7 @@ describe("Context Compaction", () => {
           );
         }
         yield { type: "text", text: "Recovered after empty delta." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -4323,7 +4335,7 @@ describe("Context Compaction", () => {
         if (options.toolChoice === "none") {
           summaryRequests++;
           yield { type: "text", text: `Summary ${summaryRequests}.` };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -4342,12 +4354,12 @@ describe("Context Compaction", () => {
             path: "package.json",
             limit: 1,
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
         yield { type: "text", text: "Answered after second recovery." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -4403,7 +4415,7 @@ describe("Context Compaction", () => {
         ) {
           compactedForWrapUp = true;
           yield { type: "text", text: "Wrap-up context summary." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -4416,7 +4428,7 @@ describe("Context Compaction", () => {
             );
           }
           yield { type: "text", text: "Stopped before running tools." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -4428,7 +4440,7 @@ describe("Context Compaction", () => {
           path: "package.json",
           limit: 1,
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 

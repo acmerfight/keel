@@ -4,7 +4,13 @@ import {
   type RecordLastBatchCheckpointOperation,
   recordLastTaskCheckpoint,
 } from "../core/git.ts";
-import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
+import type {
+  LLMProvider,
+  LLMStopReason,
+  Message,
+  ToolCall,
+  Usage,
+} from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
 import { normalizeToolCall, toolCallConcurrency } from "../tools/registry.ts";
@@ -135,6 +141,12 @@ interface AgentTurn {
   readonly text: string;
   readonly toolCalls: readonly ToolCall[];
   readonly usage: Usage;
+  readonly stopReason: LLMStopReason;
+}
+
+interface AgentTurnStop {
+  readonly usage: Usage;
+  readonly reason: LLMStopReason;
 }
 
 export interface ReadVisibilityState {
@@ -224,20 +236,31 @@ function finalReplyMessage(text: string): Message | null {
 function finishAgentTurn(
   assistantText: readonly string[],
   pendingToolCalls: readonly ToolCall[],
-  usage: Usage | null,
+  stop: AgentTurnStop | null,
 ): AgentTurn {
-  if (usage === null) {
+  if (stop === null) {
     throw new KeelError(
       "agent_missing_stop",
       "LLM stream ended without stop event",
+    );
+  }
+  if (stop.reason === "length" && pendingToolCalls.length > 0) {
+    throw new KeelError(
+      "provider_protocol_error",
+      "LLM stream stopped with length after tool calls",
     );
   }
 
   return {
     text: assistantText.join(""),
     toolCalls: pendingToolCalls,
-    usage,
+    usage: stop.usage,
+    stopReason: stop.reason,
   };
+}
+
+function agentStopReasonFromProvider(reason: LLMStopReason): string {
+  return reason === "length" ? "provider_length" : "completed";
 }
 
 function buildCostReport(
@@ -343,7 +366,7 @@ async function* streamAgentTurn(
       : {}),
   });
 
-  let usage: Usage | null = null;
+  let stop: AgentTurnStop | null = null;
   const assistantText: string[] = [];
   const pendingToolCalls: ToolCall[] = [];
   let assistantStarted = false;
@@ -386,7 +409,7 @@ async function* streamAgentTurn(
           yield event;
           break;
         case "stop":
-          usage = event.usage;
+          stop = { usage: event.usage, reason: event.reason };
           break;
       }
     }
@@ -397,7 +420,7 @@ async function* streamAgentTurn(
     throw error;
   }
 
-  return finishAgentTurn(assistantText, pendingToolCalls, usage);
+  return finishAgentTurn(assistantText, pendingToolCalls, stop);
 }
 
 interface CompactionConfig {
@@ -694,7 +717,7 @@ export async function* runAgentTurn(
         type: "end",
         usage: state.accounting.totalUsage,
         turns: completedTurns,
-        stopReason: "completed",
+        stopReason: agentStopReasonFromProvider(turnResult.stopReason),
         ...(cost !== undefined ? { cost } : {}),
       };
       return;

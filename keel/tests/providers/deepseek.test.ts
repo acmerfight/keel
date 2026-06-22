@@ -522,6 +522,22 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "length-during-tool-call") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [editToolCallDelta(0, '{"path":"note.txt"')],
+                    },
+                  },
+                ],
+              }),
+              sseFinish(10, 4, "length"),
+            ]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "invalid-json") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -1564,6 +1580,7 @@ describe("DeepSeek Provider", () => {
     const stopEvent = events.find((e) => e.type === "stop");
     expect(stopEvent).toEqual({
       type: "stop",
+      reason: "stop",
       usage: {
         inputTokens: 10,
         cachedInputTokens: 0,
@@ -1599,6 +1616,7 @@ describe("DeepSeek Provider", () => {
     const stopEvent = events.find((e) => e.type === "stop");
     expect(stopEvent).toEqual({
       type: "stop",
+      reason: "stop",
       usage: {
         inputTokens: 10,
         cachedInputTokens: 4,
@@ -2502,7 +2520,42 @@ describe("DeepSeek Provider", () => {
 
   test(`Given the model hits max tokens,
     When finish_reason is "length",
-    Then provider throws a protocol error instead of yielding stop`, async () => {
+    Then provider yields a length stop reason with the partial response`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "length-limit" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      { type: "text", text: "partial output" },
+      {
+        type: "stop",
+        reason: "length",
+        usage: {
+          inputTokens: 10,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 10,
+          outputTokens: 4096,
+        },
+      },
+    ]);
+  });
+
+  test(`Given the model is truncated while streaming a tool call,
+    When finish_reason is "length",
+    Then provider rejects the incomplete tool call instead of yielding it`, async () => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "test-key",
@@ -2515,14 +2568,14 @@ describe("DeepSeek Provider", () => {
       collect(
         provider.stream({
           systemPrompt: "You are helpful.",
-          messages: [{ role: "user", content: "length-limit" }],
+          messages: [{ role: "user", content: "length-during-tool-call" }],
           signal: freshSignal(),
         }),
       ),
     ).rejects.toMatchObject({
       name: "KeelError",
       code: "provider_protocol_error",
-      message: "DeepSeek stream finished with reason: length",
+      message: "DeepSeek stream finished with length during a tool call",
     });
   });
 
@@ -2737,6 +2790,7 @@ describe("DeepSeek Provider", () => {
     const stopEvent = events.find((e) => e.type === "stop");
     expect(stopEvent).toEqual({
       type: "stop",
+      reason: "stop",
       usage: {
         inputTokens: 8,
         cachedInputTokens: 0,
@@ -2772,6 +2826,7 @@ describe("DeepSeek Provider", () => {
     const stopEvent = events.find((e) => e.type === "stop");
     expect(stopEvent).toEqual({
       type: "stop",
+      reason: "stop",
       usage: {
         inputTokens: 7,
         cachedInputTokens: 0,
@@ -2866,6 +2921,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 30,
           cachedInputTokens: 0,
@@ -2905,6 +2961,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 24,
           cachedInputTokens: 0,
@@ -2945,6 +3002,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 26,
           cachedInputTokens: 0,
@@ -2985,6 +3043,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 28,
           cachedInputTokens: 0,
@@ -3024,6 +3083,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 25,
           cachedInputTokens: 0,
@@ -3065,6 +3125,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 27,
           cachedInputTokens: 0,
@@ -3112,6 +3173,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 30,
           cachedInputTokens: 0,
@@ -3152,6 +3214,7 @@ describe("DeepSeek Provider", () => {
       },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 30,
           cachedInputTokens: 0,
@@ -3745,6 +3808,7 @@ describe("DeepSeek Provider", () => {
     const stopEvent = events.find((e) => e.type === "stop");
     expect(stopEvent).toEqual({
       type: "stop",
+      reason: "stop",
       usage: {
         inputTokens: 12,
         cachedInputTokens: 0,
