@@ -16,10 +16,10 @@ keel eval --check
 DEEPSEEK_API_KEY=... keel eval --trials 3 --out evals/results/$(date +%Y%m%d-%H%M%S).jsonl
 
 # Run the same suite with Kimi K2.6.
-KEEL_PROVIDER=kimi KIMI_API_KEY=... keel eval --trials 3 --out evals/results/$(date +%Y%m%d-%H%M%S).jsonl
+KIMI_API_KEY=... keel eval --provider kimi --model kimi-k2.6 --trials 3 --out evals/results/$(date +%Y%m%d-%H%M%S).jsonl
 
 # Run the same suite with Qwen 3.7 Max.
-KEEL_PROVIDER=qwen DASHSCOPE_API_KEY=... keel eval --trials 3 --out evals/results/$(date +%Y%m%d-%H%M%S).jsonl
+DASHSCOPE_API_KEY=... keel eval --provider qwen --model qwen3.7-max --trials 3 --out evals/results/$(date +%Y%m%d-%H%M%S).jsonl
 
 # Iterate on one task.
 keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl
@@ -30,19 +30,18 @@ Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
 
 Exit code is non-zero when any trial fails to verify, times out, or crashes.
 
-Eval provider selection is environment based and shares the provider resolver
-defaults with one-shot runs: DeepSeek is the default and reads
-`DEEPSEEK_API_KEY`, optional `DEEPSEEK_MODEL` (default
-`deepseek-v4-flash`), and optional `DEEPSEEK_BASE_URL`. Kimi uses
-`KEEL_PROVIDER=kimi`, `KIMI_API_KEY`, optional `KIMI_MODEL` (default
-`kimi-k2.6`), and optional `KIMI_BASE_URL` (default
-`https://api.moonshot.cn/v1`; set it to the official regional endpoint for
-your account when needed). Qwen uses `KEEL_PROVIDER=qwen`,
-`DASHSCOPE_API_KEY` or `QWEN_API_KEY`, optional `QWEN_MODEL` (default
-`qwen3.7-max`), and optional `QWEN_BASE_URL` (default
+Eval provider selection shares the provider resolver defaults with one-shot
+runs and accepts `--provider <deepseek|kimi|qwen>` plus optional `--model
+<id>` overrides. DeepSeek is the default and reads `DEEPSEEK_API_KEY`,
+optional `DEEPSEEK_MODEL` (default `deepseek-v4-flash`), and optional
+`DEEPSEEK_BASE_URL`. Kimi uses `--provider kimi` or `KEEL_PROVIDER=kimi`,
+`KIMI_API_KEY`, optional `KIMI_MODEL` (default `kimi-k2.6`), and optional
+`KIMI_BASE_URL` (default `https://api.moonshot.cn/v1`; set it to the official
+regional endpoint for your account when needed). Qwen uses `--provider qwen`
+or `KEEL_PROVIDER=qwen`, `DASHSCOPE_API_KEY` or `QWEN_API_KEY`, optional
+`QWEN_MODEL` (default `qwen3.7-max`), and optional `QWEN_BASE_URL` (default
 `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`; set it for China
-region or workspace-scoped DashScope endpoints). The `keel eval` subcommand
-does not currently accept one-shot `--provider` / `--model` flags.
+region or workspace-scoped DashScope endpoints).
 
 ## GitHub Actions
 
@@ -51,8 +50,8 @@ a required PR check. It currently runs the default DeepSeek provider and needs
 the `DEEPSEEK_API_KEY` repository secret, then builds the CLI, runs the
 compiled `dist/cli/index.js`, prints a Markdown job summary, and uploads the
 JSONL result file as an artifact. Run Kimi or Qwen evals locally with
-`KEEL_PROVIDER=kimi` or `KEEL_PROVIDER=qwen`, or add matching repository
-secrets before wiring other providers into the workflow. The workflow job
+`--provider kimi` or `--provider qwen`, or add matching repository secrets
+before wiring other providers into the workflow. The workflow job
 timeout is 180 minutes, enough for the current full suite at `trials=3` even
 when tasks run near their per-task time limits:
 

@@ -15,6 +15,7 @@ import {
 } from "../agent/prompt.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
+import type { ProviderId } from "../core/provider-id.ts";
 import type { LLMProvider, Message, Usage } from "../llm/types.ts";
 import {
   type BashMode,
@@ -30,7 +31,6 @@ import type { SessionQueuedInput } from "./session-store.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 type EndEventWithCost = EndEvent & { readonly cost: CostReport };
-export type ProviderId = "fake" | "deepseek" | "kimi" | "qwen";
 
 interface InteractiveSessionArgs {
   readonly bashMode: BashMode;
