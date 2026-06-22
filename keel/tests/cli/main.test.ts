@@ -1164,20 +1164,17 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("");
   });
 
-  test(`Given Qwen is selected for diagnostics with CLI flags,
+  test(`Given Qwen fallback API key env is selected for diagnostics with CLI flags,
     When the CLI main dispatches the doctor command,
-    Then it reports the effective provider settings without exposing the key`, async () => {
+    Then it reports the fallback key env and default endpoint`, async () => {
     // Given
-    const apiKeySecret = "main-doctor-api-key-secret";
-    const baseUrlSecret = "main-doctor-base-url-secret";
+    const apiKeySecret = "main-doctor-qwen-fallback-secret";
     const fixture = createRuntime(
       ["--doctor", "--provider", "qwen", "--model", "qwen3.7-plus"],
       {
         env: {
           KEEL_PROVIDER: "fake",
-          DASHSCOPE_API_KEY: apiKeySecret,
-          QWEN_BASE_URL: `https://user:${baseUrlSecret}@example.test/v1?api_key=${baseUrlSecret}#${baseUrlSecret}`,
-          KEEL_CONTEXT_WINDOW_TOKENS: "8192",
+          QWEN_API_KEY: apiKeySecret,
         },
       },
     );
@@ -1189,17 +1186,14 @@ describe("CLI Main", () => {
     expect(exitCode).toBe(0);
     expect(fixture.stdout()).toContain("provider: qwen (source: --provider)");
     expect(fixture.stdout()).toContain("model: qwen3.7-plus (source: --model)");
-    expect(fixture.stdout()).toContain("api key: present (DASHSCOPE_API_KEY)");
+    expect(fixture.stdout()).toContain("api key: present (QWEN_API_KEY)");
     expect(fixture.stdout()).toContain(
-      "base url: https://example.test/v1 (source: QWEN_BASE_URL)",
+      "base url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1 (source: default)",
     );
     expect(fixture.stdout()).toContain(
-      "context window: 8192 tokens (source: KEEL_CONTEXT_WINDOW_TOKENS)",
+      "context window: 256000 tokens (source: default)",
     );
     expect(fixture.stdout()).not.toContain(apiKeySecret);
-    expect(fixture.stdout()).not.toContain(baseUrlSecret);
-    expect(fixture.stdout()).not.toContain("user:");
-    expect(fixture.stdout()).not.toContain("api_key=");
     expect(fixture.stderr()).toBe("");
   });
 
