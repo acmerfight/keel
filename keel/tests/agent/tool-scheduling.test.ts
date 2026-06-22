@@ -74,13 +74,13 @@ describe("Tool Scheduling", () => {
             tool: "read",
             path: "existing.txt",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
         followUpMessages = options.messages;
         yield { type: "text", text: "Inspected both files." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -140,7 +140,7 @@ describe("Tool Scheduling", () => {
             tool: "read",
             path: "note.txt",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -159,14 +159,14 @@ describe("Tool Scheduling", () => {
             tool: "read",
             path: "note.txt",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
         turn++;
         followUpMessages = options.messages;
         yield { type: "text", text: "Updated and checked the note." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -232,7 +232,7 @@ describe("Tool Scheduling", () => {
             tool: "read",
             path: "note.txt",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -268,14 +268,14 @@ describe("Tool Scheduling", () => {
             id: "list_workspace",
             tool: "ls",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
         turn++;
         followUpMessages = options.messages;
         yield { type: "text", text: "Updated the note after inspection." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -348,7 +348,7 @@ describe("Tool Scheduling", () => {
             tool: "read",
             path: "note.txt",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -368,12 +368,12 @@ describe("Tool Scheduling", () => {
             path: "note.txt",
             edits: [{ oldText: "alpha beta", newText: "alpha beta gamma" }],
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
         yield { type: "text", text: "Expanded the note." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -438,7 +438,7 @@ describe("Tool Scheduling", () => {
           tool: "grep",
           pattern: "visible",
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const events: AgentEvent[] = [];

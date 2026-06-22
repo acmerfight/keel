@@ -102,6 +102,7 @@ describe("DeepSeek Recorded Fixtures", () => {
       );
       expect(events.at(-1)).toEqual({
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 19,
           cachedInputTokens: 0,
@@ -143,6 +144,7 @@ describe("DeepSeek Recorded Fixtures", () => {
         },
         {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 355,
             cachedInputTokens: 0,

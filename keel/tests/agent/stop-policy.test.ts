@@ -59,7 +59,7 @@ function wrapUpBoundaryProvider(summary: string): LLMProvider {
       const lastMessage = options.messages.at(-1);
       if (lastMessage?.role === "user" && options.toolChoice === "none") {
         yield { type: "text", text: summary };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         return;
       }
 
@@ -71,7 +71,7 @@ function wrapUpBoundaryProvider(summary: string): LLMProvider {
         path: "a.txt",
         edits: [{ oldText: "old", newText: "new" }],
       };
-      yield { type: "stop", usage: ZERO_USAGE };
+      yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
     },
   };
 }
@@ -146,7 +146,7 @@ describe("Agent Stopping", () => {
           wrapUpToolChoices.push(options.toolChoice);
           wrapUpTranscripts.push(options.messages);
           yield { type: "text", text: "Stopping here." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
 
@@ -158,7 +158,7 @@ describe("Agent Stopping", () => {
           path: "a.txt",
           edits: [{ oldText: "old", newText: "new" }],
         };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -388,6 +388,7 @@ describe("Agent Stopping", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1_000_000,
             cachedInputTokens: 0,

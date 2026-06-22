@@ -28,6 +28,8 @@ interface ToolMessage {
 
 export type Message = UserMessage | AssistantMessage | ToolMessage;
 
+export type LLMStopReason = "stop" | "length";
+
 export type LLMEvent =
   | { readonly type: "text"; readonly text: string }
   | ({ readonly type: "tool_call" } & ToolCall)
@@ -39,7 +41,11 @@ export type LLMEvent =
       readonly maxRetries: number;
       readonly delayMs: number;
     }
-  | { readonly type: "stop"; readonly usage: Usage };
+  | {
+      readonly type: "stop";
+      readonly reason: LLMStopReason;
+      readonly usage: Usage;
+    };
 
 export interface StreamOptions {
   readonly systemPrompt: string;

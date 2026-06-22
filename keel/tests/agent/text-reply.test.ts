@@ -130,11 +130,11 @@ describe("Text Reply", () => {
           secondTurnMessages = [...options.messages];
         }
         if (turn === 1) {
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         yield { type: "text", text: "Now responding." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     await collect(
@@ -190,6 +190,7 @@ describe("Text Reply", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -253,6 +254,7 @@ describe("Text Reply", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: turn === 1 ? 1_000_000 : 1,
             cachedInputTokens: 0,
@@ -323,17 +325,17 @@ describe("Text Reply", () => {
             path: "package.json",
             limit: 1,
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         if (turn === 2) {
           yield { type: "text", text: "Inspected package." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         secondTurnMessages = [...options.messages];
         yield { type: "text", text: "Continuing with package context." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     await collect(
@@ -406,12 +408,12 @@ describe("Text Reply", () => {
             path: "package.json",
             limit: 1,
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         secondTurnMessages = [...options.messages];
         yield { type: "text", text: "Adjusted after steering." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -485,12 +487,12 @@ describe("Text Reply", () => {
             path: "AGENTS.md",
             limit: 1,
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         secondTurnMessages = [...options.messages];
         yield { type: "text", text: "Adjusted after batch steering." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -589,7 +591,7 @@ describe("Text Reply", () => {
           delayMs: 0,
         };
         yield { type: "text", text: "Recovered." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -669,6 +671,7 @@ describe("Text Reply", () => {
         providerSignal = options.signal;
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -784,6 +787,7 @@ describe("Text Reply", () => {
           turn++;
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -797,6 +801,7 @@ describe("Text Reply", () => {
         yield { type: "text", text: "Completed the long task." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -843,6 +848,7 @@ describe("Text Reply", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 1,
               cachedInputTokens: 0,
@@ -863,6 +869,7 @@ describe("Text Reply", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,

@@ -54,7 +54,7 @@ describe("Conversation History", () => {
       async *stream(options) {
         providerMessages = options.messages;
         yield { type: "text", text: "Alpha." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -102,11 +102,11 @@ describe("Conversation History", () => {
             tool: "read",
             path: "package.json",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         yield { type: "text", text: "Read package.json." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -168,11 +168,11 @@ describe("Conversation History", () => {
             tool: "read",
             path: "package.json",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         yield { type: "text", text: "Read package and noted steering." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
@@ -261,16 +261,16 @@ describe("Conversation History", () => {
         providerRequests.push(options.messages);
         if (options.toolChoice === "none") {
           yield { type: "text", text: "Current Task: continue latest step." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         if (providerRequests.length === 1) {
           yield { type: "text", text: "Continued." };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         yield { type: "text", text: "Continued after checkpoint." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 

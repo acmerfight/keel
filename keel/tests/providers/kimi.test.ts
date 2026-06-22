@@ -974,6 +974,7 @@ describe("Kimi Provider", () => {
       { type: "text", text: "ok" },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 7,
           cachedInputTokens: 0,
@@ -1197,6 +1198,7 @@ describe("Kimi Provider", () => {
       { type: "text", text: " Kimi" },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 12,
           cachedInputTokens: 5,
@@ -1218,6 +1220,7 @@ describe("Kimi Provider", () => {
       { type: "text", text: "metered" },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 12,
           cachedInputTokens: 5,
@@ -1239,6 +1242,7 @@ describe("Kimi Provider", () => {
       { type: "text", text: "complete" },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 9,
           cachedInputTokens: 0,
@@ -1275,6 +1279,7 @@ describe("Kimi Provider", () => {
       },
       {
         type: "stop",
+        reason: "stop",
         usage: {
           inputTokens: 20,
           cachedInputTokens: 3,
@@ -1539,12 +1544,46 @@ describe("Kimi Provider", () => {
     });
   });
 
+  test(`Given Kimi stops because the output token limit was reached,
+    When the provider reads finish_reason length,
+    Then it yields partial text and a length stop reason`, async () => {
+    // Given
+    const provider = createKimiProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "kimi-k2.6",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are Keel.",
+        messages: [{ role: "user", content: "length-limit" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      { type: "text", text: "partial" },
+      {
+        type: "stop",
+        reason: "length",
+        usage: {
+          inputTokens: 10,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 10,
+          outputTokens: 4,
+        },
+      },
+    ]);
+  });
+
   test(`Given Kimi returns malformed or incomplete streams,
     When the provider reads them,
     Then it fails with protocol errors`, async () => {
     // When / Then
     await expectProviderError("truncated", "provider_protocol_error");
-    await expectProviderError("length-limit", "provider_protocol_error");
     await expectProviderError("invalid-json", "provider_protocol_error");
     await expectProviderError("empty-schema-chunk", "provider_protocol_error");
     await expectProviderError("invalid-usage", "provider_protocol_error");

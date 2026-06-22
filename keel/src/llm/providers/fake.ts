@@ -98,7 +98,7 @@ export function createFakeProvider(
         }
       }
 
-      yield { type: "stop", usage: response.usage };
+      yield { type: "stop", reason: "stop", usage: response.usage };
     },
   };
 }

@@ -45,13 +45,13 @@ describe("Searching Code", () => {
             tool: "grep",
             pattern: "alpha\nbeta",
           };
-          yield { type: "stop", usage: ZERO_USAGE };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         toolFeedback =
           options.messages.findLast((m) => m.role === "tool")?.content ?? "";
         yield { type: "text", text: "Retrying with a single-line search." };
-        yield { type: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
