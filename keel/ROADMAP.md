@@ -44,7 +44,8 @@ What a user can do today:
   the next model request.
 - `keel --session <id>` / `keel --resume <id>` — persist and resume
   interactive transcripts as JSONL session ledgers, with schema validation,
-  workspace checks, and active-session locks.
+  workspace checks, active-session locks, bounded snapshots, and replay of
+  queued input that was admitted but not yet consumed.
 - Interactive `/compact [focus]` — manually replace older conversation with
   a model-generated checkpoint summary; automatic compaction also runs before
   oversized requests and retries once after provider context overflow before
@@ -59,9 +60,11 @@ What a user can do today:
   remembered for the process-local session. One-shot runs fail closed
   because there is no approval UI; forced non-TTY interactive runs also
   reject `ask` so approvals cannot be read from piped input.
-- `keel --max-cost <usd>` — cost tracking with budget stop.
-- `keel --report <file>` — write a machine-readable run report with turns,
-  stop reason, token usage, duration, provider/model, and cost when tracked.
+- `keel --max-cost <usd>` — one-shot or interactive session cost tracking
+  with budget stop.
+- `keel --report <file>` — write a machine-readable one-shot or interactive
+  session report with turns, stop reason, token usage, duration,
+  provider/model, and cost when tracked.
 - `keel --transcript <file>` — write provider-visible one-shot messages as
   schema-versioned JSONL.
 - `keel eval [--check] [--trials <n>]` — run a repeatable harness eval suite
@@ -73,33 +76,36 @@ What a user can do today:
   harness-failure, and regression transcript-path deltas.
 - `keel /undo` — restore the last edit, created file, or apply_patch batch
   checkpoint.
-- `keel --doctor` — environment check.
+- `keel --doctor` — environment check, currently focused on bundled ripgrep
+  diagnostics.
 
 Known limits that shape the priorities below:
 
-- Interactive sessions still have no TUI or session-level report, and cost
-  limits apply to each submitted turn rather than the whole interactive
-  session. Persisted sessions restore transcript context, not bash approval
-  grants or a durable mid-run input inbox.
+- Interactive sessions still have no TUI. Persisted sessions restore
+  transcript context and pending queued input, but not bash approval grants;
+  fork/branch semantics and future sub-agent state are still absent.
 - Provider selection supports DeepSeek, Kimi, and Qwen through one-shot and
   interactive `--provider` / `--model` overrides plus environment
   configuration (`KEEL_PROVIDER`, provider-specific API keys, base URLs, and
   model env vars). Cost tracking fail-closes when a selected model has unknown
-  pricing.
+  pricing. `keel --doctor` does not yet diagnose the selected provider,
+  model, API-key presence, base URL, context window, or cost-model status.
 - Provider retry/backoff is in place for request setup failures and
   pre-stream HTTP 408 / 409 / 429 / 5xx responses, including retry notices,
   `retry-after-ms`, `Retry-After`, per-wait ceilings, and a total retry
-  delay budget. Mid-stream failures after non-empty assistant output or tool
-  calls still fail the turn; context overflow before assistant output is
+  delay budget. Provider `length` stop reasons are surfaced as
+  `provider_length`. Mid-stream failures after non-empty assistant output or
+  tool calls still fail the turn; context overflow before assistant output is
   handled by compaction and one retry, not provider replay.
-- Same-turn batches made only of parallel-safe read tools (`read`, `ls`,
-  `glob`, `grep`) run concurrently with source-ordered results. Any batch
-  containing `edit`, `write`, or `bash` currently falls back to sequential
-  execution; there is no resource-aware mixed-batch scheduler yet.
-- Edit remains single-replacement per tool call (or `replaceAll` for one
-  target string). Keel has fuzzy matching for common copy/paste drift,
-  enforced read-before-edit for updates, and an initial apply_patch path for
-  coordinated Add/Update patches, but no broad multi-edit-per-file operation.
+- Same-turn parallel-safe read tools (`read`, `ls`, `glob`, `grep`) run
+  concurrently with source-ordered results, including adjacent read batches
+  around exclusive `edit`, `write`, or `bash` barriers. Keel still lacks
+  richer resource-aware scheduling for independent mutations.
+- Edit supports multiple replacements per file tool call, `replaceAll` for
+  individual targets, fuzzy matching for common copy/paste drift,
+  enforced read-before-edit for updates, and apply_patch Add/Update batches.
+  Remaining gaps are stronger stale-context recovery and fuller diff
+  semantics.
 - Eval results compare keel across versions; cross-agent comparisons are
   intentionally deferred until the core coding loop is more complete and the
   suite has a larger real-task corpus.
@@ -109,23 +115,26 @@ Known limits that shape the priorities below:
 1. **Interactive session with steering.** ✅ Partial (2026-06): `keel`
    now starts an interactive session; follow-up messages reuse context, and
    user input typed while tools are running is injected after completed tool
-   results at the next model request. Remaining work is clearer interactive
-   UX, a durable input inbox, and session-level reporting. Real coding is
-   conversational: follow-ups, corrections, "now also fix the tests" —
-   including while a run is in progress. Daily use also generates the
-   real-task corpus the eval suite needs.
+   results at the next model request. Named sessions persist transcripts,
+   compaction replacement records, and unconsumed queued input; interactive
+   `--report` records session-level turns, usage, provider/model, and cost.
+   Remaining work is clearer interactive UX/TUI, resume behavior beyond
+   transcript and pending-input replay, fork/branch semantics, and future
+   sub-agent state. Real coding is conversational: follow-ups, corrections,
+   "now also fix the tests" — including while a run is in progress. Daily use
+   also generates the real-task corpus the eval suite needs.
 2. **General provider/model configuration.**
    ✅ Partial (2026-06): DeepSeek, Kimi, and Qwen are wired through
    one-shot and interactive `--provider` / `--model` overrides,
    `KEEL_PROVIDER`, provider-specific API keys, base URLs, model env vars
    including `DEEPSEEK_MODEL`, and reports that identify provider/model for
-   one-shot runs. Remaining work is provider profile metadata beyond the
-   current resolver and pricing maps, additional frontier providers when
-   needed, and clearer interactive-session reporting for the selected
-   provider/model. This carries daily-use weight because switching frontier
-   models should not require code changes. Cross-agent same-model evals remain
-   useful later, but are not the next slice while the core coding loop still
-   has basic gaps.
+   one-shot and interactive runs. Remaining work is provider profile metadata
+   beyond the current resolver and pricing maps, `keel --doctor` diagnostics
+   for selected provider/model/API-key/base-url/context/cost-model state, and
+   additional frontier providers when needed. This carries daily-use weight
+   because switching frontier models should not require code changes.
+   Cross-agent same-model evals remain useful later, but are not the next
+   slice while the core coding loop still has basic gaps.
 3. **Context compaction and overflow recovery.** ✅ Partial (2026-06):
    automatic compaction can trigger before oversized requests, summarizes old
    turns without cutting inside a current tool-call/result suffix, compacts
@@ -152,9 +161,10 @@ Known limits that shape the priorities below:
 5. **Completed P0 foundations.** ✅ Done/partial (2026-06): provider retry
    with backoff now handles request setup failures and pre-stream HTTP
    408 / 409 / 429 / 5xx, honors `retry-after-ms` / `Retry-After`, emits a
-   user-visible retry notice, respects retry budgets, and leaves mid-stream
-   replay and overflow recovery out of scope. The 64-turn cap now ends with
-   a summary instead of a thrown error. `--bash-policy ask` supports
+   user-visible retry notice, respects retry budgets, and surfaces provider
+   `length` stops as `provider_length`; mid-stream replay remains out of
+   scope. The 64-turn cap now ends with a summary instead of a thrown error.
+   `--bash-policy ask` supports
    per-command approval in interactive sessions and fails closed when no
    approval UI is available. These should inform future slices but no longer
    determine the next P0 pick.
@@ -166,9 +176,9 @@ Codex/Claude Code — or directly moves the eval numbers.
 
 - **Edit reliability.** ✅ Partial (2026-06): single-target edit now handles
   line-ending drift, trailing whitespace, smart punctuation, common
-  indentation, `replaceAll`, enforced read-before-edit, and an initial
-  apply_patch Add/Update strategy for coordinated larger changes. Remaining
-  gaps are broader multi-edit per file, stronger stale-context recovery, and
+  indentation, `replaceAll`, enforced read-before-edit, multi-replacement
+  edit calls for one file, and apply_patch Add/Update batches for coordinated
+  larger changes. Remaining gaps are stronger stale-context recovery and
   fuller diff semantics. Edit success rate is a tracked eval sub-metric.
 - **Project context injection** — ✅ Partial (2026-06): root `AGENTS.md` is
   loaded into the system prompt with safety checks. Remaining work is support
@@ -178,20 +188,23 @@ Codex/Claude Code — or directly moves the eval numbers.
   path pattern before reading, and `ls` lists directory entries with ignore
   policy enforcement.
 - **Parallel tool execution.** ✅ Partial (2026-06): all-parallel-safe
-  same-turn batches now overlap while preserving source-order tool results;
-  exclusive batches still run sequentially. Remaining work is
-  resource-aware mixed-batch scheduling that can parallelize independent
-  reads while serializing writes.
+  same-turn batches now overlap while preserving source-order tool results,
+  and mixed batches are segmented so adjacent reads can run in parallel around
+  exclusive mutation or shell barriers. Remaining work is resource-aware
+  scheduling that can safely overlap independent mutations.
 - **Session persistence / resume.** ✅ Partial (2026-06): named interactive
   sessions persist JSONL ledgers and rebuild transcript context on
   `--resume`, including compaction replacement records and active-session
-  locks. Remaining work is whole-task undo, fork/branch semantics, durable
-  queued input, and future sub-agent state.
+  locks. Session ledgers also preserve unconsumed queued input and bounded
+  snapshots. Remaining work is fork/branch semantics and future sub-agent
+  state.
 - **Bash approval hardening** — richer command parsing/risk
   classification, safer prefix approvals beyond exact command + cwd,
   and persistent approval rules. OS sandboxing remains P2.
-- **Whole-task undo** — `/undo` restores the last edit, created file, or
-  apply_patch batch checkpoint; a failed task should roll back as a unit.
+- **Whole-task undo** — ✅ Partial (2026-06): `/undo` restores the last edit,
+  created file, apply_patch batch, or multi-file task checkpoint. Remaining
+  work is broader command grouping and user-facing controls for choosing older
+  checkpoints.
 
 ## P2 — After the replacement works
 
