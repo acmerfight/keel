@@ -59,7 +59,7 @@ type PositiveIntegerEnv =
   | { readonly status: "valid"; readonly value: number }
   | { readonly status: "invalid"; readonly message: string };
 
-export interface ProviderDiagnosticIssue {
+interface ProviderDiagnosticIssue {
   readonly severity: "error" | "warning";
   readonly message: string;
 }
