@@ -42,10 +42,12 @@ What a user can do today:
   reuse prior user / assistant / tool context from the same terminal run;
   input typed while a tool turn is running is injected after tool results at
   the next model request.
-- `keel --session <id>` / `keel --resume <id>` — persist and resume
-  interactive transcripts as JSONL session ledgers, with schema validation,
-  workspace checks, active-session locks, bounded snapshots, and replay of
-  queued input that was admitted but not yet consumed.
+- `keel --session <id>` / `keel --resume <id>` / `keel --resume <id> --fork <new-id>` —
+  persist, resume, and fork interactive transcripts as JSONL session ledgers,
+  with schema validation, workspace checks, active-session locks, bounded
+  snapshots, replay of queued input that was admitted but not yet consumed,
+  and independent fork ledgers that continue from completed restored history
+  without copying the source session's pending queued input.
 - Interactive `/compact [focus]` — manually replace older conversation with
   a model-generated checkpoint summary; automatic compaction also runs before
   oversized requests and retries once after provider context overflow before
@@ -84,8 +86,9 @@ What a user can do today:
 Known limits that shape the priorities below:
 
 - Interactive sessions still have no TUI. Persisted sessions restore
-  transcript context and pending queued input, but not bash approval grants;
-  fork/branch semantics and future sub-agent state are still absent.
+  transcript context and pending queued input, and can fork a completed
+  restored history into an independent named session, but not bash approval
+  grants; message-point branch UX and future sub-agent state are still absent.
 - Provider selection supports DeepSeek, Kimi, and Qwen through one-shot and
   interactive `--provider` / `--model` overrides plus environment
   configuration (`KEEL_PROVIDER`, provider-specific API keys, base URLs, and
@@ -123,8 +126,8 @@ Known limits that shape the priorities below:
    compaction replacement records, and unconsumed queued input; interactive
    `--report` records session-level turns, usage, provider/model, and cost.
    Remaining work is clearer interactive UX/TUI, resume behavior beyond
-   transcript and pending-input replay, fork/branch semantics, and future
-   sub-agent state. Real coding is conversational: follow-ups, corrections,
+   transcript and pending-input replay, richer message-point branch UX, and
+   future sub-agent state. Real coding is conversational: follow-ups, corrections,
    "now also fix the tests" — including while a run is in progress. Daily use
    also generates the real-task corpus the eval suite needs.
 2. **General provider/model configuration.**
@@ -202,8 +205,9 @@ Codex/Claude Code — or directly moves the eval numbers.
   sessions persist JSONL ledgers and rebuild transcript context on
   `--resume`, including compaction replacement records and active-session
   locks. Session ledgers also preserve unconsumed queued input and bounded
-  snapshots. Remaining work is fork/branch semantics and future sub-agent
-  state.
+  snapshots, and `--resume <id> --fork <new-id>` creates an independent fork
+  from completed restored history without copying pending queued input.
+  Remaining work is message-point branch UX and future sub-agent state.
 - **Bash approval hardening** — richer command parsing/risk
   classification, safer prefix approvals beyond exact command + cwd,
   and persistent approval rules. OS sandboxing remains P2.

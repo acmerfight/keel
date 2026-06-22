@@ -49,6 +49,7 @@ export type CliArgs =
       readonly transcriptFile?: string;
       readonly sessionId?: string;
       readonly resumeSessionId?: string;
+      readonly forkSessionId?: string;
       readonly providerId?: ProviderId;
       readonly model?: string;
     };
@@ -67,7 +68,7 @@ function parseError(message: string): ParseResult<never> {
 
 export const USAGE = [
   "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] <message>",
-  "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id>]",
+  "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id> [--fork <new-id>]]",
   "       keel --doctor [--offline] [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
   "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
   "       keel eval compare --base <old.jsonl> --head <new.jsonl>",
@@ -405,6 +406,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   let transcriptFile: string | undefined;
   let sessionId: string | undefined;
   let resumeSessionId: string | undefined;
+  let forkSessionId: string | undefined;
   let providerId: ProviderId | undefined;
   let model: string | undefined;
   let userMessage: string | undefined;
@@ -414,6 +416,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   const bashPolicyPrefix = "--bash-policy=";
   const sessionPrefix = "--session=";
   const resumePrefix = "--resume=";
+  const forkPrefix = "--fork=";
   const providerPrefix = "--provider=";
   const modelPrefix = "--model=";
 
@@ -576,12 +579,30 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
       continue;
     }
 
+    if (arg === "--fork") {
+      const parsed = requireOptionValue("--fork", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      forkSessionId = parsed.value;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(forkPrefix)) {
+      const parsed = requireOptionValue("--fork", arg.slice(forkPrefix.length));
+      if (!parsed.ok) return parsed;
+      forkSessionId = parsed.value;
+      continue;
+    }
+
     userMessage = args.slice(index).join(" ");
     break;
   }
 
   if (sessionId !== undefined && resumeSessionId !== undefined) {
     return parseError("Error: --session cannot be combined with --resume.");
+  }
+  if (forkSessionId !== undefined && resumeSessionId === undefined) {
+    return parseError("Error: --fork requires --resume <id>.");
   }
 
   return parseOk({
@@ -593,6 +614,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
     ...(transcriptFile !== undefined ? { transcriptFile } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
+    ...(forkSessionId !== undefined ? { forkSessionId } : {}),
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
   });
