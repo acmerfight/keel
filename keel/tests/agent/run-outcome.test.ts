@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -96,6 +96,119 @@ describe("Run Outcome Reporting", () => {
     });
   });
 
+  test(`Given the provider stops after hitting its output token limit,
+    When the run ends with partial text,
+    Then the session reports a provider length stop reason`, async () => {
+    // Given
+    const provider: LLMProvider = {
+      id: "length-limited",
+      async *stream() {
+        yield { type: "text", text: "Partial answer." };
+        yield {
+          type: "stop",
+          reason: "length",
+          usage: {
+            inputTokens: 10,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 10,
+            outputTokens: 4,
+          },
+        };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgent({
+        workspace: process.cwd(),
+        provider,
+        userMessage: "write a long answer",
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+      }),
+    );
+
+    // Then
+    expect(events).toContainEqual({ type: "text", text: "Partial answer." });
+    expect(endEvent(events)).toMatchObject({
+      turns: 1,
+      stopReason: "provider_length",
+    });
+  });
+
+  test(`Given the assistant output is truncated while requesting a tool,
+    When the run consumes the turn,
+    Then the run fails before executing the tool`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const createdPath = join(workspace, "created.txt");
+    let request = 0;
+    const provider: LLMProvider = {
+      id: "truncated-tool-request",
+      async *stream() {
+        request++;
+        if (request === 1) {
+          yield {
+            type: "tool_call",
+            id: "write_file",
+            tool: "write",
+            path: "created.txt",
+            content: "created\n",
+          };
+          yield {
+            type: "stop",
+            reason: "length",
+            usage: {
+              inputTokens: 10,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 10,
+              outputTokens: 4,
+            },
+          };
+          return;
+        }
+        yield { type: "text", text: "Done." };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When / Then
+      await expect(
+        collect(
+          runAgent({
+            workspace,
+            provider,
+            userMessage: "fix the note",
+            systemPrompt: "You are helpful.",
+            signal: freshSignal(),
+            allowBash: false,
+            stopPolicy: defaultStopPolicy(),
+          }),
+        ),
+      ).rejects.toMatchObject({
+        code: "provider_protocol_error",
+        message: "LLM stream stopped with length after tool calls",
+      });
+      await expect(readFile(createdPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a task that needs one tool round before the final answer,
     When the run ends,
     Then the session counts both model turns`, async () => {
@@ -152,6 +265,7 @@ describe("Run Outcome Reporting", () => {
         };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 1_000_000,
             cachedInputTokens: 0,
@@ -207,6 +321,7 @@ describe("Run Outcome Reporting", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 200_000,
               cachedInputTokens: 0,
@@ -219,6 +334,7 @@ describe("Run Outcome Reporting", () => {
         yield { type: "text", text: "Done." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 100_000,
             cachedInputTokens: 0,
@@ -272,6 +388,7 @@ describe("Run Outcome Reporting", () => {
           yield { type: "text", text: "Compacted earlier work." };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 200_000,
               cachedInputTokens: 0,
@@ -284,6 +401,7 @@ describe("Run Outcome Reporting", () => {
         yield { type: "text", text: "Done." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 100_000,
             cachedInputTokens: 0,
@@ -343,6 +461,7 @@ describe("Run Outcome Reporting", () => {
           };
           yield {
             type: "stop",
+            reason: "stop",
             usage: {
               inputTokens: 200_000,
               cachedInputTokens: 0,
@@ -356,6 +475,7 @@ describe("Run Outcome Reporting", () => {
         yield { type: "text", text: "Need to stop before reading note.txt." };
         yield {
           type: "stop",
+          reason: "stop",
           usage: {
             inputTokens: 100_000,
             cachedInputTokens: 0,
