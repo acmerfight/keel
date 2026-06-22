@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { z } from "zod";
+import type { ProviderId } from "../core/provider-id.ts";
 import {
   type BashMode,
   type BashPolicy,
@@ -12,12 +13,10 @@ interface EvalCliArgs {
   readonly outFile: string;
   readonly trials: number;
   readonly taskId?: string;
-  readonly providerId?: CliProviderId;
+  readonly providerId?: ProviderId;
   readonly model?: string;
   readonly check: boolean;
 }
-
-type CliProviderId = "fake" | "deepseek" | "kimi" | "qwen";
 
 export type CliArgs =
   | { readonly command: "doctor" }
@@ -31,7 +30,7 @@ export type CliArgs =
       readonly reportFile?: string;
       readonly sessionId?: string;
       readonly resumeSessionId?: string;
-      readonly providerId?: CliProviderId;
+      readonly providerId?: ProviderId;
       readonly model?: string;
     };
 
@@ -92,7 +91,7 @@ function parseBashPolicy(raw: string | undefined): ParseResult<BashPolicy> {
   return parseOk(result.data);
 }
 
-function parseProviderId(raw: string | undefined): ParseResult<CliProviderId> {
+function parseProviderId(raw: string | undefined): ParseResult<ProviderId> {
   const parsedValue = requireOptionValue("--provider", raw);
   if (!parsedValue.ok) return parsedValue;
   const result = providerIdSchema.safeParse(parsedValue.value);
@@ -131,7 +130,7 @@ function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
   let outFile = "eval-results.jsonl";
   let trials = 1;
   let taskId: string | undefined;
-  let providerId: CliProviderId | undefined;
+  let providerId: ProviderId | undefined;
   let model: string | undefined;
   let check = false;
   const providerPrefix = "--provider=";
@@ -238,7 +237,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   let reportFile: string | undefined;
   let sessionId: string | undefined;
   let resumeSessionId: string | undefined;
-  let providerId: CliProviderId | undefined;
+  let providerId: ProviderId | undefined;
   let model: string | undefined;
   let userMessage: string | undefined;
   const maxCostPrefix = "--max-cost=";

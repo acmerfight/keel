@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
+import type { ProviderId } from "../core/provider-id.ts";
 import { type EvalTask, loadEvalTasks } from "./task.ts";
 
 // Mirrors the CLI --report payload. The runner consumes the report through
@@ -257,7 +258,7 @@ interface ResultLine {
 }
 
 interface EvalProviderSelection {
-  readonly providerId?: string;
+  readonly providerId?: ProviderId;
   readonly model?: string;
 }
 
@@ -271,7 +272,7 @@ export interface EvalCommandArgs {
   readonly outFile: string;
   readonly trials: number;
   readonly taskId?: string;
-  readonly providerId?: string;
+  readonly providerId?: ProviderId;
   readonly model?: string;
   readonly check: boolean;
   readonly cliEntry: string;
