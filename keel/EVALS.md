@@ -26,6 +26,9 @@ keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl
 
 # Keep provider-visible messages for every trial.
 keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl --transcript-dir /tmp/keel-transcripts
+
+# Compare two result files after running the same suite on two keel versions.
+keel eval compare --base /tmp/old.jsonl --head /tmp/new.jsonl
 ```
 
 Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
@@ -34,6 +37,9 @@ run creates a unique subdirectory under `<dir>` and writes one
 schema-versioned JSONL transcript per trial.
 
 Exit code is non-zero when any trial fails to verify, times out, or crashes.
+`keel eval compare` is report-only: it exits non-zero for unreadable or
+invalid inputs, but regressions are printed rather than used as a failure
+gate.
 
 Eval provider selection shares the provider resolver defaults with one-shot
 runs and accepts `--provider <deepseek|kimi|qwen>` plus optional `--model
@@ -111,8 +117,11 @@ Each trial appends one JSON line:
   "message", "message": ... }` record for each provider-visible user /
   assistant / tool message.
 - Regression comparison is `diff`-shaped by design: run the suite on two
-  keel versions, compare pass counts, turns, and tokens per task from the
-  two JSONL files.
+  keel versions, then run `keel eval compare --base <old.jsonl> --head
+  <new.jsonl>`. It prints per-task pass, outcome, turn, token, cost, and
+  wall-time deltas, separates `timeout` / `crashed` harness failures from
+  verifier failures, and includes failed head-side `transcriptPath` values
+  for regression rows.
 - One trial says little: agent behavior varies between runs. Use
   `--trials 3` or more before claiming a change helped. Per-task pass
   fractions give you pass^k-style reliability reading; a task passing

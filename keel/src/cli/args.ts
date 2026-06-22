@@ -7,8 +7,9 @@ import {
   bashModeFromPolicy,
 } from "../permissions/bash.ts";
 
-interface EvalCliArgs {
+interface EvalRunCliArgs {
   readonly command: "eval";
+  readonly mode: "run";
   readonly suiteDir: string;
   readonly outFile: string;
   readonly transcriptDir?: string;
@@ -18,6 +19,15 @@ interface EvalCliArgs {
   readonly model?: string;
   readonly check: boolean;
 }
+
+interface EvalCompareCliArgs {
+  readonly command: "eval";
+  readonly mode: "compare";
+  readonly baseFile: string;
+  readonly headFile: string;
+}
+
+type EvalCliArgs = EvalRunCliArgs | EvalCompareCliArgs;
 
 export type CliArgs =
   | { readonly command: "doctor" }
@@ -52,6 +62,7 @@ export const USAGE = [
   "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] <message>",
   "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id>]",
   "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
+  "       keel eval compare --base <old.jsonl> --head <new.jsonl>",
   "       keel /undo",
   "",
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
@@ -129,7 +140,71 @@ function requireOptionValue(
   return parseOk(raw);
 }
 
+function parseEvalCompareArgs(
+  args: readonly string[],
+): ParseResult<EvalCompareCliArgs> {
+  let baseFile: string | undefined;
+  let headFile: string | undefined;
+  const basePrefix = "--base=";
+  const headPrefix = "--head=";
+
+  let skipNext = false;
+  for (const [index, arg] of args.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+
+    if (arg === "--base") {
+      const parsed = requireOptionValue("--base", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      baseFile = parsed.value;
+      skipNext = true;
+      continue;
+    }
+    if (arg.startsWith(basePrefix)) {
+      const parsed = requireOptionValue("--base", arg.slice(basePrefix.length));
+      if (!parsed.ok) return parsed;
+      baseFile = parsed.value;
+      continue;
+    }
+    if (arg === "--head") {
+      const parsed = requireOptionValue("--head", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      headFile = parsed.value;
+      skipNext = true;
+      continue;
+    }
+    if (arg.startsWith(headPrefix)) {
+      const parsed = requireOptionValue("--head", arg.slice(headPrefix.length));
+      if (!parsed.ok) return parsed;
+      headFile = parsed.value;
+      continue;
+    }
+
+    return parseError(`Error: unknown eval compare option "${arg}"`);
+  }
+
+  if (baseFile === undefined) {
+    return parseError("Error: eval compare requires --base <file>.");
+  }
+  if (headFile === undefined) {
+    return parseError("Error: eval compare requires --head <file>.");
+  }
+
+  return parseOk({
+    command: "eval",
+    mode: "compare",
+    baseFile,
+    headFile,
+  });
+}
+
 function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
+  if (args[0] === "compare") {
+    return parseEvalCompareArgs(args.slice(1));
+  }
+
   let suiteDir = join("evals", "tasks");
   let outFile = "eval-results.jsonl";
   let transcriptDir: string | undefined;
@@ -229,6 +304,7 @@ function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
 
   return parseOk({
     command: "eval",
+    mode: "run",
     suiteDir,
     outFile,
     ...(transcriptDir !== undefined ? { transcriptDir } : {}),
