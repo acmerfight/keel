@@ -1170,7 +1170,14 @@ describe("CLI Main", () => {
     // Given
     const apiKeySecret = "main-doctor-qwen-fallback-secret";
     const fixture = createRuntime(
-      ["--doctor", "--provider", "qwen", "--model", "qwen3.7-plus"],
+      [
+        "--doctor",
+        "--offline",
+        "--provider",
+        "qwen",
+        "--model",
+        "qwen3.7-plus",
+      ],
       {
         env: {
           KEEL_PROVIDER: "fake",
@@ -1193,6 +1200,7 @@ describe("CLI Main", () => {
     expect(fixture.stdout()).toContain(
       "context window: 256000 tokens (source: default)",
     );
+    expect(fixture.stdout()).toContain("provider auth: skipped (--offline)");
     expect(fixture.stdout()).not.toContain(apiKeySecret);
     expect(fixture.stderr()).toBe("");
   });
@@ -1202,7 +1210,7 @@ describe("CLI Main", () => {
     Then it redacts the base URL value while preserving the source`, async () => {
     // Given
     const fixture = createRuntime(
-      ["--doctor", "--provider=qwen", "--model=qwen3.7-plus"],
+      ["--doctor", "--offline", "--provider=qwen", "--model=qwen3.7-plus"],
       {
         env: {
           DASHSCOPE_API_KEY: "test-key",
@@ -1221,6 +1229,7 @@ describe("CLI Main", () => {
     expect(fixture.stdout()).toContain(
       "base url: <unparseable URL> (source: QWEN_BASE_URL)",
     );
+    expect(fixture.stdout()).toContain("provider auth: skipped (--offline)");
     expect(fixture.stdout()).not.toContain("secret-token");
     expect(fixture.stderr()).toBe("");
   });
@@ -1329,7 +1338,7 @@ describe("CLI Main", () => {
     When the CLI main dispatches the doctor command,
     Then it reports provider readiness with a cost warning`, async () => {
     // Given
-    const fixture = createRuntime(["--doctor"], {
+    const fixture = createRuntime(["--doctor", "--offline"], {
       env: {
         KEEL_PROVIDER: "kimi",
         KIMI_API_KEY: "test-key",
@@ -1350,6 +1359,7 @@ describe("CLI Main", () => {
     expect(fixture.stdout()).toContain(
       "warning: cost tracking is unavailable for model kimi-next",
     );
+    expect(fixture.stdout()).toContain("provider auth: skipped (--offline)");
     expect(fixture.stderr()).toBe("");
   });
 

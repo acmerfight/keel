@@ -76,8 +76,10 @@ What a user can do today:
   harness-failure, and regression transcript-path deltas.
 - `keel /undo` — restore the last edit, created file, or apply_patch batch
   checkpoint.
-- `keel --doctor` — environment check, currently focused on bundled ripgrep
-  diagnostics.
+- `keel --doctor` — environment check for bundled ripgrep plus the selected
+  provider/model/API-key/base-url/context/cost-model state; by default it also
+  verifies real provider auth with a low-cost online models endpoint, while
+  `--offline` keeps the check local-only.
 
 Known limits that shape the priorities below:
 
@@ -88,8 +90,10 @@ Known limits that shape the priorities below:
   interactive `--provider` / `--model` overrides plus environment
   configuration (`KEEL_PROVIDER`, provider-specific API keys, base URLs, and
   model env vars). Cost tracking fail-closes when a selected model has unknown
-  pricing. `keel --doctor` does not yet diagnose the selected provider,
-  model, API-key presence, base URL, context window, or cost-model status.
+  pricing. `keel --doctor` reports selected provider readiness, including an
+  online auth probe for real providers unless `--offline` is passed. Remaining
+  provider work is richer profile metadata and additional frontier providers
+  when needed.
 - Provider retry/backoff is in place for request setup failures and
   pre-stream HTTP 408 / 409 / 429 / 5xx responses, including retry notices,
   `retry-after-ms`, `Retry-After`, per-wait ceilings, and a total retry
@@ -128,10 +132,12 @@ Known limits that shape the priorities below:
    one-shot and interactive `--provider` / `--model` overrides,
    `KEEL_PROVIDER`, provider-specific API keys, base URLs, model env vars
    including `DEEPSEEK_MODEL`, and reports that identify provider/model for
-   one-shot and interactive runs. Remaining work is provider profile metadata
-   beyond the current resolver and pricing maps, `keel --doctor` diagnostics
-   for selected provider/model/API-key/base-url/context/cost-model state, and
-   additional frontier providers when needed. This carries daily-use weight
+   one-shot and interactive runs. `keel --doctor` now reports selected
+   provider/model/API-key/base-url/context/cost-model state and validates real
+   provider auth online by default, with `--offline` for local-only
+   diagnostics. Remaining work is provider profile metadata beyond the current
+   resolver and pricing maps, plus additional frontier providers when needed.
+   This carries daily-use weight
    because switching frontier models should not require code changes.
    Cross-agent same-model evals remain useful later, but are not the next
    slice while the core coding loop still has basic gaps.

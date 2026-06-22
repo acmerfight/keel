@@ -18,22 +18,65 @@ export interface DoctorResult {
   readonly stderr: string;
 }
 
+type DoctorOnlineMode = "online" | "offline";
+
 export interface RipgrepDoctorDiagnostic {
   readonly provider: string;
   readonly path: string;
   readonly version: string;
 }
 
+export interface ProviderOnlineDiagnosticRequest {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+}
+
+type ProviderAuthDiagnostic =
+  | {
+      readonly status: "ok";
+      readonly method: "GET";
+      readonly path: "/models";
+    }
+  | {
+      readonly status: "failed";
+      readonly message: string;
+    }
+  | {
+      readonly status: "skipped";
+      readonly reason:
+        | "--offline"
+        | "not required"
+        | "missing API key"
+        | "local provider diagnostics failed";
+    };
+
 export interface DoctorOptions {
   readonly runtime: ProviderConfigRuntime;
   readonly readRipgrepDiagnostic: () => Promise<RipgrepDoctorDiagnostic>;
+  readonly readProviderOnlineDiagnostic: (
+    request: ProviderOnlineDiagnosticRequest,
+  ) => Promise<ProviderAuthDiagnostic>;
+  readonly onlineMode: DoctorOnlineMode;
   readonly selection?: ProviderSelection;
 }
 
 const RIPGREP_DOCTOR_TIMEOUT_MS = 5_000;
+const PROVIDER_MODELS_TIMEOUT_MS = 5_000;
 const ripgrepVersionLineSchema = z
   .string()
   .regex(/^ripgrep\s+\S+/, "expected ripgrep version output");
+const modelsListResponseSchema = z
+  .object({
+    data: z.array(z.unknown()),
+  })
+  .passthrough();
+
+type ProviderModelsUrlResult =
+  | { readonly status: "ok"; readonly url: URL }
+  | {
+      readonly status: "failed";
+      readonly message: "base URL must not include credentials, query, or fragment";
+    };
 
 function ripgrepVersionError(error: Error, stderr: string): KeelError {
   const detail = stderr.trim() === "" ? error.message : stderr.trim();
@@ -89,6 +132,77 @@ export async function readBundledRipgrepDiagnostic(): Promise<RipgrepDoctorDiagn
     path: ripgrep.path,
     version,
   };
+}
+
+function providerModelsUrl(baseUrl: string): ProviderModelsUrlResult {
+  const url = new URL(baseUrl);
+  if (
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    return {
+      status: "failed",
+      message: "base URL must not include credentials, query, or fragment",
+    };
+  }
+  const basePath = url.pathname.endsWith("/")
+    ? url.pathname.slice(0, -1)
+    : url.pathname;
+  url.pathname = `${basePath}/models`;
+  return { status: "ok", url };
+}
+
+function responseStatusMessage(response: Response): string {
+  return `HTTP ${response.status}`;
+}
+
+export async function readProviderModelsDiagnostic(
+  request: ProviderOnlineDiagnosticRequest,
+): Promise<ProviderAuthDiagnostic> {
+  let url: URL;
+  try {
+    const result = providerModelsUrl(request.baseUrl);
+    if (result.status === "failed") {
+      return { status: "failed", message: result.message };
+    }
+    url = result.url;
+  } catch {
+    return { status: "failed", message: "invalid base URL" };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${request.apiKey}`,
+      },
+      signal: AbortSignal.timeout(PROVIDER_MODELS_TIMEOUT_MS),
+    });
+  } catch {
+    return { status: "failed", message: "network request failed" };
+  }
+
+  if (!response.ok) {
+    return { status: "failed", message: responseStatusMessage(response) };
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return { status: "failed", message: "invalid /models response" };
+  }
+
+  const parsed = modelsListResponseSchema.safeParse(body);
+  if (!parsed.success) {
+    return { status: "failed", message: "invalid /models response" };
+  }
+
+  return { status: "ok", method: "GET", path: "/models" };
 }
 
 function apiKeyLine(apiKey: ApiKeyDiagnostic): string {
@@ -152,6 +266,57 @@ function providerDiagnosticLines(
   ];
 }
 
+function providerAuthLine(diagnostic: ProviderAuthDiagnostic): string {
+  switch (diagnostic.status) {
+    case "ok":
+      return `provider auth: ok (${diagnostic.method} ${diagnostic.path})`;
+    case "failed":
+      return `provider auth: failed (${diagnostic.message})`;
+    case "skipped":
+      return `provider auth: skipped (${diagnostic.reason})`;
+  }
+}
+
+async function readProviderAuthDiagnostic(
+  options: DoctorOptions,
+  diagnostic: ProviderConfigDiagnostic,
+): Promise<ProviderAuthDiagnostic> {
+  if (options.onlineMode === "offline") {
+    return { status: "skipped", reason: "--offline" };
+  }
+
+  if (diagnostic.apiKey.status === "missing") {
+    return { status: "skipped", reason: "missing API key" };
+  }
+
+  if (providerDiagnosticHasError(diagnostic)) {
+    return {
+      status: "skipped",
+      reason: "local provider diagnostics failed",
+    };
+  }
+
+  if (
+    diagnostic.apiKey.status === "not-required" ||
+    diagnostic.baseUrl.status === "none"
+  ) {
+    return { status: "skipped", reason: "not required" };
+  }
+
+  const apiKey = options.runtime.env(diagnostic.apiKey.presentEnvKey);
+  if (apiKey === undefined || apiKey === "") {
+    return {
+      status: "failed",
+      message: "API key changed before auth probe",
+    };
+  }
+
+  return await options.readProviderOnlineDiagnostic({
+    baseUrl: diagnostic.baseUrl.value,
+    apiKey,
+  });
+}
+
 export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
   const stdoutLines: string[] = ["Keel doctor"];
   const stderrLines: string[] = [];
@@ -176,7 +341,15 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
       options.selection,
     );
     stdoutLines.push("", ...providerDiagnosticLines(providerDiagnostic));
+    const authDiagnostic = await readProviderAuthDiagnostic(
+      options,
+      providerDiagnostic,
+    );
+    stdoutLines.push(providerAuthLine(authDiagnostic));
     if (providerDiagnosticHasError(providerDiagnostic)) {
+      exitCode = 1;
+    }
+    if (authDiagnostic.status === "failed") {
       exitCode = 1;
     }
   } catch (error) {
