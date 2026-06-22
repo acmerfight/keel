@@ -252,6 +252,21 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("Error: --report requires a file path.\n");
   });
 
+  test(`Given a transcript option without a file path,
+    When the CLI main parses the request,
+    Then it returns a validation error before resolving a provider`, async () => {
+    // Given
+    const fixture = createRuntime(["--transcript"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --transcript requires a value.\n");
+  });
+
   test.each(["0", "abc"])(`Given invalid max cost value %s,
     When the CLI main parses the request,
     Then it returns a validation error before resolving a provider`, async (maxCost) => {
@@ -397,6 +412,51 @@ describe("CLI Main", () => {
     expect(exitCode).toBe(0);
     expect(fixture.stdout()).toBe("Hello from fake provider.\n");
     expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given a one-shot transcript path,
+    When the CLI main runs in-process,
+    Then it writes the provider-visible transcript`, async () => {
+    // Given
+    const root = await mkdtemp(join(tmpdir(), "keel-cli-main-transcript-"));
+    const transcriptPath = join(root, "artifacts", "run.jsonl");
+    const fixture = createRuntime(["--transcript", transcriptPath, "hello"], {
+      cwd: root,
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Hello from fake provider.\n");
+      expect(fixture.stderr()).toBe("");
+      const records = (await readFile(transcriptPath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(records).toMatchObject([
+        {
+          schemaVersion: 1,
+          type: "transcript",
+          provider: "fake",
+          model: "fake",
+          systemPrompt: expect.stringContaining("You are keel"),
+        },
+        { type: "message", message: { role: "user", content: "hello" } },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "Hello from fake provider.",
+          },
+        },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test(`Given provider and model flags are used for an interactive session,
@@ -560,6 +620,23 @@ describe("CLI Main", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe("Error: --out requires a value.\n");
+  });
+
+  test(`Given an eval transcript directory option is missing its value,
+    When the CLI main parses the eval request,
+    Then it returns an option value validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["eval", "--transcript-dir"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --transcript-dir requires a value.\n",
+    );
   });
 
   test(`Given an eval task option is missing its value,

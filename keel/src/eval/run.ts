@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   cpSync,
@@ -7,9 +8,10 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import type { ProviderId } from "../core/provider-id.ts";
@@ -36,6 +38,14 @@ const runReportSchema = z.object({
 
 type RunReport = z.infer<typeof runReportSchema>;
 
+const transcriptHeaderSchema = z.object({
+  schemaVersion: z.literal(1),
+  type: z.literal("transcript"),
+  provider: z.string(),
+  model: z.string(),
+  systemPrompt: z.string(),
+});
+
 const packageJsonSchema = z.object({ version: z.string() });
 
 function keelVersion(): string {
@@ -54,6 +64,7 @@ interface TrialResult {
   readonly outcome: TrialOutcome;
   readonly wallMs: number;
   readonly report?: RunReport;
+  readonly transcriptPath?: string;
 }
 
 interface ProcessResult {
@@ -169,10 +180,37 @@ function readRunReport(reportPath: string): RunReport | null {
   }
 }
 
+function readableTranscriptResult(transcriptPath: string | undefined): {
+  readonly transcriptPath?: string;
+} {
+  if (transcriptPath === undefined || !isReadableTranscript(transcriptPath)) {
+    return {};
+  }
+  return { transcriptPath };
+}
+
+function artifactName(value: string): string {
+  const name = value.replace(/[^A-Za-z0-9._-]/gu, "_");
+  const digest = createHash("sha256").update(value).digest("hex").slice(0, 12);
+  return `${name === "" ? "task" : name}-${digest}`;
+}
+
+function isReadableTranscript(transcriptPath: string): boolean {
+  try {
+    if (!statSync(transcriptPath).isFile()) return false;
+    const firstLine = readFileSync(transcriptPath, "utf8").split("\n", 1)[0];
+    if (firstLine === undefined || firstLine === "") return false;
+    return transcriptHeaderSchema.safeParse(JSON.parse(firstLine)).success;
+  } catch {
+    return false;
+  }
+}
+
 async function runTrial(
   task: EvalTask,
   cliEntry: string,
   selection: EvalProviderSelection,
+  transcriptPath: string | undefined,
 ): Promise<TrialResult> {
   return withTrialWorkspace(task, async (workDir, metaDir) => {
     const reportPath = join(metaDir, "report.json");
@@ -189,6 +227,7 @@ async function runTrial(
         : []),
       "--report",
       reportPath,
+      ...(transcriptPath !== undefined ? ["--transcript", transcriptPath] : []),
       task.prompt,
     ];
 
@@ -200,14 +239,22 @@ async function runTrial(
     const wallMs = Date.now() - startedAt;
 
     if (run.timedOut) {
-      return { outcome: "timeout", wallMs };
+      return {
+        outcome: "timeout",
+        wallMs,
+        ...readableTranscriptResult(transcriptPath),
+      };
     }
     const report = readRunReport(reportPath);
     if (run.exitCode !== 0 || report === null) {
       if (run.stderrTail !== "") {
         process.stderr.write(`[${task.id}] agent stderr: ${run.stderrTail}\n`);
       }
-      return { outcome: "crashed", wallMs };
+      return {
+        outcome: "crashed",
+        wallMs,
+        ...readableTranscriptResult(transcriptPath),
+      };
     }
 
     const verify = await runProcess("bash", [task.verifyScript], {
@@ -216,15 +263,26 @@ async function runTrial(
     });
     /* v8 ignore next 3: CI and supported user environments provide bash. */
     if (verify.spawnFailed) {
-      return { outcome: "crashed", wallMs, report };
+      return {
+        outcome: "crashed",
+        wallMs,
+        report,
+        ...readableTranscriptResult(transcriptPath),
+      };
     }
     if (verify.timedOut) {
-      return { outcome: "timeout", wallMs, report };
+      return {
+        outcome: "timeout",
+        wallMs,
+        report,
+        ...readableTranscriptResult(transcriptPath),
+      };
     }
     return {
       outcome: verify.exitCode === 0 ? "verified" : "verify_failed",
       wallMs,
       report,
+      ...readableTranscriptResult(transcriptPath),
     };
   });
 }
@@ -255,6 +313,7 @@ interface ResultLine {
   readonly outcome: TrialOutcome;
   readonly wallMs: number;
   readonly report?: RunReport;
+  readonly transcriptPath?: string;
 }
 
 interface EvalProviderSelection {
@@ -276,6 +335,7 @@ export interface EvalCommandArgs {
   readonly model?: string;
   readonly check: boolean;
   readonly cliEntry: string;
+  readonly transcriptDir?: string;
 }
 
 function selectTasks(args: EvalCommandArgs): readonly EvalTask[] {
@@ -318,17 +378,39 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
   }
 
   const version = keelVersion();
+  const transcriptRunDir =
+    args.transcriptDir === undefined
+      ? undefined
+      : join(
+          resolve(args.transcriptDir),
+          `run-${new Date().toISOString().replace(/[:.]/gu, "-")}-${process.pid}`,
+        );
+  if (transcriptRunDir !== undefined) {
+    mkdirSync(transcriptRunDir, { recursive: true });
+  }
   let passingTasks = 0;
   let passingTrials = 0;
   for (const task of tasks) {
     let passes = 0;
     for (let trial = 1; trial <= args.trials; trial++) {
-      const result = await runTrial(task, args.cliEntry, {
-        ...(args.providerId !== undefined
-          ? { providerId: args.providerId }
-          : {}),
-        ...(args.model !== undefined ? { model: args.model } : {}),
-      });
+      const transcriptPath =
+        transcriptRunDir === undefined
+          ? undefined
+          : join(
+              transcriptRunDir,
+              `${artifactName(task.id)}-trial-${trial}.jsonl`,
+            );
+      const result = await runTrial(
+        task,
+        args.cliEntry,
+        {
+          ...(args.providerId !== undefined
+            ? { providerId: args.providerId }
+            : {}),
+          ...(args.model !== undefined ? { model: args.model } : {}),
+        },
+        transcriptPath,
+      );
       const pass = result.outcome === "verified";
       if (pass) passes++;
       appendResultLine(args.outFile, {
@@ -341,6 +423,9 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
         outcome: result.outcome,
         wallMs: result.wallMs,
         ...(result.report !== undefined ? { report: result.report } : {}),
+        ...(result.transcriptPath !== undefined
+          ? { transcriptPath: result.transcriptPath }
+          : {}),
       });
       process.stderr.write(
         `[${task.id}] trial ${trial}: ${result.outcome} (${result.wallMs}ms)\n`,

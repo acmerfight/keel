@@ -11,6 +11,7 @@ interface EvalCliArgs {
   readonly command: "eval";
   readonly suiteDir: string;
   readonly outFile: string;
+  readonly transcriptDir?: string;
   readonly trials: number;
   readonly taskId?: string;
   readonly providerId?: ProviderId;
@@ -28,6 +29,7 @@ export type CliArgs =
       readonly userMessage?: string;
       readonly maxCostUsd?: number;
       readonly reportFile?: string;
+      readonly transcriptFile?: string;
       readonly sessionId?: string;
       readonly resumeSessionId?: string;
       readonly providerId?: ProviderId;
@@ -47,14 +49,16 @@ function parseError(message: string): ParseResult<never> {
 }
 
 export const USAGE = [
-  "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] <message>",
+  "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] <message>",
   "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id>]",
-  "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
+  "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
   "       keel /undo",
   "",
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
   "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
   "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
+  "--transcript writes provider-visible run messages as schema-versioned JSONL.",
+  "--transcript-dir writes one provider-visible transcript JSONL file per eval trial.",
   "--provider and --model override provider env for the current run.",
   "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, DEEPSEEK_MODEL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
   "Context compaction uses an estimated 256000-token default window for real providers; set KEEL_CONTEXT_WINDOW_TOKENS for a model-specific window.",
@@ -128,6 +132,7 @@ function requireOptionValue(
 function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
   let suiteDir = join("evals", "tasks");
   let outFile = "eval-results.jsonl";
+  let transcriptDir: string | undefined;
   let trials = 1;
   let taskId: string | undefined;
   let providerId: ProviderId | undefined;
@@ -135,6 +140,7 @@ function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
   let check = false;
   const providerPrefix = "--provider=";
   const modelPrefix = "--model=";
+  const transcriptDirPrefix = "--transcript-dir=";
 
   let skipNext = false;
   for (const [index, arg] of args.entries()) {
@@ -155,6 +161,22 @@ function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
       if (!parsed.ok) return parsed;
       outFile = parsed.value;
       skipNext = true;
+      continue;
+    }
+    if (arg === "--transcript-dir") {
+      const parsed = requireOptionValue("--transcript-dir", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      transcriptDir = parsed.value;
+      skipNext = true;
+      continue;
+    }
+    if (arg.startsWith(transcriptDirPrefix)) {
+      const parsed = requireOptionValue(
+        "--transcript-dir",
+        arg.slice(transcriptDirPrefix.length),
+      );
+      if (!parsed.ok) return parsed;
+      transcriptDir = parsed.value;
       continue;
     }
     if (arg === "--trials") {
@@ -209,6 +231,7 @@ function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
     command: "eval",
     suiteDir,
     outFile,
+    ...(transcriptDir !== undefined ? { transcriptDir } : {}),
     trials,
     ...(taskId !== undefined ? { taskId } : {}),
     ...(providerId !== undefined ? { providerId } : {}),
@@ -235,6 +258,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   let bashPolicyOptionSeen = false;
   let maxCostUsd: number | undefined;
   let reportFile: string | undefined;
+  let transcriptFile: string | undefined;
   let sessionId: string | undefined;
   let resumeSessionId: string | undefined;
   let providerId: ProviderId | undefined;
@@ -242,6 +266,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   let userMessage: string | undefined;
   const maxCostPrefix = "--max-cost=";
   const reportPrefix = "--report=";
+  const transcriptPrefix = "--transcript=";
   const bashPolicyPrefix = "--bash-policy=";
   const sessionPrefix = "--session=";
   const resumePrefix = "--resume=";
@@ -353,6 +378,24 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
       continue;
     }
 
+    if (arg === "--transcript") {
+      const parsed = requireOptionValue("--transcript", args[index + 1]);
+      if (!parsed.ok) return parsed;
+      transcriptFile = parsed.value;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(transcriptPrefix)) {
+      const parsed = requireOptionValue(
+        "--transcript",
+        arg.slice(transcriptPrefix.length),
+      );
+      if (!parsed.ok) return parsed;
+      transcriptFile = parsed.value;
+      continue;
+    }
+
     if (arg === "--session") {
       const parsed = requireOptionValue("--session", args[index + 1]);
       if (!parsed.ok) return parsed;
@@ -403,6 +446,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
     ...(userMessage !== undefined ? { userMessage } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(reportFile !== undefined ? { reportFile } : {}),
+    ...(transcriptFile !== undefined ? { transcriptFile } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
     ...(providerId !== undefined ? { providerId } : {}),

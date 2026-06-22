@@ -41,6 +41,7 @@ import {
   type SessionState,
   SessionStoreError,
 } from "./session-store.ts";
+import { writeRunTranscript } from "./transcript.ts";
 
 interface CliInput extends NodeJS.ReadableStream {
   readonly isTTY?: boolean;
@@ -98,6 +99,9 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
     return await runEvalCommand({
       suiteDir: cliArgs.suiteDir,
       outFile: cliArgs.outFile,
+      ...(cliArgs.transcriptDir !== undefined
+        ? { transcriptDir: cliArgs.transcriptDir }
+        : {}),
       trials: cliArgs.trials,
       ...(cliArgs.taskId !== undefined ? { taskId: cliArgs.taskId } : {}),
       ...(cliArgs.providerId !== undefined
@@ -132,6 +136,12 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
   ) {
     runtime.writeStderr(
       "Error: --session and --resume are only supported for interactive sessions.\n",
+    );
+    return 1;
+  }
+  if (!userMessage && cliArgs.transcriptFile !== undefined) {
+    runtime.writeStderr(
+      "Error: --transcript is only supported for one-shot runs.\n",
     );
     return 1;
   }
@@ -368,15 +378,17 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
     const projectInstructions = loadProjectInstructions(workspace);
     const startedAt = runtime.now();
     const bashPermission = oneShotBashPermissionPolicy(cliArgs.bashMode);
+    const systemPrompt = buildAgentSystemPrompt({
+      workspace,
+      platform: runtime.platform,
+      ...(projectInstructions !== undefined ? { projectInstructions } : {}),
+    });
+    let transcriptMessages: readonly Message[] | undefined;
     const stream = runAgent({
       workspace,
       provider: resolved.provider,
       userMessage,
-      systemPrompt: buildAgentSystemPrompt({
-        workspace,
-        platform: runtime.platform,
-        ...(projectInstructions !== undefined ? { projectInstructions } : {}),
-      }),
+      systemPrompt,
       signal: abortController.signal,
       allowBash: bashModeExposesTool(cliArgs.bashMode),
       stopPolicy: defaultStopPolicy(),
@@ -394,6 +406,13 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
       ...(resolved.contextCompaction !== undefined
         ? { contextCompaction: resolved.contextCompaction }
         : {}),
+      ...(cliArgs.transcriptFile !== undefined
+        ? {
+            onTranscriptReady: (messages) => {
+              transcriptMessages = messages;
+            },
+          }
+        : {}),
     });
 
     const finalEnd = await printAgentEvents(stream, runtime);
@@ -408,6 +427,17 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         model: resolved.model,
         end: finalEnd,
         durationMs: runtime.now() - startedAt,
+      });
+    }
+    if (
+      cliArgs.transcriptFile !== undefined &&
+      transcriptMessages !== undefined
+    ) {
+      writeRunTranscript(cliArgs.transcriptFile, {
+        provider: resolved.provider.id,
+        model: resolved.model,
+        systemPrompt,
+        messages: transcriptMessages,
       });
     }
   } catch (error) {
