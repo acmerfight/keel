@@ -516,10 +516,7 @@ function interactiveBashPermissionPolicy(
       if (answer === "s" || answer === "session" || answer === "a") {
         return { type: "allow", scope: "session" };
       }
-      if (
-        request.prefixApproval !== undefined &&
-        (answer === "p" || answer === "prefix")
-      ) {
+      if (request.prefixApproval !== undefined && answer === "p") {
         return { type: "allow", scope: "session-prefix" };
       }
       return { type: "deny", message: "User did not approve this command." };
