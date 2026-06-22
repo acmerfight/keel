@@ -88,7 +88,15 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
 
   if (cliArgs.command === "doctor") {
     const { runDoctor } = await import("./doctor.ts");
-    const result = await runDoctor();
+    const result = await runDoctor({
+      runtime,
+      selection: {
+        ...(cliArgs.providerId !== undefined
+          ? { providerId: cliArgs.providerId }
+          : {}),
+        ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
+      },
+    });
     runtime.writeStdout(result.stdout);
     runtime.writeStderr(result.stderr);
     return result.exitCode;

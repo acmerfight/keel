@@ -1152,7 +1152,7 @@ describe("CLI Main", () => {
     When the CLI main dispatches the doctor command,
     Then it returns the diagnostic result`, async () => {
     // Given
-    const fixture = createRuntime(["--doctor"]);
+    const fixture = createRuntime(["--doctor", "--provider=fake"]);
 
     // When
     const exitCode = await runCliMain(fixture.runtime);
@@ -1160,7 +1160,139 @@ describe("CLI Main", () => {
     // Then
     expect(exitCode).toBe(0);
     expect(fixture.stdout()).toContain("Keel doctor");
+    expect(fixture.stdout()).toContain("provider: fake (source: --provider)");
     expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given Qwen is selected for diagnostics with CLI flags,
+    When the CLI main dispatches the doctor command,
+    Then it reports the effective provider settings without exposing the key`, async () => {
+    // Given
+    const apiKeySecret = "main-doctor-api-key-secret";
+    const baseUrlSecret = "main-doctor-base-url-secret";
+    const fixture = createRuntime(
+      ["--doctor", "--provider", "qwen", "--model", "qwen3.7-plus"],
+      {
+        env: {
+          KEEL_PROVIDER: "fake",
+          DASHSCOPE_API_KEY: apiKeySecret,
+          QWEN_BASE_URL: `https://user:${baseUrlSecret}@example.test/v1?api_key=${baseUrlSecret}#${baseUrlSecret}`,
+          KEEL_CONTEXT_WINDOW_TOKENS: "8192",
+        },
+      },
+    );
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toContain("provider: qwen (source: --provider)");
+    expect(fixture.stdout()).toContain("model: qwen3.7-plus (source: --model)");
+    expect(fixture.stdout()).toContain("api key: present (DASHSCOPE_API_KEY)");
+    expect(fixture.stdout()).toContain(
+      "base url: https://example.test/v1 (source: QWEN_BASE_URL)",
+    );
+    expect(fixture.stdout()).toContain(
+      "context window: 8192 tokens (source: KEEL_CONTEXT_WINDOW_TOKENS)",
+    );
+    expect(fixture.stdout()).not.toContain(apiKeySecret);
+    expect(fixture.stdout()).not.toContain(baseUrlSecret);
+    expect(fixture.stdout()).not.toContain("user:");
+    expect(fixture.stdout()).not.toContain("api_key=");
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given a selected real provider is missing its API key,
+    When the CLI main dispatches the doctor command,
+    Then it reports the missing provider setting as a failing diagnostic`, async () => {
+    // Given
+    const fixture = createRuntime(["--doctor"], {
+      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toContain(
+      "provider: deepseek (source: KEEL_PROVIDER)",
+    );
+    expect(fixture.stdout()).toContain(
+      "api key: missing (expected DEEPSEEK_API_KEY)",
+    );
+    expect(fixture.stdout()).toContain(
+      "error: missing API key: expected DEEPSEEK_API_KEY",
+    );
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given Kimi is configured with unknown pricing,
+    When the CLI main dispatches the doctor command,
+    Then it reports provider readiness with a cost warning`, async () => {
+    // Given
+    const fixture = createRuntime(["--doctor"], {
+      env: {
+        KEEL_PROVIDER: "kimi",
+        KIMI_API_KEY: "test-key",
+        KIMI_MODEL: "kimi-next",
+      },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toContain(
+      "provider: kimi (source: KEEL_PROVIDER)",
+    );
+    expect(fixture.stdout()).toContain("model: kimi-next (source: KIMI_MODEL)");
+    expect(fixture.stdout()).toContain("cost model: unknown");
+    expect(fixture.stdout()).toContain(
+      "warning: cost tracking is unavailable for model kimi-next",
+    );
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given the context window env is invalid for diagnostics,
+    When the CLI main dispatches the doctor command,
+    Then it reports the invalid context setting as a failing diagnostic`, async () => {
+    // Given
+    const fixture = createRuntime(["--doctor", "--provider=fake"], {
+      env: { KEEL_CONTEXT_WINDOW_TOKENS: "12px" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toContain(
+      "context window: invalid (source: KEEL_CONTEXT_WINDOW_TOKENS)",
+    );
+    expect(fixture.stdout()).toContain(
+      "error: KEEL_CONTEXT_WINDOW_TOKENS must be a positive integer",
+    );
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given an unknown provider is configured for diagnostics,
+    When the CLI main dispatches the doctor command,
+    Then it reports the provider configuration failure`, async () => {
+    // Given
+    const fixture = createRuntime(["--doctor"], {
+      env: { KEEL_PROVIDER: "unknown" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toContain("provider: failed");
+    expect(fixture.stderr()).toBe('Error: unknown provider "unknown"\n');
   });
 
   test(`Given the last edit checkpoint can be restored,

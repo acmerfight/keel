@@ -2,11 +2,25 @@ import { execFile } from "node:child_process";
 import { z } from "zod";
 import { KeelError } from "../core/error.ts";
 import { resolveRipgrep } from "../tools/ripgrep.ts";
+import {
+  type ApiKeyDiagnostic,
+  type BaseUrlDiagnostic,
+  type ContextWindowDiagnostic,
+  inspectProviderConfig,
+  type ProviderConfigDiagnostic,
+  type ProviderConfigRuntime,
+  type ProviderSelection,
+} from "./provider-config.ts";
 
 export interface DoctorResult {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;
+}
+
+export interface DoctorOptions {
+  readonly runtime: ProviderConfigRuntime;
+  readonly selection?: ProviderSelection;
 }
 
 const RIPGREP_DOCTOR_TIMEOUT_MS = 5_000;
@@ -60,27 +74,113 @@ function readRipgrepVersion(path: string): Promise<string> {
   });
 }
 
-export async function runDoctor(): Promise<DoctorResult> {
+function apiKeyLine(apiKey: ApiKeyDiagnostic): string {
+  switch (apiKey.status) {
+    case "not-required":
+      return "api key: not required";
+    case "present":
+      return `api key: present (${apiKey.presentEnvKey})`;
+    case "missing":
+      return `api key: missing (expected ${apiKey.expectedEnvKeys.join(" or ")})`;
+  }
+}
+
+function baseUrlLine(baseUrl: BaseUrlDiagnostic): string {
+  switch (baseUrl.status) {
+    case "none":
+      return "base url: none";
+    case "configured":
+      return `base url: ${redactBaseUrl(baseUrl.value)} (source: ${baseUrl.source})`;
+  }
+}
+
+function redactBaseUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    const path = url.pathname === "/" ? "" : url.pathname;
+    return `${url.protocol}//${url.host}${path}`;
+  } catch {
+    return "<unparseable URL>";
+  }
+}
+
+function contextWindowLine(contextWindow: ContextWindowDiagnostic): string {
+  switch (contextWindow.status) {
+    case "disabled":
+      return "context window: disabled";
+    case "enabled":
+      return `context window: ${contextWindow.tokens} tokens (source: ${contextWindow.source})`;
+    case "invalid":
+      return `context window: invalid (source: ${contextWindow.source})`;
+  }
+}
+
+function providerDiagnosticHasError(
+  diagnostic: ProviderConfigDiagnostic,
+): boolean {
+  return diagnostic.issues.some((issue) => issue.severity === "error");
+}
+
+function providerDiagnosticLines(
+  diagnostic: ProviderConfigDiagnostic,
+): readonly string[] {
+  return [
+    `provider: ${diagnostic.providerId} (source: ${diagnostic.providerSource})`,
+    `model: ${diagnostic.model} (source: ${diagnostic.modelSource})`,
+    apiKeyLine(diagnostic.apiKey),
+    baseUrlLine(diagnostic.baseUrl),
+    contextWindowLine(diagnostic.contextWindow),
+    `cost model: ${diagnostic.costModel}`,
+    ...diagnostic.issues.map((issue) => `${issue.severity}: ${issue.message}`),
+  ];
+}
+
+function processEnvRuntime(): ProviderConfigRuntime {
+  return {
+    env: (key) => process.env[key],
+  };
+}
+
+export async function runDoctor(
+  options: DoctorOptions = { runtime: processEnvRuntime() },
+): Promise<DoctorResult> {
+  const stdoutLines: string[] = ["Keel doctor"];
+  const stderrLines: string[] = [];
+  let exitCode = 0;
+
   try {
     const ripgrep = await resolveRipgrep();
     const version = await readRipgrepVersion(ripgrep.path);
-    return {
-      exitCode: 0,
-      stdout: [
-        "Keel doctor",
-        `ripgrep: ok (${ripgrep.provider})`,
-        `ripgrep path: ${ripgrep.path}`,
-        `ripgrep version: ${version}`,
-        "",
-      ].join("\n"),
-      stderr: "",
-    };
+    stdoutLines.push(
+      `ripgrep: ok (${ripgrep.provider})`,
+      `ripgrep path: ${ripgrep.path}`,
+      `ripgrep version: ${version}`,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return {
-      exitCode: 1,
-      stdout: "Keel doctor\n",
-      stderr: `ripgrep: failed: ${message}\n`,
-    };
+    exitCode = 1;
+    stderrLines.push(`ripgrep: failed: ${message}`);
   }
+
+  try {
+    const providerDiagnostic = inspectProviderConfig(
+      options.runtime,
+      options.selection,
+    );
+    stdoutLines.push("", ...providerDiagnosticLines(providerDiagnostic));
+    if (providerDiagnosticHasError(providerDiagnostic)) {
+      exitCode = 1;
+    }
+  } catch (error) {
+    exitCode = 1;
+    const message = error instanceof Error ? error.message : String(error);
+    stdoutLines.push("", "provider: failed");
+    stderrLines.push(message);
+  }
+
+  return {
+    exitCode,
+    stdout: `${stdoutLines.join("\n")}\n`,
+    stderr: stderrLines.length === 0 ? "" : `${stderrLines.join("\n")}\n`,
+  };
 }
