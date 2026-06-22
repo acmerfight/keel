@@ -192,7 +192,7 @@ function readableTranscriptResult(transcriptPath: string | undefined): {
 function artifactName(value: string): string {
   const name = value.replace(/[^A-Za-z0-9._-]/gu, "_");
   const digest = createHash("sha256").update(value).digest("hex").slice(0, 12);
-  return `${name === "" ? "task" : name}-${digest}`;
+  return `${name}-${digest}`;
 }
 
 function isReadableTranscript(transcriptPath: string): boolean {
