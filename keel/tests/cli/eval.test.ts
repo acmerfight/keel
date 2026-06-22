@@ -31,6 +31,7 @@ const resultLineSchema = z.object({
   outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
   wallMs: z.number().nonnegative(),
   report: runReportSchema.optional(),
+  transcriptPath: z.string().optional(),
 });
 
 interface TaskFixture {
@@ -235,6 +236,72 @@ describe("CLI Eval", () => {
         pass: false,
         outcome: "verify_failed",
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given user asks eval to keep trial transcripts,
+    When user runs keel eval,
+    Then each trial result links to a readable provider-visible transcript`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const transcriptDir = join(root, "transcripts");
+    await createTask(suiteDir, "fix-note", FIX_NOTE_TASK);
+
+    try {
+      // When
+      const result = await runCli(
+        [
+          "eval",
+          "--suite",
+          suiteDir,
+          "--out",
+          outFile,
+          "--transcript-dir",
+          transcriptDir,
+        ],
+        { cwd: root, env: { KEEL_PROVIDER: "fake" }, timeoutMs: 60_000 },
+      );
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("fix-note: 1/1 pass");
+
+      const lines = await readResultLines(outFile);
+      const transcriptPath = lines[0]?.transcriptPath;
+      expect(transcriptPath).toContain("fix-note-");
+      expect(transcriptPath).toContain("-trial-1");
+
+      const records = (await readFile(transcriptPath ?? "", "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(records[0]).toMatchObject({
+        schemaVersion: 1,
+        type: "transcript",
+        provider: "fake",
+        model: "fake",
+        systemPrompt: expect.stringContaining("You are keel"),
+      });
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            role: "user",
+            content: FIX_NOTE_TASK.prompt,
+          }),
+        }),
+      );
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            role: "assistant",
+            toolCalls: expect.any(Array),
+          }),
+        }),
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

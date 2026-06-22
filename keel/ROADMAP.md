@@ -62,9 +62,12 @@ What a user can do today:
 - `keel --max-cost <usd>` — cost tracking with budget stop.
 - `keel --report <file>` — write a machine-readable run report with turns,
   stop reason, token usage, duration, provider/model, and cost when tracked.
+- `keel --transcript <file>` — write provider-visible one-shot messages as
+  schema-versioned JSONL.
 - `keel eval [--check] [--trials <n>]` — run a repeatable harness eval suite
   from `evals/tasks`, with per-trial JSONL results and reference-solution
-  verifier checks.
+  verifier checks. `--transcript-dir <dir>` keeps one readable transcript
+  artifact per trial and links it from the result JSONL when produced.
 - `keel /undo` — restore the last edit, created file, or apply_patch batch
   checkpoint.
 - `keel --doctor` — environment check.
@@ -131,14 +134,16 @@ Known limits that shape the priorities below:
 4. **Harness eval measurement loop.** ✅ Baseline done (2026-06): `keel eval`
    runs deterministic outcome-graded task directories from `evals/tasks`,
    appends per-trial JSONL results, supports multi-trial runs, and
-   validates each task's reference solution via `--check`. The current
-   seed suite covers exact edits, search/edit, multi-file rename, new file
-   creation, bash-driven test fixing, long-file editing, stale edit
-   recovery, repeated-string disambiguation, test-preserving bug fixes,
-   and pattern-following feature additions. The next work is corpus growth
-   from real daily-use failures and transcript review tooling. External
-   agent runners and cross-agent same-model comparisons should wait until
-   the basic daily-use capabilities below are stronger and `keel eval` has
+   validates each task's reference solution via `--check`. Optional
+   `--transcript-dir` writes provider-visible per-trial transcripts and
+   records their paths in the JSONL results. The current seed suite covers
+   exact edits, search/edit, multi-file rename, new file creation,
+   bash-driven test fixing, long-file editing, stale edit recovery,
+   repeated-string disambiguation, test-preserving bug fixes, and
+   pattern-following feature additions. The next work is corpus growth from
+   real daily-use failures and transcript comparison tooling. External agent
+   runners and cross-agent same-model comparisons should wait until the
+   basic daily-use capabilities below are stronger and `keel eval` has
    enough real usage to make the comparison meaningful.
 5. **Completed P0 foundations.** ✅ Done/partial (2026-06): provider retry
    with backoff now handles request setup failures and pre-stream HTTP

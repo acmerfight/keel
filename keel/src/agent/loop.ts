@@ -88,6 +88,7 @@ export interface RunAgentOptions {
   readonly costTracking?: CostTrackingOptions;
   readonly bashPermission?: BashPermissionPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
+  readonly onTranscriptReady?: (messages: readonly Message[]) => void;
 }
 
 type InjectedUserMessage = Extract<Message, { readonly role: "user" }>;
@@ -811,6 +812,7 @@ export async function* runAgent(
         ? { contextCompaction: options.contextCompaction }
         : {}),
     });
+    options.onTranscriptReady?.(messages);
   } finally {
     if (checkpointOperations.length > 1) {
       recordLastTaskCheckpoint({
