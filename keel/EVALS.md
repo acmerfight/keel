@@ -23,10 +23,15 @@ DASHSCOPE_API_KEY=... keel eval --provider qwen --model qwen3.7-max --trials 3 -
 
 # Iterate on one task.
 keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl
+
+# Keep provider-visible messages for every trial.
+keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl --transcript-dir /tmp/keel-transcripts
 ```
 
 Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
-(appends; gitignored).
+(appends; gitignored). `--transcript-dir <dir>` is opt-in. When set, each
+run creates a unique subdirectory under `<dir>` and writes one
+schema-versioned JSONL transcript per trial.
 
 Exit code is non-zero when any trial fails to verify, times out, or crashes.
 
@@ -78,6 +83,7 @@ Each trial appends one JSON line:
   "pass": true,
   "outcome": "verified",
   "wallMs": 9182,
+  "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
     "schemaVersion": 1,
     "provider": "deepseek",
@@ -98,6 +104,12 @@ Each trial appends one JSON line:
 - `wallMs` is measured around the spawned agent CLI run. It excludes the
   later verifier step, so read it as agent wall time rather than full
   trial wall time.
+- `transcriptPath` is present only when `--transcript-dir` is enabled and
+  the trial produced a readable transcript file with a valid header. The
+  transcript JSONL starts with `{ "schemaVersion": 1, "type": "transcript",
+  "provider", "model", "systemPrompt" }`, followed by one `{ "type":
+  "message", "message": ... }` record for each provider-visible user /
+  assistant / tool message.
 - Regression comparison is `diff`-shaped by design: run the suite on two
   keel versions, compare pass counts, turns, and tokens per task from the
   two JSONL files.
@@ -125,6 +137,9 @@ Execution model (mirrors Terminal-Bench/Harbor):
 - The runner spawns the real `keel` CLI as a subprocess — the same
   surface a user runs. `src/eval/` is forbidden (by
   `tests/invariants/boundaries.test.ts`) from importing harness internals.
+- `--transcript-dir` is implemented through the same subprocess boundary:
+  the runner passes a trial-specific `--transcript <file>` path into the
+  child CLI and records that path only after the file exists.
 - `verify.sh` grades only the final workspace state, never the agent's
   path to it. Any approach that produces the right outcome passes.
 
@@ -173,6 +188,5 @@ and treat prior scores for that task version as invalid.
   same-model comparison path; the JSONL schema already records provider/model
   so old results stay usable.
 - No LLM-graded rubrics; deterministic outcome checks only.
-- No transcript persistence per trial; the runner keeps only metrics.
 - `interventions` (human steering count) becomes meaningful with
   **Interactive session with steering** and will be added to the schema then.

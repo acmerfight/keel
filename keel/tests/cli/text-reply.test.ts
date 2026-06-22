@@ -118,14 +118,16 @@ describe("CLI Text Reply", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toBe(
       [
-        "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] <message>",
+        "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] <message>",
         "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id>]",
-        "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--check]",
+        "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
         "       keel /undo",
         "",
         "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
         "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
         "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
+        "--transcript writes provider-visible run messages as schema-versioned JSONL.",
+        "--transcript-dir writes one provider-visible transcript JSONL file per eval trial.",
         "--provider and --model override provider env for the current run.",
         "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, DEEPSEEK_MODEL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
         "Context compaction uses an estimated 256000-token default window for real providers; set KEEL_CONTEXT_WINDOW_TOKENS for a model-specific window.",
@@ -490,6 +492,50 @@ describe("CLI Text Reply", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).not.toBe("");
     expect(result.stdout.trim()).not.toBe("keel v0.0.1");
+  });
+
+  test(`Given user requests a one-shot transcript,
+    When user runs the CLI with a message,
+    Then the CLI writes provider-visible messages as JSONL`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-transcript-"));
+    const transcriptPath = join(workspace, "run.jsonl");
+
+    try {
+      // When
+      const result = await runCli(["--transcript", transcriptPath, "hello"], {
+        KEEL_PROVIDER: "fake",
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Hello from fake provider.\n");
+      expect(result.stderr).toBe("");
+
+      const records = (await readFile(transcriptPath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(records[0]).toMatchObject({
+        schemaVersion: 1,
+        type: "transcript",
+        provider: "fake",
+        model: "fake",
+        systemPrompt: expect.stringContaining("You are keel"),
+      });
+      expect(records.slice(1)).toMatchObject([
+        { type: "message", message: { role: "user", content: "hello" } },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "Hello from fake provider.",
+          },
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test.each(["0", "abc"])(`Given an invalid max cost value %s,
