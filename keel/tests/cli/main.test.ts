@@ -267,6 +267,42 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("Error: --transcript requires a value.\n");
   });
 
+  test(`Given a transcript option uses an empty equals path,
+    When the CLI main parses the request,
+    Then it returns a validation error before resolving a provider`, async () => {
+    // Given
+    const fixture = createRuntime(["--transcript=", "hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --transcript requires a value.\n");
+  });
+
+  test(`Given a transcript path without a one-shot prompt,
+    When the CLI main parses the request,
+    Then it rejects transcript capture before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--transcript", "run.jsonl"], {
+      env: { KEEL_FORCE_INTERACTIVE: "1" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --transcript is only supported for one-shot runs.\n",
+    );
+  });
+
   test.each(["0", "abc"])(`Given invalid max cost value %s,
     When the CLI main parses the request,
     Then it returns a validation error before resolving a provider`, async (maxCost) => {
@@ -420,7 +456,7 @@ describe("CLI Main", () => {
     // Given
     const root = await mkdtemp(join(tmpdir(), "keel-cli-main-transcript-"));
     const transcriptPath = join(root, "artifacts", "run.jsonl");
-    const fixture = createRuntime(["--transcript", transcriptPath, "hello"], {
+    const fixture = createRuntime([`--transcript=${transcriptPath}`, "hello"], {
       cwd: root,
       env: { KEEL_PROVIDER: "fake" },
     });
@@ -639,6 +675,23 @@ describe("CLI Main", () => {
     );
   });
 
+  test(`Given an eval transcript directory option uses an empty equals value,
+    When the CLI main parses the eval request,
+    Then it returns an option value validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["eval", "--transcript-dir="]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --transcript-dir requires a value.\n",
+    );
+  });
+
   test(`Given an eval task option is missing its value,
     When the CLI main parses the eval request,
     Then it returns an option value validation error`, async () => {
@@ -784,6 +837,37 @@ describe("CLI Main", () => {
     }
   });
 
+  test(`Given eval transcript directory uses equals syntax,
+    When the CLI main dispatches to the eval runner,
+    Then it accepts the inline transcript artifact option`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-main-eval-transcript-equals-"),
+    );
+    const fixture = createRuntime(
+      [
+        "eval",
+        "--suite",
+        join(workspace, "missing-suite"),
+        "--out",
+        join(workspace, "results.jsonl"),
+        `--transcript-dir=${join(workspace, "transcripts")}`,
+      ],
+      { cwd: workspace },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an invalid eval trial count,
     When the CLI main parses the eval request,
     Then it returns a trial validation error`, async () => {
@@ -817,6 +901,8 @@ describe("CLI Main", () => {
         "1",
         "--task",
         "fix-note",
+        "--transcript-dir",
+        join(workspace, "transcripts"),
         "--check",
       ],
       { cwd: workspace },

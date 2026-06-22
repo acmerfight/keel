@@ -616,9 +616,31 @@ describe("Eval Runner", () => {
     }
   });
 
-  test(`Given the child writes an invalid transcript artifact,
+  test.each([
+    {
+      name: "malformed JSON",
+      transcriptAction:
+        "writeFileSync(args[transcriptIndex + 1], '{not-json}\\n', 'utf8');",
+    },
+    {
+      name: "wrong header schema",
+      transcriptAction:
+        'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":1,"type":"message"}\\n\', \'utf8\');',
+    },
+    {
+      name: "empty file",
+      transcriptAction: "writeFileSync(args[transcriptIndex + 1], '', 'utf8');",
+    },
+    {
+      name: "directory path",
+      transcriptAction:
+        "mkdirSync(args[transcriptIndex + 1], { recursive: true });",
+    },
+  ])(`Given the child writes a $name transcript artifact,
     When the eval runner records the result,
-    Then the result omits the transcript path`, async () => {
+    Then the result omits the transcript path`, async ({
+    transcriptAction,
+  }) => {
     // Given
     const { root, suiteDir, outFile } = await createEvalDir();
     const transcriptDir = join(root, "transcripts");
@@ -636,7 +658,7 @@ describe("Eval Runner", () => {
         "const reportIndex = args.indexOf('--report');",
         "const transcriptIndex = args.indexOf('--transcript');",
         "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
-        "writeFileSync(args[transcriptIndex + 1], '{not-json}\\n', 'utf8');",
+        transcriptAction,
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
         "  schemaVersion: 1,",
         "  provider: 'fake',",
