@@ -987,6 +987,80 @@ describe("Interactive Session", () => {
     }
   });
 
+  test(`Given an interactive user answers prefix for a command without a family,
+    When the assistant requests bash approval,
+    Then the command is denied without offering a command family`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command =
+      "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
+    const provider = createFakeProvider([
+      fakeToolResponse("bash", { command }),
+      fakeResponse("No prefix approval."),
+    ]);
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let approvalAnswered = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+        if (text.includes("Approve bash command") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.write("p\n");
+          input.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("try prefix approval\n");
+
+      // Then
+      await withTimeout(session, 5000, "prefix denial did not finish");
+      expect(stdout).toBe("No prefix approval.\n");
+      expect(stderr).not.toContain("[p] allow command family for session:");
+      await expect(
+        readFile(join(workspace, "created.txt"), "utf8"),
+      ).rejects.toThrow("ENOENT");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a resumed session previously approved bash for the session,
     When the assistant repeats the command after resume,
     Then the resumed session asks for approval again`, async () => {
