@@ -577,6 +577,136 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("Error: --task requires a value.\n");
   });
 
+  test(`Given an eval provider option is invalid,
+    When the CLI main parses the eval request,
+    Then it returns a provider validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["eval", "--provider", "anthropic"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --provider must be one of: fake, deepseek, kimi, qwen.\n",
+    );
+  });
+
+  test(`Given an inline eval provider option is invalid,
+    When the CLI main parses the eval request,
+    Then it returns a provider validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["eval", "--provider=anthropic"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --provider must be one of: fake, deepseek, kimi, qwen.\n",
+    );
+  });
+
+  test(`Given an eval model option is missing its value,
+    When the CLI main parses the eval request,
+    Then it returns an option value validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["eval", "--model"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --model requires a value.\n");
+  });
+
+  test(`Given an inline eval model option is missing its value,
+    When the CLI main parses the eval request,
+    Then it returns an option value validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["eval", "--model="]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --model requires a value.\n");
+  });
+
+  test(`Given eval provider and model options are valid,
+    When the CLI main dispatches to the eval runner,
+    Then it accepts the separated provider selection flags`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-main-eval-model-"),
+    );
+    const fixture = createRuntime(
+      [
+        "eval",
+        "--provider",
+        "fake",
+        "--model",
+        "ignored",
+        "--suite",
+        join(workspace, "missing-suite"),
+        "--out",
+        join(workspace, "results.jsonl"),
+      ],
+      { cwd: workspace },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given eval provider and model equals options are valid,
+    When the CLI main dispatches to the eval runner,
+    Then it accepts the inline provider selection flags`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-main-eval-model-equals-"),
+    );
+    const fixture = createRuntime(
+      [
+        "eval",
+        "--provider=fake",
+        "--model=ignored",
+        "--suite",
+        join(workspace, "missing-suite"),
+        "--out",
+        join(workspace, "results.jsonl"),
+      ],
+      { cwd: workspace },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an invalid eval trial count,
     When the CLI main parses the eval request,
     Then it returns a trial validation error`, async () => {

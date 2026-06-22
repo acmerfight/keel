@@ -141,6 +141,45 @@ describe("CLI Eval", () => {
     }
   });
 
+  test(`Given provider env would select an invalid provider,
+    When user runs keel eval with a provider override,
+    Then the eval uses the selected provider for the trial`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    await createTask(suiteDir, "fix-note", FIX_NOTE_TASK);
+
+    try {
+      // When
+      const result = await runCli(
+        [
+          "eval",
+          "--provider",
+          "fake",
+          "--model",
+          "ignored",
+          "--suite",
+          suiteDir,
+          "--out",
+          outFile,
+        ],
+        { cwd: root, env: { KEEL_PROVIDER: "unknown" }, timeoutMs: 60_000 },
+      );
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("fix-note: 1/1 pass");
+
+      const lines = await readResultLines(outFile);
+      expect(lines[0]?.report).toMatchObject({
+        provider: "fake",
+        model: "fake",
+        stopReason: "completed",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a suite path is relative to the current directory,
     When user runs keel eval,
     Then task scripts are still resolved before trial isolation changes cwd`, async () => {

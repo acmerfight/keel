@@ -1,5 +1,6 @@
 import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
 import type { CostModel } from "../core/cost.ts";
+import type { ProviderId } from "../core/provider-id.ts";
 import {
   createDeepseekProvider,
   deepseekCostModel,
@@ -11,10 +12,7 @@ import {
 } from "../llm/providers/kimi.ts";
 import { createQwenProvider, qwenCostModel } from "../llm/providers/qwen.ts";
 import type { LLMProvider } from "../llm/types.ts";
-import type {
-  InteractiveResolvedProvider,
-  ProviderId,
-} from "./interactive-session.ts";
+import type { InteractiveResolvedProvider } from "./interactive-session.ts";
 
 interface CliEditRequest {
   readonly path: string;
