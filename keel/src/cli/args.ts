@@ -29,8 +29,14 @@ interface EvalCompareCliArgs {
 
 type EvalCliArgs = EvalRunCliArgs | EvalCompareCliArgs;
 
+interface DoctorCliArgs {
+  readonly command: "doctor";
+  readonly providerId?: ProviderId;
+  readonly model?: string;
+}
+
 export type CliArgs =
-  | { readonly command: "doctor" }
+  | DoctorCliArgs
   | { readonly command: "undo" }
   | EvalCliArgs
   | {
@@ -61,6 +67,7 @@ function parseError(message: string): ParseResult<never> {
 export const USAGE = [
   "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] <message>",
   "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id>]",
+  "       keel --doctor [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
   "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
   "       keel eval compare --base <old.jsonl> --head <new.jsonl>",
   "       keel /undo",
@@ -316,9 +323,62 @@ function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
   });
 }
 
+function parseDoctorArgs(args: readonly string[]): ParseResult<DoctorCliArgs> {
+  let providerId: ProviderId | undefined;
+  let model: string | undefined;
+  const providerPrefix = "--provider=";
+  const modelPrefix = "--model=";
+
+  let skipNext = false;
+  for (const [index, arg] of args.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+
+    if (arg === "--provider") {
+      const parsed = parseProviderId(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      providerId = parsed.value;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(providerPrefix)) {
+      const parsed = parseProviderId(arg.slice(providerPrefix.length));
+      if (!parsed.ok) return parsed;
+      providerId = parsed.value;
+      continue;
+    }
+
+    if (arg === "--model") {
+      const parsed = parseModel(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      model = parsed.value;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(modelPrefix)) {
+      const parsed = parseModel(arg.slice(modelPrefix.length));
+      if (!parsed.ok) return parsed;
+      model = parsed.value;
+      continue;
+    }
+
+    return parseError(`Error: unknown doctor option "${arg}"`);
+  }
+
+  return parseOk({
+    command: "doctor",
+    ...(providerId !== undefined ? { providerId } : {}),
+    ...(model !== undefined ? { model } : {}),
+  });
+}
+
 export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   if (args[0] === "--doctor") {
-    return parseOk({ command: "doctor" });
+    return parseDoctorArgs(args.slice(1));
   }
 
   if (args[0] === "/undo") {

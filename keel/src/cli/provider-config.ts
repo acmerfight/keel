@@ -46,6 +46,72 @@ type ModelSource =
   | "QWEN_MODEL"
   | "default";
 
+type ProviderSource = "--provider" | "KEEL_PROVIDER" | "default";
+type BaseUrlSource =
+  | "DEEPSEEK_BASE_URL"
+  | "KIMI_BASE_URL"
+  | "QWEN_BASE_URL"
+  | "default";
+type ContextWindowSource = "KEEL_CONTEXT_WINDOW_TOKENS" | "default";
+
+type PositiveIntegerEnv =
+  | { readonly status: "unset" }
+  | { readonly status: "valid"; readonly value: number }
+  | { readonly status: "invalid"; readonly message: string };
+
+interface ProviderDiagnosticIssue {
+  readonly severity: "error" | "warning";
+  readonly message: string;
+}
+
+export type ApiKeyDiagnostic =
+  | {
+      readonly status: "not-required";
+      readonly expectedEnvKeys: readonly string[];
+    }
+  | {
+      readonly status: "present";
+      readonly expectedEnvKeys: readonly string[];
+      readonly presentEnvKey: string;
+    }
+  | {
+      readonly status: "missing";
+      readonly expectedEnvKeys: readonly string[];
+    };
+
+export type BaseUrlDiagnostic =
+  | { readonly status: "none" }
+  | {
+      readonly status: "configured";
+      readonly value: string;
+      readonly source: BaseUrlSource;
+    };
+
+export type ContextWindowDiagnostic =
+  | { readonly status: "disabled" }
+  | {
+      readonly status: "enabled";
+      readonly tokens: number;
+      readonly source: ContextWindowSource;
+    }
+  | {
+      readonly status: "invalid";
+      readonly source: "KEEL_CONTEXT_WINDOW_TOKENS";
+      readonly message: string;
+    };
+
+export interface ProviderConfigDiagnostic {
+  readonly providerId: ProviderId;
+  readonly providerSource: ProviderSource;
+  readonly model: string;
+  readonly modelSource: ModelSource;
+  readonly apiKey: ApiKeyDiagnostic;
+  readonly baseUrl: BaseUrlDiagnostic;
+  readonly contextWindow: ContextWindowDiagnostic;
+  readonly costModel: "known" | "unknown";
+  readonly issues: readonly ProviderDiagnosticIssue[];
+}
+
 type ResolvedProviderBase<
   Id extends ProviderId,
   Cost extends CostModel | null,
@@ -68,13 +134,13 @@ function providerConfigError(message: string): never {
   throw new ProviderConfigError(message);
 }
 
-function positiveIntegerEnv(
+function readPositiveIntegerEnv(
   runtime: ProviderConfigRuntime,
   key: string,
-): number | undefined {
+): PositiveIntegerEnv {
   const value = runtime.env(key);
   if (value === undefined || value === "") {
-    return undefined;
+    return { status: "unset" };
   }
   const parsed = Number.parseInt(value, 10);
   if (
@@ -82,9 +148,27 @@ function positiveIntegerEnv(
     parsed <= 0 ||
     String(parsed) !== value
   ) {
-    providerConfigError(`Error: ${key} must be a positive integer.`);
+    return {
+      status: "invalid",
+      message: `${key} must be a positive integer`,
+    };
   }
-  return parsed;
+  return { status: "valid", value: parsed };
+}
+
+function positiveIntegerEnv(
+  runtime: ProviderConfigRuntime,
+  key: string,
+): number | undefined {
+  const result = readPositiveIntegerEnv(runtime, key);
+  switch (result.status) {
+    case "unset":
+      return undefined;
+    case "valid":
+      return result.value;
+    case "invalid":
+      providerConfigError(`Error: ${result.message}.`);
+  }
 }
 
 function fakeContextCompactionOptions(
@@ -117,18 +201,28 @@ function isProviderId(value: string): value is ProviderId {
   );
 }
 
+function selectedProvider(
+  runtime: ProviderConfigRuntime,
+  selection: ProviderSelection | undefined,
+): { readonly providerId: ProviderId; readonly source: ProviderSource } {
+  if (selection?.providerId !== undefined) {
+    return { providerId: selection.providerId, source: "--provider" };
+  }
+  const configuredProviderId = runtime.env("KEEL_PROVIDER");
+  if (configuredProviderId === undefined) {
+    return { providerId: "deepseek", source: "default" };
+  }
+  if (isProviderId(configuredProviderId)) {
+    return { providerId: configuredProviderId, source: "KEEL_PROVIDER" };
+  }
+  providerConfigError(`Error: unknown provider "${configuredProviderId}"`);
+}
+
 function selectedProviderId(
   runtime: ProviderConfigRuntime,
   selection: ProviderSelection | undefined,
 ): ProviderId {
-  if (selection?.providerId !== undefined) {
-    return selection.providerId;
-  }
-  const providerId = runtime.env("KEEL_PROVIDER") ?? "deepseek";
-  if (isProviderId(providerId)) {
-    return providerId;
-  }
-  providerConfigError(`Error: unknown provider "${providerId}"`);
+  return selectedProvider(runtime, selection).providerId;
 }
 
 function selectedModel(
@@ -215,6 +309,247 @@ const ZERO_COST_MODEL: CostModel = {
 function kimiCostModel(model: string): CostModel | null {
   if (model === "kimi-k2.6") return KIMI_K2_6_COST_MODEL;
   return null;
+}
+
+interface ProviderProfileBase {
+  readonly defaultModel: string;
+  readonly modelEnvKey?: Exclude<ModelSource, "--model" | "default">;
+  readonly apiKeyEnvKeys: readonly string[];
+  readonly missingApiKeyMessage: string;
+  readonly contextWindowDefaultTokens?: number;
+  readonly costModel: (model: string) => CostModel | null;
+}
+
+type ProviderProfile =
+  | (ProviderProfileBase & {
+      readonly baseUrlEnvKey: Exclude<BaseUrlSource, "default">;
+      readonly defaultBaseUrl: string;
+    })
+  | (ProviderProfileBase & {
+      readonly baseUrlEnvKey?: never;
+      readonly defaultBaseUrl?: never;
+    });
+
+const PROVIDER_PROFILES = {
+  fake: {
+    defaultModel: "fake",
+    apiKeyEnvKeys: [],
+    missingApiKeyMessage: "Error: fake provider does not require an API key.",
+    costModel: () => ZERO_COST_MODEL,
+  },
+  deepseek: {
+    defaultModel: "deepseek-v4-flash",
+    modelEnvKey: "DEEPSEEK_MODEL",
+    apiKeyEnvKeys: ["DEEPSEEK_API_KEY"],
+    missingApiKeyMessage:
+      "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.",
+    baseUrlEnvKey: "DEEPSEEK_BASE_URL",
+    defaultBaseUrl: "https://api.deepseek.com",
+    contextWindowDefaultTokens: 256_000,
+    costModel: deepseekCostModel,
+  },
+  kimi: {
+    defaultModel: "kimi-k2.6",
+    modelEnvKey: "KIMI_MODEL",
+    apiKeyEnvKeys: ["KIMI_API_KEY"],
+    missingApiKeyMessage:
+      "Error: KIMI_API_KEY is required. Set the API key to use Kimi.",
+    baseUrlEnvKey: "KIMI_BASE_URL",
+    defaultBaseUrl: "https://api.moonshot.cn/v1",
+    contextWindowDefaultTokens: 256_000,
+    costModel: kimiCostModel,
+  },
+  qwen: {
+    defaultModel: "qwen3.7-max",
+    modelEnvKey: "QWEN_MODEL",
+    apiKeyEnvKeys: ["DASHSCOPE_API_KEY", "QWEN_API_KEY"],
+    missingApiKeyMessage:
+      "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
+    baseUrlEnvKey: "QWEN_BASE_URL",
+    defaultBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    contextWindowDefaultTokens: 256_000,
+    costModel: qwenCostModel,
+  },
+} satisfies Record<ProviderId, ProviderProfile>;
+
+function providerProfile(providerId: ProviderId): ProviderProfile {
+  return PROVIDER_PROFILES[providerId];
+}
+
+function selectedModelFromProfile(
+  runtime: ProviderConfigRuntime,
+  selection: ProviderSelection | undefined,
+  profile: ProviderProfile,
+): { readonly model: string; readonly source: ModelSource } {
+  if (profile.modelEnvKey === undefined) {
+    return { model: profile.defaultModel, source: "default" };
+  }
+  return selectedModel(
+    runtime,
+    selection,
+    profile.modelEnvKey,
+    profile.defaultModel,
+  );
+}
+
+function selectPresentApiKeyEnvKey(
+  runtime: ProviderConfigRuntime,
+  envKeys: readonly string[],
+): string | null {
+  for (const envKey of envKeys) {
+    const value = runtime.env(envKey);
+    if (value !== undefined && value !== "") {
+      return envKey;
+    }
+  }
+  return null;
+}
+
+function requireApiKey(
+  runtime: ProviderConfigRuntime,
+  profile: ProviderProfile,
+): string {
+  for (const envKey of profile.apiKeyEnvKeys) {
+    const value = runtime.env(envKey);
+    if (value !== undefined && value !== "") {
+      return value;
+    }
+  }
+  providerConfigError(profile.missingApiKeyMessage);
+}
+
+function inspectApiKey(
+  runtime: ProviderConfigRuntime,
+  profile: ProviderProfile,
+): ApiKeyDiagnostic {
+  if (profile.apiKeyEnvKeys.length === 0) {
+    return { status: "not-required", expectedEnvKeys: [] };
+  }
+
+  const presentEnvKey = selectPresentApiKeyEnvKey(
+    runtime,
+    profile.apiKeyEnvKeys,
+  );
+  if (presentEnvKey !== null) {
+    return {
+      status: "present",
+      expectedEnvKeys: profile.apiKeyEnvKeys,
+      presentEnvKey,
+    };
+  }
+
+  return { status: "missing", expectedEnvKeys: profile.apiKeyEnvKeys };
+}
+
+function inspectBaseUrl(
+  runtime: ProviderConfigRuntime,
+  profile: ProviderProfile,
+): BaseUrlDiagnostic {
+  if (profile.baseUrlEnvKey === undefined) {
+    return { status: "none" };
+  }
+
+  const configuredBaseUrl = runtime.env(profile.baseUrlEnvKey);
+  if (configuredBaseUrl !== undefined) {
+    return {
+      status: "configured",
+      value: configuredBaseUrl,
+      source: profile.baseUrlEnvKey,
+    };
+  }
+
+  return {
+    status: "configured",
+    value: profile.defaultBaseUrl,
+    source: "default",
+  };
+}
+
+function inspectContextWindow(
+  runtime: ProviderConfigRuntime,
+  profile: ProviderProfile,
+): ContextWindowDiagnostic {
+  const configured = readPositiveIntegerEnv(
+    runtime,
+    "KEEL_CONTEXT_WINDOW_TOKENS",
+  );
+  switch (configured.status) {
+    case "valid":
+      return {
+        status: "enabled",
+        tokens: configured.value,
+        source: "KEEL_CONTEXT_WINDOW_TOKENS",
+      };
+    case "invalid":
+      return {
+        status: "invalid",
+        source: "KEEL_CONTEXT_WINDOW_TOKENS",
+        message: configured.message,
+      };
+    case "unset":
+      break;
+  }
+
+  const defaultTokens = profile.contextWindowDefaultTokens;
+  if (defaultTokens === undefined) {
+    return { status: "disabled" };
+  }
+  return {
+    status: "enabled",
+    tokens: defaultTokens,
+    source: "default",
+  };
+}
+
+function apiKeyLabel(apiKey: ApiKeyDiagnostic): string {
+  return apiKey.expectedEnvKeys.join(" or ");
+}
+
+export function inspectProviderConfig(
+  runtime: ProviderConfigRuntime,
+  selection?: ProviderSelection,
+): ProviderConfigDiagnostic {
+  const provider = selectedProvider(runtime, selection);
+  const profile = providerProfile(provider.providerId);
+  const selected = selectedModelFromProfile(runtime, selection, profile);
+  const apiKey = inspectApiKey(runtime, profile);
+  const contextWindow = inspectContextWindow(runtime, profile);
+  const costModel =
+    profile.costModel(selected.model) === null ? "unknown" : "known";
+  const issues: ProviderDiagnosticIssue[] = [];
+
+  if (apiKey.status === "missing") {
+    issues.push({
+      severity: "error",
+      message: `missing API key: expected ${apiKeyLabel(apiKey)}`,
+    });
+  }
+
+  if (contextWindow.status === "invalid") {
+    issues.push({
+      severity: "error",
+      message: contextWindow.message,
+    });
+  }
+
+  if (costModel === "unknown") {
+    issues.push({
+      severity: "warning",
+      message: `cost tracking is unavailable for model ${selected.model}`,
+    });
+  }
+
+  return {
+    providerId: provider.providerId,
+    providerSource: provider.source,
+    model: selected.model,
+    modelSource: selected.source,
+    apiKey,
+    baseUrl: inspectBaseUrl(runtime, profile),
+    contextWindow,
+    costModel,
+    issues,
+  };
 }
 
 function createCliFakeProvider(userMessage: string): LLMProvider {
@@ -384,88 +719,57 @@ export function resolveProvider(
     }
 
     case "deepseek": {
-      const apiKey = runtime.env("DEEPSEEK_API_KEY");
-      if (!apiKey) {
-        providerConfigError(
-          "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.",
-        );
-      }
-      const selected = selectedModel(
-        runtime,
-        selection,
-        "DEEPSEEK_MODEL",
-        "deepseek-v4-flash",
-      );
+      const profile = PROVIDER_PROFILES.deepseek;
+      const apiKey = requireApiKey(runtime, profile);
+      const selected = selectedModelFromProfile(runtime, selection, profile);
       const contextCompaction = realContextCompactionOptions(runtime);
       return {
         providerId: "deepseek",
         provider: createDeepseekProvider({
           apiKey,
-          baseUrl:
-            runtime.env("DEEPSEEK_BASE_URL") ?? "https://api.deepseek.com",
+          baseUrl: runtime.env(profile.baseUrlEnvKey) ?? profile.defaultBaseUrl,
           model: selected.model,
         }),
         model: selected.model,
-        costModel: deepseekCostModel(selected.model),
+        costModel: profile.costModel(selected.model),
         modelSource: selected.source,
         contextCompaction,
       };
     }
 
     case "kimi": {
-      const apiKey = runtime.env("KIMI_API_KEY");
-      if (!apiKey) {
-        providerConfigError(
-          "Error: KIMI_API_KEY is required. Set the API key to use Kimi.",
-        );
-      }
-      const selected = selectedModel(
-        runtime,
-        selection,
-        "KIMI_MODEL",
-        "kimi-k2.6",
-      );
+      const profile = PROVIDER_PROFILES.kimi;
+      const apiKey = requireApiKey(runtime, profile);
+      const selected = selectedModelFromProfile(runtime, selection, profile);
       const contextCompaction = realContextCompactionOptions(runtime);
       return {
         providerId: "kimi",
         provider: createKimiProvider({
           apiKey,
-          baseUrl: runtime.env("KIMI_BASE_URL") ?? "https://api.moonshot.cn/v1",
+          baseUrl: runtime.env(profile.baseUrlEnvKey) ?? profile.defaultBaseUrl,
           model: selected.model,
         }),
         model: selected.model,
-        costModel: kimiCostModel(selected.model),
+        costModel: profile.costModel(selected.model),
         modelSource: selected.source,
         contextCompaction,
       };
     }
 
     case "qwen": {
-      const apiKey =
-        runtime.env("DASHSCOPE_API_KEY") ?? runtime.env("QWEN_API_KEY");
-      if (!apiKey) {
-        providerConfigError(
-          "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
-        );
-      }
-      const selected = selectedModel(
-        runtime,
-        selection,
-        "QWEN_MODEL",
-        "qwen3.7-max",
-      );
+      const profile = PROVIDER_PROFILES.qwen;
+      const apiKey = requireApiKey(runtime, profile);
+      const selected = selectedModelFromProfile(runtime, selection, profile);
       const contextCompaction = realContextCompactionOptions(runtime);
       return {
         providerId: "qwen",
         provider: createQwenProvider({
           apiKey,
-          baseUrl:
-            runtime.env("QWEN_BASE_URL") ??
-            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          baseUrl: runtime.env(profile.baseUrlEnvKey) ?? profile.defaultBaseUrl,
           model: selected.model,
         }),
         model: selected.model,
-        costModel: qwenCostModel(selected.model),
+        costModel: profile.costModel(selected.model),
         modelSource: selected.source,
         contextCompaction,
       };

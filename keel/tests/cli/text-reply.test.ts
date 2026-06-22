@@ -120,6 +120,7 @@ describe("CLI Text Reply", () => {
       [
         "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] <message>",
         "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id>]",
+        "       keel --doctor [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
         "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
         "       keel eval compare --base <old.jsonl> --head <new.jsonl>",
         "       keel /undo",
@@ -461,15 +462,12 @@ describe("CLI Text Reply", () => {
 
   test(`Given user asks for diagnostics,
     When user runs the CLI doctor command,
-    Then the CLI reports bundled ripgrep status without requiring a provider`, async () => {
+    Then the CLI reports bundled ripgrep and provider status`, async () => {
     // Given
-    const args: readonly string[] = ["--doctor"];
+    const args: readonly string[] = ["--doctor", "--provider=fake"];
 
     // When
-    const result = await runCli(args, {
-      KEEL_PROVIDER: "deepseek",
-      DEEPSEEK_API_KEY: "",
-    });
+    const result = await runCli(args);
 
     // Then
     expect(result.exitCode).toBe(0);
@@ -477,6 +475,8 @@ describe("CLI Text Reply", () => {
     expect(result.stdout).toContain("ripgrep: ok (vscode-ripgrep)");
     expect(result.stdout).toContain("ripgrep path:");
     expect(result.stdout).toMatch(/^ripgrep version: ripgrep\s+\S+/m);
+    expect(result.stdout).toContain("provider: fake (source: --provider)");
+    expect(result.stdout).toContain("api key: not required");
     expect(result.stderr).toBe("");
   });
 
