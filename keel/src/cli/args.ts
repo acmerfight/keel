@@ -31,6 +31,7 @@ type EvalCliArgs = EvalRunCliArgs | EvalCompareCliArgs;
 
 interface DoctorCliArgs {
   readonly command: "doctor";
+  readonly offline: boolean;
   readonly providerId?: ProviderId;
   readonly model?: string;
 }
@@ -67,7 +68,7 @@ function parseError(message: string): ParseResult<never> {
 export const USAGE = [
   "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] <message>",
   "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id>]",
-  "       keel --doctor [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
+  "       keel --doctor [--offline] [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
   "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
   "       keel eval compare --base <old.jsonl> --head <new.jsonl>",
   "       keel /undo",
@@ -328,6 +329,7 @@ function parseDoctorArgs(args: readonly string[]): ParseResult<DoctorCliArgs> {
   let model: string | undefined;
   const providerPrefix = "--provider=";
   const modelPrefix = "--model=";
+  let offline = false;
 
   let skipNext = false;
   for (const [index, arg] of args.entries()) {
@@ -366,11 +368,17 @@ function parseDoctorArgs(args: readonly string[]): ParseResult<DoctorCliArgs> {
       continue;
     }
 
+    if (arg === "--offline") {
+      offline = true;
+      continue;
+    }
+
     return parseError(`Error: unknown doctor option "${arg}"`);
   }
 
   return parseOk({
     command: "doctor",
+    offline,
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
   });
