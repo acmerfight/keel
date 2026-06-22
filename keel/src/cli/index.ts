@@ -95,6 +95,14 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
   }
 
   if (cliArgs.command === "eval") {
+    if (cliArgs.mode === "compare") {
+      const { runEvalCompareCommand } = await import("../eval/compare.ts");
+      return runEvalCompareCommand({
+        baseFile: cliArgs.baseFile,
+        headFile: cliArgs.headFile,
+      });
+    }
+
     const { runEvalCommand } = await import("../eval/run.ts");
     return await runEvalCommand({
       suiteDir: cliArgs.suiteDir,
