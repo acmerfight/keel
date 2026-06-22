@@ -1203,6 +1203,79 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("");
   });
 
+  test(`Given Qwen diagnostics use equals flags with an unparseable base URL,
+    When the CLI main dispatches the doctor command,
+    Then it redacts the base URL value while preserving the source`, async () => {
+    // Given
+    const fixture = createRuntime(
+      ["--doctor", "--provider=qwen", "--model=qwen3.7-plus"],
+      {
+        env: {
+          DASHSCOPE_API_KEY: "test-key",
+          QWEN_BASE_URL: "not a url with secret-token",
+        },
+      },
+    );
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toContain("provider: qwen (source: --provider)");
+    expect(fixture.stdout()).toContain("model: qwen3.7-plus (source: --model)");
+    expect(fixture.stdout()).toContain(
+      "base url: <unparseable URL> (source: QWEN_BASE_URL)",
+    );
+    expect(fixture.stdout()).not.toContain("secret-token");
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given a doctor provider flag is missing its value,
+    When the CLI main parses the command,
+    Then it exits with the provider option validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["--doctor", "--provider"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --provider requires a value.\n");
+  });
+
+  test(`Given a doctor model flag is missing its value,
+    When the CLI main parses the command,
+    Then it exits with the model option validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["--doctor", "--model"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --model requires a value.\n");
+  });
+
+  test(`Given an unsupported doctor option,
+    When the CLI main parses the command,
+    Then it exits with the doctor option validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["--doctor", "--report", "doctor.json"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe('Error: unknown doctor option "--report"\n');
+  });
+
   test(`Given a selected real provider is missing its API key,
     When the CLI main dispatches the doctor command,
     Then it reports the missing provider setting as a failing diagnostic`, async () => {

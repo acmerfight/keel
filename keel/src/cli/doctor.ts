@@ -135,15 +135,7 @@ function providerDiagnosticLines(
   ];
 }
 
-function processEnvRuntime(): ProviderConfigRuntime {
-  return {
-    env: (key) => process.env[key],
-  };
-}
-
-export async function runDoctor(
-  options: DoctorOptions = { runtime: processEnvRuntime() },
-): Promise<DoctorResult> {
+export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
   const stdoutLines: string[] = ["Keel doctor"];
   const stderrLines: string[] = [];
   let exitCode = 0;

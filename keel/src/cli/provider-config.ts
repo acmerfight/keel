@@ -315,7 +315,7 @@ interface ProviderProfileBase {
   readonly defaultModel: string;
   readonly modelEnvKey?: Exclude<ModelSource, "--model" | "default">;
   readonly apiKeyEnvKeys: readonly string[];
-  readonly missingApiKeyMessage?: string;
+  readonly missingApiKeyMessage: string;
   readonly contextWindowDefaultTokens?: number;
   readonly costModel: (model: string) => CostModel | null;
 }
@@ -334,6 +334,7 @@ const PROVIDER_PROFILES = {
   fake: {
     defaultModel: "fake",
     apiKeyEnvKeys: [],
+    missingApiKeyMessage: "Error: fake provider does not require an API key.",
     costModel: () => ZERO_COST_MODEL,
   },
   deepseek: {
@@ -414,10 +415,7 @@ function requireApiKey(
       return value;
     }
   }
-  providerConfigError(
-    profile.missingApiKeyMessage ??
-      `Error: ${profile.apiKeyEnvKeys.join(" or ")} is required.`,
-  );
+  providerConfigError(profile.missingApiKeyMessage);
 }
 
 function inspectApiKey(
