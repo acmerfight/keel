@@ -4,6 +4,7 @@ import type {
   ResolvedProvider,
 } from "../../src/cli/provider-config.ts";
 import {
+  inspectProviderConfig,
   ProviderConfigError,
   requireKnownCostModel,
   resolveInteractiveProvider,
@@ -241,6 +242,29 @@ describe("Provider Config", () => {
     expect(resolved.contextCompaction).toEqual({
       contextWindowTokens: 4096,
     });
+  });
+
+  test(`Given a real provider has context window env set,
+    When provider config diagnostics are inspected,
+    Then diagnostics report the configured context window source`, () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "deepseek",
+      DEEPSEEK_API_KEY: "test-key",
+      KEEL_CONTEXT_WINDOW_TOKENS: "4096",
+    };
+
+    // When
+    const diagnostic = inspectProviderConfig(runtime(env));
+
+    // Then
+    expect(diagnostic.providerId).toBe("deepseek");
+    expect(diagnostic.contextWindow).toEqual({
+      status: "enabled",
+      tokens: 4096,
+      source: "KEEL_CONTEXT_WINDOW_TOKENS",
+    });
+    expect(diagnostic.issues).toEqual([]);
   });
 
   test(`Given provider and model are selected by CLI options,

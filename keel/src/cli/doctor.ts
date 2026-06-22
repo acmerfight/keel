@@ -44,7 +44,7 @@ function ripgrepVersionError(error: Error, stderr: string): KeelError {
 }
 
 function parseRipgrepVersionOutput(stdout: string): string {
-  const versionLine = stdout.trim().split(/\r?\n/)[0] ?? "";
+  const versionLine = stdout.trim().split(/\r?\n/)[0];
   const result = ripgrepVersionLineSchema.safeParse(versionLine);
   if (!result.success) {
     throw new KeelError(
