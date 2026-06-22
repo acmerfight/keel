@@ -218,7 +218,7 @@ function formatOutcomeCounts(summary: TaskSummary | undefined): string {
   const parts = summary.outcomes.flatMap((outcome) =>
     outcome.count === 0 ? [] : [`${outcome.outcome}=${outcome.count}`],
   );
-  return parts.length === 0 ? "none" : parts.join(", ");
+  return parts.join(", ");
 }
 
 function formatMetricValue(

@@ -269,6 +269,62 @@ describe("Eval Compare", () => {
     }
   });
 
+  test(`Given a task has repeated trials with lower head cost,
+    When the compare command summarizes the task,
+    Then it averages repeated trials and reports the negative cost delta`, async () => {
+    // Given
+    const root = await mkdtemp(join(tmpdir(), "keel-eval-compare-trials-"));
+    const baseFile = join(root, "base.jsonl");
+    const headFile = join(root, "head.jsonl");
+    await writeResultFile(baseFile, [
+      resultLine({
+        taskId: "cheaper-task",
+        trial: 1,
+        pass: true,
+        report: report({ costUsd: 0.002 }),
+      }),
+      resultLine({
+        taskId: "cheaper-task",
+        trial: 2,
+        pass: true,
+        report: report({ costUsd: 0.002 }),
+      }),
+    ]);
+    await writeResultFile(headFile, [
+      resultLine({
+        taskId: "cheaper-task",
+        trial: 1,
+        pass: true,
+        report: report({ costUsd: 0.001 }),
+      }),
+      resultLine({
+        taskId: "cheaper-task",
+        trial: 2,
+        pass: true,
+        report: report({ costUsd: 0.001 }),
+      }),
+    ]);
+
+    try {
+      // When
+      const result = runCompare(baseFile, headFile);
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("task: cheaper-task");
+      expect(result.stdout).toContain("status: EFFICIENCY IMPROVEMENT");
+      expect(result.stdout).toContain(
+        "cost avg: $0.002000 -> $0.001000 (-$0.001000)",
+      );
+      expect(result.stdout).toContain(
+        "suite pass: 2/2 (100.0%) -> 2/2 (100.0%) (+0.0pp)",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an eval result file has no usable result lines,
     When the compare command reads it,
     Then it reports the empty file instead of printing a comparison`, async () => {

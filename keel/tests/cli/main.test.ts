@@ -744,6 +744,42 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("Error: --head requires a value.\n");
   });
 
+  test(`Given eval compare has a base option without a following value,
+    When the CLI main parses the compare request,
+    Then it returns an option value validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["eval", "compare", "--base"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --base requires a value.\n");
+  });
+
+  test(`Given eval compare has a head option without a following value,
+    When the CLI main parses the compare request,
+    Then it returns an option value validation error`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "eval",
+      "compare",
+      "--base",
+      "base.jsonl",
+      "--head",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --head requires a value.\n");
+  });
+
   test(`Given eval compare is missing the base result file,
     When the CLI main parses the eval compare request,
     Then it returns a compare option validation error`, async () => {
