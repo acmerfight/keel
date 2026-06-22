@@ -3,107 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { runEvalCompareCommand } from "../../src/eval/compare.ts";
-
-type TrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
-
-interface RunReport {
-  readonly schemaVersion: 1;
-  readonly provider: string;
-  readonly model: string;
-  readonly turns: number;
-  readonly stopReason: string;
-  readonly usage: {
-    readonly inputTokens: number;
-    readonly cachedInputTokens: number;
-    readonly uncachedInputTokens: number;
-    readonly outputTokens: number;
-  };
-  readonly durationMs: number;
-  readonly costUsd: number;
-}
-
-interface ResultLine {
-  readonly schemaVersion: 1;
-  readonly timestamp: string;
-  readonly keelVersion: string;
-  readonly taskId: string;
-  readonly trial: number;
-  readonly pass: boolean;
-  readonly outcome: TrialOutcome;
-  readonly wallMs: number;
-  readonly report?: RunReport;
-  readonly transcriptPath?: string;
-}
-
-interface ReportOptions {
-  readonly turns?: number;
-  readonly inputTokens?: number;
-  readonly outputTokens?: number;
-  readonly costUsd?: number;
-}
-
-interface ResultLineOptions {
-  readonly taskId: string;
-  readonly trial: number;
-  readonly pass: boolean;
-  readonly outcome?: TrialOutcome;
-  readonly wallMs?: number;
-  readonly report?: RunReport;
-  readonly transcriptPath?: string;
-}
+import {
+  evalRunReport as report,
+  evalResultLine as resultLine,
+  writeEvalResultFile as writeResultFile,
+} from "../../src/testing/eval-fixtures.ts";
 
 interface CommandResult {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;
-}
-
-function report(options: ReportOptions = {}): RunReport {
-  const inputTokens = options.inputTokens ?? 100;
-  return {
-    schemaVersion: 1,
-    provider: "deepseek",
-    model: "deepseek-v4-flash",
-    turns: options.turns ?? 3,
-    stopReason: "completed",
-    usage: {
-      inputTokens,
-      cachedInputTokens: 0,
-      uncachedInputTokens: inputTokens,
-      outputTokens: options.outputTokens ?? 20,
-    },
-    durationMs: 1000,
-    costUsd: options.costUsd ?? 0.001,
-  };
-}
-
-function resultLine(options: ResultLineOptions): ResultLine {
-  return {
-    schemaVersion: 1,
-    timestamp: "2026-06-22T00:00:00.000Z",
-    keelVersion: "0.0.1",
-    taskId: options.taskId,
-    trial: options.trial,
-    pass: options.pass,
-    outcome:
-      options.outcome ?? (options.pass === true ? "verified" : "verify_failed"),
-    wallMs: options.wallMs ?? 1000,
-    ...(options.report !== undefined ? { report: options.report } : {}),
-    ...(options.transcriptPath !== undefined
-      ? { transcriptPath: options.transcriptPath }
-      : {}),
-  };
-}
-
-async function writeResultFile(
-  filePath: string,
-  lines: readonly ResultLine[],
-): Promise<void> {
-  await writeFile(
-    filePath,
-    `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`,
-    "utf8",
-  );
 }
 
 function runCompare(baseFile: string, headFile: string): CommandResult {

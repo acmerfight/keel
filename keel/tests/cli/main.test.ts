@@ -20,6 +20,7 @@ import { type CliRuntime, runCliMain } from "../../src/cli/index.ts";
 import { acquireSessionLock } from "../../src/cli/session-store.ts";
 import { recordLastEditCheckpoint } from "../../src/core/git.ts";
 import { runGit } from "../../src/testing/cli-harness.ts";
+import { evalResultLineJson } from "../../src/testing/eval-fixtures.ts";
 
 const runReportSchema = z.object({
   schemaVersion: z.literal(1),
@@ -110,19 +111,6 @@ function createRuntime(
     stdout: () => stdout,
     stderr: () => stderr,
   };
-}
-
-function evalCompareResultLine(taskId: string): string {
-  return `${JSON.stringify({
-    schemaVersion: 1,
-    timestamp: "2026-06-22T00:00:00.000Z",
-    keelVersion: "0.0.1",
-    taskId,
-    trial: 1,
-    pass: true,
-    outcome: "verified",
-    wallMs: 1000,
-  })}\n`;
 }
 
 function getPort(server: Server): number {
@@ -648,8 +636,16 @@ describe("CLI Main", () => {
     const root = await mkdtemp(join(tmpdir(), "keel-cli-main-eval-compare-"));
     const baseFile = join(root, "base.jsonl");
     const headFile = join(root, "head.jsonl");
-    await writeFile(baseFile, evalCompareResultLine("same-task"), "utf8");
-    await writeFile(headFile, evalCompareResultLine("same-task"), "utf8");
+    await writeFile(
+      baseFile,
+      evalResultLineJson({ taskId: "same-task", trial: 1, pass: true }),
+      "utf8",
+    );
+    await writeFile(
+      headFile,
+      evalResultLineJson({ taskId: "same-task", trial: 1, pass: true }),
+      "utf8",
+    );
     const fixture = createRuntime([
       "eval",
       "compare",

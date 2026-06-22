@@ -4,6 +4,11 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { runCli } from "../../src/testing/cli-harness.ts";
+import {
+  evalResultLine as resultLine,
+  evalRunReport as runReport,
+  writeEvalResultFile as writeResultFile,
+} from "../../src/testing/eval-fixtures.ts";
 
 const runReportSchema = z.object({
   schemaVersion: z.literal(1),
@@ -33,9 +38,6 @@ const resultLineSchema = z.object({
   report: runReportSchema.optional(),
   transcriptPath: z.string().optional(),
 });
-
-type RunReport = z.infer<typeof runReportSchema>;
-type ResultLine = z.infer<typeof resultLineSchema>;
 
 interface TaskFixture {
   readonly prompt: string;
@@ -104,72 +106,6 @@ const FIX_NOTE_TASK: TaskFixture = {
   verify: 'grep -q "hello new world" note.txt\n',
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
-
-interface ReportOptions {
-  readonly turns?: number;
-  readonly inputTokens?: number;
-  readonly outputTokens?: number;
-  readonly durationMs?: number;
-  readonly costUsd?: number;
-}
-
-interface ResultLineOptions {
-  readonly taskId: string;
-  readonly trial: number;
-  readonly pass: boolean;
-  readonly outcome?: ResultLine["outcome"];
-  readonly wallMs?: number;
-  readonly report?: RunReport;
-  readonly transcriptPath?: string;
-}
-
-function runReport(options: ReportOptions = {}): RunReport {
-  const inputTokens = options.inputTokens ?? 100;
-  return {
-    schemaVersion: 1,
-    provider: "deepseek",
-    model: "deepseek-v4-flash",
-    turns: options.turns ?? 3,
-    stopReason: "completed",
-    usage: {
-      inputTokens,
-      cachedInputTokens: 0,
-      uncachedInputTokens: inputTokens,
-      outputTokens: options.outputTokens ?? 20,
-    },
-    durationMs: options.durationMs ?? 900,
-    costUsd: options.costUsd ?? 0.001,
-  };
-}
-
-function resultLine(options: ResultLineOptions): ResultLine {
-  return {
-    schemaVersion: 1,
-    timestamp: "2026-06-22T00:00:00.000Z",
-    keelVersion: "0.0.1",
-    taskId: options.taskId,
-    trial: options.trial,
-    pass: options.pass,
-    outcome:
-      options.outcome ?? (options.pass === true ? "verified" : "verify_failed"),
-    wallMs: options.wallMs ?? 1000,
-    ...(options.report !== undefined ? { report: options.report } : {}),
-    ...(options.transcriptPath !== undefined
-      ? { transcriptPath: options.transcriptPath }
-      : {}),
-  };
-}
-
-async function writeResultFile(
-  outFile: string,
-  lines: readonly ResultLine[],
-): Promise<void> {
-  await writeFile(
-    outFile,
-    `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`,
-    "utf8",
-  );
-}
 
 describe("CLI Eval", () => {
   test(`Given a suite with one solvable task,

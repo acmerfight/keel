@@ -1,0 +1,104 @@
+import { writeFile } from "node:fs/promises";
+
+type EvalTrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
+
+export interface EvalRunReport {
+  readonly schemaVersion: 1;
+  readonly provider: string;
+  readonly model: string;
+  readonly turns: number;
+  readonly stopReason: string;
+  readonly usage: {
+    readonly inputTokens: number;
+    readonly cachedInputTokens: number;
+    readonly uncachedInputTokens: number;
+    readonly outputTokens: number;
+  };
+  readonly durationMs: number;
+  readonly costUsd: number;
+}
+
+export interface EvalResultLine {
+  readonly schemaVersion: 1;
+  readonly timestamp: string;
+  readonly keelVersion: string;
+  readonly taskId: string;
+  readonly trial: number;
+  readonly pass: boolean;
+  readonly outcome: EvalTrialOutcome;
+  readonly wallMs: number;
+  readonly report?: EvalRunReport;
+  readonly transcriptPath?: string;
+}
+
+export interface EvalRunReportOptions {
+  readonly turns?: number;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly durationMs?: number;
+  readonly costUsd?: number;
+}
+
+export interface EvalResultLineOptions {
+  readonly taskId: string;
+  readonly trial: number;
+  readonly pass: boolean;
+  readonly outcome?: EvalTrialOutcome;
+  readonly wallMs?: number;
+  readonly report?: EvalRunReport;
+  readonly transcriptPath?: string;
+}
+
+export function evalRunReport(
+  options: EvalRunReportOptions = {},
+): EvalRunReport {
+  const inputTokens = options.inputTokens ?? 100;
+  return {
+    schemaVersion: 1,
+    provider: "deepseek",
+    model: "deepseek-v4-flash",
+    turns: options.turns ?? 3,
+    stopReason: "completed",
+    usage: {
+      inputTokens,
+      cachedInputTokens: 0,
+      uncachedInputTokens: inputTokens,
+      outputTokens: options.outputTokens ?? 20,
+    },
+    durationMs: options.durationMs ?? 1000,
+    costUsd: options.costUsd ?? 0.001,
+  };
+}
+
+export function evalResultLine(options: EvalResultLineOptions): EvalResultLine {
+  return {
+    schemaVersion: 1,
+    timestamp: "2026-06-22T00:00:00.000Z",
+    keelVersion: "0.0.1",
+    taskId: options.taskId,
+    trial: options.trial,
+    pass: options.pass,
+    outcome:
+      options.outcome ?? (options.pass === true ? "verified" : "verify_failed"),
+    wallMs: options.wallMs ?? 1000,
+    ...(options.report !== undefined ? { report: options.report } : {}),
+    ...(options.transcriptPath !== undefined
+      ? { transcriptPath: options.transcriptPath }
+      : {}),
+  };
+}
+
+export function evalResultLineJson(options: EvalResultLineOptions): string {
+  return `${JSON.stringify(evalResultLine(options))}\n`;
+}
+
+export async function writeEvalResultFile(
+  filePath: string,
+  lines: readonly EvalResultLine[],
+): Promise<void> {
+  await writeFile(
+    filePath,
+    `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`,
+    "utf8",
+  );
+}
