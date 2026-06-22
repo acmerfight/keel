@@ -17,6 +17,7 @@ import {
   consumeSessionQueuedInputs,
   createSessionStore,
   ensureSessionCanBeCreated,
+  forkSessionStore,
   persistSessionMessages,
   persistSessionQueuedInput,
   resumeSessionStore,
@@ -2216,6 +2217,138 @@ describe("Session Store", () => {
         messages: compactedMessages,
         pendingInputs: [queuedInput],
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an oversized source session is restored from a bounded snapshot,
+    When it is forked into a new session,
+    Then the forked target can be resumed immediately`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const sourceLedgerPath = join(
+      home,
+      "sessions",
+      "oversized-source",
+      "ledger.jsonl",
+    );
+    const targetHeader = `${headerLine("target", ledgerWorkspace)}\n`;
+    const emptyAppendLine = `${appendLine([{ role: "user", content: "" }])}\n`;
+    const emptySnapshotLine = `${snapshotLine([{ role: "user", content: "" }], [])}\n`;
+    const resumeCapBytes = 32 * 1024 * 1024;
+    const contentLength =
+      resumeCapBytes -
+      Buffer.byteLength(targetHeader, "utf8") -
+      Buffer.byteLength(emptyAppendLine, "utf8") +
+      80;
+    expect(contentLength).toBeLessThan(
+      resumeCapBytes - Buffer.byteLength(emptySnapshotLine, "utf8"),
+    );
+    const snapshottedMessages: readonly Message[] = [
+      { role: "user", content: "x".repeat(contentLength) },
+    ];
+    const snapshotRecord = `${snapshotLine(snapshottedMessages, [])}\n`;
+    expect(Buffer.byteLength(snapshotRecord, "utf8")).toBeLessThan(
+      resumeCapBytes,
+    );
+    await mkdir(join(home, "sessions", "oversized-source"), {
+      recursive: true,
+    });
+    await writeFile(
+      sourceLedgerPath,
+      `${headerLine("oversized-source", ledgerWorkspace)}\n`,
+      "utf8",
+    );
+    await truncate(sourceLedgerPath, resumeCapBytes + 1);
+    await writeFile(sourceLedgerPath, `\n${snapshotRecord}`, {
+      encoding: "utf8",
+      flag: "a",
+    });
+
+    try {
+      const source = resumeSessionStore({
+        sessionId: "oversized-source",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When
+      const target = forkSessionStore({
+        source,
+        targetSessionId: "target",
+        runtime: runtime(home, 1),
+      });
+      const resumedTarget = resumeSessionStore({
+        sessionId: "target",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(resumedTarget.messages).toEqual(snapshottedMessages);
+      expect(resumedTarget.pendingInputs).toEqual([]);
+      const targetLedgerLines = (await readFile(target.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(targetLedgerLines.at(-1)).toMatchObject({
+        type: "snapshot",
+        messages: snapshottedMessages,
+        pendingInputs: [],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a source session has no completed history,
+    When it is forked into a new session,
+    Then the target resumes as an empty fork`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+
+    try {
+      const source = createSessionStore({
+        sessionId: "empty-source",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When
+      const target = forkSessionStore({
+        source,
+        targetSessionId: "empty-target",
+        runtime: runtime(home, 1),
+      });
+      const resumedTarget = resumeSessionStore({
+        sessionId: "empty-target",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(resumedTarget.messages).toEqual([]);
+      expect(resumedTarget.pendingInputs).toEqual([]);
+      const targetLedgerLines = (await readFile(target.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(targetLedgerLines).toEqual([
+        {
+          schemaVersion: 1,
+          type: "session",
+          id: "empty-target",
+          createdAt: "1970-01-01T00:00:00.001Z",
+          workspace: source.workspace,
+          forkedFrom: "empty-source",
+        },
+      ]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

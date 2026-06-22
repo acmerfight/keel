@@ -578,6 +578,51 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("Error: --resume requires a value.\n");
   });
 
+  test(`Given fork is passed without a target session id,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--resume", "demo", "--fork"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --fork requires a value.\n");
+  });
+
+  test(`Given fork is passed with an empty equals value,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--resume", "demo", "--fork="]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --fork requires a value.\n");
+  });
+
+  test(`Given fork is passed without a source session,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--fork", "target"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --fork requires --resume <id>.\n");
+  });
+
   test(`Given session and resume flags are combined,
     When the CLI main parses the request,
     Then it returns a validation error before starting interactive mode`, async () => {
@@ -2827,6 +2872,205 @@ describe("CLI Main", () => {
         consumedInputIds: ["queued-input-1"],
       });
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named session has completed history and queued future input,
+    When the user forks it into a new session,
+    Then the fork continues from history without consuming the source's queued input`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const firstInput = new PassThrough();
+    firstInput.end("remember alpha\n");
+    const firstRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: firstInput,
+    });
+
+    try {
+      const firstExitCode = await runCliMain(firstRun.runtime);
+      const sourceLedgerPath = join(home, "sessions", "source", "ledger.jsonl");
+      await writeFile(
+        sourceLedgerPath,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          type: "input_admitted",
+          timestamp: "1970-01-01T00:00:00.001Z",
+          id: "queued-source-input",
+          sequence: 2,
+          line: "remember queued",
+        })}\n`,
+        { encoding: "utf8", flag: "a" },
+      );
+      const forkInput = new PassThrough();
+      forkInput.end("what did I ask you to remember?\n");
+      const forkRun = createRuntime(["--resume=source", "--fork=target"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input: forkInput,
+      });
+
+      // When
+      const forkExitCode = await runCliMain(forkRun.runtime);
+
+      // Then
+      expect(firstExitCode).toBe(0);
+      expect(forkExitCode).toBe(0);
+      expect(forkRun.stdout()).toBe("Earlier you said: remember alpha\n");
+      expect(forkRun.stderr()).toBe("");
+      const sourceLedgerLines = (await readFile(sourceLedgerPath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(
+        sourceLedgerLines.some(
+          (line) =>
+            Array.isArray(line.consumedInputIds) &&
+            line.consumedInputIds.includes("queued-source-input"),
+        ),
+      ).toBe(false);
+      const targetLedgerLines = (
+        await readFile(join(home, "sessions", "target", "ledger.jsonl"), "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(targetLedgerLines[0]).toMatchObject({
+        type: "session",
+        id: "target",
+        forkedFrom: "source",
+      });
+      expect(
+        targetLedgerLines.some(
+          (line) =>
+            line.type === "input_admitted" && line.line === "remember queued",
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the fork target session already exists,
+    When the user forks a source session into that target,
+    Then the CLI fails without overwriting the target ledger`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sourceInput = new PassThrough();
+    sourceInput.end("remember source\n");
+    const sourceRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: sourceInput,
+    });
+    const targetInput = new PassThrough();
+    targetInput.end("remember target\n");
+    const targetRun = createRuntime(["--session", "target"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: targetInput,
+    });
+
+    try {
+      const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const targetExitCode = await runCliMain(targetRun.runtime);
+      const targetLedgerPath = join(home, "sessions", "target", "ledger.jsonl");
+      const targetLedgerBefore = await readFile(targetLedgerPath, "utf8");
+      const forkInput = new PassThrough();
+      forkInput.end("what did I ask you to remember?\n");
+      const forkRun = createRuntime(
+        ["--resume", "source", "--fork", "target"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "fake",
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+          },
+          input: forkInput,
+        },
+      );
+
+      // When
+      const forkExitCode = await runCliMain(forkRun.runtime);
+
+      // Then
+      expect(sourceExitCode).toBe(0);
+      expect(targetExitCode).toBe(0);
+      expect(forkExitCode).toBe(1);
+      expect(forkRun.stdout()).toBe("");
+      expect(forkRun.stderr()).toBe(
+        'Error: session "target" already exists. Use --resume target to continue it.\n',
+      );
+      expect(await readFile(targetLedgerPath, "utf8")).toBe(targetLedgerBefore);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the fork source session is already active,
+    When the user forks it into a new session,
+    Then the CLI fails before creating the target ledger`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const activeLock = acquireSessionLock({
+      sessionId: "source",
+      runtime: {
+        env: (key) => (key === "KEEL_HOME" ? home : undefined),
+        now: () => 0,
+      },
+    });
+    const input = new PassThrough();
+    input.end("what did I ask you to remember?\n");
+    const fixture = createRuntime(["--resume", "source", "--fork", "target"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        'Error: session "source" is already active. Stop the other Keel process before using it again.\n',
+      );
+      await expect(
+        access(join(home, "sessions", "target", "ledger.jsonl")),
+      ).rejects.toThrow();
+    } finally {
+      activeLock.release();
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }

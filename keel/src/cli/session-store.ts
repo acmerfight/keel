@@ -100,6 +100,7 @@ const sessionHeaderSchema = z
     id: z.string(),
     createdAt: z.string(),
     workspace: z.string(),
+    forkedFrom: z.string().optional(),
   })
   .strict();
 
@@ -201,6 +202,7 @@ interface SessionHeaderRecord {
   readonly id: string;
   readonly createdAt: string;
   readonly workspace: string;
+  readonly forkedFrom?: string;
 }
 
 interface AppendSessionRecord {
@@ -558,6 +560,9 @@ function toSessionHeaderRecord(
     id: record.id,
     createdAt: record.createdAt,
     workspace: record.workspace,
+    ...(record.forkedFrom !== undefined
+      ? { forkedFrom: record.forkedFrom }
+      : {}),
   };
 }
 
@@ -1144,7 +1149,7 @@ function appendSessionSnapshotIfNeeded(options: {
 function parseProviderVisibleMessages(
   sessionId: string,
   messages: readonly Message[],
-  action: "persist",
+  action: "persist" | "fork",
 ): readonly Message[] {
   const parsed = z.array(messageSchema).safeParse(messages);
   if (!parsed.success) {
@@ -1158,7 +1163,7 @@ function parseProviderVisibleMessages(
 function validateCompletedTranscript(
   sessionId: string,
   messages: readonly Message[],
-  action: "persist" | "resume",
+  action: "persist" | "resume" | "fork",
 ): void {
   const errorPrefix = `Error: cannot ${action} session "${sessionId}":`;
   const pendingToolCallIds = new Set<string>();
@@ -1202,6 +1207,15 @@ export function createSessionStore(options: {
   readonly workspace: string;
   readonly runtime: SessionStoreRuntime;
 }): SessionState {
+  return createEmptySessionStore(options);
+}
+
+function createEmptySessionStore(options: {
+  readonly sessionId: string;
+  readonly workspace: string;
+  readonly runtime: SessionStoreRuntime;
+  readonly forkedFrom?: string;
+}): SessionState {
   const workspace = realpathSync(options.workspace);
   const filePath = sessionFilePath(options.runtime, options.sessionId);
   writeInitialHeader(filePath, {
@@ -1210,6 +1224,9 @@ export function createSessionStore(options: {
     id: options.sessionId,
     createdAt: isoTimestamp(options.runtime),
     workspace,
+    ...(options.forkedFrom !== undefined
+      ? { forkedFrom: options.forkedFrom }
+      : {}),
   });
   return sessionStateFromReplay({
     id: options.sessionId,
@@ -1218,6 +1235,46 @@ export function createSessionStore(options: {
     messages: [],
     pendingInputsById: new Map(),
   });
+}
+
+export function forkSessionStore(options: {
+  readonly source: SessionState;
+  readonly targetSessionId: string;
+  readonly runtime: SessionStoreRuntime;
+}): SessionState {
+  const messages = parseProviderVisibleMessages(
+    options.targetSessionId,
+    options.source.messages,
+    "fork",
+  );
+  validateCompletedTranscript(options.targetSessionId, messages, "fork");
+  const session = createEmptySessionStore({
+    sessionId: options.targetSessionId,
+    workspace: options.source.workspace,
+    runtime: options.runtime,
+    forkedFrom: options.source.id,
+  });
+  const forkedSession = sessionStateFromReplay({
+    id: options.targetSessionId,
+    filePath: session.filePath,
+    workspace: session.workspace,
+    messages,
+    pendingInputsById: new Map(),
+  });
+  if (messages.length > 0) {
+    appendJsonLine(session.filePath, {
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      type: "append",
+      timestamp: isoTimestamp(options.runtime),
+      reason: "turn",
+      messages,
+    });
+  }
+  appendSessionSnapshotIfNeeded({
+    session: forkedSession,
+    runtime: options.runtime,
+  });
+  return forkedSession;
 }
 
 export function resumeSessionStore(options: {
