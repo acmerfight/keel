@@ -33,6 +33,7 @@ import {
   consumeSessionQueuedInputs,
   createSessionStore,
   ensureSessionCanBeCreated,
+  forkSessionStore,
   persistSessionMessages,
   persistSessionQueuedInput,
   resumeSessionStore,
@@ -183,10 +184,21 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
       return 1;
     }
     let sessionLock: SessionLock | undefined;
+    let sourceSessionLock: SessionLock | undefined;
     try {
       const workspace = runtime.cwd();
       try {
-        const sessionIdForLock = cliArgs.sessionId ?? cliArgs.resumeSessionId;
+        if (
+          cliArgs.forkSessionId !== undefined &&
+          cliArgs.resumeSessionId !== undefined
+        ) {
+          sourceSessionLock = acquireSessionLock({
+            sessionId: cliArgs.resumeSessionId,
+            runtime,
+          });
+        }
+        const sessionIdForLock =
+          cliArgs.sessionId ?? cliArgs.forkSessionId ?? cliArgs.resumeSessionId;
         if (sessionIdForLock !== undefined) {
           sessionLock = acquireSessionLock({
             sessionId: sessionIdForLock,
@@ -201,11 +213,26 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
             runtime,
           });
         } else if (cliArgs.resumeSessionId !== undefined) {
-          session = resumeSessionStore({
+          const resumedSession = resumeSessionStore({
             sessionId: cliArgs.resumeSessionId,
             workspace,
             runtime,
           });
+          if (cliArgs.forkSessionId !== undefined) {
+            ensureSessionCanBeCreated({
+              sessionId: cliArgs.forkSessionId,
+              runtime,
+            });
+            session = forkSessionStore({
+              source: resumedSession,
+              targetSessionId: cliArgs.forkSessionId,
+              runtime,
+            });
+            sourceSessionLock?.release();
+            sourceSessionLock = undefined;
+          } else {
+            session = resumedSession;
+          }
           persistedMessages = session.messages;
         }
         let sessionPersistence:
@@ -363,6 +390,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           });
         }
       } finally {
+        sourceSessionLock?.release();
         sessionLock?.release();
       }
     } catch (error) {
