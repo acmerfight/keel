@@ -121,6 +121,7 @@ describe("CLI Text Reply", () => {
         "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] <message>",
         "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id>]",
         "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
+        "       keel eval compare --base <old.jsonl> --head <new.jsonl>",
         "       keel /undo",
         "",
         "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",

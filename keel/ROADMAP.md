@@ -68,6 +68,9 @@ What a user can do today:
   from `evals/tasks`, with per-trial JSONL results and reference-solution
   verifier checks. `--transcript-dir <dir>` keeps one readable transcript
   artifact per trial and links it from the result JSONL when produced.
+  `keel eval compare --base <old.jsonl> --head <new.jsonl>` compares two
+  result files by task, including pass, outcome, turn, token, cost, wall-time,
+  harness-failure, and regression transcript-path deltas.
 - `keel /undo` — restore the last edit, created file, or apply_patch batch
   checkpoint.
 - `keel --doctor` — environment check.
@@ -140,11 +143,12 @@ Known limits that shape the priorities below:
    exact edits, search/edit, multi-file rename, new file creation,
    bash-driven test fixing, long-file editing, stale edit recovery,
    repeated-string disambiguation, test-preserving bug fixes, and
-   pattern-following feature additions. The next work is corpus growth from
-   real daily-use failures and transcript comparison tooling. External agent
-   runners and cross-agent same-model comparisons should wait until the
-   basic daily-use capabilities below are stronger and `keel eval` has
-   enough real usage to make the comparison meaningful.
+   pattern-following feature additions. Result comparison now reports per-task
+   score and efficiency deltas with transcript paths for regressions. The next
+   work is corpus growth from real daily-use failures. External agent runners
+   and cross-agent same-model comparisons should wait until the basic daily-use
+   capabilities below are stronger and `keel eval` has enough real usage to make
+   the comparison meaningful.
 5. **Completed P0 foundations.** ✅ Done/partial (2026-06): provider retry
    with backoff now handles request setup failures and pre-stream HTTP
    408 / 409 / 429 / 5xx, honors `retry-after-ms` / `Retry-After`, emits a

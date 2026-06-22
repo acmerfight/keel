@@ -628,6 +628,40 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe('Error: unknown eval option "--wat"\n');
   });
 
+  test(`Given eval compare is missing the base result file,
+    When the CLI main parses the eval compare request,
+    Then it returns a compare option validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["eval", "compare", "--head", "head.jsonl"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: eval compare requires --base <file>.\n",
+    );
+  });
+
+  test(`Given eval compare is missing the head result file,
+    When the CLI main parses the eval compare request,
+    Then it returns a compare option validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["eval", "compare", "--base", "base.jsonl"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: eval compare requires --head <file>.\n",
+    );
+  });
+
   test(`Given an eval option is missing its value,
     When the CLI main parses the eval request,
     Then it returns an option value validation error`, async () => {
