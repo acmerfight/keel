@@ -87,9 +87,12 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
   const cliArgs = parsedCliArgs.value;
 
   if (cliArgs.command === "doctor") {
-    const { runDoctor } = await import("./doctor.ts");
+    const { readBundledRipgrepDiagnostic, runDoctor } = await import(
+      "./doctor.ts"
+    );
     const result = await runDoctor({
       runtime,
+      readRipgrepDiagnostic: readBundledRipgrepDiagnostic,
       selection: {
         ...(cliArgs.providerId !== undefined
           ? { providerId: cliArgs.providerId }

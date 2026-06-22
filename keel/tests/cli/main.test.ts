@@ -1246,11 +1246,41 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("Error: --provider requires a value.\n");
   });
 
+  test(`Given a doctor provider equals flag has an empty value,
+    When the CLI main parses the command,
+    Then it exits with the provider option validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["--doctor", "--provider="]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --provider requires a value.\n");
+  });
+
   test(`Given a doctor model flag is missing its value,
     When the CLI main parses the command,
     Then it exits with the model option validation error`, async () => {
     // Given
     const fixture = createRuntime(["--doctor", "--model"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --model requires a value.\n");
+  });
+
+  test(`Given a doctor model equals flag has an empty value,
+    When the CLI main parses the command,
+    Then it exits with the model option validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["--doctor", "--model="]);
 
     // When
     const exitCode = await runCliMain(fixture.runtime);

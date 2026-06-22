@@ -18,8 +18,15 @@ export interface DoctorResult {
   readonly stderr: string;
 }
 
+export interface RipgrepDoctorDiagnostic {
+  readonly provider: string;
+  readonly path: string;
+  readonly version: string;
+}
+
 export interface DoctorOptions {
   readonly runtime: ProviderConfigRuntime;
+  readonly readRipgrepDiagnostic: () => Promise<RipgrepDoctorDiagnostic>;
   readonly selection?: ProviderSelection;
 }
 
@@ -72,6 +79,16 @@ function readRipgrepVersion(path: string): Promise<string> {
       },
     );
   });
+}
+
+export async function readBundledRipgrepDiagnostic(): Promise<RipgrepDoctorDiagnostic> {
+  const ripgrep = await resolveRipgrep();
+  const version = await readRipgrepVersion(ripgrep.path);
+  return {
+    provider: ripgrep.provider,
+    path: ripgrep.path,
+    version,
+  };
 }
 
 function apiKeyLine(apiKey: ApiKeyDiagnostic): string {
@@ -141,12 +158,11 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
   let exitCode = 0;
 
   try {
-    const ripgrep = await resolveRipgrep();
-    const version = await readRipgrepVersion(ripgrep.path);
+    const ripgrep = await options.readRipgrepDiagnostic();
     stdoutLines.push(
       `ripgrep: ok (${ripgrep.provider})`,
       `ripgrep path: ${ripgrep.path}`,
-      `ripgrep version: ${version}`,
+      `ripgrep version: ${ripgrep.version}`,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

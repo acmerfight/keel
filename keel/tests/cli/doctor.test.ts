@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { runDoctor } from "../../src/cli/doctor.ts";
 import { runCli } from "../../src/testing/cli-harness.ts";
 
 function expectRipgrepDiagnostics(stdout: string): void {
@@ -173,5 +174,29 @@ describe("CLI Doctor", () => {
     expect(result.stderr).toBe(
       "Error: --provider must be one of: fake, deepseek, kimi, qwen.\n",
     );
+  });
+
+  test(`Given bundled ripgrep diagnostics fail,
+    When doctor runs,
+    Then it reports the ripgrep failure and still reports provider diagnostics`, async () => {
+    // Given
+    const runtime = {
+      env: () => undefined,
+    };
+
+    // When
+    const result = await runDoctor({
+      runtime,
+      selection: { providerId: "fake" },
+      readRipgrepDiagnostic: async () => {
+        throw "ripgrep exploded";
+      },
+    });
+
+    // Then
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain("Keel doctor\n");
+    expect(result.stdout).toContain("provider: fake (source: --provider)");
+    expect(result.stderr).toBe("ripgrep: failed: ripgrep exploded\n");
   });
 });
