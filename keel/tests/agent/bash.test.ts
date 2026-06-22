@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -480,6 +481,213 @@ describe("Bash Commands", () => {
       expect(events).toContainEqual({
         type: "text",
         text: "Ran twice.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a shell command family is approved for the session,
+    When the assistant runs matching commands in the same workspace,
+    Then the later matching command runs without asking again`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const firstCommand = "git status --short";
+    const secondCommand = "git status --porcelain";
+    const provider = createFakeProvider([
+      fakeToolResponse("bash", { command: firstCommand }),
+      fakeToolResponse("bash", { command: secondCommand }),
+      fakeResponse("Checked status twice."),
+    ]);
+    let promptCount = 0;
+    const offeredFamilies: string[] = [];
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        promptCount++;
+        if (request.prefixApproval !== undefined) {
+          offeredFamilies.push(request.prefixApproval.display);
+        }
+        return { type: "allow", scope: "session-prefix" };
+      },
+    });
+
+    try {
+      execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "check git status twice",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+          stopPolicy: defaultStopPolicy(),
+          bashPermission,
+        }),
+      );
+
+      // Then
+      expect(promptCount).toBe(1);
+      expect(offeredFamilies).toEqual(["git status"]);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Checked status twice.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a shell command family is approved for the session,
+    When the assistant runs a matching command in another workspace,
+    Then the other workspace asks for permission again`, async () => {
+    // Given
+    const firstWorkspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const secondWorkspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    let promptCount = 0;
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: () => {
+        promptCount++;
+        return { type: "allow", scope: "session-prefix" };
+      },
+    });
+
+    try {
+      execFileSync("git", ["init", "--quiet"], { cwd: firstWorkspace });
+      execFileSync("git", ["init", "--quiet"], { cwd: secondWorkspace });
+
+      // When
+      await collect(
+        runAgent({
+          workspace: firstWorkspace,
+          provider: createFakeProvider([
+            fakeToolResponse("bash", { command: "git status --short" }),
+            fakeResponse("Checked first status."),
+          ]),
+          userMessage: "check git status",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+          stopPolicy: defaultStopPolicy(),
+          bashPermission,
+        }),
+      );
+      await collect(
+        runAgent({
+          workspace: secondWorkspace,
+          provider: createFakeProvider([
+            fakeToolResponse("bash", { command: "git status --porcelain" }),
+            fakeResponse("Checked second status."),
+          ]),
+          userMessage: "check git status",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+          stopPolicy: defaultStopPolicy(),
+          bashPermission,
+        }),
+      );
+
+      // Then
+      expect(promptCount).toBe(2);
+    } finally {
+      await rm(firstWorkspace, { recursive: true, force: true });
+      await rm(secondWorkspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a shell command family approval is unavailable,
+    When a prompt incorrectly approves a command family,
+    Then the command is denied instead of cached broadly`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    let offeredFamily = false;
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        offeredFamily = request.prefixApproval !== undefined;
+        return { type: "allow", scope: "session-prefix" };
+      },
+    });
+
+    try {
+      // When
+      const decision = await bashPermission.review({
+        command: "git status --short && git diff",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(offeredFamily).toBe(false);
+      expect(decision).toEqual({
+        type: "deny",
+        message: "No command family approval is available.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a simple shell command has no approved command family,
+    When a prompt incorrectly approves a command family,
+    Then the command is denied without offering a family`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    let offeredFamily = false;
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        offeredFamily = request.prefixApproval !== undefined;
+        return { type: "allow", scope: "session-prefix" };
+      },
+    });
+
+    try {
+      // When
+      const decision = await bashPermission.review({
+        command: "echo hello",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(offeredFamily).toBe(false);
+      expect(decision).toEqual({
+        type: "deny",
+        message: "No command family approval is available.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an empty shell command has no approved command family,
+    When a prompt incorrectly approves a command family,
+    Then the command is denied without offering a family`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    let offeredFamily = false;
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        offeredFamily = request.prefixApproval !== undefined;
+        return { type: "allow", scope: "session-prefix" };
+      },
+    });
+
+    try {
+      // When
+      const decision = await bashPermission.review({
+        command: "  ",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(offeredFamily).toBe(false);
+      expect(decision).toEqual({
+        type: "deny",
+        message: "No command family approval is available.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

@@ -58,10 +58,11 @@ What a user can do today:
 - `keel --allow-bash` / `keel --bash-policy trusted` — trusted shell
   mode (all-or-nothing).
 - `keel --bash-policy ask` — expose bash while requiring per-command
-  approval in interactive sessions, with exact command + cwd approval
-  remembered for the process-local session. One-shot runs fail closed
-  because there is no approval UI; forced non-TTY interactive runs also
-  reject `ask` so approvals cannot be read from piped input.
+  approval in interactive sessions, with exact command + cwd approval and
+  conservative command-family + cwd approval remembered for the
+  process-local session. One-shot runs fail closed because there is no
+  approval UI; forced non-TTY interactive runs also reject `ask` so
+  approvals cannot be read from piped input.
 - `keel --max-cost <usd>` — one-shot or interactive session cost tracking
   with budget stop.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
@@ -209,8 +210,8 @@ Codex/Claude Code — or directly moves the eval numbers.
   from completed restored history without copying pending queued input.
   Remaining work is message-point branch UX and future sub-agent state.
 - **Bash approval hardening** — richer command parsing/risk
-  classification, safer prefix approvals beyond exact command + cwd,
-  and persistent approval rules. OS sandboxing remains P2.
+  classification, broader command-family approvals, and persistent
+  approval rules. OS sandboxing remains P2.
 - **Whole-task undo** — ✅ Partial (2026-06): `/undo` restores the last edit,
   created file, apply_patch batch, or multi-file task checkpoint. Remaining
   work is broader command grouping and user-facing controls for choosing older

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -900,6 +901,87 @@ describe("Interactive Session", () => {
       expect(stdout).toBe("Ran twice.\n");
       expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
       expect(stderr.match(/Approve bash command/g)).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive user approves a bash command family,
+    When the assistant runs matching commands in the same workspace,
+    Then the later matching command runs without another prompt`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const firstCommand = "git status --short";
+    const secondCommand = "git status --porcelain";
+    const provider = createFakeProvider([
+      fakeToolResponse("bash", { command: firstCommand }),
+      fakeToolResponse("bash", { command: secondCommand }),
+      fakeResponse("Checked status twice."),
+    ]);
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let approvalPrompts = 0;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+        if (text.includes("Approve bash command")) {
+          approvalPrompts++;
+          input.write("p\n");
+          input.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+
+      // When
+      input.write("check status twice\n");
+
+      // Then
+      await withTimeout(
+        session,
+        5000,
+        "command family approval did not finish",
+      );
+      expect(stdout).toBe("Checked status twice.\n");
+      expect(stderr).toContain(
+        "[p] allow command family for session: git status",
+      );
+      expect(approvalPrompts).toBe(1);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
