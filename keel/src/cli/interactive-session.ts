@@ -476,12 +476,21 @@ function interactiveBashPermissionPolicy(
   return createSessionBashPermissionPolicy({
     prompt: async (request) => {
       const promptSequence = lineReader.sequence();
+      const prefixApprovalLine =
+        request.prefixApproval === undefined
+          ? []
+          : [
+              `[p] allow command family for session: ${escapeApprovalText(
+                request.prefixApproval.display,
+              )}`,
+            ];
       writeStderr(
         [
           "Approve bash command?",
           `cwd: ${escapeApprovalText(request.cwd)}`,
           `$ ${escapeApprovalText(request.command)}`,
-          "[y] allow once, [s] allow for session, [n] deny; any other input denies: ",
+          ...prefixApprovalLine,
+          "[y] allow once, [s] allow exact command for session, [n] deny; any other input denies: ",
         ].join("\n"),
       );
       const rawAnswer = await lineReader.readLineAfter(
@@ -506,6 +515,9 @@ function interactiveBashPermissionPolicy(
       }
       if (answer === "s" || answer === "session" || answer === "a") {
         return { type: "allow", scope: "session" };
+      }
+      if (request.prefixApproval !== undefined && answer === "p") {
+        return { type: "allow", scope: "session-prefix" };
       }
       return { type: "deny", message: "User did not approve this command." };
     },
