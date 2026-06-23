@@ -56,6 +56,9 @@ const PREFIX_APPROVAL_CANDIDATES: readonly (readonly string[])[] = [
   ["pnpm", "test"],
   ["npm", "test"],
   ["git", "status"],
+  // Do not add git diff without family-specific trailing argv validation:
+  // --no-index, absolute paths, escaped paths, and external diff hooks can
+  // reach outside the cwd-bound approval.
 ];
 
 function parseSimpleCommandArgv(command: string): readonly string[] | null {

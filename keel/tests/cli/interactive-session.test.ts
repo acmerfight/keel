@@ -1061,6 +1061,99 @@ describe("Interactive Session", () => {
     }
   });
 
+  test(`Given git diff no-index requests interactive bash approval,
+    When the user answers prefix,
+    Then the command is denied without offering a command family`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const outsideSecret = join(tmpdir(), "keel-outside-secret.txt");
+    const outsideEmpty = join(tmpdir(), "keel-outside-empty.txt");
+    const command = `git diff --no-index ${outsideSecret} ${outsideEmpty}`;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.messages.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "git_diff_no_index",
+            tool: "bash",
+            command,
+          };
+        } else {
+          secondTurnMessages = options.messages;
+          yield { type: "text", text: "No git diff family." };
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let approvalAnswered = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+        if (text.includes("Approve bash command") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.write("p\n");
+          input.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("try git diff prefix approval\n");
+
+      // Then
+      await withTimeout(session, 5000, "git diff prefix denial did not finish");
+      expect(stdout).toBe("No git diff family.\n");
+      expect(stderr).not.toContain(
+        "[p] allow command family for session: git diff",
+      );
+      expect(secondTurnMessages).toContainEqual({
+        role: "tool",
+        toolCallId: "git_diff_no_index",
+        content: expect.stringContaining("User did not approve this command."),
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a resumed session previously approved bash for the session,
     When the assistant repeats the command after resume,
     Then the resumed session asks for approval again`, async () => {
