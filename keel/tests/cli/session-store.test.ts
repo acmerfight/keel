@@ -2355,6 +2355,163 @@ describe("Session Store", () => {
     }
   });
 
+  test(`Given a source session has completed history,
+    When it is forked before the first restored user message,
+    Then the target resumes as an empty fork`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const sourceMessages: readonly Message[] = [
+      { role: "user", content: "remember alpha" },
+      {
+        role: "assistant",
+        content: "Remembered: remember alpha",
+        toolCalls: [],
+      },
+    ];
+
+    try {
+      const source = createSessionStore({
+        sessionId: "source",
+        workspace,
+        runtime: runtime(home),
+      });
+      persistSessionMessages({
+        session: source,
+        previousMessages: [],
+        currentMessages: sourceMessages,
+        reason: "turn",
+        consumedInputIds: [],
+        runtime: runtime(home, 1),
+      });
+      const restoredSource = resumeSessionStore({
+        sessionId: "source",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // When
+      const target = forkSessionStore({
+        source: restoredSource,
+        targetSessionId: "target",
+        forkBeforeUser: 1,
+        runtime: runtime(home, 3),
+      });
+      const resumedTarget = resumeSessionStore({
+        sessionId: "target",
+        workspace,
+        runtime: runtime(home, 4),
+      });
+
+      // Then
+      expect(resumedTarget.messages).toEqual([]);
+      expect(resumedTarget.pendingInputs).toEqual([]);
+      const targetLedgerLines = (await readFile(target.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(targetLedgerLines).toEqual([
+        {
+          schemaVersion: 1,
+          type: "session",
+          id: "target",
+          createdAt: "1970-01-01T00:00:00.003Z",
+          workspace: source.workspace,
+          forkedFrom: "source",
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a source session has completed tool-call history before a later prompt,
+    When it is forked before that later restored user message,
+    Then the target keeps the complete tool-call prefix`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const retainedMessages: readonly Message[] = [
+      { role: "user", content: "inspect workspace" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "tool-1",
+            tool: "read",
+            path: "README.md",
+          },
+        ],
+      },
+      { role: "tool", toolCallId: "tool-1", content: "README" },
+      {
+        role: "assistant",
+        content: "The workspace has a README.",
+        toolCalls: [],
+      },
+    ];
+    const sourceMessages: readonly Message[] = [
+      ...retainedMessages,
+      { role: "user", content: "now remember beta" },
+      {
+        role: "assistant",
+        content: "Remembered: now remember beta",
+        toolCalls: [],
+      },
+    ];
+
+    try {
+      const source = createSessionStore({
+        sessionId: "source",
+        workspace,
+        runtime: runtime(home),
+      });
+      persistSessionMessages({
+        session: source,
+        previousMessages: [],
+        currentMessages: sourceMessages,
+        reason: "turn",
+        consumedInputIds: [],
+        runtime: runtime(home, 1),
+      });
+      const restoredSource = resumeSessionStore({
+        sessionId: "source",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // When
+      const target = forkSessionStore({
+        source: restoredSource,
+        targetSessionId: "target",
+        forkBeforeUser: 2,
+        runtime: runtime(home, 3),
+      });
+      const resumedTarget = resumeSessionStore({
+        sessionId: "target",
+        workspace,
+        runtime: runtime(home, 4),
+      });
+
+      // Then
+      expect(resumedTarget.messages).toEqual(retainedMessages);
+      expect(resumedTarget.pendingInputs).toEqual([]);
+      const targetLedgerLines = (await readFile(target.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(targetLedgerLines.at(1)).toMatchObject({
+        type: "append",
+        messages: retainedMessages,
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a persisted session record has an invalid shape,
     When the session is resumed,
     Then it fails closed before restoring partial history`, async () => {

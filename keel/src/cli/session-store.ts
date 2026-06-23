@@ -1240,13 +1240,22 @@ function createEmptySessionStore(options: {
 export function forkSessionStore(options: {
   readonly source: SessionState;
   readonly targetSessionId: string;
+  readonly forkBeforeUser?: number;
   readonly runtime: SessionStoreRuntime;
 }): SessionState {
-  const messages = parseProviderVisibleMessages(
+  const sourceMessages = parseProviderVisibleMessages(
     options.targetSessionId,
     options.source.messages,
     "fork",
   );
+  const messages =
+    options.forkBeforeUser === undefined
+      ? sourceMessages
+      : messagesBeforeRestoredUser({
+          targetSessionId: options.targetSessionId,
+          messages: sourceMessages,
+          userMessageNumber: options.forkBeforeUser,
+        });
   validateCompletedTranscript(options.targetSessionId, messages, "fork");
   const session = createEmptySessionStore({
     sessionId: options.targetSessionId,
@@ -1275,6 +1284,26 @@ export function forkSessionStore(options: {
     runtime: options.runtime,
   });
   return forkedSession;
+}
+
+function messagesBeforeRestoredUser(options: {
+  readonly targetSessionId: string;
+  readonly messages: readonly Message[];
+  readonly userMessageNumber: number;
+}): readonly Message[] {
+  let userMessageCount = 0;
+  for (const [index, message] of options.messages.entries()) {
+    if (message.role !== "user") {
+      continue;
+    }
+    userMessageCount += 1;
+    if (userMessageCount === options.userMessageNumber) {
+      return options.messages.slice(0, index);
+    }
+  }
+  sessionStoreError(
+    `Error: cannot fork session "${options.targetSessionId}": --fork-before-user ${options.userMessageNumber} exceeds restored user message count ${userMessageCount}.`,
+  );
 }
 
 export function resumeSessionStore(options: {
