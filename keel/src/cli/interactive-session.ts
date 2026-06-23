@@ -41,6 +41,11 @@ interface InteractiveSessionArgs {
 
 export type SessionPersistenceReason = "turn" | "compaction";
 
+export interface InteractiveForkSessionRequest {
+  readonly targetSessionId: string;
+  readonly beforeUser?: number;
+}
+
 interface InteractiveResolvedProviderBase {
   readonly provider: LLMProvider;
   readonly model: string;
@@ -83,6 +88,7 @@ export interface InteractiveSessionOptions {
     reason: SessionPersistenceReason,
     consumedInputIds: readonly string[],
   ) => void;
+  readonly forkSession?: (request: InteractiveForkSessionRequest) => string;
   readonly persistBashApprovalGrant?: (grant: BashApprovalGrant) => void;
   readonly input: NodeJS.ReadableStream;
   readonly writeStdout: (text: string) => void;
@@ -142,13 +148,30 @@ interface ManualCompactCommand {
   readonly focusInstruction?: string;
 }
 
-type InteractiveCommand = HelpCommand | ManualCompactCommand;
+interface ForkCommand {
+  readonly kind: "fork";
+  readonly targetSessionId: string;
+  readonly beforeUser?: number;
+}
+
+interface InvalidInteractiveCommand {
+  readonly kind: "invalid";
+  readonly message: string;
+}
+
+type InteractiveCommand =
+  | HelpCommand
+  | ManualCompactCommand
+  | ForkCommand
+  | InvalidInteractiveCommand;
 
 function formatInteractiveHelp(): string {
   return [
     "Interactive commands:",
     "  /help              Show this help.",
     "  /compact [focus]   Summarize older conversation context with optional focus.",
+    "  /fork <target-id> [--before-user <n>]",
+    "                     Fork this named or resumed session without switching to it.",
     "",
     "Session commands:",
     "  keel sessions",
@@ -167,6 +190,82 @@ function formatInteractiveHelp(): string {
   ].join("\n");
 }
 
+function parseForkBeforeUser(raw: string | undefined): number | string {
+  if (raw === undefined || raw === "") {
+    return "Error: --before-user requires a value.";
+  }
+  if (!/^[1-9][0-9]*$/u.test(raw)) {
+    return "Error: --before-user must be a positive integer.";
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    return "Error: --before-user must be a positive integer.";
+  }
+  return value;
+}
+
+function parseForkCommandArgs(
+  rawArgs: string | undefined,
+): ForkCommand | InvalidInteractiveCommand {
+  const trimmedArgs = rawArgs?.trim() ?? "";
+  if (trimmedArgs === "") {
+    return {
+      kind: "invalid",
+      message: "Error: /fork requires <target-id>.",
+    };
+  }
+
+  const args = trimmedArgs.split(/\s+/u);
+  const targetSessionId = args[0];
+  if (targetSessionId === undefined || targetSessionId.startsWith("-")) {
+    return {
+      kind: "invalid",
+      message: "Error: /fork requires <target-id>.",
+    };
+  }
+
+  let beforeUser: number | undefined;
+  const beforeUserPrefix = "--before-user=";
+  const optionArgs = args.slice(1);
+  let skipNext = false;
+  for (const [index, arg] of optionArgs.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+
+    if (arg === "--before-user") {
+      const parsed = parseForkBeforeUser(optionArgs[index + 1]);
+      if (typeof parsed === "string") {
+        return { kind: "invalid", message: parsed };
+      }
+      beforeUser = parsed;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(beforeUserPrefix)) {
+      const parsed = parseForkBeforeUser(arg.slice(beforeUserPrefix.length));
+      if (typeof parsed === "string") {
+        return { kind: "invalid", message: parsed };
+      }
+      beforeUser = parsed;
+      continue;
+    }
+
+    return {
+      kind: "invalid",
+      message: `Error: unknown /fork option "${arg}".`,
+    };
+  }
+
+  return {
+    kind: "fork",
+    targetSessionId,
+    ...(beforeUser !== undefined ? { beforeUser } : {}),
+  };
+}
+
 function parseInteractiveCommand(
   userMessage: string,
 ): InteractiveCommand | null {
@@ -175,15 +274,25 @@ function parseInteractiveCommand(
     return { kind: "help" };
   }
 
-  const match = /^\/compact(?:\s+(.*))?$/u.exec(trimmed);
-  if (match === null) {
+  const forkMatch = /^\/fork(?:\s+(.*))?$/u.exec(trimmed);
+  if (forkMatch !== null) {
+    return parseForkCommandArgs(forkMatch[1]);
+  }
+
+  const compactMatch = /^\/compact(?:\s+(.*))?$/u.exec(trimmed);
+  if (compactMatch === null) {
     return null;
   }
-  const focusInstruction = match[1]?.trim();
+  const focusInstruction = compactMatch[1]?.trim();
   if (focusInstruction === undefined || focusInstruction === "") {
     return { kind: "compact" };
   }
   return { kind: "compact", focusInstruction };
+}
+
+function formatInteractiveCommandFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return `${sanitizeStatusLineText(message)}\n`;
 }
 
 function formatManualCompactionFailure(error: unknown): string {
@@ -701,6 +810,11 @@ export async function runInteractiveSession(
         consumeQueuedInputLines([rawInput]);
         continue;
       }
+      if (interactiveCommand?.kind === "invalid") {
+        options.writeStderr(`${interactiveCommand.message}\n`);
+        consumeQueuedInputLines([rawInput]);
+        continue;
+      }
       if (interactiveCommand?.kind === "compact") {
         if (messages.length === 0 || resolved === null) {
           options.writeStderr(
@@ -737,6 +851,22 @@ export async function runInteractiveSession(
           sessionStopReason = "cost_budget";
           break;
         }
+        continue;
+      }
+      if (interactiveCommand?.kind === "fork") {
+        if (options.forkSession === undefined) {
+          options.writeStderr(
+            "Error: /fork requires a named session. Start with --session or --resume.\n",
+          );
+          consumeQueuedInputLines([rawInput]);
+          continue;
+        }
+        try {
+          options.writeStdout(options.forkSession(interactiveCommand));
+        } catch (error) {
+          options.writeStderr(formatInteractiveCommandFailure(error));
+        }
+        consumeQueuedInputLines([rawInput]);
         continue;
       }
       resolved ??= options.resolveProvider(userMessage);
