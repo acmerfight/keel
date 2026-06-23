@@ -9,6 +9,7 @@ import type { AgentEvent } from "../../src/agent/loop.ts";
 import { runInteractiveSession } from "../../src/cli/interactive-session.ts";
 import {
   createSessionStore,
+  persistSessionBashApprovalGrant,
   persistSessionMessages,
   persistSessionQueuedInput,
   resumeSessionStore,
@@ -1156,12 +1157,21 @@ describe("Interactive Session", () => {
 
   test(`Given a resumed session previously approved bash for the session,
     When the assistant repeats the command after resume,
-    Then the resumed session asks for approval again`, async () => {
+    Then the command runs without another approval prompt`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const command =
       "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
-    let persistedMessages: readonly Message[] = [];
+    const session = createSessionStore({
+      sessionId: "bash-approval-resume",
+      workspace,
+      runtime: {
+        env: (key) => (key === "KEEL_HOME" ? home : undefined),
+        now: () => 0,
+      },
+    });
+    let persistedMessages: readonly Message[] = session.messages;
     let firstApprovalPrompts = 0;
     const firstInput = new PassThrough();
     const firstProvider = createFakeProvider([
@@ -1172,6 +1182,9 @@ describe("Interactive Session", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      initialMessages: session.messages,
+      initialQueuedInputs: session.pendingInputs,
+      initialBashApprovalGrants: session.bashApprovalGrants,
       input: firstInput,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -1204,8 +1217,28 @@ describe("Interactive Session", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
+      persistSessionMessages: (messages, reason, consumedInputIds) => {
+        persistedMessages = persistSessionMessages({
+          session,
+          previousMessages: persistedMessages,
+          currentMessages: messages,
+          runtime: {
+            env: (key) => (key === "KEEL_HOME" ? home : undefined),
+            now: () => 1,
+          },
+          reason,
+          consumedInputIds,
+        });
+      },
+      persistBashApprovalGrant: (grant) => {
+        persistSessionBashApprovalGrant({
+          session,
+          grant,
+          runtime: {
+            env: (key) => (key === "KEEL_HOME" ? home : undefined),
+            now: () => 2,
+          },
+        });
       },
     });
 
@@ -1213,6 +1246,14 @@ describe("Interactive Session", () => {
       firstInput.write("run once\n");
       await firstSession;
 
+      const resumedSession = resumeSessionStore({
+        sessionId: "bash-approval-resume",
+        workspace,
+        runtime: {
+          env: (key) => (key === "KEEL_HOME" ? home : undefined),
+          now: () => 3,
+        },
+      });
       let secondApprovalPrompts = 0;
       const secondInput = new PassThrough();
       const secondProvider = createFakeProvider([
@@ -1223,14 +1264,190 @@ describe("Interactive Session", () => {
         cliArgs: { bashMode: "ask" },
         workspace,
         platform: process.platform,
-        initialMessages: persistedMessages,
+        initialMessages: resumedSession.messages,
+        initialQueuedInputs: resumedSession.pendingInputs,
+        initialBashApprovalGrants: resumedSession.bashApprovalGrants,
         input: secondInput,
         writeStdout: () => {},
         writeStderr: (text) => {
           if (text.includes("Approve bash command")) {
             secondApprovalPrompts++;
-            secondInput.write("y\n");
-            secondInput.end();
+          }
+        },
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => ({
+          provider: secondProvider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        }),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async (stream) => {
+          let finalEnd:
+            | Extract<AgentEvent, { readonly type: "end" }>
+            | undefined;
+          for await (const event of stream) {
+            if (event.type === "end") {
+              finalEnd = event;
+            }
+          }
+          return finalEnd;
+        },
+        formatCostReport: () => "",
+        persistBashApprovalGrant: (grant) => {
+          persistSessionBashApprovalGrant({
+            session: resumedSession,
+            grant,
+            runtime: {
+              env: (key) => (key === "KEEL_HOME" ? home : undefined),
+              now: () => 4,
+            },
+          });
+        },
+      });
+
+      // When
+      secondInput.write("run again\n");
+      secondInput.end();
+
+      // Then
+      await withTimeout(
+        secondSession,
+        5000,
+        "resumed approved command did not finish",
+      );
+      expect(firstApprovalPrompts).toBe(1);
+      expect(secondApprovalPrompts).toBe(0);
+      expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a resumed session previously approved a bash command family,
+    When the assistant runs a matching command after resume,
+    Then the command family runs without another approval prompt`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const firstCommand = "git status --short";
+    const secondCommand = "git status --porcelain";
+    const session = createSessionStore({
+      sessionId: "bash-prefix-approval-resume",
+      workspace,
+      runtime: {
+        env: (key) => (key === "KEEL_HOME" ? home : undefined),
+        now: () => 0,
+      },
+    });
+    let persistedMessages: readonly Message[] = session.messages;
+    let firstApprovalPrompts = 0;
+    const firstInput = new PassThrough();
+    const firstProvider = createFakeProvider([
+      fakeToolResponse("bash", { command: firstCommand }),
+      fakeResponse("First status done."),
+    ]);
+    const firstSession = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace,
+      platform: process.platform,
+      initialMessages: session.messages,
+      initialQueuedInputs: session.pendingInputs,
+      initialBashApprovalGrants: session.bashApprovalGrants,
+      input: firstInput,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        if (text.includes("Approve bash command")) {
+          firstApprovalPrompts++;
+          firstInput.write("p\n");
+          firstInput.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider: firstProvider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionMessages: (messages, reason, consumedInputIds) => {
+        persistedMessages = persistSessionMessages({
+          session,
+          previousMessages: persistedMessages,
+          currentMessages: messages,
+          runtime: {
+            env: (key) => (key === "KEEL_HOME" ? home : undefined),
+            now: () => 1,
+          },
+          reason,
+          consumedInputIds,
+        });
+      },
+      persistBashApprovalGrant: (grant) => {
+        persistSessionBashApprovalGrant({
+          session,
+          grant,
+          runtime: {
+            env: (key) => (key === "KEEL_HOME" ? home : undefined),
+            now: () => 2,
+          },
+        });
+      },
+    });
+
+    try {
+      execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+      firstInput.write("check status\n");
+      await firstSession;
+
+      const resumedSession = resumeSessionStore({
+        sessionId: "bash-prefix-approval-resume",
+        workspace,
+        runtime: {
+          env: (key) => (key === "KEEL_HOME" ? home : undefined),
+          now: () => 3,
+        },
+      });
+      let secondApprovalPrompts = 0;
+      const secondInput = new PassThrough();
+      const secondProvider = createFakeProvider([
+        fakeToolResponse("bash", { command: secondCommand }),
+        fakeResponse("Second status done."),
+      ]);
+      const secondSession = runInteractiveSession({
+        cliArgs: { bashMode: "ask" },
+        workspace,
+        platform: process.platform,
+        initialMessages: resumedSession.messages,
+        initialQueuedInputs: resumedSession.pendingInputs,
+        initialBashApprovalGrants: resumedSession.bashApprovalGrants,
+        input: secondInput,
+        writeStdout: () => {},
+        writeStderr: (text) => {
+          if (text.includes("Approve bash command")) {
+            secondApprovalPrompts++;
           }
         },
         onSigint: () => {},
@@ -1261,19 +1478,20 @@ describe("Interactive Session", () => {
       });
 
       // When
-      secondInput.write("run again\n");
+      secondInput.write("check status again\n");
+      secondInput.end();
 
       // Then
       await withTimeout(
         secondSession,
         5000,
-        "resumed approval prompt was not answered",
+        "resumed approved command family did not finish",
       );
       expect(firstApprovalPrompts).toBe(1);
-      expect(secondApprovalPrompts).toBe(1);
-      expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
+      expect(secondApprovalPrompts).toBe(0);
     } finally {
       await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   });
 

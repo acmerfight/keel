@@ -4,6 +4,18 @@ export type BashPolicy = "ask" | "deny" | "trusted";
 // used to derive tool exposure and approval behavior.
 export type BashMode = "disabled" | "ask" | "trusted";
 
+export type BashApprovalGrant =
+  | {
+      readonly type: "exact";
+      readonly cwd: string;
+      readonly command: string;
+    }
+  | {
+      readonly type: "prefix";
+      readonly cwd: string;
+      readonly argvPrefix: readonly string[];
+    };
+
 export function bashModeFromPolicy(policy: BashPolicy): BashMode {
   return policy === "deny" ? "disabled" : policy;
 }
@@ -115,9 +127,23 @@ export function createSessionBashPermissionPolicy(options: {
   readonly prompt: (
     request: BashPermissionRequest,
   ) => BashPermissionDecision | Promise<BashPermissionDecision>;
+  readonly initialGrants?: readonly BashApprovalGrant[];
+  readonly onGrant?: (grant: BashApprovalGrant) => void;
 }): BashPermissionPolicy {
   const approved = new Set<string>();
   const approvedPrefixes = new Set<string>();
+  for (const grant of options.initialGrants ?? []) {
+    switch (grant.type) {
+      case "exact":
+        approved.add(JSON.stringify([grant.cwd, grant.command]));
+        break;
+      case "prefix":
+        approvedPrefixes.add(
+          prefixKey({ cwd: grant.cwd, argvPrefix: grant.argvPrefix }),
+        );
+        break;
+    }
+  }
 
   return {
     review: async (request) => {
@@ -146,6 +172,11 @@ export function createSessionBashPermissionPolicy(options: {
         prefixApproval === undefined ? request : { ...request, prefixApproval };
       const decision = await options.prompt(promptRequest);
       if (decision.type === "allow" && decision.scope === "session") {
+        options.onGrant?.({
+          type: "exact",
+          cwd: request.cwd,
+          command: request.command,
+        });
         approved.add(key);
       } else if (
         decision.type === "allow" &&
@@ -157,6 +188,12 @@ export function createSessionBashPermissionPolicy(options: {
             message: "No command family approval is available.",
           };
         }
+        const grant = {
+          type: "prefix",
+          cwd: request.cwd,
+          argvPrefix: [...prefixApproval.argvPrefix],
+        } satisfies BashApprovalGrant;
+        options.onGrant?.(grant);
         approvedPrefixes.add(
           prefixKey({
             cwd: request.cwd,

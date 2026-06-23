@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import type { Message, ToolCall } from "../llm/types.ts";
+import type { BashApprovalGrant } from "../permissions/bash.ts";
 import {
   isToolName,
   toolCallCanonicalArguments,
@@ -159,6 +160,36 @@ const inputConsumedRecordSchema = z
   })
   .strict();
 
+const exactBashApprovalGrantSchema = z
+  .object({
+    type: z.literal("exact"),
+    cwd: z.string(),
+    command: z.string(),
+  })
+  .strict();
+
+const prefixBashApprovalGrantSchema = z
+  .object({
+    type: z.literal("prefix"),
+    cwd: z.string(),
+    argvPrefix: z.array(z.string()),
+  })
+  .strict();
+
+const bashApprovalGrantSchema = z.discriminatedUnion("type", [
+  exactBashApprovalGrantSchema,
+  prefixBashApprovalGrantSchema,
+]);
+
+const bashApprovalGrantedRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("bash_approval_granted"),
+    timestamp: z.string(),
+    grant: bashApprovalGrantSchema,
+  })
+  .strict();
+
 const queuedInputSchema = z
   .object({
     id: z.string(),
@@ -176,6 +207,7 @@ const snapshotRecordSchema = z
     reason: z.literal("size_threshold"),
     messages: z.array(messageSchema),
     pendingInputs: z.array(queuedInputSchema),
+    bashApprovalGrants: z.array(bashApprovalGrantSchema).optional(),
   })
   .strict();
 
@@ -198,11 +230,13 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   replaceRecordSchema,
   inputAdmittedRecordSchema,
   inputConsumedRecordSchema,
+  bashApprovalGrantedRecordSchema,
   snapshotRecordSchema,
 ]);
 
 type RawMessage = z.infer<typeof messageSchema>;
 type RawSessionQueuedInput = z.infer<typeof queuedInputSchema>;
+type RawBashApprovalGrant = z.infer<typeof bashApprovalGrantSchema>;
 type RawSessionHeaderRecord = z.infer<typeof sessionHeaderSchema>;
 type RawSessionMutationRecord = z.infer<typeof sessionMutationRecordSchema>;
 type SessionLockOwner = z.infer<typeof sessionLockOwnerSchema>;
@@ -250,6 +284,13 @@ interface InputConsumedSessionRecord {
   readonly inputIds: readonly string[];
 }
 
+interface BashApprovalGrantedSessionRecord {
+  readonly schemaVersion: 1;
+  readonly type: "bash_approval_granted";
+  readonly timestamp: string;
+  readonly grant: BashApprovalGrant;
+}
+
 interface SnapshotSessionRecord {
   readonly schemaVersion: 1;
   readonly type: "snapshot";
@@ -257,6 +298,7 @@ interface SnapshotSessionRecord {
   readonly reason: "size_threshold";
   readonly messages: readonly Message[];
   readonly pendingInputs: readonly SessionQueuedInput[];
+  readonly bashApprovalGrants?: readonly BashApprovalGrant[];
 }
 
 type SessionMutationRecord =
@@ -264,6 +306,7 @@ type SessionMutationRecord =
   | ReplaceSessionRecord
   | InputAdmittedSessionRecord
   | InputConsumedSessionRecord
+  | BashApprovalGrantedSessionRecord
   | SnapshotSessionRecord;
 
 interface SessionRecords {
@@ -286,6 +329,7 @@ export interface SessionState {
   readonly workspace: string;
   readonly messages: readonly Message[];
   readonly pendingInputs: readonly SessionQueuedInput[];
+  readonly bashApprovalGrants: readonly BashApprovalGrant[];
   readonly [sessionReplayStateKey]: SessionReplayState;
 }
 
@@ -328,6 +372,7 @@ interface SessionCatalogReplayState {
 interface SessionReplayState {
   readonly messages: Message[];
   readonly pendingInputsById: Map<string, SessionQueuedInput>;
+  readonly bashApprovalGrants: BashApprovalGrant[];
 }
 
 type ObjectValue =
@@ -635,6 +680,27 @@ function toSessionQueuedInput(
   };
 }
 
+function copyBashApprovalGrant(grant: BashApprovalGrant): BashApprovalGrant {
+  switch (grant.type) {
+    case "exact":
+      return {
+        type: "exact",
+        cwd: grant.cwd,
+        command: grant.command,
+      };
+    case "prefix":
+      return {
+        type: "prefix",
+        cwd: grant.cwd,
+        argvPrefix: [...grant.argvPrefix],
+      };
+  }
+}
+
+function toBashApprovalGrant(grant: RawBashApprovalGrant): BashApprovalGrant {
+  return copyBashApprovalGrant(grant);
+}
+
 function toSessionMutationRecord(
   record: RawSessionMutationRecord,
 ): SessionMutationRecord {
@@ -677,6 +743,13 @@ function toSessionMutationRecord(
         timestamp: record.timestamp,
         inputIds: [...record.inputIds],
       };
+    case "bash_approval_granted":
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "bash_approval_granted",
+        timestamp: record.timestamp,
+        grant: toBashApprovalGrant(record.grant),
+      };
     case "snapshot":
       return {
         schemaVersion: SESSION_SCHEMA_VERSION,
@@ -685,6 +758,12 @@ function toSessionMutationRecord(
         reason: "size_threshold",
         messages: record.messages.map(toMessage),
         pendingInputs: record.pendingInputs.map(toSessionQueuedInput),
+        ...(record.bashApprovalGrants !== undefined
+          ? {
+              bashApprovalGrants:
+                record.bashApprovalGrants.map(toBashApprovalGrant),
+            }
+          : {}),
       };
   }
 }
@@ -1054,6 +1133,7 @@ function applySessionCatalogMutation(
       };
     case "input_admitted":
     case "input_consumed":
+    case "bash_approval_granted":
       return {
         ...state,
         updatedAt: record.timestamp,
@@ -1334,12 +1414,17 @@ function sessionStateFromReplay(options: {
   readonly workspace: string;
   readonly messages: readonly Message[];
   readonly pendingInputsById: ReadonlyMap<string, SessionQueuedInput>;
+  readonly bashApprovalGrants: readonly BashApprovalGrant[];
 }): SessionState {
   const messages = [...options.messages];
   const pendingInputsById = new Map(options.pendingInputsById);
+  const bashApprovalGrants = options.bashApprovalGrants.map(
+    copyBashApprovalGrant,
+  );
   const replayState = {
     messages: [...messages],
     pendingInputsById,
+    bashApprovalGrants,
   };
   const session = {
     [sessionReplayStateKey]: replayState,
@@ -1348,6 +1433,7 @@ function sessionStateFromReplay(options: {
     workspace: options.workspace,
     messages,
     pendingInputs: pendingInputsInReplayOrder(pendingInputsById),
+    bashApprovalGrants,
   };
   return session;
 }
@@ -1405,6 +1491,9 @@ function appendSessionSnapshotIfNeeded(options: {
   }
 
   const replayState = replayStateForSession(options.session);
+  const bashApprovalGrants = replayState.bashApprovalGrants.map(
+    copyBashApprovalGrant,
+  );
   appendJsonLine(options.session.filePath, {
     schemaVersion: SESSION_SCHEMA_VERSION,
     type: "snapshot",
@@ -1412,6 +1501,7 @@ function appendSessionSnapshotIfNeeded(options: {
     reason: "size_threshold",
     messages: [...replayState.messages],
     pendingInputs: pendingInputsInReplayOrder(replayState.pendingInputsById),
+    ...(bashApprovalGrants.length > 0 ? { bashApprovalGrants } : {}),
   });
 }
 
@@ -1503,6 +1593,7 @@ function createEmptySessionStore(options: {
     workspace,
     messages: [],
     pendingInputsById: new Map(),
+    bashApprovalGrants: [],
   });
 }
 
@@ -1538,6 +1629,7 @@ export function forkSessionStore(options: {
     workspace: session.workspace,
     messages,
     pendingInputsById: new Map(),
+    bashApprovalGrants: [],
   });
   if (messages.length > 0) {
     appendJsonLine(session.filePath, {
@@ -1605,6 +1697,7 @@ export function resumeSessionStore(options: {
 
   let messages: Message[] = [];
   const pendingInputsById = new Map<string, SessionQueuedInput>();
+  let bashApprovalGrants: BashApprovalGrant[] = [];
   for (const record of records.mutations) {
     switch (record.type) {
       case "append":
@@ -1626,12 +1719,21 @@ export function resumeSessionStore(options: {
       case "input_consumed":
         consumeReplayInputs(pendingInputsById, record.inputIds);
         break;
+      case "bash_approval_granted":
+        bashApprovalGrants = [
+          ...bashApprovalGrants,
+          copyBashApprovalGrant(record.grant),
+        ];
+        break;
       case "snapshot":
         messages = [...record.messages];
         pendingInputsById.clear();
         for (const input of record.pendingInputs) {
           pendingInputsById.set(input.id, input);
         }
+        bashApprovalGrants = (record.bashApprovalGrants ?? []).map(
+          copyBashApprovalGrant,
+        );
         break;
     }
   }
@@ -1643,6 +1745,7 @@ export function resumeSessionStore(options: {
     workspace: expectedWorkspace,
     messages,
     pendingInputsById,
+    bashApprovalGrants,
   });
 }
 
@@ -1727,6 +1830,25 @@ export function persistSessionMessages(options: {
     runtime: options.runtime,
   });
   return [...currentMessages];
+}
+
+export function persistSessionBashApprovalGrant(options: {
+  readonly session: SessionState;
+  readonly grant: BashApprovalGrant;
+  readonly runtime: SessionStoreRuntime;
+}): void {
+  const grant = copyBashApprovalGrant(options.grant);
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "bash_approval_granted",
+    timestamp: isoTimestamp(options.runtime),
+    grant,
+  });
+  replayStateForSession(options.session).bashApprovalGrants.push(grant);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
 }
 
 export function persistSessionQueuedInput(options: {
