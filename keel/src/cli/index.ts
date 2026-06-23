@@ -7,6 +7,7 @@ import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import type { Message } from "../llm/types.ts";
 import {
+  type BashApprovalGrant,
   type BashMode,
   type BashPermissionPolicy,
   bashModeExposesTool,
@@ -35,6 +36,7 @@ import {
   ensureSessionCanBeCreated,
   forkSessionStore,
   listSessionCatalog,
+  persistSessionBashApprovalGrant,
   persistSessionMessages,
   persistSessionQueuedInput,
   resumeSessionStore,
@@ -362,6 +364,10 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
                 reason: SessionPersistenceReason,
                 consumedInputIds: readonly string[],
               ) => void;
+              readonly initialBashApprovalGrants: readonly BashApprovalGrant[];
+              readonly persistBashApprovalGrant: (
+                grant: BashApprovalGrant,
+              ) => void;
             }
           | undefined;
         if (session !== undefined) {
@@ -369,6 +375,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           sessionPersistence = {
             initialMessages: resumedSession.messages,
             initialQueuedInputs: resumedSession.pendingInputs,
+            initialBashApprovalGrants: resumedSession.bashApprovalGrants,
             persistQueuedInput: (input: {
               readonly sequence: number;
               readonly line: string;
@@ -400,6 +407,13 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
                 consumedInputIds,
               });
             },
+            persistBashApprovalGrant: (grant: BashApprovalGrant) => {
+              persistSessionBashApprovalGrant({
+                session: resumedSession,
+                grant,
+                runtime,
+              });
+            },
           };
         } else if (cliArgs.sessionId !== undefined) {
           const sessionId = cliArgs.sessionId;
@@ -419,6 +433,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           sessionPersistence = {
             initialMessages: [],
             initialQueuedInputs: [],
+            initialBashApprovalGrants: [],
             persistQueuedInput: (input: {
               readonly sequence: number;
               readonly line: string;
@@ -449,6 +464,13 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
                 runtime,
                 reason,
                 consumedInputIds,
+              });
+            },
+            persistBashApprovalGrant: (grant: BashApprovalGrant) => {
+              persistSessionBashApprovalGrant({
+                session: ensureActiveSession(),
+                grant,
+                runtime,
               });
             },
           };
