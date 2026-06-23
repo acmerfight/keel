@@ -18,6 +18,7 @@ import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import type { LLMProvider, Message, Usage } from "../llm/types.ts";
 import {
+  type BashApprovalGrant,
   type BashMode,
   type BashPermissionPolicy,
   bashModeExposesTool,
@@ -71,6 +72,7 @@ export interface InteractiveSessionOptions {
   readonly projectInstructions?: ProjectInstructions;
   readonly initialMessages?: readonly Message[];
   readonly initialQueuedInputs?: readonly SessionQueuedInput[];
+  readonly initialBashApprovalGrants?: readonly BashApprovalGrant[];
   readonly persistQueuedInput?: (input: {
     readonly sequence: number;
     readonly line: string;
@@ -81,6 +83,7 @@ export interface InteractiveSessionOptions {
     reason: SessionPersistenceReason,
     consumedInputIds: readonly string[],
   ) => void;
+  readonly persistBashApprovalGrant?: (grant: BashApprovalGrant) => void;
   readonly input: NodeJS.ReadableStream;
   readonly writeStdout: (text: string) => void;
   readonly writeStderr: (text: string) => void;
@@ -468,12 +471,22 @@ function interactiveBashPermissionPolicy(
   mode: BashMode,
   lineReader: LineReader,
   writeStderr: (text: string) => void,
+  policyOptions: {
+    readonly initialGrants?: readonly BashApprovalGrant[];
+    readonly onGrant?: (grant: BashApprovalGrant) => void;
+  },
 ): BashPermissionPolicy | undefined {
   if (mode !== "ask") {
     return undefined;
   }
 
   return createSessionBashPermissionPolicy({
+    ...(policyOptions.initialGrants !== undefined
+      ? { initialGrants: policyOptions.initialGrants }
+      : {}),
+    ...(policyOptions.onGrant !== undefined
+      ? { onGrant: policyOptions.onGrant }
+      : {}),
     prompt: async (request) => {
       const promptSequence = lineReader.sequence();
       const prefixApprovalLine =
@@ -552,6 +565,14 @@ export async function runInteractiveSession(
     options.cliArgs.bashMode,
     lineReader,
     options.writeStderr,
+    {
+      ...(options.initialBashApprovalGrants !== undefined
+        ? { initialGrants: options.initialBashApprovalGrants }
+        : {}),
+      ...(options.persistBashApprovalGrant !== undefined
+        ? { onGrant: options.persistBashApprovalGrant }
+        : {}),
+    },
   );
   let activeAbortController: AbortController | null = null;
   let reportProvider: InteractiveResolvedProvider | null = null;

@@ -18,6 +18,7 @@ import {
   createSessionStore,
   ensureSessionCanBeCreated,
   forkSessionStore,
+  persistSessionBashApprovalGrant,
   persistSessionMessages,
   persistSessionQueuedInput,
   resumeSessionStore,
@@ -25,6 +26,7 @@ import {
   SessionStoreError,
 } from "../../src/cli/session-store.ts";
 import type { Message } from "../../src/llm/types.ts";
+import type { BashApprovalGrant } from "../../src/permissions/bash.ts";
 
 function runtime(home: string, now = 0) {
   return {
@@ -2217,6 +2219,115 @@ describe("Session Store", () => {
         messages: compactedMessages,
         pendingInputs: [queuedInput],
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given session bash approval grants are snapshotted,
+    When the session is resumed from the bounded snapshot,
+    Then the approval grants are restored`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const grant = {
+      type: "exact",
+      cwd: ledgerWorkspace,
+      command: "npm test",
+    } satisfies BashApprovalGrant;
+    const largeMessages: readonly Message[] = [
+      { role: "user", content: "x".repeat(16 * 1024 * 1024) },
+    ];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "snapshot-bash-approvals",
+        workspace,
+        runtime: runtime(home),
+      });
+      persistSessionBashApprovalGrant({
+        session,
+        grant,
+        runtime: runtime(home, 1),
+      });
+
+      // When
+      persistSessionMessages({
+        session,
+        previousMessages: [],
+        currentMessages: largeMessages,
+        runtime: runtime(home, 2),
+        reason: "turn",
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "snapshot-bash-approvals",
+        workspace,
+        runtime: runtime(home, 3),
+      });
+
+      // Then
+      expect(resumed.bashApprovalGrants).toEqual([grant]);
+      const ledgerLines = (await readFile(session.filePath, "utf8"))
+        .trimEnd()
+        .split("\n");
+      const lastLine = ledgerLines.at(-1);
+      expect(lastLine).toBeDefined();
+      if (lastLine === undefined) {
+        throw new Error("Expected snapshot line");
+      }
+      expect(JSON.parse(lastLine)).toMatchObject({
+        type: "snapshot",
+        bashApprovalGrants: [grant],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a source session has bash approval grants,
+    When it is forked into a new session,
+    Then the target session starts without source approval grants`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const grant = {
+      type: "prefix",
+      cwd: ledgerWorkspace,
+      argvPrefix: ["git", "status"],
+    } satisfies BashApprovalGrant;
+
+    try {
+      const source = createSessionStore({
+        sessionId: "source-with-approval",
+        workspace,
+        runtime: runtime(home),
+      });
+      persistSessionBashApprovalGrant({
+        session: source,
+        grant,
+        runtime: runtime(home, 1),
+      });
+
+      // When
+      const target = forkSessionStore({
+        source,
+        targetSessionId: "target-without-approval",
+        runtime: runtime(home, 2),
+      });
+      const resumedTarget = resumeSessionStore({
+        sessionId: "target-without-approval",
+        workspace,
+        runtime: runtime(home, 3),
+      });
+
+      // Then
+      expect(source.bashApprovalGrants).toEqual([grant]);
+      expect(target.bashApprovalGrants).toEqual([]);
+      expect(resumedTarget.bashApprovalGrants).toEqual([]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
