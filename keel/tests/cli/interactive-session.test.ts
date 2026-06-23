@@ -133,6 +133,62 @@ describe("Interactive Session", () => {
     expect(sigintHandlers.size).toBe(0);
   });
 
+  test(`Given the interactive session is idle,
+    When user enters /help,
+    Then help is printed without starting a model turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("help should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("help should not start a model turn");
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("/help\n");
+
+    // Then
+    await session;
+    expect(stdout).toContain("Interactive commands:");
+    expect(stdout).toContain("/help");
+    expect(stdout).toContain("/compact [focus]");
+    expect(stdout).toContain("keel sessions");
+    expect(stdout).toContain("keel sessions fork");
+    expect(stderr).toBe("");
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
   test(`Given an interactive turn has cost tracking,
     When the turn completes,
     Then the session prints the cost report`, async () => {
@@ -2236,6 +2292,110 @@ describe("Interactive Session", () => {
       { role: "user", content: "after compact" },
     ]);
     expect(JSON.stringify(observedContexts[2])).not.toContain("/compact");
+  });
+
+  test(`Given user enters /help while an interactive tool turn is running,
+    When the assistant continues after the tool result,
+    Then the help command is deferred instead of injected as steering`, async () => {
+    // Given
+    let turn = 0;
+    let helpWritten = false;
+    const observedContexts: Message[][] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        turn++;
+        observedContexts.push(structuredClone([...options.messages]));
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "deferred_help_read",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          };
+        } else if (turn === 2) {
+          yield { type: "text", text: "Tool turn done." };
+        } else {
+          yield { type: "text", text: "After help done." };
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "tool_start" && !helpWritten) {
+            helpWritten = true;
+            input.write("/help\n");
+            input.end("after help\n");
+          } else if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("inspect package\n");
+
+    // Then
+    await session;
+    expect(stdout).toContain("Tool turn done.\n");
+    expect(stdout).toContain("Interactive commands:");
+    expect(stdout).toContain("After help done.\n");
+    expect(observedContexts[1]).toEqual([
+      { role: "user", content: "inspect package" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "deferred_help_read",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          },
+        ],
+      },
+      expect.objectContaining({
+        role: "tool",
+        toolCallId: "deferred_help_read",
+      }),
+    ]);
+    expect(observedContexts[2]).toContainEqual({
+      role: "user",
+      content: "after help",
+    });
+    expect(JSON.stringify(observedContexts)).not.toContain("/help");
   });
 
   test(`Given queued input exists before a deferred compact command,

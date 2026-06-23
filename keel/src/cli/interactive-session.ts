@@ -133,22 +133,57 @@ interface LineWaiter {
   readonly resolve: (line: string | null) => void;
 }
 
+interface HelpCommand {
+  readonly kind: "help";
+}
+
 interface ManualCompactCommand {
+  readonly kind: "compact";
   readonly focusInstruction?: string;
 }
 
-function parseManualCompactCommand(
+type InteractiveCommand = HelpCommand | ManualCompactCommand;
+
+function formatInteractiveHelp(): string {
+  return [
+    "Interactive commands:",
+    "  /help              Show this help.",
+    "  /compact [focus]   Summarize older conversation context with optional focus.",
+    "",
+    "Session commands:",
+    "  keel sessions",
+    "      List saved interactive sessions.",
+    "  keel --resume <id>",
+    "      Resume a saved interactive session.",
+    "  keel --resume <id> --fork-points",
+    "      List restored user-message fork points.",
+    "  keel sessions fork <source-id> <target-id> [--before-user <n>]",
+    "      Fork a saved session into a new session.",
+    "",
+    "Controls:",
+    "  Ctrl-D             Exit when input closes.",
+    "  Ctrl-C             Interrupt the active turn or exit while idle.",
+    "",
+  ].join("\n");
+}
+
+function parseInteractiveCommand(
   userMessage: string,
-): ManualCompactCommand | null {
-  const match = /^\/compact(?:\s+(.*))?$/u.exec(userMessage.trim());
+): InteractiveCommand | null {
+  const trimmed = userMessage.trim();
+  if (trimmed === "/help") {
+    return { kind: "help" };
+  }
+
+  const match = /^\/compact(?:\s+(.*))?$/u.exec(trimmed);
   if (match === null) {
     return null;
   }
   const focusInstruction = match[1]?.trim();
   if (focusInstruction === undefined || focusInstruction === "") {
-    return {};
+    return { kind: "compact" };
   }
-  return { focusInstruction };
+  return { kind: "compact", focusInstruction };
 }
 
 function formatManualCompactionFailure(error: unknown): string {
@@ -660,8 +695,13 @@ export async function runInteractiveSession(
         consumeQueuedInputLines([rawInput]);
         continue;
       }
-      const manualCompactCommand = parseManualCompactCommand(rawLine);
-      if (manualCompactCommand !== null) {
+      const interactiveCommand = parseInteractiveCommand(rawLine);
+      if (interactiveCommand?.kind === "help") {
+        options.writeStdout(formatInteractiveHelp());
+        consumeQueuedInputLines([rawInput]);
+        continue;
+      }
+      if (interactiveCommand?.kind === "compact") {
         if (messages.length === 0 || resolved === null) {
           options.writeStderr(
             "Context compaction skipped: no conversation history to compact.\n",
@@ -674,7 +714,7 @@ export async function runInteractiveSession(
         let compactCost: CostReport | undefined;
         try {
           compactCost = await executeManualCompaction({
-            command: manualCompactCommand,
+            command: interactiveCommand,
             resolved,
             messages,
             systemPrompt,
@@ -745,8 +785,7 @@ export async function runInteractiveSession(
               return [];
             }
             const firstCommandIndex = queuedLines.findIndex(
-              (queuedLine) =>
-                parseManualCompactCommand(queuedLine.line) !== null,
+              (queuedLine) => parseInteractiveCommand(queuedLine.line) !== null,
             );
             const injectableLines =
               firstCommandIndex < 0

@@ -145,6 +145,39 @@ describe("CLI Text Reply", () => {
   });
 
   test(`Given user starts an interactive session,
+    When user enters /help,
+    Then the CLI prints local interactive help`, async () => {
+    // Given
+    const { child, result } = runCliProcess(
+      [],
+      { KEEL_FORCE_INTERACTIVE: "1" },
+      { stdin: "pipe" },
+    );
+
+    // When
+    child.stdin?.write("/help\n");
+    child.stdin?.end();
+
+    // Then
+    try {
+      const exit = await withTimeout(
+        result,
+        5000,
+        "interactive CLI did not finish after stdin closed",
+      );
+      expect(exit.exitCode).toBe(0);
+      expect(exit.stderr).toBe("");
+      expect(exit.stdout).toContain("Interactive commands:");
+      expect(exit.stdout).toContain("/help");
+      expect(exit.stdout).toContain("/compact [focus]");
+      expect(exit.stdout).toContain("keel sessions");
+      expect(exit.stdout).toContain("keel sessions fork");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
+  test(`Given user starts an interactive session,
     When user sends two related messages,
     Then the second answer uses context from the first`, async () => {
     // Given
