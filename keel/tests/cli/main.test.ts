@@ -3294,6 +3294,127 @@ describe("CLI Main", () => {
     }
   });
 
+  test(`Given a named interactive session is resumed before approving bash,
+    When the user approves a bash command for the resumed session,
+    Then the resumed CLI run persists that approval grant`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-bash-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const command =
+      "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
+    await writeSessionLedger({
+      home,
+      id: "resumed-bash-new-grant",
+      workspace: ledgerWorkspace,
+      createdAt: "1970-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("1970-01-01T00:00:00.001Z", [
+          { role: "user", content: "remember alpha" },
+          { role: "assistant", content: "Remembered alpha.", toolCalls: [] },
+        ]),
+      ],
+    });
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      req.resume();
+      requestCount++;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      if (requestCount === 1) {
+        res.write(sseToolCall("call_bash_resumed", "bash", { command }));
+        res.write(sseToolFinish());
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
+      }
+      res.end(sseTextReplyWithUsage("Resumed bash done."));
+    });
+    await listen(server);
+
+    const input = new PassThrough();
+    Object.defineProperty(input, "isTTY", { value: true });
+    let approvalPrompts = 0;
+    let resolveApprovalPrompt: () => void = () => {};
+    const approvalPrompt = new Promise<void>((resolve) => {
+      resolveApprovalPrompt = resolve;
+    });
+    const fixture = createRuntime(
+      ["--resume", "resumed-bash-new-grant", "--bash-policy", "ask"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_HOME: home,
+        },
+        input,
+        onStderr: (text) => {
+          if (text.includes("Approve bash command")) {
+            approvalPrompts++;
+            resolveApprovalPrompt();
+          }
+        },
+      },
+    );
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      input.write("run bash after resume\n");
+      await withTimeout(
+        approvalPrompt,
+        5000,
+        "resumed bash approval prompt was not shown",
+      );
+      input.write("s\n");
+      input.end();
+      const exitCode = await withTimeout(
+        run,
+        5000,
+        "resumed bash approval run did not finish",
+      );
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(approvalPrompts).toBe(1);
+      expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("x");
+      expect(fixture.stdout()).toBe("Resumed bash done.\n");
+      const ledgerLines = (
+        await readFile(
+          join(home, "sessions", "resumed-bash-new-grant", "ledger.jsonl"),
+          "utf8",
+        )
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerLines).toContainEqual({
+        schemaVersion: 1,
+        type: "bash_approval_granted",
+        timestamp: "1970-01-01T00:00:00.000Z",
+        grant: {
+          type: "exact",
+          cwd: workspace,
+          command,
+        },
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a named session has queued input from an interrupted process,
     When the user resumes with no new stdin,
     Then the queued input runs once and is marked consumed`, async () => {
