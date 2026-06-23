@@ -3639,6 +3639,159 @@ describe("CLI Main", () => {
   });
 
   test(`Given a named session has multiple completed prompts,
+    When the user creates a fork with the sessions command,
+    Then the CLI creates an independent target without starting an agent`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sourceInput = new PassThrough();
+    sourceInput.end("remember alpha\nremember beta\n");
+    const sourceRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: sourceInput,
+    });
+    const forkRun = createRuntime(
+      ["sessions", "fork", "source", "target", "--before-user=2"],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "deepseek",
+          KEEL_HOME: home,
+        },
+      },
+    );
+    const listRun = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      const sourceExitCode = await runCliMain(sourceRun.runtime);
+
+      // When
+      const forkExitCode = await runCliMain(forkRun.runtime);
+      const listExitCode = await runCliMain(listRun.runtime);
+
+      // Then
+      expect(sourceExitCode).toBe(0);
+      expect(forkExitCode).toBe(0);
+      expect(forkRun.stdout()).toBe(
+        [
+          'Forked session "source" to "target" before restored user message 2.',
+          "resume: keel --resume target",
+          "",
+        ].join("\n"),
+      );
+      expect(forkRun.stderr()).toBe("");
+      expect(listExitCode).toBe(0);
+      expect(listRun.stdout()).toContain("target  updated ");
+      expect(listRun.stdout()).toContain("   forked from: source\n");
+      const targetLedgerLines = (
+        await readFile(join(home, "sessions", "target", "ledger.jsonl"), "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(targetLedgerLines[0]).toMatchObject({
+        type: "session",
+        id: "target",
+        forkedFrom: "source",
+      });
+      const forkedHistory = targetLedgerLines.find(
+        (line) => line.type === "append",
+      );
+      expect(forkedHistory).toMatchObject({
+        type: "append",
+        messages: [
+          { role: "user", content: "remember alpha" },
+          { role: "assistant", content: "Remembered: remember alpha" },
+        ],
+      });
+      expect(JSON.stringify(forkedHistory)).not.toContain("remember beta");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named session has completed history,
+    When the user creates a full fork with the sessions command,
+    Then the CLI copies the restored history and prints the resume command`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "source",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:01.000Z", [
+          { role: "user", content: "remember alpha" },
+          {
+            role: "assistant",
+            content: "Remembered: remember alpha",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    const forkRun = createRuntime(["sessions", "fork", "source", "target"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "deepseek",
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const forkExitCode = await runCliMain(forkRun.runtime);
+
+      // Then
+      expect(forkExitCode).toBe(0);
+      expect(forkRun.stdout()).toBe(
+        [
+          'Forked session "source" to "target".',
+          "resume: keel --resume target",
+          "",
+        ].join("\n"),
+      );
+      expect(forkRun.stderr()).toBe("");
+      const targetLedgerLines = (
+        await readFile(join(home, "sessions", "target", "ledger.jsonl"), "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(targetLedgerLines[0]).toMatchObject({
+        type: "session",
+        id: "target",
+        forkedFrom: "source",
+      });
+      expect(
+        targetLedgerLines.find((line) => line.type === "append"),
+      ).toMatchObject({
+        messages: [
+          { role: "user", content: "remember alpha" },
+          { role: "assistant", content: "Remembered: remember alpha" },
+        ],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named session has multiple completed prompts,
     When the user lists fork points for that session,
     Then the CLI shows the restored user message numbers and matching fork commands`, async () => {
     // Given
@@ -3677,9 +3830,9 @@ describe("CLI Main", () => {
         [
           'Fork points for session "source":',
           "1. remember alpha",
-          "   use: keel --resume source --fork <new-id> --fork-before-user 1",
+          "   use: keel sessions fork source <new-id> --before-user 1",
           `2. ${longPromptPreview}`,
-          "   use: keel --resume source --fork <new-id> --fork-before-user 2",
+          "   use: keel sessions fork source <new-id> --before-user 2",
           "",
         ].join("\n"),
       );
@@ -3775,6 +3928,90 @@ describe("CLI Main", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe('Error: unknown sessions option "--all"\n');
+  });
+
+  test(`Given sessions fork is missing the target session id,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime(["sessions", "fork", "source"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: sessions fork requires <source-id> <target-id>.\n",
+    );
+  });
+
+  test(`Given sessions fork receives an invalid fork point,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "sessions",
+      "fork",
+      "source",
+      "target",
+      "--before-user=0",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --before-user must be a positive integer.\n",
+    );
+  });
+
+  test(`Given sessions fork is passed a fork point flag without a value,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "sessions",
+      "fork",
+      "source",
+      "target",
+      "--before-user",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --before-user requires a value.\n");
+  });
+
+  test(`Given sessions fork receives an unsupported option,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "sessions",
+      "fork",
+      "source",
+      "target",
+      "--all",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      'Error: unknown sessions fork option "--all"\n',
+    );
   });
 
   test(`Given persisted sessions exist across workspaces,
@@ -3996,53 +4233,53 @@ describe("CLI Main", () => {
           `   preview: ${longPromptPreview}`,
           "   resume: keel --resume long-preview",
           "   fork-points: keel --resume long-preview --fork-points",
-          "   fork: keel --resume long-preview --fork <new-id>",
+          "   fork: keel sessions fork long-preview <new-id>",
           "forked  updated 2026-01-02T00:00:05.000Z",
           "   forked from: older",
           "   preview: remember beta with spacing",
           "   resume: keel --resume forked",
           "   fork-points: keel --resume forked --fork-points",
-          "   fork: keel --resume forked --fork <new-id>",
+          "   fork: keel sessions fork forked <new-id>",
           "checkpoint-only  updated 2026-01-01T18:30:02.000Z",
           "   preview: checkpoint: Only checkpoint summary remains.",
           "   resume: keel --resume checkpoint-only",
           "   fork-points: keel --resume checkpoint-only --fork-points",
-          "   fork: keel --resume checkpoint-only --fork <new-id>",
+          "   fork: keel sessions fork checkpoint-only <new-id>",
           "compacted  updated 2026-01-01T18:00:02.000Z",
           "   preview: remember compacted",
           "   resume: keel --resume compacted",
           "   fork-points: keel --resume compacted --fork-points",
-          "   fork: keel --resume compacted --fork <new-id>",
+          "   fork: keel sessions fork compacted <new-id>",
           "snapshotted  updated 2026-01-01T17:00:02.000Z",
           "   preview: remember snapshot",
           "   resume: keel --resume snapshotted",
           "   fork-points: keel --resume snapshotted --fork-points",
-          "   fork: keel --resume snapshotted --fork <new-id>",
+          "   fork: keel sessions fork snapshotted <new-id>",
           "queued  updated 2026-01-01T16:00:02.000Z",
           "   preview: (no restored user messages)",
           "   resume: keel --resume queued",
           "   fork-points: keel --resume queued --fork-points",
-          "   fork: keel --resume queued --fork <new-id>",
+          "   fork: keel sessions fork queued <new-id>",
           "tie-a  updated 2026-01-01T15:00:01.000Z",
           "   preview: remember tie a",
           "   resume: keel --resume tie-a",
           "   fork-points: keel --resume tie-a --fork-points",
-          "   fork: keel --resume tie-a --fork <new-id>",
+          "   fork: keel sessions fork tie-a <new-id>",
           "tie-b  updated 2026-01-01T15:00:01.000Z",
           "   preview: remember tie b",
           "   resume: keel --resume tie-b",
           "   fork-points: keel --resume tie-b --fork-points",
-          "   fork: keel --resume tie-b --fork <new-id>",
+          "   fork: keel sessions fork tie-b <new-id>",
           "empty  updated 2026-01-01T12:00:00.000Z",
           "   preview: (no restored user messages)",
           "   resume: keel --resume empty",
           "   fork-points: keel --resume empty --fork-points",
-          "   fork: keel --resume empty --fork <new-id>",
+          "   fork: keel sessions fork empty <new-id>",
           "older  updated 2026-01-01T00:00:06.000Z",
           "   preview: remember alpha",
           "   resume: keel --resume older",
           "   fork-points: keel --resume older --fork-points",
-          "   fork: keel --resume older --fork <new-id>",
+          "   fork: keel sessions fork older <new-id>",
           "",
         ].join("\n"),
       );
@@ -4114,12 +4351,12 @@ describe("CLI Main", () => {
           `   preview: ${malformedCheckpointPreview}`,
           "   resume: keel --resume malformed-checkpoint",
           "   fork-points: keel --resume malformed-checkpoint --fork-points",
-          "   fork: keel --resume malformed-checkpoint --fork <new-id>",
+          "   fork: keel sessions fork malformed-checkpoint <new-id>",
           "assistant-only  updated 2026-01-01T17:00:01.000Z",
           "   preview: (no restored user messages)",
           "   resume: keel --resume assistant-only",
           "   fork-points: keel --resume assistant-only --fork-points",
-          "   fork: keel --resume assistant-only --fork <new-id>",
+          "   fork: keel sessions fork assistant-only <new-id>",
           "",
         ].join("\n"),
       );
@@ -4221,6 +4458,58 @@ describe("CLI Main", () => {
       expect(fixture.stderr()).toContain(
         `Error: cannot list sessions at ${sessionsPath}:`,
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a sessions fork point is beyond the restored user messages,
+    When the user forks a source session at that point,
+    Then the CLI fails with the sessions fork option name before creating the target ledger`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "source",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:01.000Z", [
+          { role: "user", content: "remember alpha" },
+          {
+            role: "assistant",
+            content: "Remembered: remember alpha",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    const forkRun = createRuntime(
+      ["sessions", "fork", "source", "target", "--before-user", "2"],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+      },
+    );
+
+    try {
+      // When
+      const forkExitCode = await runCliMain(forkRun.runtime);
+
+      // Then
+      expect(forkExitCode).toBe(1);
+      expect(forkRun.stdout()).toBe("");
+      expect(forkRun.stderr()).toBe(
+        'Error: cannot fork session "target": --before-user 2 exceeds restored user message count 1.\n',
+      );
+      await expect(
+        access(join(home, "sessions", "target", "ledger.jsonl")),
+      ).rejects.toThrow();
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
