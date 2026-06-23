@@ -34,9 +34,13 @@ import {
   createSessionStore,
   ensureSessionCanBeCreated,
   forkSessionStore,
+  listSessionCatalog,
   persistSessionMessages,
   persistSessionQueuedInput,
   resumeSessionStore,
+  type SessionCatalog,
+  type SessionCatalogEntry,
+  type SessionCatalogWarning,
   type SessionLock,
   type SessionQueuedInput,
   type SessionState,
@@ -106,6 +110,43 @@ function formatSessionForkPoints(session: SessionState): string {
     return `No restored user messages in session "${session.id}".\n`;
   }
   return `${lines.join("\n")}\n`;
+}
+
+function sessionCatalogEntryLines(
+  entry: SessionCatalogEntry,
+): readonly string[] {
+  return [
+    `${entry.id}  updated ${entry.updatedAt}`,
+    ...(entry.forkedFrom !== undefined
+      ? [`   forked from: ${entry.forkedFrom}`]
+      : []),
+    `   preview: ${entry.preview}`,
+    `   resume: keel --resume ${entry.id}`,
+    `   fork-points: keel --resume ${entry.id} --fork-points`,
+    `   fork: keel --resume ${entry.id} --fork <new-id>`,
+  ];
+}
+
+function formatSessionCatalog(catalog: SessionCatalog): string {
+  if (catalog.sessions.length === 0) {
+    return `No sessions for workspace ${catalog.workspace}.\n`;
+  }
+  const lines = [`Sessions for workspace ${catalog.workspace}:`];
+  for (const session of catalog.sessions) {
+    lines.push(...sessionCatalogEntryLines(session));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function formatSessionCatalogWarnings(
+  warnings: readonly SessionCatalogWarning[],
+): string {
+  return warnings
+    .map(
+      (warning) =>
+        `Warning: skipped session "${warning.sessionId}": ${warning.message}\n`,
+    )
+    .join("");
 }
 
 export async function runCliMain(runtime: CliRuntime): Promise<number> {
@@ -180,6 +221,25 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
       case "blocked":
         runtime.writeStderr(`${result.message}\n`);
         return 1;
+    }
+  }
+
+  if (cliArgs.command === "sessions") {
+    try {
+      const catalog = listSessionCatalog({
+        workspace: runtime.cwd(),
+        runtime,
+      });
+      runtime.writeStdout(formatSessionCatalog(catalog));
+      runtime.writeStderr(formatSessionCatalogWarnings(catalog.warnings));
+      return 0;
+    } catch (error) {
+      /* v8 ignore next 3: listSessionCatalog converts supported catalog failures to SessionStoreError. */
+      if (!(error instanceof SessionStoreError)) {
+        throw error;
+      }
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
     }
   }
 

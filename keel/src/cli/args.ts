@@ -39,6 +39,7 @@ interface DoctorCliArgs {
 export type CliArgs =
   | DoctorCliArgs
   | { readonly command: "undo" }
+  | { readonly command: "sessions" }
   | EvalCliArgs
   | {
       readonly command: "run";
@@ -72,6 +73,7 @@ export const USAGE = [
   "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] <message>",
   "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id> [--fork-points | --fork <new-id> [--fork-before-user <n>]]]",
   "       keel --doctor [--offline] [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
+  "       keel sessions",
   "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
   "       keel eval compare --base <old.jsonl> --head <new.jsonl>",
   "       keel /undo",
@@ -407,6 +409,14 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
 
   if (args[0] === "/undo") {
     return parseOk({ command: "undo" });
+  }
+
+  if (args[0] === "sessions") {
+    const extraArg = args[1];
+    if (extraArg !== undefined) {
+      return parseError(`Error: unknown sessions option "${extraArg}"`);
+    }
+    return parseOk({ command: "sessions" });
   }
 
   if (args[0] === "eval") {
