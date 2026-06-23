@@ -78,6 +78,36 @@ function oneShotBashPermissionPolicy(
   return undefined;
 }
 
+const FORK_POINT_PREVIEW_MAX_LENGTH = 120;
+
+function forkPointPreview(content: string): string {
+  const normalized = content.replace(/\s+/gu, " ").trim();
+  if (normalized.length <= FORK_POINT_PREVIEW_MAX_LENGTH) {
+    return normalized;
+  }
+  return `${normalized.slice(0, FORK_POINT_PREVIEW_MAX_LENGTH - 3)}...`;
+}
+
+function formatSessionForkPoints(session: SessionState): string {
+  const lines = [`Fork points for session "${session.id}":`];
+  let userMessageCount = 0;
+  for (const message of session.messages) {
+    if (message.role !== "user") {
+      continue;
+    }
+    userMessageCount += 1;
+    lines.push(`${userMessageCount}. ${forkPointPreview(message.content)}`);
+    lines.push(
+      `   use: keel --resume ${session.id} --fork <new-id> --fork-before-user ${userMessageCount}`,
+    );
+  }
+
+  if (userMessageCount === 0) {
+    return `No restored user messages in session "${session.id}".\n`;
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 export async function runCliMain(runtime: CliRuntime): Promise<number> {
   let exitCode = 0;
   const parsedCliArgs = parseCliArgs(runtime.args);
@@ -154,6 +184,24 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
   }
 
   const userMessage = cliArgs.userMessage;
+  if (cliArgs.forkPoints && cliArgs.resumeSessionId !== undefined) {
+    try {
+      const session = resumeSessionStore({
+        sessionId: cliArgs.resumeSessionId,
+        workspace: runtime.cwd(),
+        runtime,
+      });
+      runtime.writeStdout(formatSessionForkPoints(session));
+      return 0;
+    } catch (error) {
+      /* v8 ignore next 3: resumeSessionStore reports supported fork-point failures as SessionStoreError. */
+      if (!(error instanceof SessionStoreError)) {
+        throw error;
+      }
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+  }
   if (
     userMessage !== undefined &&
     (cliArgs.sessionId !== undefined || cliArgs.resumeSessionId !== undefined)
