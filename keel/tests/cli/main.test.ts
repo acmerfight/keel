@@ -691,6 +691,146 @@ describe("CLI Main", () => {
     );
   });
 
+  test(`Given fork-points is passed without a source session,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime(["--fork-points"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-points requires --resume <id>.\n",
+    );
+  });
+
+  test(`Given fork-points is combined with a fork target,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork-points",
+      "--fork",
+      "target",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-points cannot be combined with --fork.\n",
+    );
+  });
+
+  test(`Given fork-points is combined with a fork point,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork-points",
+      "--fork-before-user",
+      "1",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-points cannot be combined with --fork-before-user.\n",
+    );
+  });
+
+  test(`Given fork-points is combined with a prompt,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork-points",
+      "hello",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-points cannot be combined with a message.\n",
+    );
+  });
+
+  test(`Given fork-points is combined with transcript output,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork-points",
+      "--transcript",
+      "out.jsonl",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-points cannot be combined with --transcript.\n",
+    );
+  });
+
+  test(`Given fork-points names a missing source session,
+    When the CLI main reads fork points,
+    Then it reports the resume error without starting interactive mode`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const fixture = createRuntime(["--resume", "missing", "--fork-points"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain(
+        'Error: cannot resume session "missing": session ledger not found at ',
+      );
+      expect(fixture.stderr()).toContain(
+        join(home, "sessions", "missing", "ledger.jsonl"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given session and resume flags are combined,
     When the CLI main parses the request,
     Then it returns a validation error before starting interactive mode`, async () => {
@@ -3097,6 +3237,100 @@ describe("CLI Main", () => {
         ],
       });
       expect(JSON.stringify(forkedHistory)).not.toContain("remember beta");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named session has multiple completed prompts,
+    When the user lists fork points for that session,
+    Then the CLI shows the restored user message numbers and matching fork commands`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const longPrompt = `remember ${"0123456789".repeat(14)}`;
+    const longPromptPreview = `${longPrompt.slice(0, 117)}...`;
+    const sourceInput = new PassThrough();
+    sourceInput.end(`remember alpha\n${longPrompt}\n`);
+    const sourceRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: sourceInput,
+    });
+    const listRun = createRuntime(["--resume", "source", "--fork-points"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      const sourceExitCode = await runCliMain(sourceRun.runtime);
+
+      // When
+      const listExitCode = await runCliMain(listRun.runtime);
+
+      // Then
+      expect(sourceExitCode).toBe(0);
+      expect(listExitCode).toBe(0);
+      expect(listRun.stdout()).toBe(
+        [
+          'Fork points for session "source":',
+          "1. remember alpha",
+          "   use: keel --resume source --fork <new-id> --fork-before-user 1",
+          `2. ${longPromptPreview}`,
+          "   use: keel --resume source --fork <new-id> --fork-before-user 2",
+          "",
+        ].join("\n"),
+      );
+      expect(listRun.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named session has no restored user messages,
+    When the user lists fork points for that session,
+    Then the CLI reports that no fork points are available`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sessionDir = join(home, "sessions", "empty");
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      join(sessionDir, "ledger.jsonl"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        type: "session",
+        id: "empty",
+        createdAt: "1970-01-01T00:00:00.000Z",
+        workspace: await realpath(workspace),
+      })}\n`,
+      "utf8",
+    );
+    const listRun = createRuntime(["--resume", "empty", "--fork-points"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const listExitCode = await runCliMain(listRun.runtime);
+
+      // Then
+      expect(listExitCode).toBe(0);
+      expect(listRun.stdout()).toBe(
+        'No restored user messages in session "empty".\n',
+      );
+      expect(listRun.stderr()).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
