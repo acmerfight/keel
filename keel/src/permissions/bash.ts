@@ -56,7 +56,6 @@ const PREFIX_APPROVAL_CANDIDATES: readonly (readonly string[])[] = [
   ["pnpm", "test"],
   ["npm", "test"],
   ["git", "status"],
-  ["git", "diff"],
 ];
 
 function parseSimpleCommandArgv(command: string): readonly string[] | null {

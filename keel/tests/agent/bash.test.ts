@@ -630,6 +630,40 @@ describe("Bash Commands", () => {
     }
   });
 
+  test(`Given git diff can read absolute paths outside the workspace,
+    When a prompt incorrectly approves it as a command family,
+    Then the command is denied without offering a family`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const outsideSecret = join(tmpdir(), "keel-outside-secret.txt");
+    const outsideEmpty = join(tmpdir(), "keel-outside-empty.txt");
+    let offeredFamily = false;
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        offeredFamily = request.prefixApproval !== undefined;
+        return { type: "allow", scope: "session-prefix" };
+      },
+    });
+
+    try {
+      // When
+      const decision = await bashPermission.review({
+        command: `git diff --no-index ${outsideSecret} ${outsideEmpty}`,
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(offeredFamily).toBe(false);
+      expect(decision).toEqual({
+        type: "deny",
+        message: "No command family approval is available.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a simple shell command has no approved command family,
     When a prompt incorrectly approves a command family,
     Then the command is denied without offering a family`, async () => {
