@@ -36,10 +36,25 @@ interface DoctorCliArgs {
   readonly model?: string;
 }
 
+interface SessionsListCliArgs {
+  readonly command: "sessions";
+  readonly mode: "list";
+}
+
+interface SessionsForkCliArgs {
+  readonly command: "sessions";
+  readonly mode: "fork";
+  readonly sourceSessionId: string;
+  readonly targetSessionId: string;
+  readonly forkBeforeUser?: number;
+}
+
+type SessionsCliArgs = SessionsListCliArgs | SessionsForkCliArgs;
+
 export type CliArgs =
   | DoctorCliArgs
   | { readonly command: "undo" }
-  | { readonly command: "sessions" }
+  | SessionsCliArgs
   | EvalCliArgs
   | {
       readonly command: "run";
@@ -74,6 +89,7 @@ export const USAGE = [
   "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id> [--fork-points | --fork <new-id> [--fork-before-user <n>]]]",
   "       keel --doctor [--offline] [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
   "       keel sessions",
+  "       keel sessions fork <source-id> <target-id> [--before-user <n>]",
   "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
   "       keel eval compare --base <old.jsonl> --head <new.jsonl>",
   "       keel /undo",
@@ -82,8 +98,9 @@ export const USAGE = [
   "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
   "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
   "--transcript writes provider-visible run messages as schema-versioned JSONL.",
-  "--fork-points lists restored user message numbers for --fork-before-user; it requires --resume.",
+  "--fork-points lists restored user message numbers for sessions fork --before-user; it requires --resume.",
   "--fork-before-user cuts a fork before the 1-based restored user message number; it requires --resume and --fork.",
+  "--before-user cuts a sessions fork before the 1-based restored user message number.",
   "--transcript-dir writes one provider-visible transcript JSONL file per eval trial.",
   "--provider and --model override provider env for the current run.",
   "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, DEEPSEEK_MODEL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
@@ -156,6 +173,16 @@ function parseForkBeforeUser(raw: string | undefined): ParseResult<number> {
   return parseOk(result.data);
 }
 
+function parseBeforeUser(raw: string | undefined): ParseResult<number> {
+  const parsedValue = requireOptionValue("--before-user", raw);
+  if (!parsedValue.ok) return parsedValue;
+  const result = forkBeforeUserSchema.safeParse(parsedValue.value);
+  if (!result.success) {
+    return parseError("Error: --before-user must be a positive integer.");
+  }
+  return parseOk(result.data);
+}
+
 function requireOptionValue(
   option: string,
   raw: string | undefined,
@@ -224,6 +251,70 @@ function parseEvalCompareArgs(
     baseFile,
     headFile,
   });
+}
+
+function parseSessionsForkArgs(
+  args: readonly string[],
+): ParseResult<SessionsForkCliArgs> {
+  const sourceSessionId = args[0];
+  const targetSessionId = args[1];
+  if (
+    sourceSessionId === undefined ||
+    sourceSessionId === "" ||
+    targetSessionId === undefined ||
+    targetSessionId === ""
+  ) {
+    return parseError("Error: sessions fork requires <source-id> <target-id>.");
+  }
+
+  let forkBeforeUser: number | undefined;
+  const beforeUserPrefix = "--before-user=";
+  const optionArgs = args.slice(2);
+  let skipNext = false;
+  for (const [index, arg] of optionArgs.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+
+    if (arg === "--before-user") {
+      const parsed = parseBeforeUser(optionArgs[index + 1]);
+      if (!parsed.ok) return parsed;
+      forkBeforeUser = parsed.value;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(beforeUserPrefix)) {
+      const parsed = parseBeforeUser(arg.slice(beforeUserPrefix.length));
+      if (!parsed.ok) return parsed;
+      forkBeforeUser = parsed.value;
+      continue;
+    }
+
+    return parseError(`Error: unknown sessions fork option "${arg}"`);
+  }
+
+  return parseOk({
+    command: "sessions",
+    mode: "fork",
+    sourceSessionId,
+    targetSessionId,
+    ...(forkBeforeUser !== undefined ? { forkBeforeUser } : {}),
+  });
+}
+
+function parseSessionsArgs(
+  args: readonly string[],
+): ParseResult<SessionsCliArgs> {
+  const subcommand = args[0];
+  if (subcommand === undefined) {
+    return parseOk({ command: "sessions", mode: "list" });
+  }
+  if (subcommand === "fork") {
+    return parseSessionsForkArgs(args.slice(1));
+  }
+  return parseError(`Error: unknown sessions option "${subcommand}"`);
 }
 
 function parseEvalArgs(args: readonly string[]): ParseResult<EvalCliArgs> {
@@ -412,11 +503,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   }
 
   if (args[0] === "sessions") {
-    const extraArg = args[1];
-    if (extraArg !== undefined) {
-      return parseError(`Error: unknown sessions option "${extraArg}"`);
-    }
-    return parseOk({ command: "sessions" });
+    return parseSessionsArgs(args.slice(1));
   }
 
   if (args[0] === "eval") {
