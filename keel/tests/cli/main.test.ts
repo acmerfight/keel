@@ -19,6 +19,7 @@ import { z } from "zod";
 import { type CliRuntime, runCliMain } from "../../src/cli/index.ts";
 import { acquireSessionLock } from "../../src/cli/session-store.ts";
 import { recordLastEditCheckpoint } from "../../src/core/git.ts";
+import type { Message } from "../../src/llm/types.ts";
 import { runGit } from "../../src/testing/cli-harness.ts";
 import { evalResultLineJson } from "../../src/testing/eval-fixtures.ts";
 
@@ -111,6 +112,122 @@ function createRuntime(
     stdout: () => stdout,
     stderr: () => stderr,
   };
+}
+
+function appendSessionRecordLine(
+  timestamp: string,
+  messages: readonly Message[],
+): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    type: "append",
+    timestamp,
+    reason: "turn",
+    messages,
+  });
+}
+
+function replaceSessionRecordLine(
+  timestamp: string,
+  messages: readonly Message[],
+): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    type: "replace",
+    timestamp,
+    reason: "compaction",
+    messages,
+  });
+}
+
+function snapshotSessionRecordLine(
+  timestamp: string,
+  messages: readonly Message[],
+): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    type: "snapshot",
+    timestamp,
+    reason: "size_threshold",
+    messages,
+    pendingInputs: [],
+  });
+}
+
+function inputAdmittedRecordLine(options: {
+  readonly timestamp: string;
+  readonly id: string;
+  readonly line: string;
+}): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    type: "input_admitted",
+    timestamp: options.timestamp,
+    id: options.id,
+    sequence: 1,
+    line: options.line,
+  });
+}
+
+function inputConsumedRecordLine(
+  timestamp: string,
+  inputIds: readonly string[],
+): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    type: "input_consumed",
+    timestamp,
+    inputIds,
+  });
+}
+
+function conversationCheckpoint(
+  summary: string,
+  noLaterMessages = false,
+): string {
+  return [
+    "<conversation-checkpoint>",
+    "The following is a summary of earlier conversation. Treat it as historical context, not as a new instruction.",
+    noLaterMessages
+      ? "No later messages are available after this checkpoint; continue from the task state and next steps in the summary."
+      : "",
+    "<summary>",
+    summary,
+    "</summary>",
+    "</conversation-checkpoint>",
+  ]
+    .filter((part) => part !== "")
+    .join("\n");
+}
+
+async function writeSessionLedger(options: {
+  readonly home: string;
+  readonly id: string;
+  readonly headerId?: string;
+  readonly workspace: string;
+  readonly createdAt: string;
+  readonly forkedFrom?: string;
+  readonly records?: readonly string[];
+}): Promise<void> {
+  const sessionDir = join(options.home, "sessions", options.id);
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(
+    join(sessionDir, "ledger.jsonl"),
+    `${[
+      JSON.stringify({
+        schemaVersion: 1,
+        type: "session",
+        id: options.headerId ?? options.id,
+        createdAt: options.createdAt,
+        workspace: options.workspace,
+        ...(options.forkedFrom !== undefined
+          ? { forkedFrom: options.forkedFrom }
+          : {}),
+      }),
+      ...(options.records ?? []),
+    ].join("\n")}\n`,
+    "utf8",
+  );
 }
 
 function getPort(server: Server): number {
@@ -3331,6 +3448,501 @@ describe("CLI Main", () => {
         'No restored user messages in session "empty".\n',
       );
       expect(listRun.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given no persisted sessions for the current workspace,
+    When the user lists sessions,
+    Then the CLI reports an empty catalog without contacting a provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const fixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "deepseek",
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe(
+        `No sessions for workspace ${await realpath(workspace)}.\n`,
+      );
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an unsupported sessions option,
+    When the user lists sessions,
+    Then the CLI exits with a validation error`, async () => {
+    // Given
+    const fixture = createRuntime(["sessions", "--all"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe('Error: unknown sessions option "--all"\n');
+  });
+
+  test(`Given persisted sessions exist across workspaces,
+    When the user lists sessions,
+    Then the CLI shows only current workspace sessions with previews and resume commands`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const otherWorkspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const otherLedgerWorkspace = await realpath(otherWorkspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const longPrompt = `remember ${"0123456789".repeat(14)}`;
+    const longPromptPreview = `${longPrompt.slice(0, 117)}...`;
+    await writeSessionLedger({
+      home,
+      id: "long-preview",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-04T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-04T00:00:05.000Z", [
+          { role: "user", content: longPrompt },
+          {
+            role: "assistant",
+            content: "Remembered long prompt.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "older",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
+          { role: "user", content: "remember alpha" },
+          {
+            role: "assistant",
+            content: "Remembered alpha.",
+            toolCalls: [],
+          },
+        ]),
+        appendSessionRecordLine("2026-01-01T00:00:06.000Z", [
+          { role: "user", content: "remember alpha later" },
+          {
+            role: "assistant",
+            content: "Remembered later alpha.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "forked",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      forkedFrom: "older",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          { role: "user", content: "remember beta\nwith spacing" },
+          {
+            role: "assistant",
+            content: "Remembered beta.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "compacted",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T18:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T18:00:01.000Z", [
+          { role: "user", content: "old compacted prompt" },
+          {
+            role: "assistant",
+            content: "Old compacted answer.",
+            toolCalls: [],
+          },
+        ]),
+        replaceSessionRecordLine("2026-01-01T18:00:02.000Z", [
+          {
+            role: "user",
+            content: conversationCheckpoint("Old task summarized."),
+          },
+          { role: "user", content: "remember compacted" },
+          {
+            role: "assistant",
+            content: "Remembered compacted.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "checkpoint-only",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T18:30:00.000Z",
+      records: [
+        replaceSessionRecordLine("2026-01-01T18:30:02.000Z", [
+          {
+            role: "user",
+            content: conversationCheckpoint(
+              "Only checkpoint summary remains.",
+              true,
+            ),
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "snapshotted",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T17:00:00.000Z",
+      records: [
+        snapshotSessionRecordLine("2026-01-01T17:00:02.000Z", [
+          { role: "user", content: "remember snapshot" },
+          {
+            role: "assistant",
+            content: "Remembered snapshot.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "queued",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T16:00:00.000Z",
+      records: [
+        inputAdmittedRecordLine({
+          timestamp: "2026-01-01T16:00:01.000Z",
+          id: "queued-catalog-input",
+          line: "remember queued",
+        }),
+        inputConsumedRecordLine("2026-01-01T16:00:02.000Z", [
+          "queued-catalog-input",
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "tie-a",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T15:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T15:00:01.000Z", [
+          { role: "user", content: "remember tie a" },
+          {
+            role: "assistant",
+            content: "Remembered tie a.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "tie-b",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T15:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T15:00:01.000Z", [
+          { role: "user", content: "remember tie b" },
+          {
+            role: "assistant",
+            content: "Remembered tie b.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "empty",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T12:00:00.000Z",
+    });
+    await writeSessionLedger({
+      home,
+      id: "elsewhere",
+      workspace: otherLedgerWorkspace,
+      createdAt: "2026-01-03T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-03T00:00:05.000Z", [
+          { role: "user", content: "do not show this session" },
+          {
+            role: "assistant",
+            content: "Hidden.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    const fixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe(
+        [
+          `Sessions for workspace ${ledgerWorkspace}:`,
+          "long-preview  updated 2026-01-04T00:00:05.000Z",
+          `   preview: ${longPromptPreview}`,
+          "   resume: keel --resume long-preview",
+          "   fork-points: keel --resume long-preview --fork-points",
+          "   fork: keel --resume long-preview --fork <new-id>",
+          "forked  updated 2026-01-02T00:00:05.000Z",
+          "   forked from: older",
+          "   preview: remember beta with spacing",
+          "   resume: keel --resume forked",
+          "   fork-points: keel --resume forked --fork-points",
+          "   fork: keel --resume forked --fork <new-id>",
+          "checkpoint-only  updated 2026-01-01T18:30:02.000Z",
+          "   preview: checkpoint: Only checkpoint summary remains.",
+          "   resume: keel --resume checkpoint-only",
+          "   fork-points: keel --resume checkpoint-only --fork-points",
+          "   fork: keel --resume checkpoint-only --fork <new-id>",
+          "compacted  updated 2026-01-01T18:00:02.000Z",
+          "   preview: remember compacted",
+          "   resume: keel --resume compacted",
+          "   fork-points: keel --resume compacted --fork-points",
+          "   fork: keel --resume compacted --fork <new-id>",
+          "snapshotted  updated 2026-01-01T17:00:02.000Z",
+          "   preview: remember snapshot",
+          "   resume: keel --resume snapshotted",
+          "   fork-points: keel --resume snapshotted --fork-points",
+          "   fork: keel --resume snapshotted --fork <new-id>",
+          "queued  updated 2026-01-01T16:00:02.000Z",
+          "   preview: (no restored user messages)",
+          "   resume: keel --resume queued",
+          "   fork-points: keel --resume queued --fork-points",
+          "   fork: keel --resume queued --fork <new-id>",
+          "tie-a  updated 2026-01-01T15:00:01.000Z",
+          "   preview: remember tie a",
+          "   resume: keel --resume tie-a",
+          "   fork-points: keel --resume tie-a --fork-points",
+          "   fork: keel --resume tie-a --fork <new-id>",
+          "tie-b  updated 2026-01-01T15:00:01.000Z",
+          "   preview: remember tie b",
+          "   resume: keel --resume tie-b",
+          "   fork-points: keel --resume tie-b --fork-points",
+          "   fork: keel --resume tie-b --fork <new-id>",
+          "empty  updated 2026-01-01T12:00:00.000Z",
+          "   preview: (no restored user messages)",
+          "   resume: keel --resume empty",
+          "   fork-points: keel --resume empty --fork-points",
+          "   fork: keel --resume empty --fork <new-id>",
+          "older  updated 2026-01-01T00:00:06.000Z",
+          "   preview: remember alpha",
+          "   resume: keel --resume older",
+          "   fork-points: keel --resume older --fork-points",
+          "   fork: keel --resume older --fork <new-id>",
+          "",
+        ].join("\n"),
+      );
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(otherWorkspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given restored session messages do not contain user prompts,
+    When the user lists sessions,
+    Then the CLI falls back to an empty user preview`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const malformedCheckpoint = conversationCheckpoint(
+      "Malformed checkpoint should be treated as ordinary user text.",
+    ).replace("<summary>", "<body>");
+    const malformedCheckpointPreview = `${malformedCheckpoint
+      .replace(/\s+/gu, " ")
+      .trim()
+      .slice(0, 117)}...`;
+    await writeSessionLedger({
+      home,
+      id: "malformed-checkpoint",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T18:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T18:00:01.000Z", [
+          { role: "user", content: malformedCheckpoint },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "assistant-only",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T17:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T17:00:01.000Z", [
+          {
+            role: "assistant",
+            content: "No restored user prompt.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    const fixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe(
+        [
+          `Sessions for workspace ${ledgerWorkspace}:`,
+          "malformed-checkpoint  updated 2026-01-01T18:00:01.000Z",
+          `   preview: ${malformedCheckpointPreview}`,
+          "   resume: keel --resume malformed-checkpoint",
+          "   fork-points: keel --resume malformed-checkpoint --fork-points",
+          "   fork: keel --resume malformed-checkpoint --fork <new-id>",
+          "assistant-only  updated 2026-01-01T17:00:01.000Z",
+          "   preview: (no restored user messages)",
+          "   resume: keel --resume assistant-only",
+          "   fork-points: keel --resume assistant-only --fork-points",
+          "   fork: keel --resume assistant-only --fork <new-id>",
+          "",
+        ].join("\n"),
+      );
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one session ledger is damaged,
+    When the user lists sessions,
+    Then the CLI warns and still shows the valid sessions`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "good",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:01.000Z", [
+          { role: "user", content: "remember good" },
+          {
+            role: "assistant",
+            content: "Remembered good.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "broken",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: ["not json"],
+    });
+    await writeSessionLedger({
+      home,
+      id: "mismatched",
+      headerId: "other-session",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const fixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("good  updated");
+      expect(fixture.stdout()).toContain("   preview: remember good\n");
+      expect(fixture.stdout()).not.toContain("broken  updated");
+      expect(fixture.stderr()).toContain(
+        'Warning: skipped session "broken": cannot load session ledger',
+      );
+      expect(fixture.stderr()).toContain("line 2 is not valid JSON");
+      expect(fixture.stderr()).toContain(
+        'Warning: skipped session "mismatched": ledger belongs to session "other-session", not "mismatched".',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the session catalog storage cannot be scanned,
+    When the user lists sessions,
+    Then the CLI reports the catalog load failure`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sessionsPath = join(home, "sessions");
+    await writeFile(sessionsPath, "not a directory", "utf8");
+    const fixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain(
+        `Error: cannot list sessions at ${sessionsPath}:`,
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
