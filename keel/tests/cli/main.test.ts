@@ -623,6 +623,74 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("Error: --fork requires --resume <id>.\n");
   });
 
+  test(`Given fork-before-user is passed without a value,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork",
+      "target",
+      "--fork-before-user",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-before-user requires a value.\n",
+    );
+  });
+
+  test(`Given fork-before-user is not a positive integer,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork",
+      "target",
+      "--fork-before-user=0",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-before-user must be a positive integer.\n",
+    );
+  });
+
+  test(`Given fork-before-user is passed without a fork target,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork-before-user",
+      "1",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-before-user requires --resume <id> --fork <new-id>.\n",
+    );
+  });
+
   test(`Given session and resume flags are combined,
     When the CLI main parses the request,
     Then it returns a validation error before starting interactive mode`, async () => {
@@ -2958,6 +3026,131 @@ describe("CLI Main", () => {
             line.type === "input_admitted" && line.line === "remember queued",
         ),
       ).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named session has multiple completed prompts,
+    When the user forks it before a restored user message,
+    Then the fork continues from the earlier history only`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sourceInput = new PassThrough();
+    sourceInput.end("remember alpha\nremember beta\n");
+    const sourceRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: sourceInput,
+    });
+
+    try {
+      const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const forkInput = new PassThrough();
+      forkInput.end("what did I ask you to remember?\n");
+      const forkRun = createRuntime(
+        ["--resume", "source", "--fork", "target", "--fork-before-user=2"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "fake",
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+          },
+          input: forkInput,
+        },
+      );
+
+      // When
+      const forkExitCode = await runCliMain(forkRun.runtime);
+
+      // Then
+      expect(sourceExitCode).toBe(0);
+      expect(forkExitCode).toBe(0);
+      expect(forkRun.stdout()).toBe("Earlier you said: remember alpha\n");
+      expect(forkRun.stderr()).toBe("");
+      const targetLedgerLines = (
+        await readFile(join(home, "sessions", "target", "ledger.jsonl"), "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(targetLedgerLines[0]).toMatchObject({
+        type: "session",
+        id: "target",
+        forkedFrom: "source",
+      });
+      const forkedHistory = targetLedgerLines.find(
+        (line) => line.type === "append",
+      );
+      expect(forkedHistory).toMatchObject({
+        type: "append",
+        messages: [
+          { role: "user", content: "remember alpha" },
+          { role: "assistant", content: "Remembered: remember alpha" },
+        ],
+      });
+      expect(JSON.stringify(forkedHistory)).not.toContain("remember beta");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a fork point is beyond the restored user messages,
+    When the user forks a source session at that point,
+    Then the CLI fails before creating the target ledger`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sourceInput = new PassThrough();
+    sourceInput.end("remember alpha\n");
+    const sourceRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: sourceInput,
+    });
+
+    try {
+      const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const forkInput = new PassThrough();
+      forkInput.end("what did I ask you to remember?\n");
+      const forkRun = createRuntime(
+        ["--resume", "source", "--fork", "target", "--fork-before-user", "2"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "fake",
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+          },
+          input: forkInput,
+        },
+      );
+
+      // When
+      const forkExitCode = await runCliMain(forkRun.runtime);
+
+      // Then
+      expect(sourceExitCode).toBe(0);
+      expect(forkExitCode).toBe(1);
+      expect(forkRun.stdout()).toBe("");
+      expect(forkRun.stderr()).toBe(
+        'Error: cannot fork session "target": --fork-before-user 2 exceeds restored user message count 1.\n',
+      );
+      await expect(
+        access(join(home, "sessions", "target", "ledger.jsonl")),
+      ).rejects.toThrow();
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

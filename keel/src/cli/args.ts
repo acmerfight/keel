@@ -50,6 +50,7 @@ export type CliArgs =
       readonly sessionId?: string;
       readonly resumeSessionId?: string;
       readonly forkSessionId?: string;
+      readonly forkBeforeUser?: number;
       readonly providerId?: ProviderId;
       readonly model?: string;
     };
@@ -68,7 +69,7 @@ function parseError(message: string): ParseResult<never> {
 
 export const USAGE = [
   "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] <message>",
-  "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id> [--fork <new-id>]]",
+  "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id> [--fork <new-id> [--fork-before-user <n>]]]",
   "       keel --doctor [--offline] [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
   "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
   "       keel eval compare --base <old.jsonl> --head <new.jsonl>",
@@ -78,6 +79,7 @@ export const USAGE = [
   "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
   "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
   "--transcript writes provider-visible run messages as schema-versioned JSONL.",
+  "--fork-before-user cuts a fork before the 1-based restored user message number; it requires --resume and --fork.",
   "--transcript-dir writes one provider-visible transcript JSONL file per eval trial.",
   "--provider and --model override provider env for the current run.",
   "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, DEEPSEEK_MODEL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
@@ -89,6 +91,7 @@ const maxCostSchema = z.coerce.number().finite().positive();
 const bashPolicySchema = z.enum(["ask", "deny", "trusted"]);
 const providerIdSchema = z.enum(["fake", "deepseek", "kimi", "qwen"]);
 const trialsSchema = z.coerce.number().int().positive();
+const forkBeforeUserSchema = z.coerce.number().int().positive();
 
 function parseMaxCost(raw: string | undefined): ParseResult<number> {
   const result = maxCostSchema.safeParse(raw);
@@ -135,6 +138,16 @@ function parseTrials(raw: string | undefined): ParseResult<number> {
   const result = trialsSchema.safeParse(raw);
   if (!result.success) {
     return parseError("Error: --trials must be a positive integer.");
+  }
+  return parseOk(result.data);
+}
+
+function parseForkBeforeUser(raw: string | undefined): ParseResult<number> {
+  const parsedValue = requireOptionValue("--fork-before-user", raw);
+  if (!parsedValue.ok) return parsedValue;
+  const result = forkBeforeUserSchema.safeParse(parsedValue.value);
+  if (!result.success) {
+    return parseError("Error: --fork-before-user must be a positive integer.");
   }
   return parseOk(result.data);
 }
@@ -407,6 +420,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   let sessionId: string | undefined;
   let resumeSessionId: string | undefined;
   let forkSessionId: string | undefined;
+  let forkBeforeUser: number | undefined;
   let providerId: ProviderId | undefined;
   let model: string | undefined;
   let userMessage: string | undefined;
@@ -417,6 +431,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   const sessionPrefix = "--session=";
   const resumePrefix = "--resume=";
   const forkPrefix = "--fork=";
+  const forkBeforeUserPrefix = "--fork-before-user=";
   const providerPrefix = "--provider=";
   const modelPrefix = "--model=";
 
@@ -594,12 +609,37 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
       continue;
     }
 
+    if (arg === "--fork-before-user") {
+      const parsed = parseForkBeforeUser(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      forkBeforeUser = parsed.value;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(forkBeforeUserPrefix)) {
+      const parsed = parseForkBeforeUser(
+        arg.slice(forkBeforeUserPrefix.length),
+      );
+      if (!parsed.ok) return parsed;
+      forkBeforeUser = parsed.value;
+      continue;
+    }
+
     userMessage = args.slice(index).join(" ");
     break;
   }
 
   if (sessionId !== undefined && resumeSessionId !== undefined) {
     return parseError("Error: --session cannot be combined with --resume.");
+  }
+  if (
+    forkBeforeUser !== undefined &&
+    (resumeSessionId === undefined || forkSessionId === undefined)
+  ) {
+    return parseError(
+      "Error: --fork-before-user requires --resume <id> --fork <new-id>.",
+    );
   }
   if (forkSessionId !== undefined && resumeSessionId === undefined) {
     return parseError("Error: --fork requires --resume <id>.");
@@ -615,6 +655,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
     ...(forkSessionId !== undefined ? { forkSessionId } : {}),
+    ...(forkBeforeUser !== undefined ? { forkBeforeUser } : {}),
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
   });
