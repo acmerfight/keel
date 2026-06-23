@@ -104,7 +104,7 @@ function formatSessionForkPoints(session: SessionState): string {
     userMessageCount += 1;
     lines.push(`${userMessageCount}. ${forkPointPreview(message.content)}`);
     lines.push(
-      `   use: keel --resume ${session.id} --fork <new-id> --fork-before-user ${userMessageCount}`,
+      `   use: keel sessions fork ${session.id} <new-id> --before-user ${userMessageCount}`,
     );
   }
 
@@ -125,7 +125,7 @@ function sessionCatalogEntryLines(
     `   preview: ${entry.preview}`,
     `   resume: keel --resume ${entry.id}`,
     `   fork-points: keel --resume ${entry.id} --fork-points`,
-    `   fork: keel --resume ${entry.id} --fork <new-id>`,
+    `   fork: keel sessions fork ${entry.id} <new-id>`,
   ];
 }
 
@@ -149,6 +149,18 @@ function formatSessionCatalogWarnings(
         `Warning: skipped session "${warning.sessionId}": ${warning.message}\n`,
     )
     .join("");
+}
+
+function formatSessionForkCreated(options: {
+  readonly sourceSessionId: string;
+  readonly targetSessionId: string;
+  readonly forkBeforeUser?: number;
+}): string {
+  const forkLine =
+    options.forkBeforeUser === undefined
+      ? `Forked session "${options.sourceSessionId}" to "${options.targetSessionId}".`
+      : `Forked session "${options.sourceSessionId}" to "${options.targetSessionId}" before restored user message ${options.forkBeforeUser}.`;
+  return `${forkLine}\nresume: keel --resume ${options.targetSessionId}\n`;
 }
 
 export async function runCliMain(runtime: CliRuntime): Promise<number> {
@@ -227,6 +239,55 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
   }
 
   if (cliArgs.command === "sessions") {
+    if (cliArgs.mode === "fork") {
+      let sourceSessionLock: SessionLock | undefined;
+      let targetSessionLock: SessionLock | undefined;
+      try {
+        sourceSessionLock = acquireSessionLock({
+          sessionId: cliArgs.sourceSessionId,
+          runtime,
+        });
+        targetSessionLock = acquireSessionLock({
+          sessionId: cliArgs.targetSessionId,
+          runtime,
+        });
+        ensureSessionCanBeCreated({
+          sessionId: cliArgs.targetSessionId,
+          runtime,
+        });
+        const source = resumeSessionStore({
+          sessionId: cliArgs.sourceSessionId,
+          workspace: runtime.cwd(),
+          runtime,
+        });
+        forkSessionStore({
+          source,
+          targetSessionId: cliArgs.targetSessionId,
+          ...(cliArgs.forkBeforeUser !== undefined
+            ? {
+                forkPoint: {
+                  beforeUser: cliArgs.forkBeforeUser,
+                  optionName: "--before-user",
+                },
+              }
+            : {}),
+          runtime,
+        });
+        runtime.writeStdout(formatSessionForkCreated(cliArgs));
+        return 0;
+      } catch (error) {
+        /* v8 ignore next 3: session fork command converts supported failures to SessionStoreError. */
+        if (!(error instanceof SessionStoreError)) {
+          throw error;
+        }
+        runtime.writeStderr(`${error.message}\n`);
+        return 1;
+      } finally {
+        targetSessionLock?.release();
+        sourceSessionLock?.release();
+      }
+    }
+
     try {
       const catalog = listSessionCatalog({
         workspace: runtime.cwd(),
@@ -337,7 +398,12 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
               source: resumedSession,
               targetSessionId: cliArgs.forkSessionId,
               ...(cliArgs.forkBeforeUser !== undefined
-                ? { forkBeforeUser: cliArgs.forkBeforeUser }
+                ? {
+                    forkPoint: {
+                      beforeUser: cliArgs.forkBeforeUser,
+                      optionName: "--fork-before-user",
+                    },
+                  }
                 : {}),
               runtime,
             });

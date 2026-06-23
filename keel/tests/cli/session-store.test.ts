@@ -2505,7 +2505,10 @@ describe("Session Store", () => {
       const target = forkSessionStore({
         source: restoredSource,
         targetSessionId: "target",
-        forkBeforeUser: 1,
+        forkPoint: {
+          beforeUser: 1,
+          optionName: "--fork-before-user",
+        },
         runtime: runtime(home, 3),
       });
       const resumedTarget = resumeSessionStore({
@@ -2597,7 +2600,10 @@ describe("Session Store", () => {
       const target = forkSessionStore({
         source: restoredSource,
         targetSessionId: "target",
-        forkBeforeUser: 2,
+        forkPoint: {
+          beforeUser: 2,
+          optionName: "--fork-before-user",
+        },
         runtime: runtime(home, 3),
       });
       const resumedTarget = resumeSessionStore({
