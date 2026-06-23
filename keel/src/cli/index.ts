@@ -226,6 +226,9 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
             session = forkSessionStore({
               source: resumedSession,
               targetSessionId: cliArgs.forkSessionId,
+              ...(cliArgs.forkBeforeUser !== undefined
+                ? { forkBeforeUser: cliArgs.forkBeforeUser }
+                : {}),
               runtime,
             });
             sourceSessionLock?.release();

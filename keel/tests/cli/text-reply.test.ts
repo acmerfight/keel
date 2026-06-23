@@ -119,7 +119,7 @@ describe("CLI Text Reply", () => {
     expect(result.stderr).toBe(
       [
         "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] <message>",
-        "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id> [--fork <new-id>]]",
+        "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id> [--fork <new-id> [--fork-before-user <n>]]]",
         "       keel --doctor [--offline] [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
         "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
         "       keel eval compare --base <old.jsonl> --head <new.jsonl>",
@@ -129,6 +129,7 @@ describe("CLI Text Reply", () => {
         "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
         "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
         "--transcript writes provider-visible run messages as schema-versioned JSONL.",
+        "--fork-before-user cuts a fork before the 1-based restored user message number; it requires --resume and --fork.",
         "--transcript-dir writes one provider-visible transcript JSONL file per eval trial.",
         "--provider and --model override provider env for the current run.",
         "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, DEEPSEEK_MODEL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
