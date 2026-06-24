@@ -25,7 +25,7 @@ import {
   toolCallFromParsedArguments,
 } from "../tools/registry.ts";
 
-const SESSION_SCHEMA_VERSION = 1;
+const SESSION_SCHEMA_VERSION = 2;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const SESSION_LOCK_DIRECTORY_NAME = "active.lock";
 const SESSION_LOCK_OWNER_FILE_NAME = "owner.json";
@@ -105,6 +105,58 @@ const messageSchema = z.discriminatedUnion("role", [
   toolMessageSchema,
 ]);
 
+const storedMessageSchema = z
+  .object({
+    id: z.string().min(1),
+    message: messageSchema,
+  })
+  .strict();
+
+const sessionForkPolicyRecordSchema = z
+  .object({
+    transcript: z.literal("copy_prefix"),
+    pendingInputs: z.literal("drop"),
+    queuedInputs: z.literal("drop"),
+    bashApprovalGrants: z.literal("drop"),
+  })
+  .strict();
+
+const beforeMessageForkPointRecordSchema = z
+  .object({
+    kind: z.literal("before_message"),
+    sourceSessionId: z.string(),
+    sourceMessageId: z.string().min(1),
+    sourceOrdinal: z.number().int().positive(),
+    preview: z.string(),
+  })
+  .strict();
+
+const endForkPointRecordSchema = z
+  .object({
+    kind: z.literal("end"),
+    sourceSessionId: z.string(),
+    sourceLastMessageId: z.string().min(1).nullable(),
+    sourceOrdinal: z.number().int().nonnegative(),
+    preview: z.string(),
+  })
+  .strict();
+
+const sessionForkPointRecordSchema = z.discriminatedUnion("kind", [
+  beforeMessageForkPointRecordSchema,
+  endForkPointRecordSchema,
+]);
+
+const sessionGraphRecordSchema = z
+  .object({
+    graphId: z.string(),
+    rootSessionId: z.string(),
+    parentSessionId: z.string().nullable(),
+    branchTitle: z.string(),
+    forkPoint: sessionForkPointRecordSchema.nullable(),
+    forkPolicy: sessionForkPolicyRecordSchema,
+  })
+  .strict();
+
 const sessionHeaderSchema = z
   .object({
     schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
@@ -112,7 +164,7 @@ const sessionHeaderSchema = z
     id: z.string(),
     createdAt: z.string(),
     workspace: z.string(),
-    forkedFrom: z.string().optional(),
+    graph: sessionGraphRecordSchema,
   })
   .strict();
 
@@ -124,7 +176,7 @@ const appendRecordSchema = z
     type: z.literal("append"),
     timestamp: z.string(),
     reason: z.literal("turn"),
-    messages: z.array(messageSchema),
+    messages: z.array(storedMessageSchema),
     consumedInputIds: consumedInputIdsSchema.optional(),
   })
   .strict();
@@ -135,7 +187,7 @@ const replaceRecordSchema = z
     type: z.literal("replace"),
     timestamp: z.string(),
     reason: z.enum(["turn", "compaction"]),
-    messages: z.array(messageSchema),
+    messages: z.array(storedMessageSchema),
     consumedInputIds: consumedInputIdsSchema.optional(),
   })
   .strict();
@@ -205,7 +257,7 @@ const snapshotRecordSchema = z
     type: z.literal("snapshot"),
     timestamp: z.string(),
     reason: z.literal("size_threshold"),
-    messages: z.array(messageSchema),
+    messages: z.array(storedMessageSchema),
     pendingInputs: z.array(queuedInputSchema),
     bashApprovalGrants: z.array(bashApprovalGrantSchema).optional(),
   })
@@ -235,41 +287,83 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
 ]);
 
 type RawMessage = z.infer<typeof messageSchema>;
+type RawStoredMessage = z.infer<typeof storedMessageSchema>;
 type RawSessionQueuedInput = z.infer<typeof queuedInputSchema>;
 type RawBashApprovalGrant = z.infer<typeof bashApprovalGrantSchema>;
 type RawSessionHeaderRecord = z.infer<typeof sessionHeaderSchema>;
 type RawSessionMutationRecord = z.infer<typeof sessionMutationRecordSchema>;
 type SessionLockOwner = z.infer<typeof sessionLockOwnerSchema>;
 
+export interface StoredMessage {
+  readonly id: string;
+  readonly message: Message;
+}
+
+export interface SessionForkPolicyRecord {
+  readonly transcript: "copy_prefix";
+  readonly pendingInputs: "drop";
+  readonly queuedInputs: "drop";
+  readonly bashApprovalGrants: "drop";
+}
+
+interface BeforeMessageForkPointRecord {
+  readonly kind: "before_message";
+  readonly sourceSessionId: string;
+  readonly sourceMessageId: string;
+  readonly sourceOrdinal: number;
+  readonly preview: string;
+}
+
+interface EndForkPointRecord {
+  readonly kind: "end";
+  readonly sourceSessionId: string;
+  readonly sourceLastMessageId: string | null;
+  readonly sourceOrdinal: number;
+  readonly preview: string;
+}
+
+export type SessionForkPointRecord =
+  | BeforeMessageForkPointRecord
+  | EndForkPointRecord;
+
+interface SessionGraphRecord {
+  readonly graphId: string;
+  readonly rootSessionId: string;
+  readonly parentSessionId: string | null;
+  readonly branchTitle: string;
+  readonly forkPoint: SessionForkPointRecord | null;
+  readonly forkPolicy: SessionForkPolicyRecord;
+}
+
 interface SessionHeaderRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly type: "session";
   readonly id: string;
   readonly createdAt: string;
   readonly workspace: string;
-  readonly forkedFrom?: string;
+  readonly graph: SessionGraphRecord;
 }
 
 interface AppendSessionRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly type: "append";
   readonly timestamp: string;
   readonly reason: "turn";
-  readonly messages: readonly Message[];
+  readonly messages: readonly StoredMessage[];
   readonly consumedInputIds?: readonly string[];
 }
 
 interface ReplaceSessionRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly type: "replace";
   readonly timestamp: string;
   readonly reason: "turn" | "compaction";
-  readonly messages: readonly Message[];
+  readonly messages: readonly StoredMessage[];
   readonly consumedInputIds?: readonly string[];
 }
 
 interface InputAdmittedSessionRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly type: "input_admitted";
   readonly timestamp: string;
   readonly id: string;
@@ -278,25 +372,25 @@ interface InputAdmittedSessionRecord {
 }
 
 interface InputConsumedSessionRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly type: "input_consumed";
   readonly timestamp: string;
   readonly inputIds: readonly string[];
 }
 
 interface BashApprovalGrantedSessionRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly type: "bash_approval_granted";
   readonly timestamp: string;
   readonly grant: BashApprovalGrant;
 }
 
 interface SnapshotSessionRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly type: "snapshot";
   readonly timestamp: string;
   readonly reason: "size_threshold";
-  readonly messages: readonly Message[];
+  readonly messages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
   readonly bashApprovalGrants?: readonly BashApprovalGrant[];
 }
@@ -327,7 +421,9 @@ export interface SessionState {
   readonly id: string;
   readonly filePath: string;
   readonly workspace: string;
+  readonly graph: SessionGraphRecord;
   readonly messages: readonly Message[];
+  readonly storedMessages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
   readonly bashApprovalGrants: readonly BashApprovalGrant[];
   readonly [sessionReplayStateKey]: SessionReplayState;
@@ -345,8 +441,8 @@ export interface SessionCatalogEntry {
   readonly workspace: string;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly graph: SessionGraphRecord;
   readonly preview: string;
-  readonly forkedFrom?: string;
 }
 
 export interface SessionCatalogWarning {
@@ -370,7 +466,7 @@ interface SessionCatalogReplayState {
 }
 
 interface SessionReplayState {
-  readonly messages: Message[];
+  readonly storedMessages: StoredMessage[];
   readonly pendingInputsById: Map<string, SessionQueuedInput>;
   readonly bashApprovalGrants: BashApprovalGrant[];
 }
@@ -636,6 +732,98 @@ function toMessage(message: RawMessage): Message {
   }
 }
 
+function copyMessage(message: Message): Message {
+  switch (message.role) {
+    case "user":
+      return {
+        role: "user",
+        content: message.content,
+      };
+    case "assistant":
+      return {
+        role: "assistant",
+        content: message.content,
+        toolCalls: [...message.toolCalls],
+      };
+    case "tool":
+      return {
+        role: "tool",
+        toolCallId: message.toolCallId,
+        content: message.content,
+      };
+  }
+}
+
+function toStoredMessage(storedMessage: RawStoredMessage): StoredMessage {
+  return {
+    id: storedMessage.id,
+    message: toMessage(storedMessage.message),
+  };
+}
+
+function copyStoredMessage(storedMessage: StoredMessage): StoredMessage {
+  return {
+    id: storedMessage.id,
+    message: copyMessage(storedMessage.message),
+  };
+}
+
+function messagesFromStoredMessages(
+  storedMessages: readonly StoredMessage[],
+): readonly Message[] {
+  return storedMessages.map((storedMessage) =>
+    copyMessage(storedMessage.message),
+  );
+}
+
+function copySessionForkPolicyRecord(
+  policy: SessionForkPolicyRecord,
+): SessionForkPolicyRecord {
+  return {
+    transcript: policy.transcript,
+    pendingInputs: policy.pendingInputs,
+    queuedInputs: policy.queuedInputs,
+    bashApprovalGrants: policy.bashApprovalGrants,
+  };
+}
+
+function copySessionForkPointRecord(
+  forkPoint: SessionForkPointRecord,
+): SessionForkPointRecord {
+  switch (forkPoint.kind) {
+    case "before_message":
+      return {
+        kind: "before_message",
+        sourceSessionId: forkPoint.sourceSessionId,
+        sourceMessageId: forkPoint.sourceMessageId,
+        sourceOrdinal: forkPoint.sourceOrdinal,
+        preview: forkPoint.preview,
+      };
+    case "end":
+      return {
+        kind: "end",
+        sourceSessionId: forkPoint.sourceSessionId,
+        sourceLastMessageId: forkPoint.sourceLastMessageId,
+        sourceOrdinal: forkPoint.sourceOrdinal,
+        preview: forkPoint.preview,
+      };
+  }
+}
+
+function copySessionGraphRecord(graph: SessionGraphRecord): SessionGraphRecord {
+  return {
+    graphId: graph.graphId,
+    rootSessionId: graph.rootSessionId,
+    parentSessionId: graph.parentSessionId,
+    branchTitle: graph.branchTitle,
+    forkPoint:
+      graph.forkPoint === null
+        ? null
+        : copySessionForkPointRecord(graph.forkPoint),
+    forkPolicy: copySessionForkPolicyRecord(graph.forkPolicy),
+  };
+}
+
 function toSessionHeaderRecord(
   record: RawSessionHeaderRecord,
 ): SessionHeaderRecord {
@@ -645,9 +833,7 @@ function toSessionHeaderRecord(
     id: record.id,
     createdAt: record.createdAt,
     workspace: record.workspace,
-    ...(record.forkedFrom !== undefined
-      ? { forkedFrom: record.forkedFrom }
-      : {}),
+    graph: copySessionGraphRecord(record.graph),
   };
 }
 
@@ -712,7 +898,7 @@ function toSessionMutationRecord(
           type: "append",
           timestamp: record.timestamp,
           reason: "turn",
-          messages: record.messages.map(toMessage),
+          messages: record.messages.map(toStoredMessage),
         },
         record.consumedInputIds,
       );
@@ -723,7 +909,7 @@ function toSessionMutationRecord(
           type: "replace",
           timestamp: record.timestamp,
           reason: record.reason,
-          messages: record.messages.map(toMessage),
+          messages: record.messages.map(toStoredMessage),
         },
         record.consumedInputIds,
       );
@@ -756,7 +942,7 @@ function toSessionMutationRecord(
         type: "snapshot",
         timestamp: record.timestamp,
         reason: "size_threshold",
-        messages: record.messages.map(toMessage),
+        messages: record.messages.map(toStoredMessage),
         pendingInputs: record.pendingInputs.map(toSessionQueuedInput),
         ...(record.bashApprovalGrants !== undefined
           ? {
@@ -1089,6 +1275,14 @@ function catalogPreviewStateFromMessages(
   return { kind: "empty" };
 }
 
+function catalogPreviewStateFromStoredMessages(
+  storedMessages: readonly StoredMessage[],
+): CatalogPreviewState {
+  return catalogPreviewStateFromMessages(
+    storedMessages.map((storedMessage) => storedMessage.message),
+  );
+}
+
 function appendCatalogPreviewState(
   current: CatalogPreviewState,
   next: CatalogPreviewState,
@@ -1122,14 +1316,14 @@ function applySessionCatalogMutation(
         updatedAt: record.timestamp,
         preview: appendCatalogPreviewState(
           state.preview,
-          catalogPreviewStateFromMessages(record.messages),
+          catalogPreviewStateFromStoredMessages(record.messages),
         ),
       };
     case "replace":
     case "snapshot":
       return {
         updatedAt: record.timestamp,
-        preview: catalogPreviewStateFromMessages(record.messages),
+        preview: catalogPreviewStateFromStoredMessages(record.messages),
       };
     case "input_admitted":
     case "input_consumed":
@@ -1158,10 +1352,8 @@ function sessionCatalogEntry(records: SessionRecords): SessionCatalogEntry {
     workspace: records.header.workspace,
     createdAt: records.header.createdAt,
     updatedAt: state.updatedAt,
+    graph: copySessionGraphRecord(records.header.graph),
     preview: catalogPreviewValue(state.preview),
-    ...(records.header.forkedFrom !== undefined
-      ? { forkedFrom: records.header.forkedFrom }
-      : {}),
   };
 }
 
@@ -1412,17 +1604,20 @@ function sessionStateFromReplay(options: {
   readonly id: string;
   readonly filePath: string;
   readonly workspace: string;
-  readonly messages: readonly Message[];
+  readonly graph: SessionGraphRecord;
+  readonly storedMessages: readonly StoredMessage[];
   readonly pendingInputsById: ReadonlyMap<string, SessionQueuedInput>;
   readonly bashApprovalGrants: readonly BashApprovalGrant[];
 }): SessionState {
-  const messages = [...options.messages];
+  const graph = copySessionGraphRecord(options.graph);
+  const storedMessages = options.storedMessages.map(copyStoredMessage);
+  const messages = messagesFromStoredMessages(storedMessages);
   const pendingInputsById = new Map(options.pendingInputsById);
   const bashApprovalGrants = options.bashApprovalGrants.map(
     copyBashApprovalGrant,
   );
   const replayState = {
-    messages: [...messages],
+    storedMessages: storedMessages.map(copyStoredMessage),
     pendingInputsById,
     bashApprovalGrants,
   };
@@ -1431,7 +1626,9 @@ function sessionStateFromReplay(options: {
     id: options.id,
     filePath: options.filePath,
     workspace: options.workspace,
+    graph,
     messages,
+    storedMessages,
     pendingInputs: pendingInputsInReplayOrder(pendingInputsById),
     bashApprovalGrants,
   };
@@ -1442,11 +1639,21 @@ function replayStateForSession(session: SessionState): SessionReplayState {
   return session[sessionReplayStateKey];
 }
 
+export function sessionStoredMessages(
+  session: SessionState,
+): readonly StoredMessage[] {
+  return replayStateForSession(session).storedMessages.map(copyStoredMessage);
+}
+
 function replaceReplayMessages(
   state: SessionReplayState,
-  messages: readonly Message[],
+  storedMessages: readonly StoredMessage[],
 ): void {
-  state.messages.splice(0, state.messages.length, ...messages);
+  state.storedMessages.splice(
+    0,
+    state.storedMessages.length,
+    ...storedMessages.map(copyStoredMessage),
+  );
 }
 
 function consumeReplayInputs(
@@ -1499,7 +1706,7 @@ function appendSessionSnapshotIfNeeded(options: {
     type: "snapshot",
     timestamp: isoTimestamp(options.runtime),
     reason: "size_threshold",
-    messages: [...replayState.messages],
+    messages: replayState.storedMessages.map(copyStoredMessage),
     pendingInputs: pendingInputsInReplayOrder(replayState.pendingInputsById),
     ...(bashApprovalGrants.length > 0 ? { bashApprovalGrants } : {}),
   });
@@ -1517,6 +1724,90 @@ function parseProviderVisibleMessages(
     );
   }
   return parsed.data.map(toMessage);
+}
+
+function defaultSessionForkPolicy(): SessionForkPolicyRecord {
+  return {
+    transcript: "copy_prefix",
+    pendingInputs: "drop",
+    queuedInputs: "drop",
+    bashApprovalGrants: "drop",
+  };
+}
+
+function rootSessionGraph(sessionId: string): SessionGraphRecord {
+  return {
+    graphId: sessionId,
+    rootSessionId: sessionId,
+    parentSessionId: null,
+    branchTitle: "main",
+    forkPoint: null,
+    forkPolicy: defaultSessionForkPolicy(),
+  };
+}
+
+function storedMessageId(): string {
+  return `msg_${randomUUID()}`;
+}
+
+function storedMessagesForProviderMessages(options: {
+  readonly messages: readonly Message[];
+  readonly previousStoredMessages: readonly StoredMessage[];
+}): readonly StoredMessage[] {
+  return options.messages.map((message, index) => {
+    const previous = options.previousStoredMessages[index];
+    if (previous !== undefined && messagesEqual(previous.message, message)) {
+      return copyStoredMessage(previous);
+    }
+    return {
+      id: storedMessageId(),
+      message: copyMessage(message),
+    };
+  });
+}
+
+function messageForkPreview(message: Message): string {
+  return normalizeSessionPreview(message.content);
+}
+
+function endForkPoint(source: SessionState): SessionForkPointRecord {
+  const lastMessage = source.storedMessages.at(-1);
+  return {
+    kind: "end",
+    sourceSessionId: source.id,
+    sourceLastMessageId: lastMessage?.id ?? null,
+    sourceOrdinal: source.storedMessages.length,
+    preview: "full restored history",
+  };
+}
+
+function beforeMessageForkPoint(options: {
+  readonly source: SessionState;
+  readonly storedMessage: StoredMessage;
+  readonly sourceOrdinal: number;
+}): SessionForkPointRecord {
+  return {
+    kind: "before_message",
+    sourceSessionId: options.source.id,
+    sourceMessageId: options.storedMessage.id,
+    sourceOrdinal: options.sourceOrdinal,
+    preview: messageForkPreview(options.storedMessage.message),
+  };
+}
+
+function forkSessionGraph(options: {
+  readonly source: SessionState;
+  readonly targetSessionId: string;
+  readonly forkPoint: SessionForkPointRecord;
+}): SessionGraphRecord {
+  return {
+    graphId: options.source.graph.graphId,
+    rootSessionId: options.source.graph.rootSessionId,
+    parentSessionId: options.source.id,
+    branchTitle: options.targetSessionId,
+    forkPoint: copySessionForkPointRecord(options.forkPoint),
+    forkPolicy: defaultSessionForkPolicy(),
+  };
 }
 
 function validateCompletedTranscript(
@@ -1573,25 +1864,25 @@ function createEmptySessionStore(options: {
   readonly sessionId: string;
   readonly workspace: string;
   readonly runtime: SessionStoreRuntime;
-  readonly forkedFrom?: string;
+  readonly graph?: SessionGraphRecord;
 }): SessionState {
   const workspace = realpathSync(options.workspace);
   const filePath = sessionFilePath(options.runtime, options.sessionId);
+  const graph = options.graph ?? rootSessionGraph(options.sessionId);
   writeInitialHeader(filePath, {
     schemaVersion: SESSION_SCHEMA_VERSION,
     type: "session",
     id: options.sessionId,
     createdAt: isoTimestamp(options.runtime),
     workspace,
-    ...(options.forkedFrom !== undefined
-      ? { forkedFrom: options.forkedFrom }
-      : {}),
+    graph,
   });
   return sessionStateFromReplay({
     id: options.sessionId,
     filePath,
     workspace,
-    messages: [],
+    graph,
+    storedMessages: [],
     pendingInputsById: new Map(),
     bashApprovalGrants: [],
   });
@@ -1601,47 +1892,57 @@ export function forkSessionStore(options: {
   readonly source: SessionState;
   readonly targetSessionId: string;
   readonly forkPoint?: {
-    readonly beforeUser: number;
+    readonly beforeMessageId: string;
     readonly optionName: string;
   };
   readonly runtime: SessionStoreRuntime;
 }): SessionState {
-  const sourceMessages = parseProviderVisibleMessages(
+  parseProviderVisibleMessages(
     options.targetSessionId,
     options.source.messages,
     "fork",
   );
-  const messages =
+  const forkSelection =
     options.forkPoint === undefined
-      ? sourceMessages
-      : messagesBeforeRestoredUser({
+      ? {
+          storedMessages: options.source.storedMessages.map(copyStoredMessage),
+          forkPoint: endForkPoint(options.source),
+        }
+      : storedMessagesBeforeMessage({
           targetSessionId: options.targetSessionId,
-          messages: sourceMessages,
-          userMessageNumber: options.forkPoint.beforeUser,
+          source: options.source,
+          beforeMessageId: options.forkPoint.beforeMessageId,
           optionName: options.forkPoint.optionName,
         });
+  const messages = messagesFromStoredMessages(forkSelection.storedMessages);
   validateCompletedTranscript(options.targetSessionId, messages, "fork");
+  const graph = forkSessionGraph({
+    source: options.source,
+    targetSessionId: options.targetSessionId,
+    forkPoint: forkSelection.forkPoint,
+  });
   const session = createEmptySessionStore({
     sessionId: options.targetSessionId,
     workspace: options.source.workspace,
     runtime: options.runtime,
-    forkedFrom: options.source.id,
+    graph,
   });
   const forkedSession = sessionStateFromReplay({
     id: options.targetSessionId,
     filePath: session.filePath,
     workspace: session.workspace,
-    messages,
+    graph,
+    storedMessages: forkSelection.storedMessages,
     pendingInputsById: new Map(),
     bashApprovalGrants: [],
   });
-  if (messages.length > 0) {
+  if (forkSelection.storedMessages.length > 0) {
     appendJsonLine(session.filePath, {
       schemaVersion: SESSION_SCHEMA_VERSION,
       type: "append",
       timestamp: isoTimestamp(options.runtime),
       reason: "turn",
-      messages,
+      messages: forkSelection.storedMessages.map(copyStoredMessage),
     });
   }
   appendSessionSnapshotIfNeeded({
@@ -1651,24 +1952,34 @@ export function forkSessionStore(options: {
   return forkedSession;
 }
 
-function messagesBeforeRestoredUser(options: {
+function storedMessagesBeforeMessage(options: {
   readonly targetSessionId: string;
-  readonly messages: readonly Message[];
-  readonly userMessageNumber: number;
+  readonly source: SessionState;
+  readonly beforeMessageId: string;
   readonly optionName: string;
-}): readonly Message[] {
-  let userMessageCount = 0;
-  for (const [index, message] of options.messages.entries()) {
-    if (message.role !== "user") {
-      continue;
-    }
-    userMessageCount += 1;
-    if (userMessageCount === options.userMessageNumber) {
-      return options.messages.slice(0, index);
+}): {
+  readonly storedMessages: readonly StoredMessage[];
+  readonly forkPoint: SessionForkPointRecord;
+} {
+  for (const [
+    index,
+    storedMessage,
+  ] of options.source.storedMessages.entries()) {
+    if (storedMessage.id === options.beforeMessageId) {
+      return {
+        storedMessages: options.source.storedMessages
+          .slice(0, index)
+          .map(copyStoredMessage),
+        forkPoint: beforeMessageForkPoint({
+          source: options.source,
+          storedMessage,
+          sourceOrdinal: index + 1,
+        }),
+      };
     }
   }
   sessionStoreError(
-    `Error: cannot fork session "${options.targetSessionId}": ${options.optionName} ${options.userMessageNumber} exceeds restored user message count ${userMessageCount}.`,
+    `Error: cannot fork session "${options.targetSessionId}": ${options.optionName} ${options.beforeMessageId} does not match a restored message id in session "${options.source.id}".`,
   );
 }
 
@@ -1700,17 +2011,20 @@ export function resumeSessionStore(options: {
     );
   }
 
-  let messages: Message[] = [];
+  let storedMessages: StoredMessage[] = [];
   const pendingInputsById = new Map<string, SessionQueuedInput>();
   let bashApprovalGrants: BashApprovalGrant[] = [];
   for (const record of records.mutations) {
     switch (record.type) {
       case "append":
-        messages = [...messages, ...record.messages];
+        storedMessages = [
+          ...storedMessages,
+          ...record.messages.map(copyStoredMessage),
+        ];
         consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         break;
       case "replace":
-        messages = [...record.messages];
+        storedMessages = record.messages.map(copyStoredMessage);
         consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         break;
       case "input_admitted":
@@ -1731,7 +2045,7 @@ export function resumeSessionStore(options: {
         ];
         break;
       case "snapshot":
-        messages = [...record.messages];
+        storedMessages = record.messages.map(copyStoredMessage);
         pendingInputsById.clear();
         for (const input of record.pendingInputs) {
           pendingInputsById.set(input.id, input);
@@ -1742,13 +2056,15 @@ export function resumeSessionStore(options: {
         break;
     }
   }
+  const messages = messagesFromStoredMessages(storedMessages);
   validateCompletedTranscript(options.sessionId, messages, "resume");
 
   return sessionStateFromReplay({
     id: options.sessionId,
     filePath,
     workspace: expectedWorkspace,
-    messages,
+    graph: records.header.graph,
+    storedMessages,
     pendingInputsById,
     bashApprovalGrants,
   });
@@ -1769,12 +2085,14 @@ export function persistSessionMessages(options: {
   );
   validateCompletedTranscript(options.session.id, currentMessages, "persist");
   const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
+  const replayState = replayStateForSession(options.session);
+  const currentStoredMessages = storedMessagesForProviderMessages({
+    messages: currentMessages,
+    previousStoredMessages: replayState.storedMessages,
+  });
 
   if (messageArraysEqual(currentMessages, options.previousMessages)) {
-    replaceReplayMessages(
-      replayStateForSession(options.session),
-      currentMessages,
-    );
+    replaceReplayMessages(replayState, currentStoredMessages);
     if (consumedInputIds.length > 0) {
       consumeSessionQueuedInputs({
         session: options.session,
@@ -1790,7 +2108,9 @@ export function persistSessionMessages(options: {
   }
 
   if (hasMessagePrefix(currentMessages, options.previousMessages)) {
-    const messages = currentMessages.slice(options.previousMessages.length);
+    const messages = currentStoredMessages.slice(
+      options.previousMessages.length,
+    );
     appendJsonLine(
       options.session.filePath,
       sessionRecordWithConsumedInputIds(
@@ -1804,8 +2124,7 @@ export function persistSessionMessages(options: {
         consumedInputIds,
       ),
     );
-    const replayState = replayStateForSession(options.session);
-    replaceReplayMessages(replayState, currentMessages);
+    replaceReplayMessages(replayState, currentStoredMessages);
     consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
     appendSessionSnapshotIfNeeded({
       session: options.session,
@@ -1822,13 +2141,12 @@ export function persistSessionMessages(options: {
         type: "replace",
         timestamp: isoTimestamp(options.runtime),
         reason: options.reason,
-        messages: [...currentMessages],
+        messages: currentStoredMessages.map(copyStoredMessage),
       },
       consumedInputIds,
     ),
   );
-  const replayState = replayStateForSession(options.session);
-  replaceReplayMessages(replayState, currentMessages);
+  replaceReplayMessages(replayState, currentStoredMessages);
   consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
   appendSessionSnapshotIfNeeded({
     session: options.session,

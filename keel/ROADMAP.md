@@ -43,7 +43,7 @@ What a user can do today:
   input typed while a tool turn is running is injected after tool results at
   the next model request.
 - `keel --session <id>` / `keel --resume <id>` / `keel sessions` /
-  `keel sessions fork <source-id> <target-id> [--before-user <n>]` —
+  `keel sessions fork <source-id> <target-id> [--before-message <id>]` —
   persist, resume, list, and fork interactive transcripts as JSONL session
   ledgers, with schema validation, workspace checks, active-session locks,
   bounded snapshots, replay of queued input that was admitted but not yet
@@ -208,8 +208,8 @@ Codex/Claude Code — or directly moves the eval numbers.
   sessions persist JSONL ledgers and rebuild transcript context on
   `--resume`, including compaction replacement records and active-session
   locks. Session ledgers also preserve unconsumed queued input and bounded
-  snapshots, and `keel sessions fork <source-id> <target-id> [--before-user
-  <n>]` creates an independent fork from completed restored history without
+  snapshots, and `keel sessions fork <source-id> <target-id> [--before-message
+  <id>]` creates an independent fork from completed restored history without
   copying pending queued input. Remaining work is TUI branch selection and
   future sub-agent state.
 - **Bash approval hardening** — richer command parsing/risk

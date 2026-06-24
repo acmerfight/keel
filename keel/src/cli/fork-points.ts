@@ -1,8 +1,9 @@
-import type { Message } from "../llm/types.ts";
 import { sanitizeStatusLineText } from "./output.ts";
+import type { StoredMessage } from "./session-store.ts";
 
 interface SessionForkPoint {
-  readonly beforeUser: number;
+  readonly choice: number;
+  readonly messageId: string;
   readonly preview: string;
 }
 
@@ -22,19 +23,19 @@ function forkPointPreview(content: string): string {
   return `${sanitized.slice(0, FORK_POINT_PREVIEW_MAX_LENGTH - 3)}...`;
 }
 
-export function sessionForkPointsFromMessages(options: {
+export function sessionForkPointsFromStoredMessages(options: {
   readonly sessionId: string;
-  readonly messages: readonly Message[];
+  readonly storedMessages: readonly StoredMessage[];
 }): SessionForkPoints {
   const points: SessionForkPoint[] = [];
-  for (const message of options.messages) {
-    if (message.role !== "user") {
+  for (const storedMessage of options.storedMessages) {
+    if (storedMessage.message.role !== "user") {
       continue;
     }
-    const beforeUser = points.length + 1;
     points.push({
-      beforeUser,
-      preview: forkPointPreview(message.content),
+      choice: points.length + 1,
+      messageId: storedMessage.id,
+      preview: forkPointPreview(storedMessage.message.content),
     });
   }
   return {
@@ -52,9 +53,9 @@ export function formatExternalSessionForkPoints(
 
   const lines = [`Fork points for session "${forkPoints.sessionId}":`];
   for (const point of forkPoints.points) {
-    lines.push(`${point.beforeUser}. ${point.preview}`);
+    lines.push(`${point.choice}. message ${point.messageId}: ${point.preview}`);
     lines.push(
-      `   use: keel sessions fork ${forkPoints.sessionId} <new-id> --before-user ${point.beforeUser}`,
+      `   use: keel sessions fork ${forkPoints.sessionId} <new-id> --before-message ${point.messageId}`,
     );
   }
   return `${lines.join("\n")}\n`;
@@ -70,9 +71,9 @@ export function formatInteractiveSessionForkPoints(
   const lines = [`Fork points for session "${forkPoints.sessionId}":`];
   for (const point of forkPoints.points) {
     lines.push(
-      `${point.beforeUser}. before user message ${point.beforeUser}: ${point.preview}`,
+      `${point.choice}. before message ${point.messageId}: ${point.preview}`,
     );
-    lines.push(`   use: /fork <new-id> --before-user ${point.beforeUser}`);
+    lines.push(`   use: /fork <new-id> --before-message ${point.messageId}`);
   }
   return `${lines.join("\n")}\n`;
 }
@@ -87,7 +88,7 @@ export function formatInteractiveForkPicker(
   ];
   for (const point of forkPoints.points) {
     lines.push(
-      `${point.beforeUser}. before user message ${point.beforeUser}: ${point.preview}`,
+      `${point.choice}. before message ${point.messageId}: ${point.preview}`,
     );
   }
   lines.push("");
