@@ -169,7 +169,7 @@ describe("Git Checkpoints", () => {
       expect(record).toEqual({ written: true });
       expect(restore).toEqual({
         status: "restored",
-        filePath: "3 files",
+        restoredLabel: "3 files",
       });
       expect(await readFile(firstPath, "utf8")).toBe("first old\n");
       expect(await readFile(secondPath, "utf8")).toBe("second old\n");
@@ -214,7 +214,7 @@ describe("Git Checkpoints", () => {
       expect(record).toEqual({ written: true });
       expect(restore).toEqual({
         status: "restored",
-        filePath: "note.txt",
+        restoredLabel: "note.txt",
       });
       expect(await readFile(filePath, "utf8")).toBe("old\n");
     } finally {
@@ -254,7 +254,7 @@ describe("Git Checkpoints", () => {
       expect(record).toEqual({ written: true });
       expect(restore).toEqual({
         status: "restored",
-        filePath: "created.txt",
+        restoredLabel: "created.txt",
       });
       await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
         code: "ENOENT",
@@ -299,7 +299,7 @@ describe("Git Checkpoints", () => {
       // Then
       expect(restore).toEqual({
         status: "restored",
-        filePath: "2 files",
+        restoredLabel: "2 files",
       });
       expect(await readFile(editedPath, "utf8")).toBe("old\n");
       await expect(readFile(createdPath, "utf8")).rejects.toMatchObject({
@@ -748,7 +748,7 @@ describe("Git Checkpoints", () => {
       // Then
       expect(result).toMatchObject({
         status: "restored",
-        filePath: "note.txt",
+        restoredLabel: "note.txt",
       });
       expect(await readFile(filePath, "utf8")).toBe("old\n");
     } finally {
@@ -776,7 +776,7 @@ describe("Git Checkpoints", () => {
       // Then
       expect(result).toMatchObject({
         status: "restored",
-        filePath: "created.txt",
+        restoredLabel: "created.txt",
       });
       await expect(stat(filePath)).rejects.toMatchObject({
         code: "ENOENT",
@@ -836,7 +836,7 @@ describe("Git Checkpoints", () => {
       // Then
       expect(result).toMatchObject({
         status: "restored",
-        filePath: "created.txt",
+        restoredLabel: "created.txt",
       });
       expect(secondResult).toEqual({
         status: "none",

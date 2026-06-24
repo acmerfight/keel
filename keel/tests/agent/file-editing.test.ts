@@ -3716,7 +3716,7 @@ describe("File Editing", () => {
       // Then
       expect(restore).toEqual({
         status: "restored",
-        filePath: "2 files",
+        restoredLabel: "2 files",
       });
       expect(await readFile(join(workspace, "a.txt"), "utf8")).toBe(
         "alpha old\n",
@@ -3772,7 +3772,7 @@ describe("File Editing", () => {
       // Then
       expect(restore).toEqual({
         status: "restored",
-        filePath: "real/note.txt",
+        restoredLabel: "real/note.txt",
       });
       await expect(
         readFile(join(workspace, "real", "note.txt"), "utf8"),
