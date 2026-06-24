@@ -4,9 +4,13 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { builtinTools } from "../../src/tools/builtin.ts";
-import type { OpenAICompatibleToolDefinition } from "../../src/tools/registry.ts";
+import type {
+  OpenAICompatibleToolDefinition,
+  OpenAICompatibleToolParameter,
+} from "../../src/tools/registry.ts";
 import {
   isToolName,
+  normalizeProviderToolCall,
   openAICompatibleTools,
   type ToolName,
   toolCallArguments,
@@ -14,18 +18,6 @@ import {
   toolCallFromParsedArguments,
 } from "../../src/tools/registry.ts";
 
-type ProviderField = {
-  readonly type: "string" | "integer" | "boolean" | "array" | "object";
-  readonly description: string;
-  readonly required: boolean;
-  readonly minimum?: number;
-  readonly maximum?: number;
-  readonly items?: ProviderField;
-  readonly properties?: Readonly<Record<string, ProviderField>>;
-};
-
-type ProviderParameter =
-  OpenAICompatibleToolDefinition["function"]["parameters"]["properties"][string];
 type RegisteredBuiltinTool = (typeof builtinTools)[number];
 
 function builtinToolByName<Name extends ToolName>(
@@ -84,17 +76,39 @@ function inclusiveIntegerMaximum(
   return undefined;
 }
 
+function isJsonSchema(value: unknown): value is z.core.JSONSchema.JSONSchema {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function schemaField(
+  value: unknown,
+  context: string,
+): z.core.JSONSchema.JSONSchema {
+  if (!isJsonSchema(value)) {
+    throw new Error(`${context} schema field is missing`);
+  }
+  return value;
+}
+
+function providerToolByName(
+  tools: readonly OpenAICompatibleToolDefinition[],
+  name: ToolName,
+): OpenAICompatibleToolDefinition {
+  const tool = tools.find((candidate) => candidate.function.name === name);
+  if (tool === undefined) {
+    throw new Error(`Expected provider tool ${name} to be exposed`);
+  }
+  return tool;
+}
+
 function validProviderValue(
-  field: ProviderField,
+  field: OpenAICompatibleToolParameter,
 ): string | number | boolean | readonly unknown[] | Record<string, unknown> {
   switch (field.type) {
     case "string":
       return "value";
     case "integer":
-      if (field.minimum === undefined) {
-        throw new Error("integer provider field is missing minimum");
-      }
-      return field.minimum;
+      return field.minimum ?? 1;
     case "boolean":
       return true;
     case "array":
@@ -106,9 +120,10 @@ function validProviderValue(
       if (field.properties === undefined) {
         throw new Error("object provider field is missing properties");
       }
+      const required = new Set(field.required ?? []);
       const value: Record<string, unknown> = {};
       for (const [name, property] of Object.entries(field.properties)) {
-        if (property.required) {
+        if (required.has(name)) {
           value[name] = validProviderValue(property);
         }
       }
@@ -117,58 +132,67 @@ function validProviderValue(
   }
 }
 
-function providerParameterFromField(field: ProviderField): ProviderParameter {
-  return {
-    type: field.type,
-    description: field.description,
-    ...(field.minimum !== undefined ? { minimum: field.minimum } : {}),
-    ...(field.maximum !== undefined ? { maximum: field.maximum } : {}),
-    ...(field.items !== undefined
-      ? { items: providerParameterFromField(field.items) }
-      : {}),
-    ...(field.properties !== undefined
-      ? {
-          properties: Object.fromEntries(
-            Object.entries(field.properties).map(([name, property]) => [
-              name,
-              providerParameterFromField(property),
-            ]),
-          ),
-          required: Object.entries(field.properties)
-            .filter(([, property]) => property.required)
-            .map(([name]) => name),
-          additionalProperties: false,
-        }
-      : {}),
-  };
-}
+function expectProviderParameterMatchesSchema(
+  providerField: OpenAICompatibleToolParameter,
+  jsonSchemaField: z.core.JSONSchema.JSONSchema,
+  context: string,
+): void {
+  expect(providerField.type, `${context} type drift`).toBe(
+    jsonSchemaField.type,
+  );
+  expect(providerField.description, `${context} description drift`).toBe(
+    jsonSchemaField.description,
+  );
 
-function providerDefinitionFromBuiltinTool(
-  tool: (typeof builtinTools)[number],
-): OpenAICompatibleToolDefinition {
-  const properties: Record<string, ProviderParameter> = {};
-  const required: string[] = [];
-
-  for (const [name, field] of Object.entries(tool.args.fields)) {
-    properties[name] = providerParameterFromField(field);
-    if (field.required) {
-      required.push(name);
+  switch (providerField.type) {
+    case "string":
+    case "boolean":
+      return;
+    case "integer":
+      expect(providerField.minimum, `${context} minimum drift`).toBe(
+        inclusiveIntegerMinimum(jsonSchemaField),
+      );
+      expect(providerField.maximum, `${context} maximum drift`).toBe(
+        inclusiveIntegerMaximum(jsonSchemaField),
+      );
+      return;
+    case "array":
+      if (providerField.items === undefined) {
+        throw new Error(`${context} provider array item schema is missing`);
+      }
+      expectProviderParameterMatchesSchema(
+        providerField.items,
+        schemaField(jsonSchemaField.items, `${context}.items`),
+        `${context}.items`,
+      );
+      return;
+    case "object": {
+      if (providerField.properties === undefined) {
+        throw new Error(`${context} provider object properties are missing`);
+      }
+      const jsonSchemaProperties = jsonSchemaField.properties ?? {};
+      expect(
+        Object.keys(providerField.properties).sort(),
+        `${context} property key drift`,
+      ).toEqual(Object.keys(jsonSchemaProperties).sort());
+      expect(
+        [...(providerField.required ?? [])].sort(),
+        `${context} required field drift`,
+      ).toEqual([...(jsonSchemaField.required ?? [])].sort());
+      expect(
+        providerField.additionalProperties,
+        `${context} strictness drift`,
+      ).toBe(jsonSchemaField.additionalProperties);
+      for (const [name, property] of Object.entries(providerField.properties)) {
+        expectProviderParameterMatchesSchema(
+          property,
+          schemaField(jsonSchemaProperties[name], `${context}.${name}`),
+          `${context}.${name}`,
+        );
+      }
+      return;
     }
   }
-
-  return {
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: {
-        type: "object",
-        properties,
-        required,
-        additionalProperties: false,
-      },
-    },
-  };
 }
 
 describe("tool registry", () => {
@@ -495,9 +519,9 @@ describe("tool registry", () => {
 
   test(`Given builtin tool execution receives a matching call with an explicit null optional argument,
     When the registry-owned execution guard validates the internal call,
-    Then it rejects the malformed call instead of widening the ToolCall type`, () => {
+    Then it treats the optional argument as absent`, async () => {
     const bashTool = builtinToolByName("bash");
-    const malformedCall = {
+    const callWithNullOptional = {
       id: "call_bash",
       tool: "bash",
       command: "printf ok",
@@ -505,16 +529,20 @@ describe("tool registry", () => {
     };
     expect(bashTool.name).toBe("bash");
 
-    expect(() =>
+    await expect(
       bashTool.executeCall(
         {
           workspace: ".",
           signal: new AbortController().signal,
           allowBash: false,
         },
-        malformedCall,
+        callWithNullOptional,
       ),
-    ).toThrow("Invalid builtin tool call for bash");
+    ).resolves.toEqual({
+      ok: false,
+      content:
+        "Tool failed: bash failed: shell commands are disabled. Re-run with --bash-policy ask, --bash-policy trusted, or --allow-bash to enable them.",
+    });
   });
 
   test(`Given registry-derived builtin call helpers receive malformed internal calls,
@@ -530,6 +558,20 @@ describe("tool registry", () => {
     expect(() => readTool.canonicalArgumentsFromCall(malformedCall)).toThrow(
       "Invalid builtin tool call for read",
     );
+  });
+
+  test(`Given registry-derived builtin call helpers receive a different tool call,
+    When they validate the call before deriving arguments,
+    Then they reject the mismatched tool name`, () => {
+    const readTool = builtinToolByName("read");
+    expect(readTool.name).toBe("read");
+
+    expect(() =>
+      readTool.argumentsFromCall({
+        id: "call_ls",
+        tool: "ls",
+      }),
+    ).toThrow("Invalid builtin tool call for read");
   });
 
   test(`Given builtin edit execution receives malformed nested arguments,
@@ -584,17 +626,30 @@ describe("tool registry", () => {
     }
   });
 
+  test(`Given a provider yields malformed edit arguments,
+    When the agent normalizes the provider call before scheduling,
+    Then the provider error keeps the invalid field path`, () => {
+    const malformedProviderCall = {
+      id: "call_edit",
+      tool: "edit",
+      path: "note.txt",
+      edits: "not an array",
+    } as const;
+
+    expect(() => normalizeProviderToolCall(malformedProviderCall)).toThrow(
+      /Invalid provider tool call for edit: edits: Invalid input/,
+    );
+  });
+
   test(`Given builtin tools declare their argument contracts,
     When the registry metadata is inspected,
     Then each tool lists its provider-visible arguments and required fields`, () => {
     const argumentsByTool = Object.fromEntries(
-      builtinTools.map((tool) => [
-        tool.name,
+      openAICompatibleTools(true).map((tool) => [
+        tool.function.name,
         {
-          fields: Object.keys(tool.args.fields),
-          required: Object.entries(tool.args.fields)
-            .filter(([, field]) => field.required)
-            .map(([name]) => name),
+          fields: Object.keys(tool.function.parameters.properties),
+          required: tool.function.parameters.required,
         },
       ]),
     );
@@ -614,20 +669,21 @@ describe("tool registry", () => {
     });
   });
 
-  test(`Given builtin tools declare arguments in Zod and provider metadata,
-    When metadata is compared with generated JSON schema,
+  test(`Given builtin tools declare arguments in Zod,
+    When provider metadata is compared with generated JSON schema,
     Then keys requiredness types and numeric bounds stay equivalent`, () => {
+    const providerTools = openAICompatibleTools(true);
+
     for (const tool of builtinTools) {
+      const providerTool = providerToolByName(providerTools, tool.name);
+      const providerParameters = providerTool.function.parameters;
       const jsonSchema = z.toJSONSchema(tool.args.schema);
       const schemaFields = jsonSchema.properties ?? {};
-      const metadataFields = tool.args.fields;
-      const fieldKeys = Object.keys(metadataFields).sort();
-      const requiredFields = Object.entries(metadataFields)
-        .filter(([, field]) => field.required)
-        .map(([name]) => name)
-        .sort();
+      const providerFields = providerParameters.properties;
+      const fieldKeys = Object.keys(providerFields).sort();
+      const requiredFields = [...providerParameters.required].sort();
       const completeArgs = Object.fromEntries(
-        Object.entries(metadataFields).map(([name, field]) => [
+        Object.entries(providerFields).map(([name, field]) => [
           name,
           validProviderValue(field),
         ]),
@@ -653,28 +709,12 @@ describe("tool registry", () => {
         `${tool.name} metadata-derived arguments must parse`,
       ).toBe(true);
 
-      for (const [fieldName, field] of Object.entries(metadataFields)) {
-        const schemaField = schemaFields[fieldName];
-
-        if (schemaField === undefined || typeof schemaField === "boolean") {
-          throw new Error(`${tool.name}.${fieldName} schema field is missing`);
-        }
-
-        expect(schemaField.type, `${tool.name}.${fieldName} type drift`).toBe(
-          field.type,
+      for (const [fieldName, field] of Object.entries(providerFields)) {
+        expectProviderParameterMatchesSchema(
+          field,
+          schemaField(schemaFields[fieldName], `${tool.name}.${fieldName}`),
+          `${tool.name}.${fieldName}`,
         );
-        const expectedMinimum =
-          field.type === "integer" ? field.minimum : undefined;
-        const expectedMaximum =
-          field.type === "integer" ? field.maximum : undefined;
-        expect(
-          inclusiveIntegerMinimum(schemaField),
-          `${tool.name}.${fieldName} minimum drift`,
-        ).toBe(expectedMinimum);
-        expect(
-          inclusiveIntegerMaximum(schemaField),
-          `${tool.name}.${fieldName} maximum drift`,
-        ).toBe(expectedMaximum);
       }
     }
   });
@@ -697,12 +737,34 @@ describe("tool registry", () => {
 
   test(`Given provider tools are requested,
     When OpenAI-compatible definitions are built,
-    Then descriptions and parameter schemas match the builtin registry metadata`, () => {
-    const expectedProviderTools = builtinTools.map(
-      providerDefinitionFromBuiltinTool,
-    );
+    Then descriptions match the builtin registry and parameters are strict objects`, () => {
+    const providerTools = openAICompatibleTools(true);
 
-    expect(openAICompatibleTools(true)).toEqual(expectedProviderTools);
+    expect(
+      providerTools.map((tool) => ({
+        name: tool.function.name,
+        description: tool.function.description,
+      })),
+    ).toEqual(
+      builtinTools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+      })),
+    );
+    expect(
+      providerTools.map((tool) => ({
+        name: tool.function.name,
+        parameters: {
+          type: tool.function.parameters.type,
+          additionalProperties: tool.function.parameters.additionalProperties,
+        },
+      })),
+    ).toEqual(
+      builtinTools.map((tool) => ({
+        name: tool.name,
+        parameters: { type: "object", additionalProperties: false },
+      })),
+    );
   });
 
   test(`Given provider tool names arrive as strings,
@@ -781,7 +843,7 @@ describe("tool registry", () => {
       edits: [{ oldText: "old", newText: "new", replaceAll: true }],
     });
 
-    expect(parsed).toEqual({
+    expect(parsed).toStrictEqual({
       id: "call_edit",
       tool: "edit",
       path: "src/index.ts",
@@ -801,7 +863,7 @@ describe("tool registry", () => {
       edits: [{ oldText: "old", newText: "new", replaceAll: null }],
     });
 
-    expect(parsed).toEqual({
+    expect(parsed).toStrictEqual({
       id: "call_edit",
       tool: "edit",
       path: "src/index.ts",
@@ -930,6 +992,11 @@ describe("tool registry", () => {
       limit: null,
     });
 
+    expect(explicitNull).toStrictEqual({
+      id: "call_read",
+      tool: "read",
+      path: "src/index.ts",
+    });
     expect(omitted === null ? null : toolCallArguments(omitted)).toEqual({
       path: "src/index.ts",
     });

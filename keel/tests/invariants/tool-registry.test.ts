@@ -8,51 +8,27 @@ interface ParsedSource {
 }
 
 const registryPath = "src/tools/registry.ts";
+const builtinPath = "src/tools/builtin.ts";
 const executionPath = "src/tools/execution.ts";
 const cliOutputPath = "src/cli/output.ts";
 const contextCompactionPath = "src/agent/context-compaction.ts";
 const fakeProviderPath = "src/llm/providers/fake.ts";
 const registrySource = parseSource(registryPath);
+const builtinSource = parseSource(builtinPath);
 const executionSource = parseSource(executionPath);
 const cliOutputSource = parseSource(cliOutputPath);
 const contextCompactionSource = parseSource(contextCompactionPath);
 const fakeProviderSource = parseSource(fakeProviderPath);
-const builtinToolConstantNames = new Set([
-  "readTool",
-  "lsTool",
-  "globTool",
-  "grepTool",
-  "editTool",
-  "writeTool",
-  "bashTool",
-]);
-const builtinToolNames = new Set([
-  "read",
-  "ls",
-  "glob",
-  "grep",
-  "edit",
-  "write",
-  "bash",
-]);
-const perToolArgumentSchemaNames = new Set([
-  "readToolArgumentsSchema",
-  "lsToolArgumentsSchema",
-  "globToolArgumentsSchema",
-  "grepToolArgumentsSchema",
-  "editToolArgumentsSchema",
-  "writeToolArgumentsSchema",
-  "bashToolArgumentsSchema",
-]);
-const perToolExecutorNames = new Set([
-  "executeRead",
-  "executeLs",
-  "executeGlob",
-  "executeGrep",
-  "executeEdit",
-  "executeWrite",
-  "executeBash",
-]);
+const builtinToolConstantNames = new Set(
+  arrayIdentifierElements(builtinSource, "builtinTools"),
+);
+const builtinToolNames = new Set(
+  builtinToolLiteralNames(builtinSource, builtinToolConstantNames),
+);
+const perToolArgumentSchemaNames = new Set(
+  builtinToolArgumentSchemaNames(builtinSource, builtinToolConstantNames),
+);
+const perToolExecutorNames = new Set(importedExecutorNames(builtinSource));
 
 function parseSource(path: string): ParsedSource {
   const text = readFileSync(path, "utf8");
@@ -67,6 +43,187 @@ function location(source: ParsedSource, node: ts.Node): string {
     node.getStart(source.sourceFile),
   );
   return `${source.path}:${position.line + 1}:${position.character + 1}`;
+}
+
+function propertyNameText(node: ts.PropertyName): string | null {
+  if (
+    ts.isIdentifier(node) ||
+    ts.isStringLiteral(node) ||
+    ts.isNumericLiteral(node)
+  ) {
+    return node.text;
+  }
+  return null;
+}
+
+function variableInitializer(
+  source: ParsedSource,
+  name: string,
+): ts.Expression | null {
+  let initializer: ts.Expression | null = null;
+
+  function visit(node: ts.Node): void {
+    if (
+      initializer === null &&
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === name
+    ) {
+      initializer = node.initializer ?? null;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source.sourceFile);
+  return initializer;
+}
+
+function unwrapExpression(expression: ts.Expression): ts.Expression {
+  if (
+    ts.isAsExpression(expression) ||
+    ts.isParenthesizedExpression(expression)
+  ) {
+    return unwrapExpression(expression.expression);
+  }
+  return expression;
+}
+
+function arrayIdentifierElements(
+  source: ParsedSource,
+  variableName: string,
+): readonly string[] {
+  const initializer = variableInitializer(source, variableName);
+  const expression =
+    initializer === null ? null : unwrapExpression(initializer);
+  if (expression === null || !ts.isArrayLiteralExpression(expression)) {
+    throw new Error(`${source.path} missing ${variableName} array literal`);
+  }
+
+  const names: string[] = [];
+  for (const element of expression.elements) {
+    if (!ts.isIdentifier(element)) {
+      throw new Error(`${location(source, element)} must be an identifier`);
+    }
+    names.push(element.text);
+  }
+  return names;
+}
+
+function objectProperty(
+  object: ts.ObjectLiteralExpression,
+  name: string,
+): ts.PropertyAssignment | null {
+  for (const property of object.properties) {
+    if (
+      ts.isPropertyAssignment(property) &&
+      propertyNameText(property.name) === name
+    ) {
+      return property;
+    }
+  }
+  return null;
+}
+
+function defineToolObject(
+  source: ParsedSource,
+  constantName: string,
+): ts.ObjectLiteralExpression {
+  const initializer = variableInitializer(source, constantName);
+  const expression =
+    initializer === null ? null : unwrapExpression(initializer);
+  if (
+    expression === null ||
+    !ts.isCallExpression(expression) ||
+    !ts.isIdentifier(expression.expression) ||
+    expression.expression.text !== "defineTool"
+  ) {
+    throw new Error(`${source.path} missing defineTool for ${constantName}`);
+  }
+
+  const [toolDefinition] = expression.arguments;
+  if (
+    toolDefinition === undefined ||
+    !ts.isObjectLiteralExpression(toolDefinition)
+  ) {
+    throw new Error(
+      `${location(source, expression)} defineTool must receive an object literal`,
+    );
+  }
+  return toolDefinition;
+}
+
+function builtinToolLiteralNames(
+  source: ParsedSource,
+  constantNames: ReadonlySet<string>,
+): readonly string[] {
+  const names: string[] = [];
+  for (const constantName of constantNames) {
+    const nameProperty = objectProperty(
+      defineToolObject(source, constantName),
+      "name",
+    );
+    if (
+      nameProperty === null ||
+      !ts.isStringLiteral(nameProperty.initializer)
+    ) {
+      throw new Error(`${source.path} missing string name for ${constantName}`);
+    }
+    names.push(nameProperty.initializer.text);
+  }
+  return names;
+}
+
+function builtinToolArgumentSchemaNames(
+  source: ParsedSource,
+  constantNames: ReadonlySet<string>,
+): readonly string[] {
+  const names: string[] = [];
+  for (const constantName of constantNames) {
+    const argsProperty = objectProperty(
+      defineToolObject(source, constantName),
+      "args",
+    );
+    const initializer = argsProperty?.initializer;
+    if (
+      initializer === undefined ||
+      !ts.isCallExpression(initializer) ||
+      !ts.isIdentifier(initializer.expression) ||
+      initializer.expression.text !== "toolArgs"
+    ) {
+      throw new Error(`${source.path} missing toolArgs for ${constantName}`);
+    }
+
+    const [schema] = initializer.arguments;
+    if (schema === undefined || !ts.isIdentifier(schema)) {
+      throw new Error(
+        `${location(source, initializer)} toolArgs must receive a schema identifier`,
+      );
+    }
+    names.push(schema.text);
+  }
+  return names;
+}
+
+function importedExecutorNames(source: ParsedSource): readonly string[] {
+  const names: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isImportDeclaration(node)) {
+      const namedBindings = node.importClause?.namedBindings;
+      if (namedBindings !== undefined && ts.isNamedImports(namedBindings)) {
+        for (const element of namedBindings.elements) {
+          if (/^execute[A-Z]/.test(element.name.text)) {
+            names.push(element.name.text);
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source.sourceFile);
+  return names;
 }
 
 function stringLiteralText(node: ts.Node): string | null {
@@ -274,7 +431,67 @@ function perToolFakeResponseHelpers(source: ParsedSource): readonly string[] {
   return violations;
 }
 
+function identifierOccurrences(
+  source: ParsedSource,
+  names: ReadonlySet<string>,
+): readonly string[] {
+  const occurrences: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isIdentifier(node) && names.has(node.text)) {
+      occurrences.push(`${location(source, node)} ${node.text}`);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source.sourceFile);
+  return occurrences;
+}
+
+function propertyNames(
+  source: ParsedSource,
+  names: ReadonlySet<string>,
+): readonly string[] {
+  const occurrences: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isPropertyAssignment(node)) {
+      const name = ts.isIdentifier(node.name) ? node.name.text : null;
+      if (name !== null && names.has(name)) {
+        occurrences.push(`${location(source, node)} ${name}`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source.sourceFile);
+  return occurrences;
+}
+
 describe("builtin tool registry invariants", () => {
+  test(`Given Zod schemas own builtin tool arguments,
+    When builtin and registry syntax is inspected,
+    Then no parallel ToolArgDefinition field layer remains`, () => {
+    const customArgumentIdentifiers = new Set([
+      "ToolArgDefinition",
+      "ToolArgFields",
+      "ToolArgsSpec",
+      "stringArg",
+      "integerArg",
+      "booleanArg",
+      "arrayArg",
+      "objectArg",
+    ]);
+
+    expect(
+      identifierOccurrences(builtinSource, customArgumentIdentifiers),
+    ).toEqual([]);
+    expect(propertyNames(builtinSource, new Set(["fields"]))).toEqual([]);
+    expect(
+      importedBindings(registrySource, new Set(["ToolArgDefinition"])),
+    ).toEqual([]);
+  });
+
   test(`Given provider exposure is a registry-derived surface,
     When registry syntax is inspected,
     Then it does not keep per-tool provider definition objects`, () => {

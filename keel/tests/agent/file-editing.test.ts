@@ -2653,7 +2653,7 @@ describe("File Editing", () => {
 
   test(`Given the assistant requests an invalid read window,
     When the agent validates the read,
-    Then the agent rejects the terminal read error`, async () => {
+    Then the registry guard rejects the malformed tool call`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
@@ -2694,10 +2694,9 @@ describe("File Editing", () => {
             stopPolicy: defaultStopPolicy(),
           }),
         ),
-      ).rejects.toMatchObject({
-        code: "tool_invalid_read_options",
-        message: "read failed: offset must be a positive integer in note.txt",
-      });
+      ).rejects.toThrow(
+        /Invalid builtin tool call for read: offset: Too small/,
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
