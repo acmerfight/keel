@@ -184,6 +184,269 @@ describe("Session Store", () => {
     }
   });
 
+  test(`Given session persistence captures secret-like provider-visible messages,
+    When the ledger and bounded snapshot are written,
+    Then persisted records store redacted markers instead of the raw secret`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const largeMessages: readonly Message[] = [
+      { role: "user", content: "x".repeat(16 * 1024 * 1024) },
+    ];
+    const githubToken = `ghp_${"A".repeat(36)}`;
+    const googleApiKey = `AIza${"B".repeat(35)}`;
+    const secretMessages: readonly Message[] = [
+      {
+        role: "user",
+        content: `inspect API_KEY=sk-secret-213 and ${googleApiKey}`,
+      },
+      {
+        role: "assistant",
+        content: "Reading with Bearer live-secret-213-token.",
+        toolCalls: [
+          {
+            id: "read_secret",
+            tool: "read",
+            path: "secret.txt",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_secret",
+        content: `before sk-secret-213 after ${githubToken}\nAPI_KEY=env-secret-213\n`,
+      },
+      {
+        role: "assistant",
+        content: "Inspected secret.txt.",
+        toolCalls: [],
+      },
+    ];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "redacted-snapshot",
+        workspace,
+        runtime: runtime(home),
+      });
+      const persistedLargeMessages = persistSessionMessages({
+        session,
+        previousMessages: [],
+        currentMessages: largeMessages,
+        runtime: runtime(home, 1),
+        reason: "turn",
+      });
+
+      // When
+      const persistedSecretMessages = persistSessionMessages({
+        session,
+        previousMessages: persistedLargeMessages,
+        currentMessages: secretMessages,
+        runtime: runtime(home, 2),
+        reason: "compaction",
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "redacted-snapshot",
+        workspace,
+        runtime: runtime(home, 3),
+      });
+
+      // Then
+      expect(persistedSecretMessages).toEqual(secretMessages);
+      const ledger = await readFile(session.filePath, "utf8");
+      expect(ledger.includes("sk-secret-213")).toBe(false);
+      expect(ledger.includes("env-secret-213")).toBe(false);
+      expect(ledger.includes("live-secret-213-token")).toBe(false);
+      expect(ledger.includes(githubToken)).toBe(false);
+      expect(ledger.includes(googleApiKey)).toBe(false);
+      expect(ledger.includes("[REDACTED_SECRET]")).toBe(true);
+
+      const ledgerLines = ledger.trimEnd().split("\n");
+      const lastLine = ledgerLines.at(-1);
+      expect(lastLine).toBeDefined();
+      if (lastLine === undefined) {
+        throw new Error("Expected snapshot line");
+      }
+      const snapshot = JSON.parse(lastLine);
+      expect(snapshot).toMatchObject({
+        type: "snapshot",
+        messages: expect.any(Array),
+      });
+      expect(JSON.stringify(snapshot).includes("sk-secret-213")).toBe(false);
+      expect(JSON.stringify(snapshot).includes("env-secret-213")).toBe(false);
+      expect(JSON.stringify(snapshot).includes(githubToken)).toBe(false);
+      expect(JSON.stringify(snapshot).includes(googleApiKey)).toBe(false);
+      expect(JSON.stringify(snapshot).includes("[REDACTED_SECRET]")).toBe(true);
+      expect(JSON.stringify(resumed.messages).includes("sk-secret-213")).toBe(
+        false,
+      );
+      expect(JSON.stringify(resumed.messages).includes("env-secret-213")).toBe(
+        false,
+      );
+      expect(JSON.stringify(resumed.messages).includes(githubToken)).toBe(
+        false,
+      );
+      expect(JSON.stringify(resumed.messages).includes(googleApiKey)).toBe(
+        false,
+      );
+      expect(
+        JSON.stringify(resumed.messages).includes("[REDACTED_SECRET]"),
+      ).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given queued input and bash approval contain secret-like values,
+    When the ledger and bounded snapshot are written,
+    Then persisted session metadata stores redacted markers instead of raw secrets`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const largeMessages: readonly Message[] = [
+      { role: "user", content: "x".repeat(16 * 1024 * 1024) },
+    ];
+    const grant = {
+      type: "exact",
+      cwd: ledgerWorkspace,
+      command: "printf 'Bearer live-secret-approval-token'",
+    } satisfies BashApprovalGrant;
+
+    try {
+      const session = createSessionStore({
+        sessionId: "redacted-session-metadata",
+        workspace,
+        runtime: runtime(home),
+      });
+      const queuedInput = persistSessionQueuedInput({
+        session,
+        sequence: 4,
+        line: "continue with sk-secret-queued-214",
+        runtime: runtime(home, 1),
+      });
+      persistSessionBashApprovalGrant({
+        session,
+        grant,
+        runtime: runtime(home, 2),
+      });
+
+      // When
+      persistSessionMessages({
+        session,
+        previousMessages: [],
+        currentMessages: largeMessages,
+        runtime: runtime(home, 3),
+        reason: "turn",
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "redacted-session-metadata",
+        workspace,
+        runtime: runtime(home, 4),
+      });
+
+      // Then
+      expect(queuedInput.line).toBe("continue with sk-secret-queued-214");
+
+      const ledger = await readFile(session.filePath, "utf8");
+      expect(ledger.includes("sk-secret-queued-214")).toBe(false);
+      expect(ledger.includes("live-secret-approval-token")).toBe(false);
+      expect(ledger.includes("[REDACTED_SECRET]")).toBe(true);
+
+      const lastLine = ledger.trimEnd().split("\n").at(-1);
+      expect(lastLine).toBeDefined();
+      if (lastLine === undefined) {
+        throw new Error("Expected snapshot line");
+      }
+      const snapshot = JSON.parse(lastLine);
+      expect(snapshot).toMatchObject({
+        type: "snapshot",
+        pendingInputs: expect.any(Array),
+      });
+      expect(snapshot.bashApprovalGrants ?? []).toEqual([]);
+      expect(JSON.stringify(snapshot).includes("sk-secret-queued-214")).toBe(
+        false,
+      );
+      expect(
+        JSON.stringify(snapshot).includes("live-secret-approval-token"),
+      ).toBe(false);
+      expect(JSON.stringify(snapshot).includes("[REDACTED_SECRET]")).toBe(true);
+      expect(
+        JSON.stringify(resumed.pendingInputs).includes("sk-secret-queued-214"),
+      ).toBe(false);
+      expect(
+        JSON.stringify(resumed.bashApprovalGrants).includes(
+          "live-secret-approval-token",
+        ),
+      ).toBe(false);
+      expect(resumed.bashApprovalGrants).toEqual([]);
+      expect(
+        JSON.stringify(resumed.pendingInputs).includes("[REDACTED_SECRET]"),
+      ).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a bash approval audit record contains a secret-like command,
+    When the session is resumed before snapshot compaction,
+    Then the redacted audit record is not replayed as an active approval`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const grant = {
+      type: "exact",
+      cwd: ledgerWorkspace,
+      command: "printf 'Bearer live-secret-approval-token'",
+    } satisfies BashApprovalGrant;
+
+    try {
+      const session = createSessionStore({
+        sessionId: "redacted-bash-approval-resume",
+        workspace,
+        runtime: runtime(home),
+      });
+      persistSessionBashApprovalGrant({
+        session,
+        grant,
+        runtime: runtime(home, 1),
+      });
+
+      // When
+      const resumed = resumeSessionStore({
+        sessionId: "redacted-bash-approval-resume",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      const ledgerLines = (await readFile(session.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerLines).toHaveLength(2);
+      expect(ledgerLines[1]).toMatchObject({
+        type: "bash_approval_granted",
+        grant: {
+          type: "exact",
+          cwd: ledgerWorkspace,
+          command: "printf 'Bearer [REDACTED_SECRET]'",
+        },
+      });
+      expect(JSON.stringify(ledgerLines)).not.toContain(
+        "live-secret-approval-token",
+      );
+      expect(session.bashApprovalGrants).toEqual([]);
+      expect(resumed.bashApprovalGrants).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given prompt input was queued while a named session was busy,
     When the session is resumed before another turn consumes it,
     Then the queued input is restored without changing provider-visible history`, async () => {

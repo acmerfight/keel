@@ -464,6 +464,47 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given more visible reads than the retained cap,
+    When read visibility records them,
+    Then old paths are evicted and recent paths still satisfy read-before-edit`, () => {
+    // Given
+    const retainedReadCap = 256;
+    const readVisibility = createReadVisibilityState();
+    const targetPaths = Array.from(
+      { length: retainedReadCap + 2 },
+      (_, index) => `/workspace/file-${index}.txt`,
+    );
+    const newestTarget = targetPaths[targetPaths.length - 1];
+    if (newestTarget === undefined) {
+      throw new Error("Expected newest target path");
+    }
+
+    // When
+    readVisibility.applyVisibleToolExecutions(
+      targetPaths.map((targetPath) => ({
+        ok: true,
+        content: "",
+        readTargetPath: targetPath,
+      })),
+    );
+
+    // Then
+    expect(readVisibility.visibleReadsMostRecentFirst()).toHaveLength(
+      retainedReadCap,
+    );
+    expect(readVisibility.hasRead("/workspace/file-0.txt")).toBe(false);
+    expect(readVisibility.hasRead("/workspace/file-1.txt")).toBe(false);
+    expect(readVisibility.hasRead("/workspace/file-2.txt")).toBe(true);
+    expect(readVisibility.hasRead(newestTarget)).toBe(true);
+
+    readVisibility.applyImmediateMutation({
+      ok: true,
+      content: "",
+      mutatedTargetPath: newestTarget,
+    });
+    expect(readVisibility.hasRead(newestTarget)).toBe(false);
+  });
+
   test(`Given the assistant edits two locations in one file,
     When the agent handles one multi-edit tool call,
     Then both locations are updated on disk`, async () => {
