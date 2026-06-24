@@ -25,6 +25,11 @@ import {
   createSessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
 import {
+  formatInteractiveForkPicker,
+  formatInteractiveSessionForkPoints,
+  type SessionForkPoints,
+} from "./fork-points.ts";
+import {
   formatContextCompactionReport,
   sanitizeStatusLineText,
 } from "./output.ts";
@@ -89,6 +94,7 @@ export interface InteractiveSessionOptions {
     consumedInputIds: readonly string[],
   ) => void;
   readonly forkSession?: (request: InteractiveForkSessionRequest) => string;
+  readonly listForkPoints?: () => SessionForkPoints;
   readonly persistBashApprovalGrant?: (grant: BashApprovalGrant) => void;
   readonly input: NodeJS.ReadableStream;
   readonly writeStdout: (text: string) => void;
@@ -152,6 +158,11 @@ interface ForkCommand {
   readonly kind: "fork";
   readonly targetSessionId: string;
   readonly beforeUser?: number;
+  readonly pick?: true;
+}
+
+interface ForkPointsCommand {
+  readonly kind: "fork-points";
 }
 
 interface InvalidInteractiveCommand {
@@ -162,6 +173,7 @@ interface InvalidInteractiveCommand {
 type InteractiveCommand =
   | HelpCommand
   | ManualCompactCommand
+  | ForkPointsCommand
   | ForkCommand
   | InvalidInteractiveCommand;
 
@@ -172,6 +184,9 @@ function formatInteractiveHelp(): string {
     "  /compact [focus]   Summarize older conversation context with optional focus.",
     "  /fork <target-id> [--before-user <n>]",
     "                     Fork this named or resumed session without switching to it.",
+    "  /fork <target-id> --pick",
+    "                     Choose the fork point interactively.",
+    "  /fork-points       List restored user-message fork points.",
     "",
     "Session commands:",
     "  keel sessions",
@@ -225,12 +240,18 @@ function parseForkCommandArgs(
   }
 
   let beforeUser: number | undefined;
+  let pick = false;
   const beforeUserPrefix = "--before-user=";
   const optionArgs = args.slice(1);
   let skipNext = false;
   for (const [index, arg] of optionArgs.entries()) {
     if (skipNext) {
       skipNext = false;
+      continue;
+    }
+
+    if (arg === "--pick") {
+      pick = true;
       continue;
     }
 
@@ -259,10 +280,18 @@ function parseForkCommandArgs(
     };
   }
 
+  if (pick && beforeUser !== undefined) {
+    return {
+      kind: "invalid",
+      message: "Error: --pick cannot be combined with --before-user.",
+    };
+  }
+
   return {
     kind: "fork",
     targetSessionId,
     ...(beforeUser !== undefined ? { beforeUser } : {}),
+    ...(pick ? { pick } : {}),
   };
 }
 
@@ -272,6 +301,18 @@ function parseInteractiveCommand(
   const trimmed = userMessage.trim();
   if (trimmed === "/help") {
     return { kind: "help" };
+  }
+
+  const forkPointsMatch = /^\/fork-points(?:\s+(.*))?$/u.exec(trimmed);
+  if (forkPointsMatch !== null) {
+    const extraArgs = forkPointsMatch[1]?.trim();
+    if (extraArgs !== undefined && extraArgs !== "") {
+      return {
+        kind: "invalid",
+        message: "Error: /fork-points does not accept arguments.",
+      };
+    }
+    return { kind: "fork-points" };
   }
 
   const forkMatch = /^\/fork(?:\s+(.*))?$/u.exec(trimmed);
@@ -298,6 +339,101 @@ function formatInteractiveCommandFailure(error: unknown): string {
 function formatManualCompactionFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return `Context compaction failed: ${sanitizeStatusLineText(message)}\n`;
+}
+
+function formatForkRequiresNamedSession(
+  command: "/fork" | "/fork-points",
+): string {
+  return `Error: ${command} requires a named session. Start with --session or --resume.\n`;
+}
+
+interface ForkPointSelection {
+  readonly beforeUser?: number;
+}
+
+interface ForkPointPickerSelection {
+  readonly kind: "selected";
+  readonly selection: ForkPointSelection;
+  readonly consumedLines: readonly QueuedLine[];
+}
+
+interface ForkPointPickerCancelled {
+  readonly kind: "cancelled";
+  readonly consumedLines: readonly QueuedLine[];
+  readonly explicit: boolean;
+}
+
+type ForkPointPickerResult =
+  | ForkPointPickerSelection
+  | ForkPointPickerCancelled;
+
+function formatForkPointSelectionPrompt(maxChoice: number): string {
+  return `Select fork point [0-${maxChoice}], or q to cancel:\n`;
+}
+
+function parseForkPointSelection(
+  rawSelection: string,
+  maxChoice: number,
+): ForkPointSelection | "cancelled" | "invalid" {
+  const selection = rawSelection.trim().toLowerCase();
+  if (selection === "0") {
+    return {};
+  }
+  if (selection === "q" || selection === "quit" || selection === "cancel") {
+    return "cancelled";
+  }
+  if (!/^[1-9][0-9]*$/u.test(selection)) {
+    return "invalid";
+  }
+
+  const choice = Number(selection);
+  if (!Number.isSafeInteger(choice) || choice > maxChoice) {
+    return "invalid";
+  }
+  return { beforeUser: choice };
+}
+
+async function readForkPointPickerSelection(options: {
+  readonly maxChoice: number;
+  readonly lineReader: LineReader;
+  readonly writeStdout: (text: string) => void;
+  readonly writeStderr: (text: string) => void;
+}): Promise<ForkPointPickerResult> {
+  const consumedLines: QueuedLine[] = [];
+  for (;;) {
+    const rawSelection = await options.lineReader.readLine();
+    if (rawSelection === null) {
+      return {
+        kind: "cancelled",
+        consumedLines,
+        explicit: false,
+      };
+    }
+    consumedLines.push(rawSelection);
+    const selection = parseForkPointSelection(
+      rawSelection.line,
+      options.maxChoice,
+    );
+    if (selection === "cancelled") {
+      return {
+        kind: "cancelled",
+        consumedLines,
+        explicit: true,
+      };
+    }
+    if (selection === "invalid") {
+      options.writeStderr(
+        `Error: selection must be 0-${options.maxChoice} or q.\n`,
+      );
+      options.writeStdout(formatForkPointSelectionPrompt(options.maxChoice));
+      continue;
+    }
+    return {
+      kind: "selected",
+      selection,
+      consumedLines,
+    };
+  }
 }
 
 interface ManualCompactContext {
@@ -815,6 +951,18 @@ export async function runInteractiveSession(
         consumeQueuedInputLines([rawInput]);
         continue;
       }
+      if (interactiveCommand?.kind === "fork-points") {
+        if (options.listForkPoints === undefined) {
+          options.writeStderr(formatForkRequiresNamedSession("/fork-points"));
+          consumeQueuedInputLines([rawInput]);
+          continue;
+        }
+        options.writeStdout(
+          formatInteractiveSessionForkPoints(options.listForkPoints()),
+        );
+        consumeQueuedInputLines([rawInput]);
+        continue;
+      }
       if (interactiveCommand?.kind === "compact") {
         if (messages.length === 0 || resolved === null) {
           options.writeStderr(
@@ -855,10 +1003,45 @@ export async function runInteractiveSession(
       }
       if (interactiveCommand?.kind === "fork") {
         if (options.forkSession === undefined) {
-          options.writeStderr(
-            "Error: /fork requires a named session. Start with --session or --resume.\n",
-          );
+          options.writeStderr(formatForkRequiresNamedSession("/fork"));
           consumeQueuedInputLines([rawInput]);
+          continue;
+        }
+        if (interactiveCommand.pick === true) {
+          if (options.listForkPoints === undefined) {
+            options.writeStderr(formatForkRequiresNamedSession("/fork"));
+            consumeQueuedInputLines([rawInput]);
+            continue;
+          }
+          const forkPoints = options.listForkPoints();
+          options.writeStdout(formatInteractiveForkPicker(forkPoints));
+          const pickerResult = await readForkPointPickerSelection({
+            maxChoice: forkPoints.points.length,
+            lineReader,
+            writeStdout: options.writeStdout,
+            writeStderr: options.writeStderr,
+          });
+          const consumedLines = [rawInput, ...pickerResult.consumedLines];
+          if (pickerResult.kind === "cancelled") {
+            if (pickerResult.explicit) {
+              options.writeStdout("Fork cancelled.\n");
+            }
+            consumeQueuedInputLines(consumedLines);
+            continue;
+          }
+          try {
+            options.writeStdout(
+              options.forkSession({
+                targetSessionId: interactiveCommand.targetSessionId,
+                ...(pickerResult.selection.beforeUser !== undefined
+                  ? { beforeUser: pickerResult.selection.beforeUser }
+                  : {}),
+              }),
+            );
+          } catch (error) {
+            options.writeStderr(formatInteractiveCommandFailure(error));
+          }
+          consumeQueuedInputLines(consumedLines);
           continue;
         }
         try {

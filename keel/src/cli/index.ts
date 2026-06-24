@@ -14,6 +14,10 @@ import {
 } from "../permissions/bash.ts";
 import { parseCliArgs, USAGE } from "./args.ts";
 import {
+  formatExternalSessionForkPoints,
+  sessionForkPointsFromMessages,
+} from "./fork-points.ts";
+import {
   type InteractiveForkSessionRequest,
   runInteractiveSession,
   type SessionPersistenceReason,
@@ -83,36 +87,6 @@ function oneShotBashPermissionPolicy(
     };
   }
   return undefined;
-}
-
-const FORK_POINT_PREVIEW_MAX_LENGTH = 120;
-
-function forkPointPreview(content: string): string {
-  const normalized = content.replace(/\s+/gu, " ").trim();
-  if (normalized.length <= FORK_POINT_PREVIEW_MAX_LENGTH) {
-    return normalized;
-  }
-  return `${normalized.slice(0, FORK_POINT_PREVIEW_MAX_LENGTH - 3)}...`;
-}
-
-function formatSessionForkPoints(session: SessionState): string {
-  const lines = [`Fork points for session "${session.id}":`];
-  let userMessageCount = 0;
-  for (const message of session.messages) {
-    if (message.role !== "user") {
-      continue;
-    }
-    userMessageCount += 1;
-    lines.push(`${userMessageCount}. ${forkPointPreview(message.content)}`);
-    lines.push(
-      `   use: keel sessions fork ${session.id} <new-id> --before-user ${userMessageCount}`,
-    );
-  }
-
-  if (userMessageCount === 0) {
-    return `No restored user messages in session "${session.id}".\n`;
-  }
-  return `${lines.join("\n")}\n`;
 }
 
 function sessionCatalogEntryLines(
@@ -315,7 +289,14 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         workspace: runtime.cwd(),
         runtime,
       });
-      runtime.writeStdout(formatSessionForkPoints(session));
+      runtime.writeStdout(
+        formatExternalSessionForkPoints(
+          sessionForkPointsFromMessages({
+            sessionId: session.id,
+            messages: session.messages,
+          }),
+        ),
+      );
       return 0;
     } catch (error) {
       /* v8 ignore next 3: resumeSessionStore reports supported fork-point failures as SessionStoreError. */
@@ -437,6 +418,9 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
               readonly forkSession: (
                 request: InteractiveForkSessionRequest,
               ) => string;
+              readonly listForkPoints: () => ReturnType<
+                typeof sessionForkPointsFromMessages
+              >;
               readonly initialBashApprovalGrants: readonly BashApprovalGrant[];
               readonly persistBashApprovalGrant: (
                 grant: BashApprovalGrant,
@@ -501,6 +485,11 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
               targetSessionLock?.release();
             }
           };
+          const listActiveForkPoints = () =>
+            sessionForkPointsFromMessages({
+              sessionId,
+              messages: persistedMessages,
+            });
           const initialSession = session;
           sessionPersistence = {
             initialMessages: initialSession?.messages ?? [],
@@ -539,6 +528,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
               });
             },
             forkSession: forkActiveSession,
+            listForkPoints: listActiveForkPoints,
             persistBashApprovalGrant: (grant: BashApprovalGrant) => {
               persistSessionBashApprovalGrant({
                 session: ensureActiveSession(),
