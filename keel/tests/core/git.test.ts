@@ -66,7 +66,11 @@ describe("Git Checkpoints", () => {
 
       // Then
       expect(record).toEqual({ written: false });
-      expect(restore).toEqual({ status: "none", message: "Nothing to undo." });
+      expect(restore).toEqual({
+        status: "none",
+        message:
+          "No earlier checkpoints. Ask me to undo more, or use git to reset.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -88,7 +92,11 @@ describe("Git Checkpoints", () => {
 
       // Then
       expect(result).toEqual({ written: false });
-      expect(restore).toEqual({ status: "none", message: "Nothing to undo." });
+      expect(restore).toEqual({
+        status: "none",
+        message:
+          "No earlier checkpoints. Ask me to undo more, or use git to reset.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -616,7 +624,11 @@ describe("Git Checkpoints", () => {
 
       // Then
       expect(record).toEqual({ written: false });
-      expect(restore).toEqual({ status: "none", message: "Nothing to undo." });
+      expect(restore).toEqual({
+        status: "none",
+        message:
+          "No earlier checkpoints. Ask me to undo more, or use git to reset.",
+      });
       expect(stderr).not.toHaveBeenCalled();
     } finally {
       stderr.mockRestore();
@@ -721,7 +733,11 @@ describe("Git Checkpoints", () => {
       const result = restoreLastEditCheckpoint(workspace);
 
       // Then
-      expect(result).toEqual({ status: "none", message: "Nothing to undo." });
+      expect(result).toEqual({
+        status: "none",
+        message:
+          "No earlier checkpoints. Ask me to undo more, or use git to reset.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -840,7 +856,8 @@ describe("Git Checkpoints", () => {
       });
       expect(secondResult).toEqual({
         status: "none",
-        message: "Nothing to undo.",
+        message:
+          "No earlier checkpoints. Ask me to undo more, or use git to reset.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -997,7 +1014,11 @@ describe("Git Checkpoints", () => {
       const result = restoreLastEditCheckpoint(workspace);
 
       // Then
-      expect(result).toEqual({ status: "none", message: "Nothing to undo." });
+      expect(result).toEqual({
+        status: "none",
+        message:
+          "No earlier checkpoints. Ask me to undo more, or use git to reset.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
