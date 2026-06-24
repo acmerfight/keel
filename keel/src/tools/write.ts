@@ -1,5 +1,4 @@
-import { mkdirSync, realpathSync } from "node:fs";
-import { basename, resolve } from "node:path";
+import { mkdirSync } from "node:fs";
 import { KeelError } from "../core/error.ts";
 import {
   type RecordLastBatchCheckpointOperation,
@@ -9,8 +8,12 @@ import { createTextFileAtomically } from "./atomic-write.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
 import {
-  isInsideWorkspace,
+  assertWorkspaceFileIdentityAtAccess,
+  assertWorkspaceOpenTargetAtAccess,
+  type FileIdentity,
+  findWorkspacePathsByIdentity,
   resolveWorkspaceCreateTarget,
+  resolveWorkspaceCreateTargetAtAccess,
 } from "./workspace-path.ts";
 
 interface WriteToolResult extends ToolResult {
@@ -54,23 +57,66 @@ export function executeWrite(
     throw error;
   }
 
-  const parentRealPath = realpathSync(parentPath);
-  if (!isInsideWorkspace(workspacePath, parentRealPath)) {
-    throw new KeelError(
-      "tool_path_outside_workspace",
-      `write failed: path is outside the workspace: ${filePath}`,
-      "Use a workspace-relative path under the current workspace.",
-    );
-  }
-
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
-  const realTargetPath = resolve(parentRealPath, basename(targetPath));
+  const realTargetPath = resolveWorkspaceCreateTargetAtAccess({
+    workspacePath,
+    parentPath,
+    targetPath,
+    toolName: "write",
+    requestedPath: filePath,
+  });
   if (projectIgnorePolicy.isIgnored(realTargetPath, false)) {
     throw ignoredPathError(filePath);
   }
 
+  const validateTargetAtAccess = (): string => {
+    const accessTargetPath = resolveWorkspaceCreateTargetAtAccess({
+      workspacePath,
+      parentPath,
+      targetPath,
+      toolName: "write",
+      requestedPath: filePath,
+    });
+    if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+      throw ignoredPathError(filePath);
+    }
+    return accessTargetPath;
+  };
+  const validateOpenedTempAtAccess = (tempPath: string, fd: number): void => {
+    assertWorkspaceOpenTargetAtAccess({
+      fd,
+      workspacePath,
+      targetPath: tempPath,
+      toolName: "write",
+      requestedPath: filePath,
+    });
+  };
+  let publishedTargetPath = realTargetPath;
+  const validatePublishedTargetAtAccess = (
+    publishedPath: string,
+    identity: FileIdentity,
+  ): void => {
+    const accessTargetPath = assertWorkspaceFileIdentityAtAccess({
+      identity,
+      workspacePath,
+      targetPath: publishedPath,
+      toolName: "write",
+      requestedPath: filePath,
+    });
+    if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+      throw ignoredPathError(filePath);
+    }
+    publishedTargetPath = accessTargetPath;
+  };
   try {
-    createTextFileAtomically(targetPath, content);
+    createTextFileAtomically(realTargetPath, content, {
+      beforeAccess: validateTargetAtAccess,
+      beforeWrite: validateOpenedTempAtAccess,
+      beforePublish: validateTargetAtAccess,
+      afterPublish: validatePublishedTargetAtAccess,
+      cleanupPathsByIdentity: (identity) =>
+        findWorkspacePathsByIdentity(workspacePath, identity),
+    });
   } catch (error) {
     if (isErrnoException(error) && error.code === "EEXIST") {
       throw new KeelError(
@@ -89,7 +135,7 @@ export function executeWrite(
     throw error;
   }
 
-  const createdPath = realpathSync(targetPath);
+  const createdPath = publishedTargetPath;
   recordLastCreateCheckpoint({
     workspace: workspacePath,
     filePath: createdPath,

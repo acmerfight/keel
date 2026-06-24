@@ -1,9 +1,32 @@
-import { existsSync, lstatSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import {
+  type Dirent,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  readdirSync,
+  realpathSync,
+  type Stats,
+  statSync,
+} from "node:fs";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from "node:path";
 import { KeelError } from "../core/error.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 
-type FileToolName = "edit" | "glob" | "grep" | "ls" | "read" | "write";
+type FileToolName =
+  | "apply_patch"
+  | "edit"
+  | "glob"
+  | "grep"
+  | "ls"
+  | "read"
+  | "write";
 
 export interface WorkspaceTarget {
   readonly workspacePath: string;
@@ -18,12 +41,137 @@ export interface WorkspaceCreateTarget {
   readonly parentPath: string;
 }
 
+export interface FileIdentity {
+  readonly dev: number;
+  readonly ino: number;
+}
+
+interface WorkspaceAccessTargetInput {
+  readonly workspacePath: string;
+  readonly targetPath: string;
+  readonly toolName: FileToolName;
+  readonly requestedPath: string;
+}
+
+interface WorkspaceOpenTargetInput extends WorkspaceAccessTargetInput {
+  readonly fd: number;
+}
+
+interface WorkspaceIdentityTargetInput extends WorkspaceAccessTargetInput {
+  readonly identity: FileIdentity;
+}
+
+interface WorkspaceCreateTargetAccessInput extends WorkspaceAccessTargetInput {
+  readonly parentPath: string;
+}
+
 export function isInsideWorkspace(workspace: string, target: string): boolean {
   const targetFromWorkspace = relative(workspace, target);
   return (
     targetFromWorkspace === "" ||
     (!targetFromWorkspace.startsWith("..") && !isAbsolute(targetFromWorkspace))
   );
+}
+
+export function assertWorkspaceTargetAtAccess(
+  input: WorkspaceAccessTargetInput,
+): string {
+  const targetRealPath = realpathSync(input.targetPath);
+  if (!isInsideWorkspace(input.workspacePath, targetRealPath)) {
+    throw outsideWorkspaceError(input.toolName, input.requestedPath);
+  }
+  return targetRealPath;
+}
+
+export function sameFileIdentity(
+  left: FileIdentity,
+  right: FileIdentity,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+export function fileIdentityFromStats(stat: Stats): FileIdentity {
+  return { dev: stat.dev, ino: stat.ino };
+}
+
+export function findWorkspacePathsByIdentity(
+  workspacePath: string,
+  identity: FileIdentity,
+): readonly string[] {
+  const found: string[] = [];
+  const pending = [workspacePath];
+  for (const directory of pending) {
+    let entries: Dirent<string>[];
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      /* v8 ignore next 1: identity scans tolerate concurrently removed directories. */
+      continue;
+    }
+
+    for (const entry of entries) {
+      const entryPath = join(directory, entry.name);
+      let entryStat: ReturnType<typeof lstatSync>;
+      try {
+        entryStat = lstatSync(entryPath);
+      } catch {
+        /* v8 ignore next 1: identity scans tolerate concurrently removed entries. */
+        continue;
+      }
+      if (entryStat.isSymbolicLink()) continue;
+      if (sameFileIdentity(fileIdentityFromStats(entryStat), identity)) {
+        found.push(entryPath);
+      }
+      if (entryStat.isDirectory()) pending.push(entryPath);
+    }
+  }
+  return found;
+}
+
+export function assertWorkspaceOpenTargetAtAccess(
+  input: WorkspaceOpenTargetInput,
+): string {
+  const targetRealPath = assertWorkspaceTargetAtAccess(input);
+  const targetStat = statSync(targetRealPath);
+  const openedStat = fstatSync(input.fd);
+  if (!openedStat.isFile() || !targetStat.isFile()) {
+    /* v8 ignore next 1: target resolution rejects special files; this guards post-open races. */
+    throw unsupportedPathTypeError(input.toolName, input.requestedPath);
+  }
+  if (
+    !sameFileIdentity(
+      fileIdentityFromStats(openedStat),
+      fileIdentityFromStats(targetStat),
+    )
+  ) {
+    throw outsideWorkspaceError(input.toolName, input.requestedPath);
+  }
+  return targetRealPath;
+}
+
+export function assertWorkspaceFileIdentityAtAccess(
+  input: WorkspaceIdentityTargetInput,
+): string {
+  const targetRealPath = assertWorkspaceTargetAtAccess(input);
+  const targetStat = statSync(targetRealPath);
+  if (!targetStat.isFile()) {
+    /* v8 ignore next 1: published file identity checks only receive file publishes. */
+    throw unsupportedPathTypeError(input.toolName, input.requestedPath);
+  }
+  if (!sameFileIdentity(fileIdentityFromStats(targetStat), input.identity)) {
+    throw outsideWorkspaceError(input.toolName, input.requestedPath);
+  }
+  return targetRealPath;
+}
+
+export function resolveWorkspaceCreateTargetAtAccess(
+  input: WorkspaceCreateTargetAccessInput,
+): string {
+  const parentRealPath = realpathSync(input.parentPath);
+  if (!isInsideWorkspace(input.workspacePath, parentRealPath)) {
+    throw outsideWorkspaceError(input.toolName, input.requestedPath);
+  }
+  return resolve(parentRealPath, basename(input.targetPath));
 }
 
 function remapRequestedPath(
@@ -93,6 +241,42 @@ function notDirectoryError(
   );
 }
 
+function unsupportedPathTypeError(
+  toolName: FileToolName,
+  requestedPath: string,
+): KeelError {
+  if (toolName === "glob" || toolName === "ls") {
+    return new KeelError(
+      "tool_not_directory",
+      `${toolName} failed: not a directory: ${requestedPath}`,
+      "Use a workspace directory path.",
+    );
+  }
+  if (toolName === "grep") {
+    return new KeelError(
+      "tool_not_file",
+      `grep failed: not a file or directory: ${requestedPath}`,
+      "The path is neither a file nor a directory. Verify the path exists.",
+    );
+  }
+  return new KeelError(
+    "tool_not_file",
+    `${toolName} failed: unsupported file type: ${requestedPath}`,
+    "Use a regular file or directory path inside the workspace.",
+  );
+}
+
+function assertSupportedWorkspaceEntry(
+  targetPath: string,
+  toolName: FileToolName,
+  requestedPath: string,
+): void {
+  const targetStat = statSync(targetPath);
+  if (!targetStat.isFile() && !targetStat.isDirectory()) {
+    throw unsupportedPathTypeError(toolName, requestedPath);
+  }
+}
+
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
@@ -154,10 +338,7 @@ export function resolveWorkspaceTarget(
   }
 
   if (!existsSync(absoluteRequestedPath)) {
-    if (
-      !requestIsWorkspaceRoot &&
-      projectIgnorePolicy.isIgnored(absoluteRequestedPath, true)
-    ) {
+    if (projectIgnorePolicy.isIgnored(absoluteRequestedPath, true)) {
       throw ignoredPathError(toolName, requestedPath);
     }
     throw new KeelError(
@@ -171,6 +352,7 @@ export function resolveWorkspaceTarget(
   if (!isInsideWorkspace(workspacePath, targetPath)) {
     throw outsideWorkspaceError(toolName, requestedPath);
   }
+  assertSupportedWorkspaceEntry(targetPath, toolName, requestedPath);
 
   return { workspacePath, requestedPath: absoluteRequestedPath, targetPath };
 }

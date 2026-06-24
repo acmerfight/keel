@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { fstatSync, statSync } from "node:fs";
 import { KeelError } from "../core/error.ts";
 import {
   type RecordLastBatchCheckpointOperation,
@@ -13,7 +13,14 @@ import {
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import { readEditableTextFileWithMetadata } from "./text-file.ts";
 import type { ToolResult } from "./types.ts";
-import { resolveWorkspaceTarget } from "./workspace-path.ts";
+import {
+  assertWorkspaceFileIdentityAtAccess,
+  assertWorkspaceOpenTargetAtAccess,
+  assertWorkspaceTargetAtAccess,
+  type FileIdentity,
+  findWorkspacePathsByIdentity,
+  resolveWorkspaceTarget,
+} from "./workspace-path.ts";
 
 export interface EditReplacement {
   readonly oldText: string;
@@ -44,6 +51,22 @@ type NormalizedText =
       readonly text: string;
       readonly sourceIndexByNormalizedIndex: readonly number[];
     };
+
+function fileNotReadError(filePath: string): KeelError {
+  return new KeelError(
+    "tool_file_not_read",
+    `edit failed: file has not been read: ${filePath}`,
+    `Use read(path: "${filePath}") to view the current file content, then retry edit with edits[].oldText copied from the read output.`,
+  );
+}
+
+function ignoredPathError(filePath: string): KeelError {
+  return new KeelError(
+    "tool_path_ignored",
+    `edit failed: ignored path: ${filePath}`,
+    "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+  );
+}
 
 interface NormalizedEditReplacement {
   readonly editIndex: number;
@@ -350,18 +373,20 @@ function executeEditBatch(
     "edit",
   );
 
-  const targetStat = statSync(targetPath);
+  const accessTargetPath = assertWorkspaceTargetAtAccess({
+    workspacePath,
+    targetPath,
+    toolName: "edit",
+    requestedPath: filePath,
+  });
+  const targetStat = statSync(accessTargetPath);
   const targetIsDirectory = targetStat.isDirectory();
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
   if (
     projectIgnorePolicy.isIgnored(requestedPath, targetIsDirectory) ||
-    projectIgnorePolicy.isIgnored(targetPath, targetIsDirectory)
+    projectIgnorePolicy.isIgnored(accessTargetPath, targetIsDirectory)
   ) {
-    throw new KeelError(
-      "tool_path_ignored",
-      `edit failed: ignored path: ${filePath}`,
-      "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
-    );
+    throw ignoredPathError(filePath);
   }
   if (!targetStat.isFile()) {
     throw new KeelError(
@@ -372,19 +397,36 @@ function executeEditBatch(
   }
   if (
     options.readBeforeEdit !== undefined &&
-    !options.readBeforeEdit.hasRead(targetPath)
+    !options.readBeforeEdit.hasRead(accessTargetPath)
   ) {
-    throw new KeelError(
-      "tool_file_not_read",
-      `edit failed: file has not been read: ${filePath}`,
-      `Use read(path: "${filePath}") to view the current file content, then retry edit with edits[].oldText copied from the read output.`,
-    );
+    throw fileNotReadError(filePath);
   }
 
-  const file = readEditableTextFileWithMetadata(targetPath, filePath, {
+  let openedMode = targetStat.mode & 0o7777;
+  const file = readEditableTextFileWithMetadata(accessTargetPath, filePath, {
     maxBytes: MAX_EDIT_FILE_BYTES,
     tooLargeError: (observedBytes) =>
       fileTooLargeError(filePath, observedBytes),
+    validateOpenedFile: (fd) => {
+      const openedTargetPath = assertWorkspaceOpenTargetAtAccess({
+        fd,
+        workspacePath,
+        targetPath: accessTargetPath,
+        toolName: "edit",
+        requestedPath: filePath,
+      });
+      if (projectIgnorePolicy.isIgnored(openedTargetPath, false)) {
+        throw ignoredPathError(filePath);
+      }
+      if (
+        options.readBeforeEdit !== undefined &&
+        !options.readBeforeEdit.hasRead(openedTargetPath)
+      ) {
+        throw fileNotReadError(filePath);
+      }
+      openedMode = fstatSync(fd).mode & 0o7777;
+      return openedTargetPath;
+    },
   });
   const content = file.content;
   const normalizedContent = normalizeWithSourceMap(content);
@@ -400,22 +442,69 @@ function executeEditBatch(
 
   const beforeContent = withUtf8Bom(content, file.hasUtf8Bom);
   const afterContent = withUtf8Bom(updated, file.hasUtf8Bom);
-  writeTextFileAtomically(targetPath, afterContent, {
-    mode: targetStat.mode & 0o7777,
+  const validateTargetAtAccess = (): string => {
+    const openedTargetPath = assertWorkspaceTargetAtAccess({
+      workspacePath,
+      targetPath: file.targetPath,
+      toolName: "edit",
+      requestedPath: filePath,
+    });
+    if (projectIgnorePolicy.isIgnored(openedTargetPath, false)) {
+      throw ignoredPathError(filePath);
+    }
+    return openedTargetPath;
+  };
+  const validateOpenedTempAtAccess = (tempPath: string, fd: number): void => {
+    assertWorkspaceOpenTargetAtAccess({
+      fd,
+      workspacePath,
+      targetPath: tempPath,
+      toolName: "edit",
+      requestedPath: filePath,
+    });
+  };
+  let publishedTargetPath = file.targetPath;
+  const validatePublishedTargetAtAccess = (
+    publishedPath: string,
+    identity: FileIdentity,
+  ): void => {
+    const openedTargetPath = assertWorkspaceFileIdentityAtAccess({
+      identity,
+      workspacePath,
+      targetPath: publishedPath,
+      toolName: "edit",
+      requestedPath: filePath,
+    });
+    if (projectIgnorePolicy.isIgnored(openedTargetPath, false)) {
+      throw ignoredPathError(filePath);
+    }
+    publishedTargetPath = openedTargetPath;
+  };
+  writeTextFileAtomically(file.targetPath, afterContent, {
+    mode: openedMode,
+    beforeAccess: validateTargetAtAccess,
+    beforeWrite: validateOpenedTempAtAccess,
+    beforePublish: validateTargetAtAccess,
+    afterPublish: validatePublishedTargetAtAccess,
+    validateReplacement: validateOpenedTempAtAccess,
+    rollbackOnPublishFailure: { beforeContent, afterContent },
+    cleanupPathsByIdentity: (identity) =>
+      findWorkspacePathsByIdentity(workspacePath, identity),
   });
+  const finalTargetPath = publishedTargetPath;
   recordLastEditCheckpoint({
     workspace: workspacePath,
-    filePath: targetPath,
+    filePath: finalTargetPath,
     beforeContent,
     afterContent,
   });
 
   return {
     content: `Edited ${filePath}`,
-    targetPath,
+    targetPath: finalTargetPath,
     checkpointOperation: {
       operation: "edit",
-      filePath: targetPath,
+      filePath: finalTargetPath,
       beforeContent,
       afterContent,
     },
