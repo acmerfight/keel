@@ -80,11 +80,17 @@ interface CompactMessagesOptions {
   readonly focusInstruction?: string;
 }
 
-export interface CompactMessagesResult {
-  readonly compacted: boolean;
-  readonly usage: Usage;
-  readonly stats?: ContextCompactionStats;
-}
+export type CompactMessagesResult =
+  | {
+      readonly compacted: false;
+      readonly usage: Usage;
+      readonly stats?: undefined;
+    }
+  | {
+      readonly compacted: true;
+      readonly usage: Usage;
+      readonly stats: ContextCompactionStats;
+    };
 
 export interface ContextCompactionStats {
   readonly beforeMessageCount: number;
@@ -623,6 +629,24 @@ function estimateRequestTokens(
     return accountedTokens;
   }
   return estimateTextTokens(systemPrompt) + estimateMessagesTokens(messages);
+}
+
+export function contextCompactionStatsForCurrentMessages(options: {
+  readonly stats: ContextCompactionStats;
+  readonly systemPrompt: string;
+  readonly messages: readonly Message[];
+  readonly requestMetadata?: ContextCompactionRequestMetadata;
+}): ContextCompactionStats {
+  return {
+    ...options.stats,
+    afterMessageCount: options.messages.length,
+    afterEstimatedTokens: estimateRequestTokens(
+      options.systemPrompt,
+      options.messages,
+      undefined,
+      options.requestMetadata,
+    ),
+  };
 }
 
 function estimateRequestTokensFromAccounting(

@@ -2,11 +2,17 @@ import { createInterface } from "node:readline/promises";
 import {
   type ContextCompactionOptions,
   compactMessages,
+  contextCompactionStatsForCurrentMessages,
 } from "../agent/context-compaction.ts";
-import type { AgentEvent, CostReport } from "../agent/loop.ts";
+import type {
+  AgentEvent,
+  CostReport,
+  ReadVisibilityState,
+} from "../agent/loop.ts";
 import {
   clearReadVisibilityState,
   createReadVisibilityState,
+  restorePostCompactionReads,
   runAgentTurn,
 } from "../agent/loop.ts";
 import {
@@ -465,9 +471,12 @@ async function readForkPointPickerSelection(options: {
 interface ManualCompactContext {
   readonly command: ManualCompactCommand;
   readonly resolved: InteractiveResolvedProvider;
+  readonly workspace: string;
   readonly messages: Message[];
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
+  readonly readVisibility: ReadVisibilityState;
+  readonly nextPostCompactionReadToolCallId: () => string;
   readonly options: InteractiveSessionOptions;
   readonly recordCompactionCost: (
     usage: Usage,
@@ -481,9 +490,12 @@ async function executeManualCompaction(
   const {
     command,
     resolved,
+    workspace,
     messages,
     systemPrompt,
     signal,
+    readVisibility,
+    nextPostCompactionReadToolCallId,
     options,
     recordCompactionCost,
   } = ctx;
@@ -510,10 +522,22 @@ async function executeManualCompaction(
       options.writeStdout("\n");
       return undefined;
     }
-    if (result.compacted && result.stats !== undefined) {
+    if (result.compacted) {
+      await restorePostCompactionReads({
+        workspace,
+        signal,
+        readVisibility,
+        messages,
+        nextToolCallId: nextPostCompactionReadToolCallId,
+      });
+      const reportStats = contextCompactionStatsForCurrentMessages({
+        stats: result.stats,
+        systemPrompt,
+        messages,
+      });
       options.writeStderr(
         formatContextCompactionReport({
-          ...result.stats,
+          ...reportStats,
           reasonLabel: "manual",
         }),
       );
@@ -954,6 +978,7 @@ export async function runInteractiveSession(
     return currentSessionCostReport();
   };
   const readVisibility = createReadVisibilityState();
+  let postCompactionReadSequence = 0;
 
   options.onSigint(abortActiveTurn);
   try {
@@ -1035,9 +1060,13 @@ export async function runInteractiveSession(
           compactCost = await executeManualCompaction({
             command: interactiveCommand,
             resolved,
+            workspace: options.workspace,
             messages,
             systemPrompt,
             signal: compactAbortController.signal,
+            readVisibility,
+            nextPostCompactionReadToolCallId: () =>
+              `post_compaction_read_${postCompactionReadSequence++}`,
             options,
             recordCompactionCost,
           });
@@ -1045,7 +1074,6 @@ export async function runInteractiveSession(
           activeAbortController = null;
         }
         if (!compactAbortController.signal.aborted) {
-          clearReadVisibilityState(readVisibility);
           options.persistSessionMessages?.(
             messages,
             "compaction",

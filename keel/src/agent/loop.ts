@@ -25,6 +25,7 @@ import {
   type ContextCompactionStats,
   captureContextCompactionAccountingSnapshot,
   compactMessages,
+  contextCompactionStatsForCurrentMessages,
   shouldCompactBeforeRequest,
 } from "./context-compaction.ts";
 import {
@@ -57,6 +58,9 @@ interface CostTrackingOptions {
 // otherwise it is the stop policy's reason label (e.g. "cost_budget",
 // "repeated_tool_call", "turn_limit").
 type ContextCompactionReason = "proactive" | "overflow_recovery";
+const POST_COMPACTION_MAX_RESTORED_FILES = 5;
+const POST_COMPACTION_MAX_FILE_CHARS = 20_000;
+const POST_COMPACTION_MAX_TOTAL_CHARS = 50_000;
 
 export type AgentEvent =
   | { readonly type: "text"; readonly text: string }
@@ -152,8 +156,15 @@ interface AgentTurnStop {
   readonly reason: LLMStopReason;
 }
 
+interface VisibleReadSnapshot {
+  readonly targetPath: string;
+  readonly offset?: number;
+  readonly limit?: number;
+}
+
 export interface ReadVisibilityState {
   readonly hasRead: (targetPath: string) => boolean;
+  readonly visibleReadsMostRecentFirst: () => readonly VisibleReadSnapshot[];
   readonly clear: () => void;
   readonly applyImmediateMutation: (execution: ToolExecution) => void;
   readonly applyVisibleToolExecutions: (
@@ -162,27 +173,38 @@ export interface ReadVisibilityState {
 }
 
 export function createReadVisibilityState(): ReadVisibilityState {
-  const visibleTargetPaths = new Set<string>();
+  const visibleReads = new Map<string, VisibleReadSnapshot>();
   const applyMutation = (execution: ToolExecution): void => {
     if (execution.ok && execution.mutatedTargetPath !== undefined) {
-      visibleTargetPaths.delete(execution.mutatedTargetPath);
+      visibleReads.delete(execution.mutatedTargetPath);
     }
     if (execution.ok && execution.mutatedTargetPaths !== undefined) {
       for (const targetPath of execution.mutatedTargetPaths) {
-        visibleTargetPaths.delete(targetPath);
+        visibleReads.delete(targetPath);
       }
     }
   };
   return {
-    hasRead: (targetPath) => visibleTargetPaths.has(targetPath),
-    clear: () => visibleTargetPaths.clear(),
+    hasRead: (targetPath) => visibleReads.has(targetPath),
+    visibleReadsMostRecentFirst: () => [...visibleReads.values()].reverse(),
+    clear: () => visibleReads.clear(),
     applyImmediateMutation: applyMutation,
     applyVisibleToolExecutions: (executions) => {
       for (const execution of executions) {
         if (!execution.ok) continue;
         applyMutation(execution);
         if (execution.readTargetPath !== undefined) {
-          visibleTargetPaths.add(execution.readTargetPath);
+          // Delete+set refreshes Map insertion order so iteration is recency ordered.
+          visibleReads.delete(execution.readTargetPath);
+          visibleReads.set(execution.readTargetPath, {
+            targetPath: execution.readTargetPath,
+            ...(execution.readTargetOffset !== undefined
+              ? { offset: execution.readTargetOffset }
+              : {}),
+            ...(execution.readTargetLimit !== undefined
+              ? { limit: execution.readTargetLimit }
+              : {}),
+          });
         }
       }
     },
@@ -425,7 +447,7 @@ interface CompactionConfig {
   readonly signal: AbortSignal;
   readonly contextCompaction: ContextCompactionOptions | undefined;
   readonly costTracking: CostTrackingOptions | undefined;
-  readonly onContextCompacted?: () => void;
+  readonly onContextCompacted?: (messages: Message[]) => Promise<void>;
 }
 
 type CompactionState = {
@@ -441,6 +463,7 @@ async function attemptContextCompaction(
   const targetMessages = [
     ...projectSessionLedgerToProviderMessages(streamOptions.getLedger()),
   ];
+  const requestMetadata = requestMetadataForStream(streamOptions);
   const result = await compactMessages({
     provider: config.provider,
     systemPrompt: config.systemPrompt,
@@ -452,19 +475,135 @@ async function attemptContextCompaction(
     ...(state.contextAccounting !== undefined
       ? { contextAccounting: state.contextAccounting }
       : {}),
-    requestMetadata: requestMetadataForStream(streamOptions),
+    requestMetadata,
   });
+  let finalResult = result;
   if (result.compacted) {
     state.contextAccounting = undefined;
     streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
-    config.onContextCompacted?.();
+    try {
+      await config.onContextCompacted?.(targetMessages);
+    } finally {
+      streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
+    }
+    finalResult = {
+      ...result,
+      stats: contextCompactionStatsForCurrentMessages({
+        stats: result.stats,
+        systemPrompt: config.systemPrompt,
+        messages: targetMessages,
+        requestMetadata,
+      }),
+    };
   }
   state.accounting = addRequestAccounting(
     state.accounting,
     result.usage,
     config.costTracking,
   );
-  return result;
+  return finalResult;
+}
+
+function fitPostCompactionReadContent(
+  content: string,
+  maxChars: number,
+): { readonly content: string; readonly complete: boolean } {
+  if (content.length <= maxChars) {
+    return { content, complete: true };
+  }
+  let omittedChars = content.length - maxChars;
+  for (;;) {
+    const marker = `\n\n[Post-compaction read snapshot truncated: omitted ${omittedChars} chars]`;
+    if (marker.length >= maxChars) {
+      return { content: marker.slice(0, maxChars), complete: false };
+    }
+    const prefixLength = maxChars - marker.length;
+    const nextOmittedChars = content.length - prefixLength;
+    if (nextOmittedChars === omittedChars) {
+      return {
+        content: `${content.slice(0, prefixLength)}${marker}`,
+        complete: false,
+      };
+    }
+    // Marker digit width depends on omittedChars, so settle to the exact count.
+    omittedChars = nextOmittedChars;
+  }
+}
+
+interface RestoredPostCompactionRead {
+  readonly toolCall: ToolCall;
+  readonly execution: ToolExecution;
+  readonly content: string;
+  readonly complete: boolean;
+}
+
+export async function restorePostCompactionReads(options: {
+  readonly workspace: string;
+  readonly signal: AbortSignal;
+  readonly readVisibility: ReadVisibilityState;
+  readonly messages: Message[];
+  readonly nextToolCallId: () => string;
+}): Promise<void> {
+  const targetPaths = options.readVisibility
+    .visibleReadsMostRecentFirst()
+    .slice(0, POST_COMPACTION_MAX_RESTORED_FILES);
+  clearReadVisibilityState(options.readVisibility);
+  const restored: RestoredPostCompactionRead[] = [];
+  let totalChars = 0;
+
+  for (const read of targetPaths) {
+    const remainingTotalChars = POST_COMPACTION_MAX_TOTAL_CHARS - totalChars;
+    if (remainingTotalChars <= 0) {
+      break;
+    }
+    const toolCall: ToolCall = {
+      id: options.nextToolCallId(),
+      tool: "read",
+      path: read.targetPath,
+      ...(read.offset !== undefined ? { offset: read.offset } : {}),
+      ...(read.limit !== undefined ? { limit: read.limit } : {}),
+    };
+    const execution = await executeToolCall({
+      workspace: options.workspace,
+      toolCall,
+      signal: options.signal,
+      allowBash: false,
+    });
+    if (!execution.ok || execution.readTargetPath === undefined) {
+      continue;
+    }
+    const fittedContent = fitPostCompactionReadContent(
+      execution.content,
+      Math.min(POST_COMPACTION_MAX_FILE_CHARS, remainingTotalChars),
+    );
+    totalChars += fittedContent.content.length;
+    restored.push({
+      toolCall,
+      execution,
+      content: fittedContent.content,
+      complete: fittedContent.complete,
+    });
+  }
+
+  if (restored.length === 0) {
+    return;
+  }
+
+  options.messages.push({
+    role: "assistant",
+    content: "",
+    toolCalls: restored.map((read) => read.toolCall),
+  });
+  for (const read of restored) {
+    options.messages.push({
+      role: "tool",
+      toolCallId: read.toolCall.id,
+      content: read.content,
+    });
+  }
+  options.readVisibility.applyVisibleToolExecutions(
+    restored.filter((read) => read.complete).map((read) => read.execution),
+  );
 }
 
 async function* streamTurnWithOverflowRecovery(
@@ -615,13 +754,23 @@ export async function* runAgentTurn(
     projectSessionLedgerToProviderMessages(sessionLedger);
   const priorToolCalls = priorToolCallsFromMessages(providerMessages);
   const readVisibility = options.readVisibility ?? createReadVisibilityState();
+  let postCompactionReadSequence = 0;
   const config: CompactionConfig = {
     provider,
     systemPrompt,
     signal,
     contextCompaction: options.contextCompaction,
     costTracking,
-    onContextCompacted: () => clearReadVisibilityState(readVisibility),
+    onContextCompacted: async (targetMessages) => {
+      await restorePostCompactionReads({
+        workspace,
+        signal,
+        readVisibility,
+        messages: targetMessages,
+        nextToolCallId: () =>
+          `post_compaction_read_${postCompactionReadSequence++}`,
+      });
+    },
   };
   const state: CompactionState = {
     contextAccounting: undefined,
