@@ -35,23 +35,77 @@ function runtime(home: string, now = 0) {
   };
 }
 
+function rootGraph(sessionId: string) {
+  return {
+    graphId: sessionId,
+    rootSessionId: sessionId,
+    parentSessionId: null,
+    branchTitle: "main",
+    forkPoint: null,
+    forkPolicy: {
+      transcript: "copy_prefix",
+      pendingInputs: "drop",
+      queuedInputs: "drop",
+      bashApprovalGrants: "drop",
+    },
+  };
+}
+
+function storedMessages(
+  messages: readonly Message[],
+  prefix = "stored-message",
+) {
+  return messages.map((message, index) => ({
+    id: `${prefix}-${index + 1}`,
+    message,
+  }));
+}
+
+function expectedStoredMessages(messages: readonly Message[]) {
+  return messages.map((message) => ({
+    id: expect.any(String),
+    message,
+  }));
+}
+
+function restoredUserMessageId(
+  session: {
+    readonly storedMessages: readonly {
+      readonly id: string;
+      readonly message: Message;
+    }[];
+  },
+  content: string,
+): string {
+  const storedMessage = session.storedMessages.find(
+    (candidate) =>
+      candidate.message.role === "user" &&
+      candidate.message.content === content,
+  );
+  if (storedMessage === undefined) {
+    throw new Error(`expected restored user message id for ${content}`);
+  }
+  return storedMessage.id;
+}
+
 function headerLine(sessionId: string, workspace: string): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     type: "session",
     id: sessionId,
     createdAt: "1970-01-01T00:00:00.000Z",
     workspace,
+    graph: rootGraph(sessionId),
   });
 }
 
 function appendLine(messages: readonly Message[]): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     type: "append",
     timestamp: "1970-01-01T00:00:00.000Z",
     reason: "turn",
-    messages,
+    messages: storedMessages(messages),
   });
 }
 
@@ -60,18 +114,18 @@ function snapshotLine(
   pendingInputs: readonly SessionQueuedInput[],
 ): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     type: "snapshot",
     timestamp: "1970-01-01T00:00:00.000Z",
     reason: "size_threshold",
-    messages,
+    messages: storedMessages(messages),
     pendingInputs,
   });
 }
 
 function inputAdmittedLine(input: SessionQueuedInput): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     type: "input_admitted",
     timestamp: input.timestamp,
     id: input.id,
@@ -82,7 +136,7 @@ function inputAdmittedLine(input: SessionQueuedInput): string {
 
 function inputConsumedLine(inputIds: readonly string[]): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     type: "input_consumed",
     timestamp: "1970-01-01T00:00:00.005Z",
     inputIds,
@@ -165,7 +219,7 @@ describe("Session Store", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerLines[1]).toEqual({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "input_admitted",
         timestamp: "1970-01-01T00:00:00.001Z",
         id: queuedInput.id,
@@ -225,11 +279,11 @@ describe("Session Store", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerLines[2]).toEqual({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "append",
         timestamp: "1970-01-01T00:00:00.002Z",
         reason: "turn",
-        messages,
+        messages: expectedStoredMessages(messages),
         consumedInputIds: [queuedInput.id],
       });
     } finally {
@@ -253,7 +307,7 @@ describe("Session Store", () => {
       `${[
         headerLine("ordered-inputs", ledgerWorkspace),
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.003Z",
           id: "sequence-last",
@@ -261,7 +315,7 @@ describe("Session Store", () => {
           line: "third",
         }),
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.002Z",
           id: "same-sequence-later",
@@ -269,7 +323,7 @@ describe("Session Store", () => {
           line: "second by timestamp",
         }),
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.001Z",
           id: "same-sequence-earlier",
@@ -277,7 +331,7 @@ describe("Session Store", () => {
           line: "first by timestamp",
         }),
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.004Z",
           id: "same-time-b",
@@ -285,7 +339,7 @@ describe("Session Store", () => {
           line: "same timestamp second id",
         }),
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.004Z",
           id: "same-time-a",
@@ -443,7 +497,7 @@ describe("Session Store", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerLines.at(-1)).toEqual({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "input_consumed",
         timestamp: "1970-01-01T00:00:00.003Z",
         inputIds: [queuedInput.id],
@@ -664,11 +718,11 @@ describe("Session Store", () => {
         .map((line) => JSON.parse(line));
       expect(ledgerLines).toHaveLength(3);
       expect(ledgerLines[2]).toEqual({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "append",
         timestamp: "1970-01-01T00:00:00.003Z",
         reason: "turn",
-        messages: [followUp],
+        messages: expectedStoredMessages([followUp]),
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -743,11 +797,11 @@ describe("Session Store", () => {
         .map((line) => JSON.parse(line));
       expect(ledgerLines).toHaveLength(3);
       expect(ledgerLines[2]).toEqual({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "append",
         timestamp: "1970-01-01T00:00:00.003Z",
         reason: "turn",
-        messages: [followUp],
+        messages: expectedStoredMessages([followUp]),
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -843,11 +897,11 @@ describe("Session Store", () => {
         .map((line) => JSON.parse(line));
       expect(ledgerLines).toHaveLength(3);
       expect(ledgerLines[2]).toEqual({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "replace",
         timestamp: "1970-01-01T00:00:00.003Z",
         reason: "turn",
-        messages: changedMessages,
+        messages: expectedStoredMessages(changedMessages),
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1008,7 +1062,7 @@ describe("Session Store", () => {
 
     try {
       const session = createSessionStore({
-        sessionId: "pending-before-user",
+        sessionId: "pending-before-message",
         workspace,
         runtime: runtime(home),
       });
@@ -1021,7 +1075,7 @@ describe("Session Store", () => {
       // When / Then
       expect(() =>
         resumeSessionStore({
-          sessionId: "pending-before-user",
+          sessionId: "pending-before-message",
           workspace,
           runtime: runtime(home, 2),
         }),
@@ -1554,7 +1608,7 @@ describe("Session Store", () => {
     await writeFile(
       join(home, "sessions", "no-header", "ledger.jsonl"),
       `${JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "append",
         timestamp: "1970-01-01T00:00:00.000Z",
         reason: "turn",
@@ -2048,7 +2102,7 @@ describe("Session Store", () => {
     await writeFile(
       ledgerPath,
       `\n${JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "snapshot",
         timestamp: "1970-01-01T00:00:00.001Z",
         reason: "size_threshold",
@@ -2212,11 +2266,11 @@ describe("Session Store", () => {
         throw new Error("Expected snapshot line");
       }
       expect(JSON.parse(lastLine)).toEqual({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "snapshot",
         timestamp: "1970-01-01T00:00:00.003Z",
         reason: "size_threshold",
-        messages: compactedMessages,
+        messages: expectedStoredMessages(compactedMessages),
         pendingInputs: [queuedInput],
       });
     } finally {
@@ -2408,7 +2462,7 @@ describe("Session Store", () => {
         .map((line) => JSON.parse(line));
       expect(targetLedgerLines.at(-1)).toMatchObject({
         type: "snapshot",
-        messages: snapshottedMessages,
+        messages: storedMessages(snapshottedMessages),
         pendingInputs: [],
       });
     } finally {
@@ -2452,12 +2506,30 @@ describe("Session Store", () => {
         .map((line) => JSON.parse(line));
       expect(targetLedgerLines).toEqual([
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "session",
           id: "empty-target",
           createdAt: "1970-01-01T00:00:00.001Z",
           workspace: source.workspace,
-          forkedFrom: "empty-source",
+          graph: {
+            graphId: "empty-source",
+            rootSessionId: "empty-source",
+            parentSessionId: "empty-source",
+            branchTitle: "empty-target",
+            forkPoint: {
+              kind: "end",
+              sourceSessionId: "empty-source",
+              sourceLastMessageId: null,
+              sourceOrdinal: 0,
+              preview: "full restored history",
+            },
+            forkPolicy: {
+              transcript: "copy_prefix",
+              pendingInputs: "drop",
+              queuedInputs: "drop",
+              bashApprovalGrants: "drop",
+            },
+          },
         },
       ]);
     } finally {
@@ -2500,14 +2572,18 @@ describe("Session Store", () => {
         workspace,
         runtime: runtime(home, 2),
       });
+      const forkMessageId = restoredUserMessageId(
+        restoredSource,
+        "remember alpha",
+      );
 
       // When
       const target = forkSessionStore({
         source: restoredSource,
         targetSessionId: "target",
         forkPoint: {
-          beforeUser: 1,
-          optionName: "--fork-before-user",
+          beforeMessageId: forkMessageId,
+          optionName: "--fork-before-message",
         },
         runtime: runtime(home, 3),
       });
@@ -2526,12 +2602,30 @@ describe("Session Store", () => {
         .map((line) => JSON.parse(line));
       expect(targetLedgerLines).toEqual([
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "session",
           id: "target",
           createdAt: "1970-01-01T00:00:00.003Z",
           workspace: source.workspace,
-          forkedFrom: "source",
+          graph: {
+            graphId: "source",
+            rootSessionId: "source",
+            parentSessionId: "source",
+            branchTitle: "target",
+            forkPoint: {
+              kind: "before_message",
+              sourceSessionId: "source",
+              sourceMessageId: forkMessageId,
+              sourceOrdinal: 1,
+              preview: "remember alpha",
+            },
+            forkPolicy: {
+              transcript: "copy_prefix",
+              pendingInputs: "drop",
+              queuedInputs: "drop",
+              bashApprovalGrants: "drop",
+            },
+          },
         },
       ]);
     } finally {
@@ -2595,14 +2689,18 @@ describe("Session Store", () => {
         workspace,
         runtime: runtime(home, 2),
       });
+      const forkMessageId = restoredUserMessageId(
+        restoredSource,
+        "now remember beta",
+      );
 
       // When
       const target = forkSessionStore({
         source: restoredSource,
         targetSessionId: "target",
         forkPoint: {
-          beforeUser: 2,
-          optionName: "--fork-before-user",
+          beforeMessageId: forkMessageId,
+          optionName: "--fork-before-message",
         },
         runtime: runtime(home, 3),
       });
@@ -2621,7 +2719,126 @@ describe("Session Store", () => {
         .map((line) => JSON.parse(line));
       expect(targetLedgerLines.at(1)).toMatchObject({
         type: "append",
-        messages: retainedMessages,
+        messages: restoredSource.storedMessages.slice(
+          0,
+          retainedMessages.length,
+        ),
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a source session has stable stored message ids,
+    When it is forked before a restored message id,
+    Then the target ledger records graph provenance and copies only the stored prefix`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const retainedMessages: readonly Message[] = [
+      { role: "user", content: "remember alpha" },
+      {
+        role: "assistant",
+        content: "Remembered: remember alpha",
+        toolCalls: [],
+      },
+    ];
+    const sourceMessages: readonly Message[] = [
+      ...retainedMessages,
+      { role: "user", content: "now remember beta" },
+      {
+        role: "assistant",
+        content: "Remembered: now remember beta",
+        toolCalls: [],
+      },
+    ];
+
+    try {
+      const source = createSessionStore({
+        sessionId: "source",
+        workspace,
+        runtime: runtime(home),
+      });
+      persistSessionMessages({
+        session: source,
+        previousMessages: [],
+        currentMessages: sourceMessages,
+        reason: "turn",
+        consumedInputIds: [],
+        runtime: runtime(home, 1),
+      });
+      const restoredSource = resumeSessionStore({
+        sessionId: "source",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+      const forkMessage = restoredSource.storedMessages.find(
+        (storedMessage) =>
+          storedMessage.message.role === "user" &&
+          storedMessage.message.content === "now remember beta",
+      );
+      if (forkMessage === undefined) {
+        throw new Error(
+          "expected restored source to expose the beta message id",
+        );
+      }
+
+      // When
+      const target = forkSessionStore({
+        source: restoredSource,
+        targetSessionId: "target",
+        forkPoint: {
+          beforeMessageId: forkMessage.id,
+          optionName: "--before-message",
+        },
+        runtime: runtime(home, 3),
+      });
+      const resumedTarget = resumeSessionStore({
+        sessionId: "target",
+        workspace,
+        runtime: runtime(home, 4),
+      });
+
+      // Then
+      expect(resumedTarget.messages).toEqual(retainedMessages);
+      expect(resumedTarget.pendingInputs).toEqual([]);
+      const targetLedgerLines = (await readFile(target.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(targetLedgerLines[0]).toEqual({
+        schemaVersion: 2,
+        type: "session",
+        id: "target",
+        createdAt: "1970-01-01T00:00:00.003Z",
+        workspace: source.workspace,
+        graph: {
+          graphId: "source",
+          rootSessionId: "source",
+          parentSessionId: "source",
+          branchTitle: "target",
+          forkPoint: {
+            kind: "before_message",
+            sourceSessionId: "source",
+            sourceMessageId: forkMessage.id,
+            sourceOrdinal: 3,
+            preview: "now remember beta",
+          },
+          forkPolicy: {
+            transcript: "copy_prefix",
+            pendingInputs: "drop",
+            queuedInputs: "drop",
+            bashApprovalGrants: "drop",
+          },
+        },
+      });
+      expect(targetLedgerLines[1]).toEqual({
+        schemaVersion: 2,
+        type: "append",
+        timestamp: "1970-01-01T00:00:00.003Z",
+        reason: "turn",
+        messages: restoredSource.storedMessages.slice(0, 2),
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -2641,7 +2858,7 @@ describe("Session Store", () => {
       [
         headerLine("bad-record", workspace),
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "append",
           timestamp: "1970-01-01T00:00:00.000Z",
           reason: "turn",
