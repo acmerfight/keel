@@ -187,6 +187,10 @@ type InteractiveCommand =
   | ForkCommand
   | InvalidInteractiveCommand;
 
+type ParseResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly message: string };
+
 function formatInteractiveHelp(): string {
   return [
     "Interactive commands:",
@@ -216,11 +220,11 @@ function formatInteractiveHelp(): string {
   ].join("\n");
 }
 
-function parseForkBeforeMessage(raw: string | undefined): string {
+function parseForkBeforeMessage(raw: string | undefined): ParseResult<string> {
   if (raw === undefined || raw === "") {
-    return "Error: --before-message requires a value.";
+    return { ok: false, message: "Error: --before-message requires a value." };
   }
-  return raw;
+  return { ok: true, value: raw };
 }
 
 function parseForkCommandArgs(
@@ -261,10 +265,10 @@ function parseForkCommandArgs(
 
     if (arg === "--before-message") {
       const parsed = parseForkBeforeMessage(optionArgs[index + 1]);
-      if (parsed.startsWith("Error: ")) {
-        return { kind: "invalid", message: parsed };
+      if (!parsed.ok) {
+        return { kind: "invalid", message: parsed.message };
       }
-      beforeMessageId = parsed;
+      beforeMessageId = parsed.value;
       skipNext = true;
       continue;
     }
@@ -273,10 +277,10 @@ function parseForkCommandArgs(
       const parsed = parseForkBeforeMessage(
         arg.slice(beforeMessagePrefix.length),
       );
-      if (parsed.startsWith("Error: ")) {
-        return { kind: "invalid", message: parsed };
+      if (!parsed.ok) {
+        return { kind: "invalid", message: parsed.message };
       }
-      beforeMessageId = parsed;
+      beforeMessageId = parsed.value;
       continue;
     }
 

@@ -157,30 +157,29 @@ function compareSessionCatalogGraphGroups(
 function sessionCatalogGraphGroups(
   entries: readonly SessionCatalogEntry[],
 ): readonly SessionCatalogGraphGroup[] {
-  const groupsById = new Map<string, SessionCatalogEntry[]>();
-  for (const entry of entries) {
-    const group = groupsById.get(entry.graph.graphId) ?? [];
-    group.push(entry);
-    groupsById.set(entry.graph.graphId, group);
-  }
-
-  const groups: SessionCatalogGraphGroup[] = [];
-  for (const [graphId, groupEntries] of groupsById) {
-    const updatedAt = groupEntries
-      .map((entry) => entry.updatedAt)
-      .sort((left, right) => right.localeCompare(left))[0];
-    const firstEntry = groupEntries[0];
-    if (updatedAt === undefined || firstEntry === undefined) {
+  const groupsById = new Map<string, SessionCatalogGraphGroup>();
+  for (const entry of [...entries].sort(
+    compareSessionCatalogEntriesForFormat,
+  )) {
+    const group = groupsById.get(entry.graph.graphId);
+    if (group === undefined) {
+      groupsById.set(entry.graph.graphId, {
+        graphId: entry.graph.graphId,
+        rootSessionId: entry.graph.rootSessionId,
+        updatedAt: entry.updatedAt,
+        entries: [entry],
+      });
       continue;
     }
-    groups.push({
-      graphId,
-      rootSessionId: firstEntry.graph.rootSessionId,
-      updatedAt,
-      entries: groupEntries,
+    groupsById.set(entry.graph.graphId, {
+      graphId: group.graphId,
+      rootSessionId: group.rootSessionId,
+      updatedAt: group.updatedAt,
+      entries: [...group.entries, entry],
     });
   }
-  return groups.sort(compareSessionCatalogGraphGroups);
+
+  return [...groupsById.values()].sort(compareSessionCatalogGraphGroups);
 }
 
 function sessionCatalogTreeLines(

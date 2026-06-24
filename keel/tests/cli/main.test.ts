@@ -220,6 +220,28 @@ function forkGraph(sessionId: string, parentSessionId: string) {
   };
 }
 
+function endForkGraph(options: {
+  readonly sessionId: string;
+  readonly parentSessionId: string;
+  readonly sourceLastMessageId: string;
+  readonly sourceOrdinal: number;
+}) {
+  return {
+    graphId: options.parentSessionId,
+    rootSessionId: options.parentSessionId,
+    parentSessionId: options.parentSessionId,
+    branchTitle: options.sessionId,
+    forkPoint: {
+      kind: "end",
+      sourceSessionId: options.parentSessionId,
+      sourceLastMessageId: options.sourceLastMessageId,
+      sourceOrdinal: options.sourceOrdinal,
+      preview: "full restored history",
+    },
+    forkPolicy: sessionForkPolicy(),
+  };
+}
+
 function storedMessages(messages: readonly Message[], prefix: string) {
   return messages.map((message, index) => ({
     id: `msg_${prefix.replace(/[^A-Za-z0-9_-]/gu, "_")}_${index + 1}`,
@@ -292,6 +314,10 @@ async function writeSessionLedger(options: {
   readonly workspace: string;
   readonly createdAt: string;
   readonly parentSessionId?: string;
+  readonly graph?:
+    | ReturnType<typeof rootGraph>
+    | ReturnType<typeof forkGraph>
+    | ReturnType<typeof endForkGraph>;
   readonly records?: readonly string[];
 }): Promise<void> {
   const headerId = options.headerId ?? options.id;
@@ -307,9 +333,10 @@ async function writeSessionLedger(options: {
         createdAt: options.createdAt,
         workspace: options.workspace,
         graph:
-          options.parentSessionId === undefined
+          options.graph ??
+          (options.parentSessionId === undefined
             ? rootGraph(headerId)
-            : forkGraph(headerId, options.parentSessionId),
+            : forkGraph(headerId, options.parentSessionId)),
       }),
       ...(options.records ?? []),
     ].join("\n")}\n`,
@@ -4739,6 +4766,7 @@ describe("CLI Main", () => {
     const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
     const longPrompt = `remember ${"0123456789".repeat(14)}`;
     const longPromptPreview = `${longPrompt.slice(0, 117)}...`;
+    const olderLastMessageId = "msg_append-2026-01-01T00_00_06_000Z_2";
     await writeSessionLedger({
       home,
       id: "long-preview",
@@ -4796,6 +4824,30 @@ describe("CLI Main", () => {
         ]),
       ],
     });
+    for (const branchId of ["branch-b", "branch-a"]) {
+      await writeSessionLedger({
+        home,
+        id: branchId,
+        workspace: ledgerWorkspace,
+        createdAt: "2026-01-02T00:00:00.000Z",
+        graph: endForkGraph({
+          sessionId: branchId,
+          parentSessionId: "older",
+          sourceLastMessageId: olderLastMessageId,
+          sourceOrdinal: 4,
+        }),
+        records: [
+          appendSessionRecordLine("2026-01-02T00:00:06.000Z", [
+            { role: "user", content: `remember ${branchId}` },
+            {
+              role: "assistant",
+              content: `Remembered ${branchId}.`,
+              toolCalls: [],
+            },
+          ]),
+        ],
+      });
+    }
     await writeSessionLedger({
       home,
       id: "compacted",
@@ -4951,9 +5003,23 @@ describe("CLI Main", () => {
       expect(stdout).toContain("   branch: main\n");
       expect(stdout).toContain(`   preview: ${longPromptPreview}\n`);
       expect(stdout).toContain(
-        "graph older root older  updated 2026-01-02T00:00:05.000Z\n",
+        "graph older root older  updated 2026-01-02T00:00:06.000Z\n",
       );
       expect(stdout).toContain("older  updated 2026-01-01T00:00:06.000Z\n");
+      expect(stdout).toContain(
+        [
+          "  branch-a  updated 2026-01-02T00:00:06.000Z",
+          "     branch: branch-a",
+          "     parent: older",
+          `     fork point: full restored history from older through message ${olderLastMessageId} (message 4)`,
+          "     fork policy: transcript=copy_prefix, pendingInputs=drop, queuedInputs=drop, bashApprovalGrants=drop",
+          "     preview: remember branch-a",
+          "     resume: keel --resume branch-a",
+          "     fork-points: keel --resume branch-a --fork-points",
+          "     fork: keel sessions fork branch-a <new-id>",
+          "  branch-b  updated 2026-01-02T00:00:06.000Z",
+        ].join("\n"),
+      );
       expect(stdout).toContain("  forked  updated 2026-01-02T00:00:05.000Z\n");
       expect(stdout).toContain("     parent: older\n");
       expect(stdout).toContain("     preview: remember beta with spacing\n");
