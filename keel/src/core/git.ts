@@ -70,6 +70,8 @@ interface GitWorkspace {
 }
 
 const CHECKPOINT_METADATA_PATH = "keel/last-edit-checkpoint.json";
+const NO_UNDO_CHECKPOINT_MESSAGE =
+  "No earlier checkpoints. Ask me to undo more, or use git to reset.";
 
 const gitOutputSchema = z
   .string()
@@ -582,12 +584,12 @@ export function restoreLastEditCheckpoint(
 ): RestoreLastEditCheckpointResult {
   const gitWorkspace = findGitWorkspace(workspace);
   if (gitWorkspace === null || !existsSync(gitWorkspace.checkpointPath)) {
-    return { status: "none", message: "Nothing to undo." };
+    return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
   }
 
   const checkpoint = readCheckpoint(gitWorkspace.checkpointPath);
   if (checkpoint.gitRoot !== gitWorkspace.root) {
-    return { status: "none", message: "Nothing to undo." };
+    return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
   }
 
   if (checkpoint.operation === "batch") {
