@@ -252,6 +252,383 @@ describe("Interactive Session", () => {
     expect(sigintHandlers.size).toBe(0);
   });
 
+  test(`Given the interactive session is idle,
+    When user lists fork points,
+    Then the command prints local fork commands without starting a model turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("fork points should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("fork points should not start a model turn");
+      },
+      formatCostReport: () => "",
+      listForkPoints: () => ({
+        sessionId: "source",
+        points: [
+          { beforeUser: 1, preview: "remember alpha" },
+          { beforeUser: 2, preview: "remember beta" },
+        ],
+      }),
+    });
+
+    // When
+    input.end("/fork-points\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe(
+      [
+        'Fork points for session "source":',
+        "1. before user message 1: remember alpha",
+        "   use: /fork <new-id> --before-user 1",
+        "2. before user message 2: remember beta",
+        "   use: /fork <new-id> --before-user 2",
+        "",
+      ].join("\n"),
+    );
+    expect(stderr).toBe("");
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given the interactive session is idle,
+    When user picks a fork point,
+    Then the fork is created from the selected point without starting a model turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let forkTarget = "";
+    let forkBeforeUser: number | undefined;
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("fork picker should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("fork picker should not start a model turn");
+      },
+      formatCostReport: () => "",
+      listForkPoints: () => ({
+        sessionId: "source",
+        points: [
+          { beforeUser: 1, preview: "remember alpha" },
+          { beforeUser: 2, preview: "remember beta" },
+        ],
+      }),
+      forkSession: (request) => {
+        forkTarget = request.targetSessionId;
+        forkBeforeUser = request.beforeUser;
+        return 'Forked session "source" to "target" before restored user message 2.\nresume: keel --resume target\n';
+      },
+    });
+
+    // When
+    input.end("/fork target --pick\n2\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe(
+      [
+        'Fork points for session "source":',
+        "0. full restored history",
+        "1. before user message 1: remember alpha",
+        "2. before user message 2: remember beta",
+        "",
+        "Select fork point [0-2], or q to cancel:",
+        'Forked session "source" to "target" before restored user message 2.',
+        "resume: keel --resume target",
+        "",
+      ].join("\n"),
+    );
+    expect(stderr).toBe("");
+    expect(forkTarget).toBe("target");
+    expect(forkBeforeUser).toBe(2);
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given the interactive session is idle,
+    When user picks full restored history,
+    Then the fork is created without a before-user fork point`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let forkBeforeUser: number | undefined = 1;
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error(
+          "full-history fork picker should not resolve a provider",
+        );
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error(
+          "full-history fork picker should not start a model turn",
+        );
+      },
+      formatCostReport: () => "",
+      listForkPoints: () => ({
+        sessionId: "source",
+        points: [{ beforeUser: 1, preview: "remember alpha" }],
+      }),
+      forkSession: (request) => {
+        forkBeforeUser = request.beforeUser;
+        return 'Forked session "source" to "target".\nresume: keel --resume target\n';
+      },
+    });
+
+    // When
+    input.end("/fork target --pick\n0\n");
+
+    // Then
+    await session;
+    expect(stdout).toContain('Forked session "source" to "target".\n');
+    expect(stderr).toBe("");
+    expect(forkBeforeUser).toBeUndefined();
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given queued input contains an interactive fork picker command,
+    When the picker consumes a queued selection,
+    Then both queued inputs are marked consumed without starting a model turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let forkBeforeUser: number | undefined;
+    let providerResolved = false;
+    const consumedInputIds: string[][] = [];
+    const initialQueuedInputs: readonly SessionQueuedInput[] = [
+      {
+        id: "queued-command",
+        timestamp: "1970-01-01T00:00:00.000Z",
+        sequence: 1,
+        line: "/fork target --pick",
+      },
+      {
+        id: "queued-selection",
+        timestamp: "1970-01-01T00:00:00.000Z",
+        sequence: 2,
+        line: "2",
+      },
+    ];
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialQueuedInputs,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("queued fork picker should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("queued fork picker should not start a model turn");
+      },
+      formatCostReport: () => "",
+      consumeQueuedInputs: (inputIds) => {
+        consumedInputIds.push([...inputIds]);
+      },
+      listForkPoints: () => ({
+        sessionId: "source",
+        points: [
+          { beforeUser: 1, preview: "remember alpha" },
+          { beforeUser: 2, preview: "remember beta" },
+        ],
+      }),
+      forkSession: (request) => {
+        forkBeforeUser = request.beforeUser;
+        return 'Forked session "source" to "target" before restored user message 2.\nresume: keel --resume target\n';
+      },
+    });
+
+    // When
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toContain(
+      'Forked session "source" to "target" before restored user message 2.\n',
+    );
+    expect(stderr).toBe("");
+    expect(forkBeforeUser).toBe(2);
+    expect(consumedInputIds).toEqual([["queued-command", "queued-selection"]]);
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given the interactive fork picker receives an invalid answer,
+    When user cancels after the retry prompt,
+    Then no fork is created and no model turn starts`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let forkCalled = false;
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("cancelled fork picker should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("cancelled fork picker should not start a model turn");
+      },
+      formatCostReport: () => "",
+      listForkPoints: () => ({
+        sessionId: "source",
+        points: [{ beforeUser: 1, preview: "remember alpha" }],
+      }),
+      forkSession: () => {
+        forkCalled = true;
+        throw new Error("fork picker should have been cancelled");
+      },
+    });
+
+    // When
+    input.end("/fork target --pick\n\nx\nq\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe(
+      [
+        'Fork points for session "source":',
+        "0. full restored history",
+        "1. before user message 1: remember alpha",
+        "",
+        "Select fork point [0-1], or q to cancel:",
+        "Select fork point [0-1], or q to cancel:",
+        "Select fork point [0-1], or q to cancel:",
+        "Fork cancelled.",
+        "",
+      ].join("\n"),
+    );
+    expect(stderr).toBe(
+      "Error: selection must be 0-1 or q.\nError: selection must be 0-1 or q.\n",
+    );
+    expect(forkCalled).toBe(false);
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
   test(`Given the interactive session has no persisted session,
     When user enters /fork,
     Then the command fails locally without starting a model turn`, async () => {
@@ -294,13 +671,18 @@ describe("Interactive Session", () => {
     });
 
     // When
-    input.end("/fork target\n");
+    input.end("/fork-points\n/fork target\n/fork target --pick\n");
 
     // Then
     await session;
     expect(stdout).toBe("");
     expect(stderr).toBe(
-      "Error: /fork requires a named session. Start with --session or --resume.\n",
+      [
+        "Error: /fork-points requires a named session. Start with --session or --resume.",
+        "Error: /fork requires a named session. Start with --session or --resume.",
+        "Error: /fork requires a named session. Start with --session or --resume.",
+        "",
+      ].join("\n"),
     );
     expect(providerResolved).toBe(false);
     expect(sigintHandlers.size).toBe(0);
@@ -355,6 +737,8 @@ describe("Interactive Session", () => {
         "/fork target --before-user",
         "/fork target --before-user=0",
         "/fork target --before-user=9007199254740992",
+        "/fork target --pick --before-user 1",
+        "/fork target --pick=1",
         "/fork target --all",
         "",
       ].join("\n"),
@@ -370,6 +754,8 @@ describe("Interactive Session", () => {
         "Error: --before-user requires a value.",
         "Error: --before-user must be a positive integer.",
         "Error: --before-user must be a positive integer.",
+        "Error: --pick cannot be combined with --before-user.",
+        'Error: unknown /fork option "--pick=1".',
         'Error: unknown /fork option "--all".',
         "",
       ].join("\n"),
