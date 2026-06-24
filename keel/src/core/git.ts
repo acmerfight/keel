@@ -52,7 +52,7 @@ export interface RecordLastEditCheckpointResult {
 export type RestoreLastEditCheckpointResult =
   | {
       readonly status: "restored";
-      readonly filePath: string;
+      readonly restoredLabel: string;
     }
   | {
       readonly status: "none";
@@ -573,7 +573,7 @@ function restoreBatchCheckpoint(
   rmSync(gitWorkspace.checkpointPath, { force: true });
   return {
     status: "restored",
-    filePath: `${checkpoint.operations.length} files`,
+    restoredLabel: `${checkpoint.operations.length} files`,
   };
 }
 
@@ -605,7 +605,7 @@ export function restoreLastEditCheckpoint(
       rmSync(gitWorkspace.checkpointPath, { force: true });
       return {
         status: "restored",
-        filePath: checkpoint.relativePath,
+        restoredLabel: checkpoint.relativePath,
       };
     }
 
@@ -627,7 +627,7 @@ export function restoreLastEditCheckpoint(
     rmSync(gitWorkspace.checkpointPath, { force: true });
     return {
       status: "restored",
-      filePath: checkpoint.relativePath,
+      restoredLabel: checkpoint.relativePath,
     };
   }
 
@@ -645,6 +645,6 @@ export function restoreLastEditCheckpoint(
   rmSync(gitWorkspace.checkpointPath, { force: true });
   return {
     status: "restored",
-    filePath: checkpoint.relativePath,
+    restoredLabel: checkpoint.relativePath,
   };
 }

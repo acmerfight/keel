@@ -15,6 +15,11 @@ import {
 } from "../agent/prompt.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
+import {
+  type RecordLastBatchCheckpointOperation,
+  recordLastTaskCheckpoint,
+  restoreLastEditCheckpoint,
+} from "../core/git.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import type { LLMProvider, Message, Usage } from "../llm/types.ts";
 import {
@@ -149,6 +154,10 @@ interface HelpCommand {
   readonly kind: "help";
 }
 
+interface UndoCommand {
+  readonly kind: "undo";
+}
+
 interface ManualCompactCommand {
   readonly kind: "compact";
   readonly focusInstruction?: string;
@@ -172,6 +181,7 @@ interface InvalidInteractiveCommand {
 
 type InteractiveCommand =
   | HelpCommand
+  | UndoCommand
   | ManualCompactCommand
   | ForkPointsCommand
   | ForkCommand
@@ -181,6 +191,7 @@ function formatInteractiveHelp(): string {
   return [
     "Interactive commands:",
     "  /help              Show this help.",
+    "  /undo              Restore the last edit checkpoint.",
     "  /compact [focus]   Summarize older conversation context with optional focus.",
     "  /fork <target-id> [--before-user <n>]",
     "                     Fork this named or resumed session without switching to it.",
@@ -303,6 +314,18 @@ function parseInteractiveCommand(
     return { kind: "help" };
   }
 
+  const undoMatch = /^\/undo(?:\s+(.*))?$/u.exec(trimmed);
+  if (undoMatch !== null) {
+    const extraArgs = undoMatch[1]?.trim();
+    if (extraArgs !== undefined && extraArgs !== "") {
+      return {
+        kind: "invalid",
+        message: "Error: /undo does not accept arguments.",
+      };
+    }
+    return { kind: "undo" };
+  }
+
   const forkPointsMatch = /^\/fork-points(?:\s+(.*))?$/u.exec(trimmed);
   if (forkPointsMatch !== null) {
     const extraArgs = forkPointsMatch[1]?.trim();
@@ -334,6 +357,10 @@ function parseInteractiveCommand(
 function formatInteractiveCommandFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return `${sanitizeStatusLineText(message)}\n`;
+}
+
+function undoRestoredContextMessage(filePath: string): string {
+  return `Keel local command /undo restored ${filePath}. Treat this as workspace state, not as a new user request.`;
 }
 
 function formatManualCompactionFailure(error: unknown): string {
@@ -951,6 +978,37 @@ export async function runInteractiveSession(
         consumeQueuedInputLines([rawInput]);
         continue;
       }
+      if (interactiveCommand?.kind === "undo") {
+        const result = restoreLastEditCheckpoint(options.workspace);
+        switch (result.status) {
+          case "restored":
+            options.writeStdout(`Restored ${result.restoredLabel}\n`);
+            clearReadVisibilityState(readVisibility);
+            messages.push({
+              role: "user",
+              content: undoRestoredContextMessage(result.restoredLabel),
+            });
+            if (options.persistSessionMessages !== undefined) {
+              options.persistSessionMessages(
+                messages,
+                "turn",
+                queuedInputIds([rawInput]),
+              );
+            } else {
+              consumeQueuedInputLines([rawInput]);
+            }
+            break;
+          case "none":
+            options.writeStderr(`${result.message}\n`);
+            consumeQueuedInputLines([rawInput]);
+            break;
+          case "blocked":
+            options.writeStderr(`${result.message}\n`);
+            consumeQueuedInputLines([rawInput]);
+            break;
+        }
+        continue;
+      }
       if (interactiveCommand?.kind === "fork-points") {
         if (options.listForkPoints === undefined) {
           options.writeStderr(formatForkRequiresNamedSession("/fork-points"));
@@ -1055,6 +1113,7 @@ export async function runInteractiveSession(
       resolved ??= options.resolveProvider(userMessage);
       reportProvider ??= resolved;
       const messagesBeforeTurn = messages.slice();
+      const checkpointOperations: RecordLastBatchCheckpointOperation[] = [];
       const turnStartSequence = lineReader.sequence();
       const drainedInjectedLines: QueuedLine[] = [];
       const deferredInputLines: QueuedLine[] = [];
@@ -1088,6 +1147,9 @@ export async function runInteractiveSession(
             ? { contextCompaction: resolved.contextCompaction }
             : {}),
           readVisibility,
+          recordCheckpointOperations: (operations) => {
+            checkpointOperations.push(...operations);
+          },
           drainInjectedUserMessages: () => {
             const queuedLines = lineReader
               .drainLinesAfter(turnStartSequence)
@@ -1157,6 +1219,12 @@ export async function runInteractiveSession(
         restoreDrainedInput(restoredLines);
         options.writeStdout("\n");
       } finally {
+        if (checkpointOperations.length > 1) {
+          recordLastTaskCheckpoint({
+            workspace: options.workspace,
+            operations: checkpointOperations,
+          });
+        }
         activeAbortController = null;
       }
     }
