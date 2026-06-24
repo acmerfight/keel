@@ -1,4 +1,11 @@
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readSync,
+  statSync,
+} from "node:fs";
 import { KeelError } from "../core/error.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import {
@@ -9,7 +16,11 @@ import {
   isBinarySample,
 } from "./text-file.ts";
 import type { ToolResult } from "./types.ts";
-import { resolveWorkspaceTarget } from "./workspace-path.ts";
+import {
+  assertWorkspaceOpenTargetAtAccess,
+  assertWorkspaceTargetAtAccess,
+  resolveWorkspaceTarget,
+} from "./workspace-path.ts";
 
 const MAX_READ_LINES = 2000;
 const MAX_READ_BYTES = 50 * 1024;
@@ -283,12 +294,18 @@ export function executeRead(
     "read",
   );
 
-  const stat = statSync(targetPath);
+  const accessTargetPath = assertWorkspaceTargetAtAccess({
+    workspacePath,
+    targetPath,
+    toolName: "read",
+    requestedPath: filePath,
+  });
+  const stat = statSync(accessTargetPath);
   const targetIsDirectory = stat.isDirectory();
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
   if (
     projectIgnorePolicy.isIgnored(requestedPath, targetIsDirectory) ||
-    projectIgnorePolicy.isIgnored(targetPath, targetIsDirectory)
+    projectIgnorePolicy.isIgnored(accessTargetPath, targetIsDirectory)
   ) {
     throw new KeelError(
       "tool_path_ignored",
@@ -305,16 +322,34 @@ export function executeRead(
   }
 
   const normalizedOptions = normalizeReadOptions(filePath, options);
-  const fd = openSync(targetPath, "r");
+  const fd = openSync(
+    accessTargetPath,
+    constants.O_RDONLY | constants.O_NONBLOCK,
+  );
   try {
-    const sample = readSample(fd, stat.size);
-    if (isBinarySample(targetPath, sample)) {
+    const openedTargetPath = assertWorkspaceOpenTargetAtAccess({
+      fd,
+      workspacePath,
+      targetPath: accessTargetPath,
+      toolName: "read",
+      requestedPath: filePath,
+    });
+    if (projectIgnorePolicy.isIgnored(openedTargetPath, false)) {
+      throw new KeelError(
+        "tool_path_ignored",
+        `read failed: ignored path: ${filePath}`,
+        "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+      );
+    }
+    const openedStat = fstatSync(fd);
+    const sample = readSample(fd, openedStat.size);
+    if (isBinarySample(openedTargetPath, sample)) {
       throw binaryFileError("read", filePath);
     }
 
     return {
       content: readTextWindow(fd, filePath, normalizedOptions),
-      targetPath,
+      targetPath: openedTargetPath,
     };
   } finally {
     closeSync(fd);

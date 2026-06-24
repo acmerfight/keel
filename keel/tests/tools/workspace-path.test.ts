@@ -7,6 +7,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -183,7 +184,12 @@ describe("Workspace Path Contract", () => {
       // When / Then
       expectWorkspaceError(
         () =>
-          resolveWorkspaceTarget(workspace, "secret-dir/missing.txt", "read"),
+          resolveWorkspaceTarget(workspace, "secret-dir/missing.md", "read"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+      expectWorkspaceError(
+        () => resolveWorkspaceTarget(workspace, "secret-dir", "read"),
         "tool_path_ignored",
         "ignored path",
       );
@@ -206,6 +212,62 @@ describe("Workspace Path Contract", () => {
       expect(
         resolveWorkspaceTarget(workspace, "keep.txt", "read").targetPath,
       ).toBe(join(workspacePath, "keep.txt"));
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    `Given a workspace contains a Unix socket,
+    When target resolution validates the path,
+    Then it rejects the unsupported file type before any tool can open it`,
+    async () => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-workspace-path-"));
+      const socketPath = join(workspace, "socket-trap");
+      const server = createServer();
+      await new Promise<void>((resolveListen, rejectListen) => {
+        server.once("error", rejectListen);
+        server.listen(socketPath, resolveListen);
+      });
+
+      try {
+        // When / Then
+        expectWorkspaceError(
+          () => resolveWorkspaceTarget(workspace, "socket-trap", "read"),
+          "tool_not_file",
+          "unsupported file type",
+        );
+        expectWorkspaceError(
+          () => resolveWorkspaceTarget(workspace, "socket-trap", "ls"),
+          "tool_not_directory",
+          "not a directory",
+        );
+      } finally {
+        await new Promise<void>((resolveClose) => {
+          server.close(() => resolveClose());
+        });
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test(`Given gitignore casing differs from the on-disk path,
+    When project ignore policy checks the canonical path,
+    Then case-only request differences remain ignored`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-workspace-path-"));
+    await mkdir(join(workspace, "Secret"));
+    await writeFile(join(workspace, ".gitignore"), "secret/\n*.pem\n", "utf8");
+    await writeFile(join(workspace, "Secret", "KEY.PEM"), "secret\n", "utf8");
+
+    try {
+      // When / Then
+      expectWorkspaceError(
+        () => resolveWorkspaceTarget(workspace, "Secret/KEY.PEM", "read"),
+        "tool_path_ignored",
+        "ignored path",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

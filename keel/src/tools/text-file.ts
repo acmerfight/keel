@@ -1,4 +1,4 @@
-import { closeSync, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { extname } from "node:path";
 import { KeelError } from "../core/error.ts";
 
@@ -166,24 +166,36 @@ export function decodeUtf8(
 export interface EditableTextFile {
   readonly content: string;
   readonly hasUtf8Bom: boolean;
+  readonly targetPath: string;
 }
 
 export interface ReadEditableTextFileOptions {
   readonly command?: EditableTextFileCommand;
   readonly maxBytes: number;
   readonly tooLargeError: (observedBytes: number) => KeelError;
+  readonly validateOpenedFile: (fd: number) => string;
+}
+
+interface ReadFileCappedResult {
+  readonly bytes: Buffer;
+  readonly targetPath: string;
 }
 
 function hasUtf8Bom(bytes: Uint8Array): boolean {
   return bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
 }
 
-function readFileCapped(targetPath: string, maxBytes: number): Buffer {
+function readFileCapped(
+  targetPath: string,
+  maxBytes: number,
+  validateOpenedFile: (fd: number) => string,
+): ReadFileCappedResult {
   const readLimit = maxBytes + 1;
   const chunks: Buffer[] = [];
   let offset = 0;
-  const fd = openSync(targetPath, "r");
+  const fd = openSync(targetPath, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
+    const openedTargetPath = validateOpenedFile(fd);
     const reportedSize = fstatSync(fd).size;
     let nextChunkSize = Math.min(Math.max(reportedSize + 1, 1), readLimit);
     while (offset < readLimit) {
@@ -197,7 +209,10 @@ function readFileCapped(targetPath: string, maxBytes: number): Buffer {
       if (read < chunk.length) break;
       nextChunkSize = Math.min(Math.max(nextChunkSize * 2, 1), readLimit);
     }
-    return Buffer.concat(chunks, offset);
+    return {
+      bytes: Buffer.concat(chunks, offset),
+      targetPath: openedTargetPath,
+    };
   } finally {
     closeSync(fd);
   }
@@ -209,7 +224,11 @@ export function readEditableTextFileWithMetadata(
   options: ReadEditableTextFileOptions,
 ): EditableTextFile {
   const command = options.command ?? "edit";
-  const bytes = readFileCapped(targetPath, options.maxBytes);
+  const { bytes, targetPath: openedTargetPath } = readFileCapped(
+    targetPath,
+    options.maxBytes,
+    options.validateOpenedFile,
+  );
   if (bytes.length > options.maxBytes) {
     throw options.tooLargeError(bytes.length);
   }
@@ -226,5 +245,6 @@ export function readEditableTextFileWithMetadata(
       bytes,
     ),
     hasUtf8Bom: hasUtf8Bom(bytes),
+    targetPath: openedTargetPath,
   };
 }

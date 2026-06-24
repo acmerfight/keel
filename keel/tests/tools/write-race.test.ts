@@ -8,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
 import {
@@ -25,6 +25,7 @@ interface FsOverrides {
   ) => ReturnType<typeof import("node:fs").lstatSync>;
   readonly linkSync?: FsModule["linkSync"];
   readonly mkdirSync?: (path: PathLike) => void;
+  readonly openSync?: FsModule["openSync"];
   readonly realpathSync?: (path: PathLike) => string;
   readonly rmSync?: FsModule["rmSync"];
   readonly writeFileSync?: FsModule["writeFileSync"];
@@ -193,6 +194,356 @@ describe("Write Tool Race Handling", () => {
       } finally {
         await rm(outside, { recursive: true, force: true });
       }
+    });
+  });
+
+  test(`Given a parent directory is replaced by an outside symlink after write validation,
+    When the write tool publishes the new file,
+    Then it rejects the escaped target without creating the outside file`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const parentPath = join(workspace, "race");
+      const targetPath = join(parentPath, "new.txt");
+      const outside = await mkdtemp(join(tmpdir(), "keel-write-toc-outside-"));
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      let swapped = false;
+      const { executeWrite } = await importWriteWithFs({
+        realpathSync: (path) => {
+          const resolved = actualFs.realpathSync(path);
+          if (!swapped && String(path).endsWith(`${join("race")}`)) {
+            swapped = true;
+            const racedParent = String(path);
+            actualFs.rmSync(racedParent, { recursive: true, force: true });
+            actualFs.symlinkSync(outside, racedParent, "dir");
+          }
+          return resolved;
+        },
+      });
+
+      try {
+        // When / Then
+        expectWriteError(
+          () => executeWrite(workspace, "race/new.txt", "outside-write\n"),
+          "tool_path_outside_workspace",
+          "outside the workspace",
+        );
+        expect(await pathExists(join(outside, "new.txt"))).toBe(false);
+        expect(await pathExists(targetPath)).toBe(false);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test(`Given a write parent is moved outside after final publish validation,
+    When the write tool hard-links the new file through the raced path,
+    Then it rolls back the escaped file before reporting the boundary failure`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const parentPath = join(workspace, "race");
+      const outside = await mkdtemp(join(tmpdir(), "keel-write-link-outside-"));
+      const outsideParentPath = join(outside, "race");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      actualFs.mkdirSync(parentPath);
+      let swapped = false;
+      const { executeWrite } = await importWriteWithFs({
+        linkSync: (existingPath, newPath) => {
+          if (!swapped && String(newPath).endsWith(join("race", "new.txt"))) {
+            swapped = true;
+            actualFs.renameSync(parentPath, outsideParentPath);
+            actualFs.symlinkSync(outsideParentPath, parentPath, "dir");
+          }
+          return actualFs.linkSync(existingPath, newPath);
+        },
+      });
+
+      try {
+        // When / Then
+        expectWriteError(
+          () => executeWrite(workspace, "race/new.txt", "outside-link\n"),
+          "tool_path_outside_workspace",
+          "outside the workspace",
+        );
+        expect(await pathExists(join(outsideParentPath, "new.txt"))).toBe(
+          false,
+        );
+        expect(await readdir(outsideParentPath)).toEqual(
+          expect.not.arrayContaining([expect.stringContaining(".keel-write-")]),
+        );
+        expect(swapped).toBe(true);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test(`Given a write parent is swapped to an ignored directory during publish,
+    When the write tool verifies the published file identity,
+    Then it removes the ignored file before reporting the ignored path`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const parentPath = join(workspace, "race");
+      const backupParentPath = join(workspace, "race-backup");
+      const ignoredPath = join(workspace, "private");
+      const ignoredTargetPath = join(ignoredPath, "new.txt");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      actualFs.writeFileSync(join(workspace, ".gitignore"), "private/\n");
+      actualFs.mkdirSync(parentPath);
+      actualFs.mkdirSync(ignoredPath);
+      let swapped = false;
+      const { executeWrite } = await importWriteWithFs({
+        linkSync: (existingPath, newPath) => {
+          if (!swapped && String(newPath).endsWith(join("race", "new.txt"))) {
+            swapped = true;
+            actualFs.renameSync(parentPath, backupParentPath);
+            actualFs.symlinkSync(ignoredPath, parentPath, "dir");
+            return actualFs.linkSync(
+              join(backupParentPath, basename(String(existingPath))),
+              newPath,
+            );
+          }
+          return actualFs.linkSync(existingPath, newPath);
+        },
+      });
+
+      // When / Then
+      expectWriteError(
+        () => executeWrite(workspace, "race/new.txt", "ignored\n"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+      expect(await pathExists(ignoredTargetPath)).toBe(false);
+      expect(swapped).toBe(true);
+    });
+  });
+
+  test(`Given a published write target is replaced by a directory before verification,
+    When the write tool validates the published identity,
+    Then it reports the non-file target without removing the concurrent directory`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const parentPath = join(workspace, "race");
+      const targetPath = join(parentPath, "new.txt");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      actualFs.mkdirSync(parentPath);
+      let swapped = false;
+      const { executeWrite } = await importWriteWithFs({
+        linkSync: (existingPath, newPath) => {
+          actualFs.linkSync(existingPath, newPath);
+          if (!swapped && String(newPath).endsWith(join("race", "new.txt"))) {
+            swapped = true;
+            actualFs.rmSync(newPath, { force: true });
+            actualFs.mkdirSync(newPath);
+          }
+        },
+      });
+
+      // When / Then
+      expectWriteError(
+        () => executeWrite(workspace, "race/new.txt", "content\n"),
+        "tool_not_file",
+        "unsupported file type",
+      );
+      expect(await readdir(targetPath)).toEqual([]);
+      expect(swapped).toBe(true);
+    });
+  });
+
+  test(`Given a published write path is replaced by another workspace file before verification,
+    When the write tool compares the published identity,
+    Then it preserves the concurrent replacement and reports a boundary failure`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const targetPath = join(workspace, "race.txt");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      let replaced = false;
+      const { executeWrite } = await importWriteWithFs({
+        linkSync: (existingPath, newPath) => {
+          actualFs.linkSync(existingPath, newPath);
+          if (!replaced && String(newPath).endsWith("race.txt")) {
+            replaced = true;
+            actualFs.rmSync(newPath, { force: true });
+            actualFs.writeFileSync(newPath, "user\n", "utf8");
+          }
+        },
+      });
+
+      // When / Then
+      expectWriteError(
+        () => executeWrite(workspace, "race.txt", "content\n"),
+        "tool_path_outside_workspace",
+        "outside the workspace",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe("user\n");
+      expect(replaced).toBe(true);
+    });
+  });
+
+  test(`Given a write temp file opens in an outside-swapped parent that is restored before cleanup,
+    When the write tool verifies the opened temp file,
+    Then it rejects without leaking caller content in the outside directory`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const parentPath = join(workspace, "race");
+      const backupParentPath = join(workspace, "race-backup");
+      const outside = await mkdtemp(join(tmpdir(), "keel-write-temp-outside-"));
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      actualFs.mkdirSync(parentPath);
+      let swapped = false;
+      let restored = false;
+      const restoreParent = (): void => {
+        if (!swapped || restored) return;
+        restored = true;
+        actualFs.rmSync(parentPath, { force: true });
+        actualFs.renameSync(backupParentPath, parentPath);
+      };
+      const { executeWrite } = await importWriteWithFs({
+        openSync: (path, flags, mode) => {
+          if (!swapped && String(path).includes(".keel-write-")) {
+            swapped = true;
+            actualFs.renameSync(parentPath, backupParentPath);
+            actualFs.symlinkSync(outside, parentPath, "dir");
+          }
+          return actualFs.openSync(path, flags, mode);
+        },
+        realpathSync: (path) => {
+          const resolved = actualFs.realpathSync(path);
+          if (
+            swapped &&
+            !restored &&
+            (String(path).includes(".keel-write-") ||
+              String(path).endsWith(join("race")))
+          ) {
+            restoreParent();
+          }
+          return resolved;
+        },
+      });
+
+      try {
+        // When / Then
+        expect(() =>
+          executeWrite(workspace, "race/new.txt", "outside-temp\n"),
+        ).toThrow();
+        expect(await readdir(outside)).toEqual(
+          expect.not.arrayContaining([expect.stringContaining(".keel-write-")]),
+        );
+        expect(await pathExists(join(outside, "new.txt"))).toBe(false);
+      } finally {
+        restoreParent();
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test(`Given a write temp path is replaced after open,
+    When the write tool compares the opened descriptor identity,
+    Then it rejects without publishing the target or leaving temp content`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const parentPath = join(workspace, "race");
+      const targetPath = join(parentPath, "new.txt");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      actualFs.mkdirSync(parentPath);
+      let replaced = false;
+      const { executeWrite } = await importWriteWithFs({
+        realpathSync: (path) => {
+          const resolved = actualFs.realpathSync(path);
+          if (!replaced && String(path).includes(".keel-write-")) {
+            replaced = true;
+            const replacementPath = `${resolved}.replacement`;
+            actualFs.writeFileSync(replacementPath, "other\n", "utf8");
+            actualFs.rmSync(resolved, { force: true });
+            actualFs.renameSync(replacementPath, resolved);
+          }
+          return resolved;
+        },
+      });
+
+      // When / Then
+      expect(() =>
+        executeWrite(workspace, "race/new.txt", "content\n"),
+      ).toThrow("opened temp file no longer matches path");
+      expect(await pathExists(targetPath)).toBe(false);
+      expect(await readdir(parentPath)).toEqual([]);
+      expect(replaced).toBe(true);
+    });
+  });
+
+  test(`Given a validated write parent is swapped to an ignored workspace directory,
+    When the write tool revalidates the publish target,
+    Then it rejects without creating ignored content`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const parentPath = join(workspace, "race");
+      const ignoredPath = join(workspace, "private");
+      const targetPath = join(parentPath, "new.txt");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      actualFs.writeFileSync(join(workspace, ".gitignore"), "private/\n");
+      actualFs.mkdirSync(ignoredPath);
+      let swapped = false;
+      const { executeWrite } = await importWriteWithFs({
+        realpathSync: (path) => {
+          const resolved = actualFs.realpathSync(path);
+          if (!swapped && String(path).endsWith(join("race"))) {
+            swapped = true;
+            actualFs.rmSync(parentPath, { recursive: true, force: true });
+            actualFs.symlinkSync(ignoredPath, parentPath, "dir");
+          }
+          return resolved;
+        },
+      });
+
+      // When / Then
+      expectWriteError(
+        () => executeWrite(workspace, "race/new.txt", "ignored\n"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+      expect(await pathExists(join(ignoredPath, "new.txt"))).toBe(false);
+      expect(await pathExists(targetPath)).toBe(false);
+    });
+  });
+
+  test(`Given a write temp file is moved inside the workspace before a write failure,
+    When atomic cleanup runs by opened temp identity,
+    Then no temp file remains in the moved directory`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const parentPath = join(workspace, "race");
+      const backupParentPath = join(workspace, "race-backup");
+      const originalError = errno("EIO");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      actualFs.mkdirSync(parentPath);
+      let moved = false;
+      const { executeWrite } = await importWriteWithFs({
+        writeFileSync: (file, data, options) => {
+          actualFs.writeFileSync(file, data, options);
+          if (!moved && typeof file === "number") {
+            moved = true;
+            actualFs.renameSync(parentPath, backupParentPath);
+            throw originalError;
+          }
+        },
+      });
+
+      // When / Then
+      expect(() =>
+        executeWrite(workspace, "race/new.txt", "content\n"),
+      ).toThrow(originalError);
+      expect(await readdir(backupParentPath)).toEqual(
+        expect.not.arrayContaining([expect.stringContaining(".keel-write-")]),
+      );
+      expect(moved).toBe(true);
     });
   });
 
