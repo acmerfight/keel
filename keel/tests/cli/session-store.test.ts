@@ -663,6 +663,125 @@ describe("Session Store", () => {
     }
   });
 
+  test(`Given persisted tool calls contain explicit null optional arguments,
+    When the session is resumed,
+    Then null optionals are normalized to absent tool-call fields`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const expectedMessages: readonly Message[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          { id: "read_nulls", tool: "read", path: "src/index.ts" },
+          {
+            id: "edit_nulls",
+            tool: "edit",
+            path: "src/index.ts",
+            edits: [{ oldText: "old", newText: "new" }],
+          },
+          { id: "bash_null", tool: "bash", command: "echo ok" },
+        ],
+      },
+      { role: "tool", toolCallId: "read_nulls", content: "read result" },
+      { role: "tool", toolCallId: "edit_nulls", content: "edit result" },
+      { role: "tool", toolCallId: "bash_null", content: "bash result" },
+    ];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "null-tool-optionals",
+        workspace,
+        runtime: runtime(home),
+      });
+      const ledgerRecord = {
+        schemaVersion: 2,
+        type: "append",
+        timestamp: "1970-01-01T00:00:00.001Z",
+        reason: "turn",
+        messages: [
+          {
+            id: "stored-message-1",
+            message: {
+              role: "assistant",
+              content: "",
+              toolCalls: [
+                {
+                  id: "read_nulls",
+                  tool: "read",
+                  path: "src/index.ts",
+                  offset: null,
+                  limit: null,
+                },
+                {
+                  id: "edit_nulls",
+                  tool: "edit",
+                  path: "src/index.ts",
+                  edits: [
+                    {
+                      oldText: "old",
+                      newText: "new",
+                      replaceAll: null,
+                    },
+                  ],
+                },
+                {
+                  id: "bash_null",
+                  tool: "bash",
+                  command: "echo ok",
+                  timeoutMs: null,
+                },
+              ],
+            },
+          },
+          {
+            id: "stored-message-2",
+            message: {
+              role: "tool",
+              toolCallId: "read_nulls",
+              content: "read result",
+            },
+          },
+          {
+            id: "stored-message-3",
+            message: {
+              role: "tool",
+              toolCallId: "edit_nulls",
+              content: "edit result",
+            },
+          },
+          {
+            id: "stored-message-4",
+            message: {
+              role: "tool",
+              toolCallId: "bash_null",
+              content: "bash result",
+            },
+          },
+        ],
+      };
+      await writeFile(
+        session.filePath,
+        `${await readFile(session.filePath, "utf8")}${JSON.stringify(ledgerRecord)}\n`,
+        "utf8",
+      );
+
+      // When
+      const resumed = resumeSessionStore({
+        sessionId: "null-tool-optionals",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(resumed.messages).toStrictEqual(expectedMessages);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given completed tool calls are already persisted,
     When the same transcript and then a follow-up are persisted,
     Then the store compares the structural prefix and appends only new messages`, async () => {

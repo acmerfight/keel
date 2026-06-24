@@ -433,7 +433,7 @@ describe("Context Compaction", () => {
         id: "read_package",
         tool: "read",
         path: "package.json",
-        offset: 0,
+        offset: 1,
         limit: 200,
       },
       {

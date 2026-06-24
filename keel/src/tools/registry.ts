@@ -1,33 +1,20 @@
 import type { z } from "zod";
 import type {
   BuiltinToolExecutionContext,
-  ToolArgDefinition,
   ToolConcurrency,
   ToolExecution,
 } from "./builtin.ts";
-import { builtinTools } from "./builtin.ts";
+import { builtinToolCallSchema, builtinTools } from "./builtin.ts";
+import {
+  invalidBuiltinToolCallError,
+  toolCallValidationError,
+} from "./tool-error.ts";
+import {
+  type OpenAICompatibleToolParameters,
+  openAICompatibleParametersFromSchema,
+} from "./tool-schema.ts";
 
-interface OpenAICompatibleToolParameter {
-  readonly type: "string" | "integer" | "object" | "boolean" | "array";
-  readonly description?: string;
-  readonly minimum?: number;
-  readonly maximum?: number;
-  readonly items?: OpenAICompatibleToolParameter;
-  readonly properties?: Record<string, OpenAICompatibleToolParameter>;
-  readonly required?: readonly string[];
-  readonly additionalProperties?: false;
-}
-
-interface OpenAICompatibleToolParameters {
-  readonly type: "object";
-  readonly properties: Record<string, OpenAICompatibleToolParameter>;
-  readonly required: readonly string[];
-  readonly additionalProperties: false;
-}
-
-type NormalizedArgumentValue =
-  | { readonly kind: "omit" }
-  | { readonly kind: "value"; readonly value: unknown };
+export type { OpenAICompatibleToolParameter } from "./tool-schema.ts";
 
 export interface OpenAICompatibleToolDefinition {
   readonly type: "function";
@@ -47,33 +34,16 @@ type BuiltinToolForName<Name extends ToolName> = Extract<
   { readonly name: Name }
 >;
 
-type ToolNameOf<Tool> = Tool extends {
-  readonly name: infer Name extends string;
-}
-  ? Name
-  : never;
-
-type ToolArgsOf<Tool> = Tool extends {
-  readonly args: { readonly schema: infer Schema extends z.ZodType };
-}
-  ? z.infer<Schema>
-  : never;
-
-type ToolCallFor<Tool> = Tool extends unknown
-  ? {
-      readonly id: string;
-      readonly tool: ToolNameOf<Tool>;
-    } & ToolArgsOf<Tool>
-  : never;
-
-export type ToolCall = {
-  readonly [Tool in RegisteredBuiltinTool as Tool["name"]]: ToolCallFor<Tool>;
-}[ToolName];
+export type ToolCall = z.infer<typeof builtinToolCallSchema>;
 
 export interface ToolCallInput {
   readonly id: string;
   readonly tool: ToolName;
 }
+
+type ParsedToolCall =
+  | { readonly success: true; readonly data: ToolCall }
+  | { readonly success: false; readonly error?: z.ZodError };
 
 const builtinToolNames: ReadonlySet<string> = new Set(
   builtinTools.map((tool) => tool.name),
@@ -104,94 +74,6 @@ function builtinToolForName<Name extends ToolName>(
   throw new Error(`Missing builtin tool registration for ${name}`);
 }
 
-function toolArgField(
-  tool: RegisteredBuiltinTool,
-  key: string,
-): ToolArgDefinition | null {
-  for (const [name, field] of Object.entries(tool.args.fields)) {
-    if (name === key) {
-      return field;
-    }
-  }
-  return null;
-}
-
-function normalizeArgumentValue(
-  field: ToolArgDefinition,
-  value: unknown,
-): NormalizedArgumentValue {
-  if (value === null && !field.required) {
-    return { kind: "omit" };
-  }
-
-  if (field.type === "array" && Array.isArray(value)) {
-    const itemDefinition = field.items;
-    return {
-      kind: "value",
-      value: value.map((item) => {
-        const normalizedItem = normalizeArgumentValue(itemDefinition, item);
-        /* v8 ignore next 3: current array item definitions are required; this protects future optional item schemas. */
-        return normalizedItem.kind === "omit"
-          ? undefined
-          : normalizedItem.value;
-      }),
-    };
-  }
-
-  if (
-    field.type === "object" &&
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value)
-  ) {
-    const normalized: Record<string, unknown> = {};
-    for (const [name, propertyValue] of Object.entries(value)) {
-      const property = field.properties[name];
-      if (property === undefined) {
-        normalized[name] = propertyValue;
-        continue;
-      }
-      const normalizedProperty = normalizeArgumentValue(
-        property,
-        propertyValue,
-      );
-      if (normalizedProperty.kind === "value") {
-        normalized[name] = normalizedProperty.value;
-      }
-    }
-    return { kind: "value", value: normalized };
-  }
-
-  return { kind: "value", value };
-}
-
-function normalizeParsedArguments(
-  tool: RegisteredBuiltinTool,
-  parsedArguments: unknown,
-): unknown {
-  if (
-    typeof parsedArguments !== "object" ||
-    parsedArguments === null ||
-    Array.isArray(parsedArguments)
-  ) {
-    return parsedArguments;
-  }
-
-  const normalized: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(parsedArguments)) {
-    const field = toolArgField(tool, name);
-    if (field === null) {
-      normalized[name] = value;
-      continue;
-    }
-    const normalizedValue = normalizeArgumentValue(field, value);
-    if (normalizedValue.kind === "value") {
-      normalized[name] = normalizedValue.value;
-    }
-  }
-  return normalized;
-}
-
 function rawToolCallArguments(
   toolCall: ToolCallInput,
 ): Record<string, unknown> {
@@ -204,67 +86,15 @@ function rawToolCallArguments(
   return args;
 }
 
-function toOpenAICompatibleToolParameter(
-  field: ToolArgDefinition,
-): OpenAICompatibleToolParameter {
-  switch (field.type) {
-    case "string":
-    case "integer":
-    case "boolean":
-      return {
-        type: field.type,
-        description: field.description,
-        ...(field.minimum !== undefined ? { minimum: field.minimum } : {}),
-        ...(field.maximum !== undefined ? { maximum: field.maximum } : {}),
-      };
-    case "array":
-      return {
-        type: field.type,
-        description: field.description,
-        items: toOpenAICompatibleToolParameter(field.items),
-      };
-    case "object":
-      return {
-        type: field.type,
-        description: field.description,
-        properties: Object.fromEntries(
-          Object.entries(field.properties).map(([name, property]) => [
-            name,
-            toOpenAICompatibleToolParameter(property),
-          ]),
-        ),
-        required: Object.entries(field.properties)
-          .filter(([, property]) => property.required)
-          .map(([name]) => name),
-        additionalProperties: false,
-      };
-  }
-}
-
 function toOpenAICompatibleToolDefinition(
   tool: RegisteredBuiltinTool,
 ): OpenAICompatibleToolDefinition {
-  const properties: Record<string, OpenAICompatibleToolParameter> = {};
-  const required: string[] = [];
-
-  for (const [name, field] of Object.entries(tool.args.fields)) {
-    properties[name] = toOpenAICompatibleToolParameter(field);
-    if (field.required) {
-      required.push(name);
-    }
-  }
-
   return {
     type: "function",
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: {
-        type: "object",
-        properties,
-        required,
-        additionalProperties: false,
-      },
+      parameters: openAICompatibleParametersFromSchema(tool.args.schema),
     },
   };
 }
@@ -282,26 +112,57 @@ export function toolCallFromParsedArguments(
   name: ToolName,
   parsedArguments: unknown,
 ): ToolCall | null {
-  const tool = builtinToolForName(name);
-  const result = tool.args.schema.safeParse(
-    normalizeParsedArguments(tool, parsedArguments),
-  );
-  if (!result.success) {
-    return null;
-  }
-  const toolCall = Object.assign({ id, tool: name }, result.data);
-  /* v8 ignore next 4: toolCall is built from this tool's strict schema after successful parse; the guard narrows the registry-derived union without `as`. */
-  if (!tool.isCall(toolCall)) {
-    return null;
-  }
-  return toolCall;
+  const parsed = parseToolCallFromParsedArguments(id, name, parsedArguments);
+  return parsed.success ? parsed.data : null;
 }
 
-export function normalizeToolCall(toolCall: ToolCallInput): ToolCall | null {
-  return toolCallFromParsedArguments(
+function parseToolCallFromParsedArguments(
+  id: string,
+  name: ToolName,
+  parsedArguments: unknown,
+): ParsedToolCall {
+  const tool = builtinToolForName(name);
+  const result = tool.args.schema.safeParse(parsedArguments);
+  if (!result.success) {
+    return { success: false, error: result.error };
+  }
+  const toolCall = builtinToolCallSchema.safeParse({
+    ...result.data,
+    id,
+    tool: name,
+  });
+  /* v8 ignore next 3: the call is built from the matching parsed args schema plus registry-owned id/tool fields. */
+  if (!toolCall.success) {
+    return { success: false, error: toolCall.error };
+  }
+  /* v8 ignore next 4: toolCall is built from this tool's strict schema after successful parse; the guard narrows the registry-derived union without `as`. */
+  if (!tool.isCall(toolCall.data)) {
+    return { success: false };
+  }
+  return { success: true, data: toolCall.data };
+}
+
+function normalizeToolCallResult(toolCall: ToolCallInput): ParsedToolCall {
+  const parsed = builtinToolCallSchema.safeParse(toolCall);
+  if (parsed.success) {
+    return { success: true, data: parsed.data };
+  }
+  return parseToolCallFromParsedArguments(
     toolCall.id,
     toolCall.tool,
     rawToolCallArguments(toolCall),
+  );
+}
+
+export function normalizeProviderToolCall(toolCall: ToolCallInput): ToolCall {
+  const parsed = normalizeToolCallResult(toolCall);
+  if (parsed.success) {
+    return parsed.data;
+  }
+  throw toolCallValidationError(
+    "Invalid provider tool call",
+    toolCall.tool,
+    parsed.error,
   );
 }
 
@@ -309,14 +170,13 @@ export function executeBuiltinToolCall(
   context: BuiltinToolExecutionContext,
   toolCall: ToolCall,
 ): ToolExecution | Promise<ToolExecution> {
-  const normalizedToolCall =
-    toolCall.tool === "edit" ? normalizeToolCall(toolCall) : toolCall;
+  const normalizedToolCall = normalizeToolCallResult(toolCall);
   /* v8 ignore next 3: ToolCall values are registry-derived; this protects custom entrypoints that bypass parsing. */
-  if (normalizedToolCall === null) {
-    throw new Error(`Invalid builtin tool call for ${toolCall.tool}`);
+  if (!normalizedToolCall.success) {
+    throw invalidBuiltinToolCallError(toolCall.tool, normalizedToolCall.error);
   }
-  const tool = builtinToolForName(normalizedToolCall.tool);
-  return tool.executeCall(context, normalizedToolCall);
+  const tool = builtinToolForName(normalizedToolCall.data.tool);
+  return tool.executeCall(context, normalizedToolCall.data);
 }
 
 export function toolCallConcurrency(toolCall: ToolCall): ToolConcurrency {
