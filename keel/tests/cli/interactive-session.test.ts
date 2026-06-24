@@ -189,6 +189,250 @@ describe("Interactive Session", () => {
     expect(sigintHandlers.size).toBe(0);
   });
 
+  test(`Given the interactive session is idle,
+    When user enters /fork with a target and fork point,
+    Then the fork is created locally without starting a model turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let forkTarget = "";
+    let forkBeforeUser: number | undefined;
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("fork should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("fork should not start a model turn");
+      },
+      formatCostReport: () => "",
+      forkSession: (request) => {
+        forkTarget = request.targetSessionId;
+        forkBeforeUser = request.beforeUser;
+        return 'Forked session "source" to "target" before restored user message 2.\nresume: keel --resume target\n';
+      },
+    });
+
+    // When
+    input.end("/fork target --before-user=2\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe(
+      'Forked session "source" to "target" before restored user message 2.\nresume: keel --resume target\n',
+    );
+    expect(stderr).toBe("");
+    expect(forkTarget).toBe("target");
+    expect(forkBeforeUser).toBe(2);
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given the interactive session has no persisted session,
+    When user enters /fork,
+    Then the command fails locally without starting a model turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("fork should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("fork should not start a model turn");
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("/fork target\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe("");
+    expect(stderr).toBe(
+      "Error: /fork requires a named session. Start with --session or --resume.\n",
+    );
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given the interactive session receives malformed fork commands,
+    When user enters them at the prompt,
+    Then each command reports a local error without starting a model turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("malformed fork should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("malformed fork should not start a model turn");
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end(
+      [
+        "/fork",
+        "/fork --before-user 1",
+        "/fork target --before-user",
+        "/fork target --before-user=0",
+        "/fork target --before-user=9007199254740992",
+        "/fork target --all",
+        "",
+      ].join("\n"),
+    );
+
+    // Then
+    await session;
+    expect(stdout).toBe("");
+    expect(stderr).toBe(
+      [
+        "Error: /fork requires <target-id>.",
+        "Error: /fork requires <target-id>.",
+        "Error: --before-user requires a value.",
+        "Error: --before-user must be a positive integer.",
+        "Error: --before-user must be a positive integer.",
+        'Error: unknown /fork option "--all".',
+        "",
+      ].join("\n"),
+    );
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given the interactive fork operation fails,
+    When user enters /fork,
+    Then the failure is reported locally without starting a model turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("failed fork should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("failed fork should not start a model turn");
+      },
+      formatCostReport: () => "",
+      forkSession: () => {
+        throw "fork failed";
+      },
+    });
+
+    // When
+    input.end("/fork target\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe("");
+    expect(stderr).toBe("fork failed\n");
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
   test(`Given an interactive turn has cost tracking,
     When the turn completes,
     Then the session prints the cost report`, async () => {
@@ -2396,6 +2640,125 @@ describe("Interactive Session", () => {
       content: "after help",
     });
     expect(JSON.stringify(observedContexts)).not.toContain("/help");
+  });
+
+  test(`Given user enters /fork while an interactive tool turn is running,
+    When the assistant continues after the tool result,
+    Then the fork command is deferred instead of injected as steering`, async () => {
+    // Given
+    let turn = 0;
+    let forkWritten = false;
+    const observedContexts: Message[][] = [];
+    let forkTarget = "";
+    let forkBeforeUser: number | undefined;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        turn++;
+        observedContexts.push(structuredClone([...options.messages]));
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "deferred_fork_read",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          };
+        } else if (turn === 2) {
+          yield { type: "text", text: "Tool turn done." };
+        } else {
+          yield { type: "text", text: "After fork done." };
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "tool_start" && !forkWritten) {
+            forkWritten = true;
+            input.write("/fork target --before-user 2\n");
+            input.end("after fork\n");
+          } else if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      forkSession: (request) => {
+        forkTarget = request.targetSessionId;
+        forkBeforeUser = request.beforeUser;
+        return 'Forked session "source" to "target" before restored user message 2.\nresume: keel --resume target\n';
+      },
+    });
+
+    // When
+    input.write("inspect package\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe(
+      [
+        "Tool turn done.",
+        'Forked session "source" to "target" before restored user message 2.',
+        "resume: keel --resume target",
+        "After fork done.",
+        "",
+      ].join("\n"),
+    );
+    expect(forkTarget).toBe("target");
+    expect(forkBeforeUser).toBe(2);
+    expect(observedContexts[1]).toEqual([
+      { role: "user", content: "inspect package" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "deferred_fork_read",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          },
+        ],
+      },
+      expect.objectContaining({
+        role: "tool",
+        toolCallId: "deferred_fork_read",
+      }),
+    ]);
+    expect(observedContexts[2]).toContainEqual({
+      role: "user",
+      content: "after fork",
+    });
+    expect(JSON.stringify(observedContexts)).not.toContain("/fork");
   });
 
   test(`Given queued input exists before a deferred compact command,

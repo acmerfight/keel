@@ -14,6 +14,7 @@ import {
 } from "../permissions/bash.ts";
 import { parseCliArgs, USAGE } from "./args.ts";
 import {
+  type InteractiveForkSessionRequest,
   runInteractiveSession,
   type SessionPersistenceReason,
 } from "./interactive-session.ts";
@@ -377,8 +378,10 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           });
         }
         let session: SessionState | undefined;
+        let activeSessionId: string | undefined;
         let persistedMessages: readonly Message[] = [];
         if (cliArgs.sessionId !== undefined) {
+          activeSessionId = cliArgs.sessionId;
           ensureSessionCanBeCreated({
             sessionId: cliArgs.sessionId,
             runtime,
@@ -412,6 +415,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           } else {
             session = resumedSession;
           }
+          activeSessionId = session.id;
           persistedMessages = session.messages;
         }
         let sessionPersistence:
@@ -430,59 +434,17 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
                 reason: SessionPersistenceReason,
                 consumedInputIds: readonly string[],
               ) => void;
+              readonly forkSession: (
+                request: InteractiveForkSessionRequest,
+              ) => string;
               readonly initialBashApprovalGrants: readonly BashApprovalGrant[];
               readonly persistBashApprovalGrant: (
                 grant: BashApprovalGrant,
               ) => void;
             }
           | undefined;
-        if (session !== undefined) {
-          const resumedSession = session;
-          sessionPersistence = {
-            initialMessages: resumedSession.messages,
-            initialQueuedInputs: resumedSession.pendingInputs,
-            initialBashApprovalGrants: resumedSession.bashApprovalGrants,
-            persistQueuedInput: (input: {
-              readonly sequence: number;
-              readonly line: string;
-            }) =>
-              persistSessionQueuedInput({
-                session: resumedSession,
-                sequence: input.sequence,
-                line: input.line,
-                runtime,
-              }),
-            consumeQueuedInputs: (inputIds: readonly string[]) => {
-              consumeSessionQueuedInputs({
-                session: resumedSession,
-                inputIds,
-                runtime,
-              });
-            },
-            persistSessionMessages: (
-              messages: readonly Message[],
-              reason: SessionPersistenceReason,
-              consumedInputIds: readonly string[],
-            ) => {
-              persistedMessages = persistSessionMessages({
-                session: resumedSession,
-                previousMessages: persistedMessages,
-                currentMessages: messages,
-                runtime,
-                reason,
-                consumedInputIds,
-              });
-            },
-            persistBashApprovalGrant: (grant: BashApprovalGrant) => {
-              persistSessionBashApprovalGrant({
-                session: resumedSession,
-                grant,
-                runtime,
-              });
-            },
-          };
-        } else if (cliArgs.sessionId !== undefined) {
-          const sessionId = cliArgs.sessionId;
+        if (activeSessionId !== undefined) {
+          const sessionId = activeSessionId;
           const ensureActiveSession = (): SessionState => {
             let activeSession = session;
             if (activeSession === undefined) {
@@ -496,10 +458,54 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
             }
             return activeSession;
           };
+          const forkActiveSession = (
+            request: InteractiveForkSessionRequest,
+          ): string => {
+            const sourceSessionId = ensureActiveSession().id;
+            let targetSessionLock: SessionLock | undefined;
+            try {
+              targetSessionLock = acquireSessionLock({
+                sessionId: request.targetSessionId,
+                runtime,
+              });
+              ensureSessionCanBeCreated({
+                sessionId: request.targetSessionId,
+                runtime,
+              });
+              const source = resumeSessionStore({
+                sessionId: sourceSessionId,
+                workspace,
+                runtime,
+              });
+              forkSessionStore({
+                source,
+                targetSessionId: request.targetSessionId,
+                ...(request.beforeUser !== undefined
+                  ? {
+                      forkPoint: {
+                        beforeUser: request.beforeUser,
+                        optionName: "--before-user",
+                      },
+                    }
+                  : {}),
+                runtime,
+              });
+              return formatSessionForkCreated({
+                sourceSessionId,
+                targetSessionId: request.targetSessionId,
+                ...(request.beforeUser !== undefined
+                  ? { forkBeforeUser: request.beforeUser }
+                  : {}),
+              });
+            } finally {
+              targetSessionLock?.release();
+            }
+          };
+          const initialSession = session;
           sessionPersistence = {
-            initialMessages: [],
-            initialQueuedInputs: [],
-            initialBashApprovalGrants: [],
+            initialMessages: initialSession?.messages ?? [],
+            initialQueuedInputs: initialSession?.pendingInputs ?? [],
+            initialBashApprovalGrants: initialSession?.bashApprovalGrants ?? [],
             persistQueuedInput: (input: {
               readonly sequence: number;
               readonly line: string;
@@ -532,6 +538,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
                 consumedInputIds,
               });
             },
+            forkSession: forkActiveSession,
             persistBashApprovalGrant: (grant: BashApprovalGrant) => {
               persistSessionBashApprovalGrant({
                 session: ensureActiveSession(),

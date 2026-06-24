@@ -3638,6 +3638,326 @@ describe("CLI Main", () => {
     }
   });
 
+  test(`Given a resumed interactive session has multiple completed prompts,
+    When the user enters /fork before a restored user message and continues chatting,
+    Then the CLI creates the fork without switching the current session`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sourceInput = new PassThrough();
+    sourceInput.end("remember alpha\nremember beta\n");
+    const sourceRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: sourceInput,
+    });
+
+    try {
+      const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const forkInput = new PassThrough();
+      forkInput.end("/fork target --before-user 2\nremember gamma\n");
+      const forkRun = createRuntime(["--resume", "source"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input: forkInput,
+      });
+
+      // When
+      const forkExitCode = await runCliMain(forkRun.runtime);
+
+      // Then
+      expect(sourceExitCode).toBe(0);
+      expect(forkExitCode).toBe(0);
+      expect(forkRun.stdout()).toBe(
+        [
+          'Forked session "source" to "target" before restored user message 2.',
+          "resume: keel --resume target",
+          "Remembered: remember gamma",
+          "",
+        ].join("\n"),
+      );
+      expect(forkRun.stderr()).toBe("");
+      const sourceLedger = await readFile(
+        join(home, "sessions", "source", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(sourceLedger).not.toContain("/fork");
+      expect(sourceLedger).toContain("remember gamma");
+      const targetLedgerLines = (
+        await readFile(join(home, "sessions", "target", "ledger.jsonl"), "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(targetLedgerLines[0]).toMatchObject({
+        type: "session",
+        id: "target",
+        forkedFrom: "source",
+      });
+      const forkedHistory = targetLedgerLines.find(
+        (line) => line.type === "append",
+      );
+      expect(forkedHistory).toMatchObject({
+        type: "append",
+        messages: [
+          { role: "user", content: "remember alpha" },
+          { role: "assistant", content: "Remembered: remember alpha" },
+        ],
+      });
+      expect(JSON.stringify(forkedHistory)).not.toContain("remember beta");
+      expect(JSON.stringify(targetLedgerLines)).not.toContain("remember gamma");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a resumed interactive session has completed history,
+    When the user enters /fork without a fork point and continues chatting,
+    Then the CLI creates a full-history fork without switching the current session`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sourceInput = new PassThrough();
+    sourceInput.end("remember alpha\n");
+    const sourceRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: sourceInput,
+    });
+
+    try {
+      const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const forkInput = new PassThrough();
+      forkInput.end("/fork target\nremember gamma\n");
+      const forkRun = createRuntime(["--resume", "source"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input: forkInput,
+      });
+
+      // When
+      const forkExitCode = await runCliMain(forkRun.runtime);
+
+      // Then
+      expect(sourceExitCode).toBe(0);
+      expect(forkExitCode).toBe(0);
+      expect(forkRun.stdout()).toBe(
+        [
+          'Forked session "source" to "target".',
+          "resume: keel --resume target",
+          "Remembered: remember gamma",
+          "",
+        ].join("\n"),
+      );
+      expect(forkRun.stderr()).toBe("");
+      const sourceLedger = await readFile(
+        join(home, "sessions", "source", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(sourceLedger).not.toContain("/fork");
+      expect(sourceLedger).toContain("remember gamma");
+      const targetLedgerLines = (
+        await readFile(join(home, "sessions", "target", "ledger.jsonl"), "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(targetLedgerLines[0]).toMatchObject({
+        type: "session",
+        id: "target",
+        forkedFrom: "source",
+      });
+      const forkedHistory = targetLedgerLines.find(
+        (line) => line.type === "append",
+      );
+      expect(forkedHistory).toMatchObject({
+        type: "append",
+        messages: [
+          { role: "user", content: "remember alpha" },
+          { role: "assistant", content: "Remembered: remember alpha" },
+        ],
+      });
+      expect(JSON.stringify(targetLedgerLines)).not.toContain("remember gamma");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a resumed interactive session fork target already exists,
+    When the user enters /fork and continues chatting,
+    Then the CLI reports the fork error without switching the current session`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sourceInput = new PassThrough();
+    sourceInput.end("remember source\n");
+    const sourceRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: sourceInput,
+    });
+    const targetInput = new PassThrough();
+    targetInput.end("remember target\n");
+    const targetRun = createRuntime(["--session", "target"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: targetInput,
+    });
+
+    try {
+      const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const targetExitCode = await runCliMain(targetRun.runtime);
+      const targetLedgerPath = join(home, "sessions", "target", "ledger.jsonl");
+      const targetLedgerBefore = await readFile(targetLedgerPath, "utf8");
+      const forkInput = new PassThrough();
+      forkInput.end("/fork target\nremember gamma\n");
+      const forkRun = createRuntime(["--resume", "source"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input: forkInput,
+      });
+
+      // When
+      const forkExitCode = await runCliMain(forkRun.runtime);
+
+      // Then
+      expect(sourceExitCode).toBe(0);
+      expect(targetExitCode).toBe(0);
+      expect(forkExitCode).toBe(0);
+      expect(forkRun.stdout()).toBe("Remembered: remember gamma\n");
+      expect(forkRun.stderr()).toBe(
+        'Error: session "target" already exists. Use --resume target to continue it.\n',
+      );
+      const sourceLedger = await readFile(
+        join(home, "sessions", "source", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(sourceLedger).not.toContain("/fork");
+      expect(sourceLedger).toContain("remember gamma");
+      expect(await readFile(targetLedgerPath, "utf8")).toBe(targetLedgerBefore);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a fork command is queued behind an interactive prompt,
+    When the queued fork command is processed,
+    Then the CLI marks it consumed without sending it to the model`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sourceInput = new PassThrough();
+    sourceInput.end("remember source\n");
+    const sourceRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: sourceInput,
+    });
+    const targetInput = new PassThrough();
+    targetInput.end("remember target\n");
+    const targetRun = createRuntime(["--session", "target"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: targetInput,
+    });
+
+    try {
+      const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const targetExitCode = await runCliMain(targetRun.runtime);
+      const targetLedgerPath = join(home, "sessions", "target", "ledger.jsonl");
+      const targetLedgerBefore = await readFile(targetLedgerPath, "utf8");
+      const forkInput = new PassThrough();
+      forkInput.end("remember gamma\n/fork target\nremember delta\n");
+      const forkRun = createRuntime(["--resume", "source"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input: forkInput,
+      });
+
+      // When
+      const forkExitCode = await runCliMain(forkRun.runtime);
+
+      // Then
+      expect(sourceExitCode).toBe(0);
+      expect(targetExitCode).toBe(0);
+      expect(forkExitCode).toBe(0);
+      expect(forkRun.stdout()).toBe(
+        "Remembered: remember gamma\nRemembered: remember delta\n",
+      );
+      expect(forkRun.stderr()).toBe(
+        'Error: session "target" already exists. Use --resume target to continue it.\n',
+      );
+      expect(await readFile(targetLedgerPath, "utf8")).toBe(targetLedgerBefore);
+      const sourceLedgerLines = (
+        await readFile(join(home, "sessions", "source", "ledger.jsonl"), "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const admittedForkInput = sourceLedgerLines.find(
+        (line) =>
+          line.type === "input_admitted" && line.line === "/fork target",
+      );
+      expect(admittedForkInput).toBeDefined();
+      expect(sourceLedgerLines).toContainEqual(
+        expect.objectContaining({
+          type: "input_consumed",
+          inputIds: [admittedForkInput.id],
+        }),
+      );
+      const sourceAppends = sourceLedgerLines.filter(
+        (line) => line.type === "append",
+      );
+      expect(JSON.stringify(sourceAppends)).not.toContain("/fork target");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a named session has multiple completed prompts,
     When the user creates a fork with the sessions command,
     Then the CLI creates an independent target without starting an agent`, async () => {
