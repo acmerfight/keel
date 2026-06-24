@@ -261,6 +261,7 @@ describe("Interactive Session", () => {
     let stdout = "";
     let stderr = "";
     let providerResolved = false;
+    let listCalls = 0;
     const session = runInteractiveSession({
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
@@ -291,17 +292,23 @@ describe("Interactive Session", () => {
         throw new Error("fork points should not start a model turn");
       },
       formatCostReport: () => "",
-      listForkPoints: () => ({
-        sessionId: "source",
-        points: [
-          { beforeUser: 1, preview: "remember alpha" },
-          { beforeUser: 2, preview: "remember beta" },
-        ],
-      }),
+      listForkPoints: () => {
+        listCalls += 1;
+        return {
+          sessionId: "source",
+          points:
+            listCalls === 1
+              ? [
+                  { beforeUser: 1, preview: "remember alpha" },
+                  { beforeUser: 2, preview: "remember beta" },
+                ]
+              : [],
+        };
+      },
     });
 
     // When
-    input.end("/fork-points\n");
+    input.end("/fork-points\n/fork-points\n");
 
     // Then
     await session;
@@ -312,6 +319,7 @@ describe("Interactive Session", () => {
         "   use: /fork <new-id> --before-user 1",
         "2. before user message 2: remember beta",
         "   use: /fork <new-id> --before-user 2",
+        'No restored user messages in session "source".',
         "",
       ].join("\n"),
     );
@@ -466,6 +474,206 @@ describe("Interactive Session", () => {
     expect(sigintHandlers.size).toBe(0);
   });
 
+  test(`Given the interactive fork picker input closes before a selection,
+    When the session exits,
+    Then no fork is created and no model turn starts`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let forkCalled = false;
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("closed fork picker should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("closed fork picker should not start a model turn");
+      },
+      formatCostReport: () => "",
+      listForkPoints: () => ({
+        sessionId: "source",
+        points: [{ beforeUser: 1, preview: "remember alpha" }],
+      }),
+      forkSession: () => {
+        forkCalled = true;
+        throw new Error("fork picker should have been closed");
+      },
+    });
+
+    // When
+    input.end("/fork target --pick\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe(
+      [
+        'Fork points for session "source":',
+        "0. full restored history",
+        "1. before user message 1: remember alpha",
+        "",
+        "Select fork point [0-1], or q to cancel:",
+        "",
+      ].join("\n"),
+    );
+    expect(stderr).toBe("");
+    expect(forkCalled).toBe(false);
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given the interactive fork picker operation fails,
+    When user selects a fork point,
+    Then the failure is reported without starting a model turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("failed fork picker should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("failed fork picker should not start a model turn");
+      },
+      formatCostReport: () => "",
+      listForkPoints: () => ({
+        sessionId: "source",
+        points: [{ beforeUser: 1, preview: "remember alpha" }],
+      }),
+      forkSession: () => {
+        throw "picker fork failed";
+      },
+    });
+
+    // When
+    input.end("/fork target --pick\n1\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe(
+      [
+        'Fork points for session "source":',
+        "0. full restored history",
+        "1. before user message 1: remember alpha",
+        "",
+        "Select fork point [0-1], or q to cancel:",
+        "",
+      ].join("\n"),
+    );
+    expect(stderr).toBe("picker fork failed\n");
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given picker support is unavailable in a fork-capable session,
+    When user asks to pick a fork point,
+    Then the command fails locally without starting a model turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error(
+          "unavailable fork picker should not resolve a provider",
+        );
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error(
+          "unavailable fork picker should not start a model turn",
+        );
+      },
+      formatCostReport: () => "",
+      forkSession: () => {
+        throw new Error("fork picker should fail before forking");
+      },
+    });
+
+    // When
+    input.end("/fork target --pick\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe("");
+    expect(stderr).toBe(
+      "Error: /fork requires a named session. Start with --session or --resume.\n",
+    );
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
   test(`Given queued input contains an interactive fork picker command,
     When the picker consumes a queued selection,
     Then both queued inputs are marked consumed without starting a model turn`, async () => {
@@ -604,7 +812,7 @@ describe("Interactive Session", () => {
     });
 
     // When
-    input.end("/fork target --pick\n\nx\nq\n");
+    input.end("/fork target --pick\n\n2\nx\nq\n");
 
     // Then
     await session;
@@ -617,12 +825,13 @@ describe("Interactive Session", () => {
         "Select fork point [0-1], or q to cancel:",
         "Select fork point [0-1], or q to cancel:",
         "Select fork point [0-1], or q to cancel:",
+        "Select fork point [0-1], or q to cancel:",
         "Fork cancelled.",
         "",
       ].join("\n"),
     );
     expect(stderr).toBe(
-      "Error: selection must be 0-1 or q.\nError: selection must be 0-1 or q.\n",
+      "Error: selection must be 0-1 or q.\nError: selection must be 0-1 or q.\nError: selection must be 0-1 or q.\n",
     );
     expect(forkCalled).toBe(false);
     expect(providerResolved).toBe(false);
@@ -739,6 +948,7 @@ describe("Interactive Session", () => {
         "/fork target --before-user=9007199254740992",
         "/fork target --pick --before-user 1",
         "/fork target --pick=1",
+        "/fork-points extra",
         "/fork target --all",
         "",
       ].join("\n"),
@@ -756,6 +966,7 @@ describe("Interactive Session", () => {
         "Error: --before-user must be a positive integer.",
         "Error: --pick cannot be combined with --before-user.",
         'Error: unknown /fork option "--pick=1".',
+        "Error: /fork-points does not accept arguments.",
         'Error: unknown /fork option "--all".',
         "",
       ].join("\n"),
