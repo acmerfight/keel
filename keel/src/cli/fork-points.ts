@@ -1,7 +1,7 @@
 import type { Message } from "../llm/types.ts";
 import { sanitizeStatusLineText } from "./output.ts";
 
-export interface SessionForkPoint {
+interface SessionForkPoint {
   readonly beforeUser: number;
   readonly preview: string;
 }
