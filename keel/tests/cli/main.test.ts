@@ -3720,6 +3720,111 @@ describe("CLI Main", () => {
     }
   });
 
+  test(`Given a resumed interactive session has multiple completed prompts,
+    When the user lists fork points and picks one interactively,
+    Then the CLI creates the selected fork without exposing commands to the model`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sourceInput = new PassThrough();
+    sourceInput.end("remember alpha\nremember beta\n");
+    const sourceRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: sourceInput,
+    });
+
+    try {
+      const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const forkInput = new PassThrough();
+      forkInput.end("/fork-points\n/fork target --pick\n2\nremember gamma\n");
+      const forkRun = createRuntime(["--resume", "source"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input: forkInput,
+      });
+
+      // When
+      const forkExitCode = await runCliMain(forkRun.runtime);
+
+      // Then
+      expect(sourceExitCode).toBe(0);
+      expect(forkExitCode).toBe(0);
+      expect(forkRun.stdout()).toBe(
+        [
+          'Fork points for session "source":',
+          "1. before user message 1: remember alpha",
+          "   use: /fork <new-id> --before-user 1",
+          "2. before user message 2: remember beta",
+          "   use: /fork <new-id> --before-user 2",
+          'Fork points for session "source":',
+          "0. full restored history",
+          "1. before user message 1: remember alpha",
+          "2. before user message 2: remember beta",
+          "",
+          "Select fork point [0-2], or q to cancel:",
+          'Forked session "source" to "target" before restored user message 2.',
+          "resume: keel --resume target",
+          "Remembered: remember gamma",
+          "",
+        ].join("\n"),
+      );
+      expect(forkRun.stderr()).toBe("");
+      const sourceLedgerLines = (
+        await readFile(join(home, "sessions", "source", "ledger.jsonl"), "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const sourceAppends = sourceLedgerLines.filter(
+        (line) => line.type === "append",
+      );
+      const sourceUserMessages = sourceAppends.flatMap((line) =>
+        line.messages
+          .filter((message: Message) => message.role === "user")
+          .map((message: Message) => message.content),
+      );
+      expect(sourceUserMessages).not.toContain("/fork-points");
+      expect(sourceUserMessages).not.toContain("/fork target --pick");
+      expect(sourceUserMessages).not.toContain("2");
+      expect(JSON.stringify(sourceAppends)).toContain("remember gamma");
+      const targetLedgerLines = (
+        await readFile(join(home, "sessions", "target", "ledger.jsonl"), "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(targetLedgerLines[0]).toMatchObject({
+        type: "session",
+        id: "target",
+        forkedFrom: "source",
+      });
+      const forkedHistory = targetLedgerLines.find(
+        (line) => line.type === "append",
+      );
+      expect(forkedHistory).toMatchObject({
+        type: "append",
+        messages: [
+          { role: "user", content: "remember alpha" },
+          { role: "assistant", content: "Remembered: remember alpha" },
+        ],
+      });
+      expect(JSON.stringify(forkedHistory)).not.toContain("remember beta");
+      expect(JSON.stringify(targetLedgerLines)).not.toContain("remember gamma");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a resumed interactive session has completed history,
     When the user enters /fork without a fork point and continues chatting,
     Then the CLI creates a full-history fork without switching the current session`, async () => {
@@ -4153,6 +4258,57 @@ describe("CLI Main", () => {
           "   use: keel sessions fork source <new-id> --before-user 1",
           `2. ${longPromptPreview}`,
           "   use: keel sessions fork source <new-id> --before-user 2",
+          "",
+        ].join("\n"),
+      );
+      expect(listRun.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named session contains unsafe terminal bytes,
+    When the user lists fork points for that session,
+    Then the CLI escapes the preview bytes before printing them`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "source",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:01.000Z", [
+          { role: "user", content: "remember \u001b[2J hidden\u202e marker" },
+          {
+            role: "assistant",
+            content: "Remembered unsafe bytes",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    const listRun = createRuntime(["--resume", "source", "--fork-points"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const listExitCode = await runCliMain(listRun.runtime);
+
+      // Then
+      expect(listExitCode).toBe(0);
+      expect(listRun.stdout()).toBe(
+        [
+          'Fork points for session "source":',
+          "1. remember \\x1b[2J hidden\\u{202e} marker",
+          "   use: keel sessions fork source <new-id> --before-user 1",
           "",
         ].join("\n"),
       );
