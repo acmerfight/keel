@@ -3763,6 +3763,25 @@ describe("Interactive Session", () => {
         content: expect.stringContaining("<conversation-checkpoint>"),
       },
       { role: "assistant", content: "Tool turn done.", toolCalls: [] },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          expect.objectContaining({
+            id: "post_compaction_read_0",
+            tool: "read",
+            path: expect.stringContaining("package.json"),
+            limit: 1,
+          }),
+        ],
+      },
+      expect.objectContaining({
+        role: "tool",
+        toolCallId: "post_compaction_read_0",
+        content: expect.stringContaining(
+          "Read output stopped at requested limit of 1 lines",
+        ),
+      }),
       { role: "user", content: "after compact" },
     ]);
     expect(JSON.stringify(observedContexts[2])).not.toContain("/compact");
@@ -4924,6 +4943,152 @@ describe("Interactive Session", () => {
       "/compact",
     );
     expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given an interactive session has read a file before manual compaction,
+    When user asks for an edit after /compact,
+    Then the edit uses a fresh post-compaction read snapshot`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-interactive-compact-"),
+    );
+    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    let editRequestMessages: readonly Message[] = [];
+    let requestTurn = 0;
+    const provider: LLMProvider = {
+      id: "manual-compact-read-restore",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Manual checkpoint summary." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (requestTurn === 0) {
+          requestTurn++;
+          yield {
+            type: "tool_call",
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (requestTurn === 1) {
+          requestTurn++;
+          yield { type: "text", text: "Read note.txt." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (requestTurn === 2) {
+          requestTurn++;
+          editRequestMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "edit_note",
+            tool: "edit",
+            path: "note.txt",
+            edits: [{ oldText: "current", newText: "fresh" }],
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        requestTurn++;
+        yield { type: "text", text: "Updated note.txt." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (requestTurn === 2) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("read note.txt\n");
+      await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+      await writeFile(
+        join(workspace, "note.txt"),
+        "hello current world\n",
+        "utf8",
+      );
+      input.write("/compact\n");
+      input.write("replace the word\n");
+      input.end();
+
+      // Then
+      await session;
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello fresh world\n",
+      );
+      const restoredReadMessage = editRequestMessages.find(
+        (message): message is Extract<Message, { readonly role: "tool" }> =>
+          message.role === "tool" &&
+          message.content.includes("hello current world"),
+      );
+      expect(restoredReadMessage?.toolCallId).toContain("post_compaction_read");
+      expect(JSON.stringify(editRequestMessages)).not.toContain(
+        "hello old world",
+      );
+      expect(stdout).toBe("Read note.txt.\nUpdated note.txt.\n");
+      expect(stderr).toContain("Context compacted: manual");
+      expect(sigintHandlers.size).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test(`Given manual compaction has cost tracking enabled,

@@ -74,6 +74,8 @@ export interface ToolExecution {
   readonly content: string;
   readonly ok: boolean;
   readonly readTargetPath?: string;
+  readonly readTargetOffset?: number;
+  readonly readTargetLimit?: number;
   readonly mutatedTargetPath?: string;
   readonly mutatedTargetPaths?: readonly string[];
   readonly checkpointOperations?: readonly RecordLastBatchCheckpointOperation[];
@@ -279,6 +281,8 @@ const readTool = defineTool({
       content: result.content,
       ok: true,
       readTargetPath: result.targetPath,
+      ...(args.offset !== undefined ? { readTargetOffset: args.offset } : {}),
+      ...(args.limit !== undefined ? { readTargetLimit: args.limit } : {}),
     };
   },
 });

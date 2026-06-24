@@ -5,7 +5,10 @@ import {
   shouldCompactBeforeRequest,
 } from "../../src/agent/context-compaction.ts";
 import type { AgentEvent } from "../../src/agent/loop.ts";
-import { runAgentTurn } from "../../src/agent/loop.ts";
+import {
+  createReadVisibilityState,
+  runAgentTurn,
+} from "../../src/agent/loop.ts";
 import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
@@ -1877,6 +1880,73 @@ describe("Context Compaction", () => {
       uncachedInputTokens: 42,
       outputTokens: 7,
     });
+  });
+
+  test(`Given post-compaction read restoration throws after summary creation,
+    When proactive compaction runs,
+    Then the compacted ledger is persisted before the error propagates`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Remember alpha ".repeat(80) },
+      {
+        role: "assistant",
+        content: "Alpha is important. ".repeat(80),
+        toolCalls: [],
+      },
+      { role: "user", content: "Now continue with beta." },
+    ];
+    const readVisibility = createReadVisibilityState();
+    readVisibility.applyVisibleToolExecutions([
+      {
+        ok: true,
+        content: "",
+        readTargetPath: "package.json",
+        readTargetOffset: 0,
+      },
+    ]);
+    const provider: LLMProvider = {
+      id: "compacting-provider-restore-throws",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Alpha summary." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield {
+          type: "text",
+          text: "Should not request after failed restore.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When / Then
+    await expect(
+      collect(
+        runAgentTurn({
+          workspace: workspace(),
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          readVisibility,
+          contextCompaction: {
+            contextWindowTokens: 120,
+            keepRecentTokens: 6,
+            reserveTokens: 20,
+          },
+        }),
+      ),
+    ).rejects.toThrow("Invalid builtin tool call for read");
+    expect(messages).toEqual([
+      {
+        role: "user",
+        content: expect.stringContaining("<conversation-checkpoint>"),
+      },
+      { role: "user", content: "Now continue with beta." },
+    ]);
   });
 
   test(`Given a safe cut would otherwise orphan a tool result,
