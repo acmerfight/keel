@@ -19,11 +19,8 @@ import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import type { Message, ToolCall } from "../llm/types.ts";
 import type { BashApprovalGrant } from "../permissions/bash.ts";
-import {
-  isToolName,
-  toolCallCanonicalArguments,
-  toolCallFromParsedArguments,
-} from "../tools/registry.ts";
+import { builtinToolCallSchema } from "../tools/builtin.ts";
+import { toolCallCanonicalArguments } from "../tools/registry.ts";
 
 const SESSION_SCHEMA_VERSION = 2;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
@@ -43,38 +40,7 @@ const CONVERSATION_CHECKPOINT_NO_LATER_MESSAGES =
 const SUMMARY_OPEN = "<summary>";
 const SUMMARY_CLOSE = "</summary>";
 
-const persistedToolCallSchema = z
-  .object({
-    id: z.string(),
-    tool: z.string(),
-  })
-  .catchall(z.unknown());
-
-const toolCallSchema = persistedToolCallSchema.transform(
-  (toolCall, context) => {
-    const { id, tool, ...parsedArguments } = toolCall;
-    if (!isToolName(tool)) {
-      context.addIssue({
-        code: "custom",
-        message: `Unsupported builtin tool "${tool}".`,
-      });
-      return z.NEVER;
-    }
-    const parsedToolCall = toolCallFromParsedArguments(
-      id,
-      tool,
-      parsedArguments,
-    );
-    if (parsedToolCall === null) {
-      context.addIssue({
-        code: "custom",
-        message: `Invalid arguments for builtin tool "${tool}".`,
-      });
-      return z.NEVER;
-    }
-    return parsedToolCall;
-  },
-);
+const toolCallSchema = builtinToolCallSchema;
 
 const userMessageSchema = z
   .object({

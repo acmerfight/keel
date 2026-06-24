@@ -266,7 +266,7 @@ describe("Bash Commands", () => {
 
   test(`Given an allowed shell command has an invalid timeout,
     When the assistant tries to run it,
-    Then the agent rejects the terminal tool error`, async () => {
+    Then the registry guard reports the malformed timeout field`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
     const provider: LLMProvider = {
@@ -297,11 +297,9 @@ describe("Bash Commands", () => {
             stopPolicy: defaultStopPolicy(),
           }),
         ),
-      ).rejects.toMatchObject({
-        code: "tool_invalid_bash_timeout",
-        message:
-          "bash failed: timeout must be an integer between 1 and 60000ms",
-      });
+      ).rejects.toThrow(
+        /Invalid builtin tool call for bash: timeoutMs: Too small/,
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

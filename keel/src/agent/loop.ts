@@ -13,7 +13,10 @@ import type {
 } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
-import { normalizeToolCall, toolCallConcurrency } from "../tools/registry.ts";
+import {
+  normalizeProviderToolCall,
+  toolCallConcurrency,
+} from "../tools/registry.ts";
 import {
   type CompactMessagesResult,
   type ContextCompactionAccountingSnapshot,
@@ -392,14 +395,7 @@ async function* streamAgentTurn(
           assistantStarted = true;
           const { type: _llmEventType, ...toolCall } = event;
           if (toolCall.tool === "edit") {
-            const normalizedToolCall = normalizeToolCall(toolCall);
-            /* v8 ignore next 4: providers parse tool calls before yielding; this protects custom providers. */
-            if (normalizedToolCall === null) {
-              throw new Error(
-                `Invalid provider tool call for ${toolCall.tool}`,
-              );
-            }
-            pendingToolCalls.push(normalizedToolCall);
+            pendingToolCalls.push(normalizeProviderToolCall(toolCall));
           } else {
             pendingToolCalls.push(toolCall);
           }

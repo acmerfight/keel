@@ -1,65 +1,137 @@
 import { z } from "zod";
+import { optionalToolArgument } from "./tool-schema.ts";
 
 export const readToolArgumentsSchema = z
   .object({
-    path: z.string(),
-    offset: z.number().int().positive().optional(),
-    limit: z.number().int().positive().optional(),
+    path: z.string().describe("Workspace-relative file path to read."),
+    offset: optionalToolArgument(
+      z
+        .number()
+        .int()
+        .min(1)
+        .describe("Optional 1-indexed line number to start reading from."),
+    ),
+    limit: optionalToolArgument(
+      z
+        .number()
+        .int()
+        .min(1)
+        .describe("Optional maximum number of lines to read."),
+    ),
   })
   .strict();
 
 export const lsToolArgumentsSchema = z
   .object({
-    path: z.string().optional(),
-    limit: z.number().int().positive().max(1000).optional(),
+    path: optionalToolArgument(
+      z
+        .string()
+        .describe(
+          "Optional workspace-relative directory to list. Defaults to the workspace root.",
+        ),
+    ),
+    limit: optionalToolArgument(
+      z
+        .number()
+        .int()
+        .min(1)
+        .max(1000)
+        .describe(
+          "Optional maximum number of entries to return. Defaults to 200.",
+        ),
+    ),
   })
   .strict();
 
 export const globToolArgumentsSchema = z
   .object({
-    pattern: z.string(),
-    path: z.string().optional(),
+    pattern: z
+      .string()
+      .describe(
+        'Glob pattern for file paths, such as "**/*.test.ts" or "src/**/*.tsx".',
+      ),
+    path: optionalToolArgument(
+      z
+        .string()
+        .describe(
+          "Optional workspace-relative directory to search. Defaults to the whole workspace.",
+        ),
+    ),
   })
   .strict();
 
 export const grepToolArgumentsSchema = z
   .object({
-    pattern: z.string(),
-    path: z.string().optional(),
+    pattern: z.string().describe("Literal text to search for."),
+    path: optionalToolArgument(
+      z
+        .string()
+        .describe(
+          "Optional workspace-relative file or directory to search. Defaults to the whole workspace.",
+        ),
+    ),
   })
   .strict();
 
 const editReplacementArgumentsSchema = z
   .object({
-    oldText: z.string(),
-    newText: z.string(),
-    replaceAll: z.boolean().optional(),
+    oldText: z
+      .string()
+      .describe(
+        "Text to replace. Copy it from read output; by default it must identify one target.",
+      ),
+    newText: z.string().describe("Replacement text."),
+    replaceAll: optionalToolArgument(
+      z
+        .boolean()
+        .describe(
+          "When true, replace every exact occurrence of oldText for this edit. Defaults to false, which requires oldText to identify one target.",
+        ),
+    ),
   })
-  .strict();
+  .strict()
+  .describe("One targeted replacement inside the file.");
 
 export const editToolArgumentsSchema = z
   .object({
-    path: z.string(),
-    edits: z.array(editReplacementArgumentsSchema),
+    path: z.string().describe("Workspace-relative file path to edit."),
+    edits: z
+      .array(editReplacementArgumentsSchema)
+      .describe(
+        "One or more targeted replacements. Each oldText is matched against the original file content. Non-replaceAll edits must be unique and all matched regions must be non-overlapping.",
+      ),
   })
   .strict();
 
 export const writeToolArgumentsSchema = z
   .object({
-    path: z.string(),
-    content: z.string(),
+    path: z.string().describe("Workspace-relative file path to create."),
+    content: z.string().describe("Complete file content to write."),
   })
   .strict();
 
 export const applyPatchToolArgumentsSchema = z
   .object({
-    patch: z.string(),
+    patch: z
+      .string()
+      .describe(
+        "Full apply_patch text. Supports Add File and Update File sections only.",
+      ),
   })
   .strict();
 
 export const bashToolArgumentsSchema = z
   .object({
-    command: z.string(),
-    timeoutMs: z.number().int().positive().max(60_000).optional(),
+    command: z.string().describe("Shell command to execute."),
+    timeoutMs: optionalToolArgument(
+      z
+        .number()
+        .int()
+        .min(1)
+        .max(60_000)
+        .describe(
+          "Optional command timeout in milliseconds. Defaults to 10000ms.",
+        ),
+    ),
   })
   .strict();
