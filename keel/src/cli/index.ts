@@ -202,7 +202,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
     const result = restoreLastEditCheckpoint(runtime.cwd());
     switch (result.status) {
       case "restored":
-        runtime.writeStdout(`Restored ${result.filePath}\n`);
+        runtime.writeStdout(`Restored ${result.restoredLabel}\n`);
         return 0;
       case "none":
         runtime.writeStderr(`${result.message}\n`);
