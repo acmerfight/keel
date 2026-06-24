@@ -445,7 +445,7 @@ describe("CLI Undo", () => {
 
   test(`Given no Keel checkpoint exists,
     When user runs the undo command,
-    Then the CLI reports that there is nothing to undo without requiring a provider`, async () => {
+    Then the CLI reports the next actions without requiring a provider`, async () => {
     // Given
     const workspace = await createGitWorkspace();
 
@@ -462,7 +462,9 @@ describe("CLI Undo", () => {
       // Then
       expect(undo.exitCode).not.toBe(0);
       expect(undo.stdout).toBe("");
-      expect(undo.stderr).toBe("Nothing to undo.\n");
+      expect(undo.stderr).toBe(
+        "No earlier checkpoints. Ask me to undo more, or use git to reset.\n",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -489,7 +491,9 @@ describe("CLI Undo", () => {
 
       // Then
       expect(undo.exitCode).not.toBe(0);
-      expect(undo.stderr).toBe("Nothing to undo.\n");
+      expect(undo.stderr).toBe(
+        "No earlier checkpoints. Ask me to undo more, or use git to reset.\n",
+      );
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello old world\n",
       );
@@ -499,8 +503,8 @@ describe("CLI Undo", () => {
   });
 
   test(`Given Keel successfully edits two files in separate runs,
-    When user runs the undo command once,
-    Then only the latest Keel edit is restored`, async () => {
+    When user runs the undo command once and asks again,
+    Then only the latest edit is restored and the second attempt explains the next actions`, async () => {
     // Given
     const workspace = await createGitWorkspace();
     await commitFile(workspace, "first.txt", "first old\n");
@@ -520,9 +524,15 @@ describe("CLI Undo", () => {
 
       // When
       const undo = await runCli(["/undo"], { cwd: workspace });
+      const secondUndo = await runCli(["/undo"], { cwd: workspace });
 
       // Then
       expect(undo.exitCode).toBe(0);
+      expect(secondUndo.exitCode).not.toBe(0);
+      expect(secondUndo.stdout).toBe("");
+      expect(secondUndo.stderr).toBe(
+        "No earlier checkpoints. Ask me to undo more, or use git to reset.\n",
+      );
       expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
         "first new\n",
       );

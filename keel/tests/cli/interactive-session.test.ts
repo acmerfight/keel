@@ -197,7 +197,7 @@ describe("Interactive Session", () => {
 
   test(`Given no edit checkpoint exists,
     When user enters /undo,
-    Then the command reports nothing to undo without starting a model turn`, async () => {
+    Then the command reports the next actions without starting a model turn`, async () => {
     // Given
     const workspace = await createGitWorkspace("keel-interactive-undo-none-");
     const input = new PassThrough();
@@ -244,7 +244,9 @@ describe("Interactive Session", () => {
       // Then
       await session;
       expect(stdout).toBe("");
-      expect(stderr).toBe("Nothing to undo.\n");
+      expect(stderr).toBe(
+        "No earlier checkpoints. Ask me to undo more, or use git to reset.\n",
+      );
       expect(providerResolved).toBe(false);
       expect(sigintHandlers.size).toBe(0);
     } finally {
