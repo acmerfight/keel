@@ -121,11 +121,11 @@ function appendSessionRecordLine(
   messages: readonly Message[],
 ): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     type: "append",
     timestamp,
     reason: "turn",
-    messages,
+    messages: storedMessages(messages, `append-${timestamp}`),
   });
 }
 
@@ -134,11 +134,11 @@ function replaceSessionRecordLine(
   messages: readonly Message[],
 ): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     type: "replace",
     timestamp,
     reason: "compaction",
-    messages,
+    messages: storedMessages(messages, `replace-${timestamp}`),
   });
 }
 
@@ -147,11 +147,11 @@ function snapshotSessionRecordLine(
   messages: readonly Message[],
 ): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     type: "snapshot",
     timestamp,
     reason: "size_threshold",
-    messages,
+    messages: storedMessages(messages, `snapshot-${timestamp}`),
     pendingInputs: [],
   });
 }
@@ -162,7 +162,7 @@ function inputAdmittedRecordLine(options: {
   readonly line: string;
 }): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     type: "input_admitted",
     timestamp: options.timestamp,
     id: options.id,
@@ -176,11 +176,116 @@ function inputConsumedRecordLine(
   inputIds: readonly string[],
 ): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     type: "input_consumed",
     timestamp,
     inputIds,
   });
+}
+
+function sessionForkPolicy() {
+  return {
+    transcript: "copy_prefix",
+    pendingInputs: "drop",
+    queuedInputs: "drop",
+    bashApprovalGrants: "drop",
+  };
+}
+
+function rootGraph(sessionId: string) {
+  return {
+    graphId: sessionId,
+    rootSessionId: sessionId,
+    parentSessionId: null,
+    branchTitle: "main",
+    forkPoint: null,
+    forkPolicy: sessionForkPolicy(),
+  };
+}
+
+function forkGraph(sessionId: string, parentSessionId: string) {
+  return {
+    graphId: parentSessionId,
+    rootSessionId: parentSessionId,
+    parentSessionId,
+    branchTitle: sessionId,
+    forkPoint: {
+      kind: "end",
+      sourceSessionId: parentSessionId,
+      sourceLastMessageId: null,
+      sourceOrdinal: 0,
+      preview: "full restored history",
+    },
+    forkPolicy: sessionForkPolicy(),
+  };
+}
+
+function endForkGraph(options: {
+  readonly sessionId: string;
+  readonly parentSessionId: string;
+  readonly sourceLastMessageId: string;
+  readonly sourceOrdinal: number;
+}) {
+  return {
+    graphId: options.parentSessionId,
+    rootSessionId: options.parentSessionId,
+    parentSessionId: options.parentSessionId,
+    branchTitle: options.sessionId,
+    forkPoint: {
+      kind: "end",
+      sourceSessionId: options.parentSessionId,
+      sourceLastMessageId: options.sourceLastMessageId,
+      sourceOrdinal: options.sourceOrdinal,
+      preview: "full restored history",
+    },
+    forkPolicy: sessionForkPolicy(),
+  };
+}
+
+function storedMessages(messages: readonly Message[], prefix: string) {
+  return messages.map((message, index) => ({
+    id: `msg_${prefix.replace(/[^A-Za-z0-9_-]/gu, "_")}_${index + 1}`,
+    message,
+  }));
+}
+
+async function restoredUserMessageId(options: {
+  readonly home: string;
+  readonly sessionId: string;
+  readonly content: string;
+}): Promise<string> {
+  const ledgerLines = (
+    await readFile(
+      join(options.home, "sessions", options.sessionId, "ledger.jsonl"),
+      "utf8",
+    )
+  )
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const storedMessagesFromLedger = ledgerLines
+    .filter(
+      (line) =>
+        line.type === "append" ||
+        line.type === "replace" ||
+        line.type === "snapshot",
+    )
+    .flatMap((line) => line.messages ?? []);
+  const storedMessage = storedMessagesFromLedger.find(
+    (candidate) =>
+      candidate.message?.role === "user" &&
+      candidate.message.content === options.content,
+  );
+  if (typeof storedMessage?.id !== "string") {
+    throw new Error(`expected message id for ${options.content}`);
+  }
+  return storedMessage.id;
+}
+
+function ledgerRecordMessages(record: {
+  readonly messages?: readonly { readonly message?: Message }[];
+}): readonly (Message | undefined)[] {
+  return (record.messages ?? []).map((storedMessage) => storedMessage.message);
 }
 
 function conversationCheckpoint(
@@ -208,23 +313,30 @@ async function writeSessionLedger(options: {
   readonly headerId?: string;
   readonly workspace: string;
   readonly createdAt: string;
-  readonly forkedFrom?: string;
+  readonly parentSessionId?: string;
+  readonly graph?:
+    | ReturnType<typeof rootGraph>
+    | ReturnType<typeof forkGraph>
+    | ReturnType<typeof endForkGraph>;
   readonly records?: readonly string[];
 }): Promise<void> {
+  const headerId = options.headerId ?? options.id;
   const sessionDir = join(options.home, "sessions", options.id);
   await mkdir(sessionDir, { recursive: true });
   await writeFile(
     join(sessionDir, "ledger.jsonl"),
     `${[
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "session",
-        id: options.headerId ?? options.id,
+        id: headerId,
         createdAt: options.createdAt,
         workspace: options.workspace,
-        ...(options.forkedFrom !== undefined
-          ? { forkedFrom: options.forkedFrom }
-          : {}),
+        graph:
+          options.graph ??
+          (options.parentSessionId === undefined
+            ? rootGraph(headerId)
+            : forkGraph(headerId, options.parentSessionId)),
       }),
       ...(options.records ?? []),
     ].join("\n")}\n`,
@@ -765,7 +877,7 @@ describe("CLI Main", () => {
     expect(fixture.stderr()).toBe("Error: --fork requires --resume <id>.\n");
   });
 
-  test(`Given fork-before-user is passed without a value,
+  test(`Given fork-before-message is passed without a value,
     When the CLI main parses the request,
     Then it returns a validation error before starting interactive mode`, async () => {
     // Given
@@ -774,7 +886,7 @@ describe("CLI Main", () => {
       "source",
       "--fork",
       "target",
-      "--fork-before-user",
+      "--fork-before-message",
     ]);
 
     // When
@@ -784,11 +896,11 @@ describe("CLI Main", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe(
-      "Error: --fork-before-user requires a value.\n",
+      "Error: --fork-before-message requires a value.\n",
     );
   });
 
-  test(`Given fork-before-user is not a positive integer,
+  test(`Given fork-before-message is passed with an empty equals value,
     When the CLI main parses the request,
     Then it returns a validation error before starting interactive mode`, async () => {
     // Given
@@ -797,7 +909,7 @@ describe("CLI Main", () => {
       "source",
       "--fork",
       "target",
-      "--fork-before-user=0",
+      "--fork-before-message=",
     ]);
 
     // When
@@ -807,19 +919,19 @@ describe("CLI Main", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe(
-      "Error: --fork-before-user must be a positive integer.\n",
+      "Error: --fork-before-message requires a value.\n",
     );
   });
 
-  test(`Given fork-before-user is passed without a fork target,
+  test(`Given fork-before-message is passed without a fork target,
     When the CLI main parses the request,
     Then it returns a validation error before starting interactive mode`, async () => {
     // Given
     const fixture = createRuntime([
       "--resume",
       "source",
-      "--fork-before-user",
-      "1",
+      "--fork-before-message",
+      "msg_demo",
     ]);
 
     // When
@@ -829,7 +941,7 @@ describe("CLI Main", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe(
-      "Error: --fork-before-user requires --resume <id> --fork <new-id>.\n",
+      "Error: --fork-before-message requires --resume <id> --fork <new-id>.\n",
     );
   });
 
@@ -881,8 +993,8 @@ describe("CLI Main", () => {
       "--resume",
       "source",
       "--fork-points",
-      "--fork-before-user",
-      "1",
+      "--fork-before-message",
+      "msg_demo",
     ]);
 
     // When
@@ -892,7 +1004,7 @@ describe("CLI Main", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe(
-      "Error: --fork-points cannot be combined with --fork-before-user.\n",
+      "Error: --fork-points cannot be combined with --fork-before-message.\n",
     );
   });
 
@@ -3399,7 +3511,7 @@ describe("CLI Main", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerLines).toContainEqual({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "bash_approval_granted",
         timestamp: "1970-01-01T00:00:00.000Z",
         grant: {
@@ -3427,14 +3539,15 @@ describe("CLI Main", () => {
       join(home, "sessions", "queued", "ledger.jsonl"),
       `${[
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "session",
           id: "queued",
           createdAt: "1970-01-01T00:00:00.000Z",
           workspace: ledgerWorkspace,
+          graph: rootGraph("queued"),
         }),
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.001Z",
           id: "queued-input-1",
@@ -3504,7 +3617,7 @@ describe("CLI Main", () => {
       await writeFile(
         sourceLedgerPath,
         `${JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.001Z",
           id: "queued-source-input",
@@ -3553,7 +3666,7 @@ describe("CLI Main", () => {
       expect(targetLedgerLines[0]).toMatchObject({
         type: "session",
         id: "target",
-        forkedFrom: "source",
+        graph: { parentSessionId: "source" },
       });
       expect(
         targetLedgerLines.some(
@@ -3587,10 +3700,21 @@ describe("CLI Main", () => {
 
     try {
       const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const betaMessageId = await restoredUserMessageId({
+        home,
+        sessionId: "source",
+        content: "remember beta",
+      });
       const forkInput = new PassThrough();
       forkInput.end("what did I ask you to remember?\n");
       const forkRun = createRuntime(
-        ["--resume", "source", "--fork", "target", "--fork-before-user=2"],
+        [
+          "--resume",
+          "source",
+          "--fork",
+          "target",
+          `--fork-before-message=${betaMessageId}`,
+        ],
         {
           cwd: workspace,
           env: {
@@ -3619,18 +3743,20 @@ describe("CLI Main", () => {
       expect(targetLedgerLines[0]).toMatchObject({
         type: "session",
         id: "target",
-        forkedFrom: "source",
+        graph: { parentSessionId: "source" },
       });
       const forkedHistory = targetLedgerLines.find(
         (line) => line.type === "append",
       );
-      expect(forkedHistory).toMatchObject({
-        type: "append",
-        messages: [
-          { role: "user", content: "remember alpha" },
-          { role: "assistant", content: "Remembered: remember alpha" },
-        ],
-      });
+      expect(forkedHistory).toMatchObject({ type: "append" });
+      expect(ledgerRecordMessages(forkedHistory)).toEqual([
+        { role: "user", content: "remember alpha" },
+        {
+          role: "assistant",
+          content: "Remembered: remember alpha",
+          toolCalls: [],
+        },
+      ]);
       expect(JSON.stringify(forkedHistory)).not.toContain("remember beta");
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -3658,8 +3784,15 @@ describe("CLI Main", () => {
 
     try {
       const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const betaMessageId = await restoredUserMessageId({
+        home,
+        sessionId: "source",
+        content: "remember beta",
+      });
       const forkInput = new PassThrough();
-      forkInput.end("/fork target --before-user 2\nremember gamma\n");
+      forkInput.end(
+        `/fork target --before-message ${betaMessageId}\nremember gamma\n`,
+      );
       const forkRun = createRuntime(["--resume", "source"], {
         cwd: workspace,
         env: {
@@ -3678,7 +3811,7 @@ describe("CLI Main", () => {
       expect(forkExitCode).toBe(0);
       expect(forkRun.stdout()).toBe(
         [
-          'Forked session "source" to "target" before restored user message 2.',
+          `Forked session "source" to "target" before message ${betaMessageId}.`,
           "resume: keel --resume target",
           "Remembered: remember gamma",
           "",
@@ -3700,18 +3833,20 @@ describe("CLI Main", () => {
       expect(targetLedgerLines[0]).toMatchObject({
         type: "session",
         id: "target",
-        forkedFrom: "source",
+        graph: { parentSessionId: "source" },
       });
       const forkedHistory = targetLedgerLines.find(
         (line) => line.type === "append",
       );
-      expect(forkedHistory).toMatchObject({
-        type: "append",
-        messages: [
-          { role: "user", content: "remember alpha" },
-          { role: "assistant", content: "Remembered: remember alpha" },
-        ],
-      });
+      expect(forkedHistory).toMatchObject({ type: "append" });
+      expect(ledgerRecordMessages(forkedHistory)).toEqual([
+        { role: "user", content: "remember alpha" },
+        {
+          role: "assistant",
+          content: "Remembered: remember alpha",
+          toolCalls: [],
+        },
+      ]);
       expect(JSON.stringify(forkedHistory)).not.toContain("remember beta");
       expect(JSON.stringify(targetLedgerLines)).not.toContain("remember gamma");
     } finally {
@@ -3740,6 +3875,16 @@ describe("CLI Main", () => {
 
     try {
       const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const alphaMessageId = await restoredUserMessageId({
+        home,
+        sessionId: "source",
+        content: "remember alpha",
+      });
+      const betaMessageId = await restoredUserMessageId({
+        home,
+        sessionId: "source",
+        content: "remember beta",
+      });
       const forkInput = new PassThrough();
       forkInput.end("/fork-points\n/fork target --pick\n2\nremember gamma\n");
       const forkRun = createRuntime(["--resume", "source"], {
@@ -3761,17 +3906,17 @@ describe("CLI Main", () => {
       expect(forkRun.stdout()).toBe(
         [
           'Fork points for session "source":',
-          "1. before user message 1: remember alpha",
-          "   use: /fork <new-id> --before-user 1",
-          "2. before user message 2: remember beta",
-          "   use: /fork <new-id> --before-user 2",
+          `1. before message ${alphaMessageId}: remember alpha`,
+          `   use: /fork <new-id> --before-message ${alphaMessageId}`,
+          `2. before message ${betaMessageId}: remember beta`,
+          `   use: /fork <new-id> --before-message ${betaMessageId}`,
           'Fork points for session "source":',
           "0. full restored history",
-          "1. before user message 1: remember alpha",
-          "2. before user message 2: remember beta",
+          `1. before message ${alphaMessageId}: remember alpha`,
+          `2. before message ${betaMessageId}: remember beta`,
           "",
           "Select fork point [0-2], or q to cancel:",
-          'Forked session "source" to "target" before restored user message 2.',
+          `Forked session "source" to "target" before message ${betaMessageId}.`,
           "resume: keel --resume target",
           "Remembered: remember gamma",
           "",
@@ -3789,8 +3934,15 @@ describe("CLI Main", () => {
       );
       const sourceUserMessages = sourceAppends.flatMap((line) =>
         line.messages
-          .filter((message: Message) => message.role === "user")
-          .map((message: Message) => message.content),
+          .filter(
+            (storedMessage: { readonly message?: Message }) =>
+              storedMessage.message?.role === "user",
+          )
+          .map(
+            (storedMessage: {
+              readonly message: { readonly content: string };
+            }) => storedMessage.message.content,
+          ),
       );
       expect(sourceUserMessages).not.toContain("/fork-points");
       expect(sourceUserMessages).not.toContain("/fork target --pick");
@@ -3805,18 +3957,20 @@ describe("CLI Main", () => {
       expect(targetLedgerLines[0]).toMatchObject({
         type: "session",
         id: "target",
-        forkedFrom: "source",
+        graph: { parentSessionId: "source" },
       });
       const forkedHistory = targetLedgerLines.find(
         (line) => line.type === "append",
       );
-      expect(forkedHistory).toMatchObject({
-        type: "append",
-        messages: [
-          { role: "user", content: "remember alpha" },
-          { role: "assistant", content: "Remembered: remember alpha" },
-        ],
-      });
+      expect(forkedHistory).toMatchObject({ type: "append" });
+      expect(ledgerRecordMessages(forkedHistory)).toEqual([
+        { role: "user", content: "remember alpha" },
+        {
+          role: "assistant",
+          content: "Remembered: remember alpha",
+          toolCalls: [],
+        },
+      ]);
       expect(JSON.stringify(forkedHistory)).not.toContain("remember beta");
       expect(JSON.stringify(targetLedgerLines)).not.toContain("remember gamma");
     } finally {
@@ -3887,18 +4041,20 @@ describe("CLI Main", () => {
       expect(targetLedgerLines[0]).toMatchObject({
         type: "session",
         id: "target",
-        forkedFrom: "source",
+        graph: { parentSessionId: "source" },
       });
       const forkedHistory = targetLedgerLines.find(
         (line) => line.type === "append",
       );
-      expect(forkedHistory).toMatchObject({
-        type: "append",
-        messages: [
-          { role: "user", content: "remember alpha" },
-          { role: "assistant", content: "Remembered: remember alpha" },
-        ],
-      });
+      expect(forkedHistory).toMatchObject({ type: "append" });
+      expect(ledgerRecordMessages(forkedHistory)).toEqual([
+        { role: "user", content: "remember alpha" },
+        {
+          role: "assistant",
+          content: "Remembered: remember alpha",
+          toolCalls: [],
+        },
+      ]);
       expect(JSON.stringify(targetLedgerLines)).not.toContain("remember gamma");
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -4080,16 +4236,6 @@ describe("CLI Main", () => {
       },
       input: sourceInput,
     });
-    const forkRun = createRuntime(
-      ["sessions", "fork", "source", "target", "--before-user=2"],
-      {
-        cwd: workspace,
-        env: {
-          KEEL_PROVIDER: "deepseek",
-          KEEL_HOME: home,
-        },
-      },
-    );
     const listRun = createRuntime(["sessions"], {
       cwd: workspace,
       env: {
@@ -4099,6 +4245,27 @@ describe("CLI Main", () => {
 
     try {
       const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const betaMessageId = await restoredUserMessageId({
+        home,
+        sessionId: "source",
+        content: "remember beta",
+      });
+      const forkRun = createRuntime(
+        [
+          "sessions",
+          "fork",
+          "source",
+          "target",
+          `--before-message=${betaMessageId}`,
+        ],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "deepseek",
+            KEEL_HOME: home,
+          },
+        },
+      );
 
       // When
       const forkExitCode = await runCliMain(forkRun.runtime);
@@ -4109,7 +4276,7 @@ describe("CLI Main", () => {
       expect(forkExitCode).toBe(0);
       expect(forkRun.stdout()).toBe(
         [
-          'Forked session "source" to "target" before restored user message 2.',
+          `Forked session "source" to "target" before message ${betaMessageId}.`,
           "resume: keel --resume target",
           "",
         ].join("\n"),
@@ -4117,7 +4284,7 @@ describe("CLI Main", () => {
       expect(forkRun.stderr()).toBe("");
       expect(listExitCode).toBe(0);
       expect(listRun.stdout()).toContain("target  updated ");
-      expect(listRun.stdout()).toContain("   forked from: source\n");
+      expect(listRun.stdout()).toContain("     parent: source\n");
       const targetLedgerLines = (
         await readFile(join(home, "sessions", "target", "ledger.jsonl"), "utf8")
       )
@@ -4127,18 +4294,20 @@ describe("CLI Main", () => {
       expect(targetLedgerLines[0]).toMatchObject({
         type: "session",
         id: "target",
-        forkedFrom: "source",
+        graph: { parentSessionId: "source" },
       });
       const forkedHistory = targetLedgerLines.find(
         (line) => line.type === "append",
       );
-      expect(forkedHistory).toMatchObject({
-        type: "append",
-        messages: [
-          { role: "user", content: "remember alpha" },
-          { role: "assistant", content: "Remembered: remember alpha" },
-        ],
-      });
+      expect(forkedHistory).toMatchObject({ type: "append" });
+      expect(ledgerRecordMessages(forkedHistory)).toEqual([
+        { role: "user", content: "remember alpha" },
+        {
+          role: "assistant",
+          content: "Remembered: remember alpha",
+          toolCalls: [],
+        },
+      ]);
       expect(JSON.stringify(forkedHistory)).not.toContain("remember beta");
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -4200,16 +4369,19 @@ describe("CLI Main", () => {
       expect(targetLedgerLines[0]).toMatchObject({
         type: "session",
         id: "target",
-        forkedFrom: "source",
+        graph: { parentSessionId: "source" },
       });
-      expect(
-        targetLedgerLines.find((line) => line.type === "append"),
-      ).toMatchObject({
-        messages: [
-          { role: "user", content: "remember alpha" },
-          { role: "assistant", content: "Remembered: remember alpha" },
-        ],
-      });
+      const forkedHistory = targetLedgerLines.find(
+        (line) => line.type === "append",
+      );
+      expect(ledgerRecordMessages(forkedHistory)).toEqual([
+        { role: "user", content: "remember alpha" },
+        {
+          role: "assistant",
+          content: "Remembered: remember alpha",
+          toolCalls: [],
+        },
+      ]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -4244,6 +4416,16 @@ describe("CLI Main", () => {
 
     try {
       const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const alphaMessageId = await restoredUserMessageId({
+        home,
+        sessionId: "source",
+        content: "remember alpha",
+      });
+      const longPromptMessageId = await restoredUserMessageId({
+        home,
+        sessionId: "source",
+        content: longPrompt,
+      });
 
       // When
       const listExitCode = await runCliMain(listRun.runtime);
@@ -4254,10 +4436,85 @@ describe("CLI Main", () => {
       expect(listRun.stdout()).toBe(
         [
           'Fork points for session "source":',
-          "1. remember alpha",
-          "   use: keel sessions fork source <new-id> --before-user 1",
-          `2. ${longPromptPreview}`,
-          "   use: keel sessions fork source <new-id> --before-user 2",
+          `1. message ${alphaMessageId}: remember alpha`,
+          `   use: keel sessions fork source <new-id> --before-message ${alphaMessageId}`,
+          `2. message ${longPromptMessageId}: ${longPromptPreview}`,
+          `   use: keel sessions fork source <new-id> --before-message ${longPromptMessageId}`,
+          "",
+        ].join("\n"),
+      );
+      expect(listRun.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named session has multiple completed prompts,
+    When the user lists fork points for that session,
+    Then the CLI shows stable restored message ids and matching fork commands`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sourceInput = new PassThrough();
+    sourceInput.end("remember alpha\nremember beta\n");
+    const sourceRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: sourceInput,
+    });
+    const listRun = createRuntime(["--resume", "source", "--fork-points"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      const sourceExitCode = await runCliMain(sourceRun.runtime);
+      const sourceLedgerLines = (
+        await readFile(join(home, "sessions", "source", "ledger.jsonl"), "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const storedMessages = sourceLedgerLines
+        .filter((line) => line.type === "append")
+        .flatMap((line) => line.messages);
+      const alphaMessage = storedMessages.find(
+        (storedMessage) =>
+          storedMessage.message?.role === "user" &&
+          storedMessage.message.content === "remember alpha",
+      );
+      const betaMessage = storedMessages.find(
+        (storedMessage) =>
+          storedMessage.message?.role === "user" &&
+          storedMessage.message.content === "remember beta",
+      );
+      if (
+        typeof alphaMessage?.id !== "string" ||
+        typeof betaMessage?.id !== "string"
+      ) {
+        throw new Error("expected source ledger to store user message ids");
+      }
+
+      // When
+      const listExitCode = await runCliMain(listRun.runtime);
+
+      // Then
+      expect(sourceExitCode).toBe(0);
+      expect(listExitCode).toBe(0);
+      expect(listRun.stdout()).toBe(
+        [
+          'Fork points for session "source":',
+          `1. message ${alphaMessage.id}: remember alpha`,
+          `   use: keel sessions fork source <new-id> --before-message ${alphaMessage.id}`,
+          `2. message ${betaMessage.id}: remember beta`,
+          `   use: keel sessions fork source <new-id> --before-message ${betaMessage.id}`,
           "",
         ].join("\n"),
       );
@@ -4291,6 +4548,11 @@ describe("CLI Main", () => {
         ]),
       ],
     });
+    const unsafeMessageId = await restoredUserMessageId({
+      home,
+      sessionId: "source",
+      content: "remember \u001b[2J hidden\u202e marker",
+    });
     const listRun = createRuntime(["--resume", "source", "--fork-points"], {
       cwd: workspace,
       env: {
@@ -4307,8 +4569,8 @@ describe("CLI Main", () => {
       expect(listRun.stdout()).toBe(
         [
           'Fork points for session "source":',
-          "1. remember \\x1b[2J hidden\\u{202e} marker",
-          "   use: keel sessions fork source <new-id> --before-user 1",
+          `1. message ${unsafeMessageId}: remember \\x1b[2J hidden\\u{202e} marker`,
+          `   use: keel sessions fork source <new-id> --before-message ${unsafeMessageId}`,
           "",
         ].join("\n"),
       );
@@ -4330,11 +4592,12 @@ describe("CLI Main", () => {
     await writeFile(
       join(sessionDir, "ledger.jsonl"),
       `${JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "session",
         id: "empty",
         createdAt: "1970-01-01T00:00:00.000Z",
         workspace: await realpath(workspace),
+        graph: rootGraph("empty"),
       })}\n`,
       "utf8",
     );
@@ -4423,7 +4686,7 @@ describe("CLI Main", () => {
     );
   });
 
-  test(`Given sessions fork receives an invalid fork point,
+  test(`Given sessions fork receives an empty fork point,
     When the CLI main parses the request,
     Then it returns a validation error before reading sessions`, async () => {
     // Given
@@ -4432,7 +4695,7 @@ describe("CLI Main", () => {
       "fork",
       "source",
       "target",
-      "--before-user=0",
+      "--before-message=",
     ]);
 
     // When
@@ -4442,7 +4705,7 @@ describe("CLI Main", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe(
-      "Error: --before-user must be a positive integer.\n",
+      "Error: --before-message requires a value.\n",
     );
   });
 
@@ -4455,7 +4718,7 @@ describe("CLI Main", () => {
       "fork",
       "source",
       "target",
-      "--before-user",
+      "--before-message",
     ]);
 
     // When
@@ -4464,7 +4727,9 @@ describe("CLI Main", () => {
     // Then
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe("Error: --before-user requires a value.\n");
+    expect(fixture.stderr()).toBe(
+      "Error: --before-message requires a value.\n",
+    );
   });
 
   test(`Given sessions fork receives an unsupported option,
@@ -4501,6 +4766,7 @@ describe("CLI Main", () => {
     const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
     const longPrompt = `remember ${"0123456789".repeat(14)}`;
     const longPromptPreview = `${longPrompt.slice(0, 117)}...`;
+    const olderLastMessageId = "msg_append-2026-01-01T00_00_06_000Z_2";
     await writeSessionLedger({
       home,
       id: "long-preview",
@@ -4546,7 +4812,7 @@ describe("CLI Main", () => {
       id: "forked",
       workspace: ledgerWorkspace,
       createdAt: "2026-01-02T00:00:00.000Z",
-      forkedFrom: "older",
+      parentSessionId: "older",
       records: [
         appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
           { role: "user", content: "remember beta\nwith spacing" },
@@ -4558,6 +4824,30 @@ describe("CLI Main", () => {
         ]),
       ],
     });
+    for (const branchId of ["branch-b", "branch-a"]) {
+      await writeSessionLedger({
+        home,
+        id: branchId,
+        workspace: ledgerWorkspace,
+        createdAt: "2026-01-02T00:00:00.000Z",
+        graph: endForkGraph({
+          sessionId: branchId,
+          parentSessionId: "older",
+          sourceLastMessageId: olderLastMessageId,
+          sourceOrdinal: 4,
+        }),
+        records: [
+          appendSessionRecordLine("2026-01-02T00:00:06.000Z", [
+            { role: "user", content: `remember ${branchId}` },
+            {
+              role: "assistant",
+              content: `Remembered ${branchId}.`,
+              toolCalls: [],
+            },
+          ]),
+        ],
+      });
+    }
     await writeSessionLedger({
       home,
       id: "compacted",
@@ -4702,63 +4992,54 @@ describe("CLI Main", () => {
 
       // Then
       expect(exitCode).toBe(0);
-      expect(fixture.stdout()).toBe(
+      const stdout = fixture.stdout();
+      expect(stdout).toContain(`Sessions for workspace ${ledgerWorkspace}:\n`);
+      expect(stdout).toContain(
+        "graph long-preview root long-preview  updated 2026-01-04T00:00:05.000Z\n",
+      );
+      expect(stdout).toContain(
+        "long-preview  updated 2026-01-04T00:00:05.000Z\n",
+      );
+      expect(stdout).toContain("   branch: main\n");
+      expect(stdout).toContain(`   preview: ${longPromptPreview}\n`);
+      expect(stdout).toContain(
+        "graph older root older  updated 2026-01-02T00:00:06.000Z\n",
+      );
+      expect(stdout).toContain("older  updated 2026-01-01T00:00:06.000Z\n");
+      expect(stdout).toContain(
         [
-          `Sessions for workspace ${ledgerWorkspace}:`,
-          "long-preview  updated 2026-01-04T00:00:05.000Z",
-          `   preview: ${longPromptPreview}`,
-          "   resume: keel --resume long-preview",
-          "   fork-points: keel --resume long-preview --fork-points",
-          "   fork: keel sessions fork long-preview <new-id>",
-          "forked  updated 2026-01-02T00:00:05.000Z",
-          "   forked from: older",
-          "   preview: remember beta with spacing",
-          "   resume: keel --resume forked",
-          "   fork-points: keel --resume forked --fork-points",
-          "   fork: keel sessions fork forked <new-id>",
-          "checkpoint-only  updated 2026-01-01T18:30:02.000Z",
-          "   preview: checkpoint: Only checkpoint summary remains.",
-          "   resume: keel --resume checkpoint-only",
-          "   fork-points: keel --resume checkpoint-only --fork-points",
-          "   fork: keel sessions fork checkpoint-only <new-id>",
-          "compacted  updated 2026-01-01T18:00:02.000Z",
-          "   preview: remember compacted",
-          "   resume: keel --resume compacted",
-          "   fork-points: keel --resume compacted --fork-points",
-          "   fork: keel sessions fork compacted <new-id>",
-          "snapshotted  updated 2026-01-01T17:00:02.000Z",
-          "   preview: remember snapshot",
-          "   resume: keel --resume snapshotted",
-          "   fork-points: keel --resume snapshotted --fork-points",
-          "   fork: keel sessions fork snapshotted <new-id>",
-          "queued  updated 2026-01-01T16:00:02.000Z",
-          "   preview: (no restored user messages)",
-          "   resume: keel --resume queued",
-          "   fork-points: keel --resume queued --fork-points",
-          "   fork: keel sessions fork queued <new-id>",
-          "tie-a  updated 2026-01-01T15:00:01.000Z",
-          "   preview: remember tie a",
-          "   resume: keel --resume tie-a",
-          "   fork-points: keel --resume tie-a --fork-points",
-          "   fork: keel sessions fork tie-a <new-id>",
-          "tie-b  updated 2026-01-01T15:00:01.000Z",
-          "   preview: remember tie b",
-          "   resume: keel --resume tie-b",
-          "   fork-points: keel --resume tie-b --fork-points",
-          "   fork: keel sessions fork tie-b <new-id>",
-          "empty  updated 2026-01-01T12:00:00.000Z",
-          "   preview: (no restored user messages)",
-          "   resume: keel --resume empty",
-          "   fork-points: keel --resume empty --fork-points",
-          "   fork: keel sessions fork empty <new-id>",
-          "older  updated 2026-01-01T00:00:06.000Z",
-          "   preview: remember alpha",
-          "   resume: keel --resume older",
-          "   fork-points: keel --resume older --fork-points",
-          "   fork: keel sessions fork older <new-id>",
-          "",
+          "  branch-a  updated 2026-01-02T00:00:06.000Z",
+          "     branch: branch-a",
+          "     parent: older",
+          `     fork point: full restored history from older through message ${olderLastMessageId} (message 4)`,
+          "     fork policy: transcript=copy_prefix, pendingInputs=drop, queuedInputs=drop, bashApprovalGrants=drop",
+          "     preview: remember branch-a",
+          "     resume: keel --resume branch-a",
+          "     fork-points: keel --resume branch-a --fork-points",
+          "     fork: keel sessions fork branch-a <new-id>",
+          "  branch-b  updated 2026-01-02T00:00:06.000Z",
         ].join("\n"),
       );
+      expect(stdout).toContain("  forked  updated 2026-01-02T00:00:05.000Z\n");
+      expect(stdout).toContain("     parent: older\n");
+      expect(stdout).toContain("     preview: remember beta with spacing\n");
+      expect(stdout).toContain(
+        "     fork policy: transcript=copy_prefix, pendingInputs=drop, queuedInputs=drop, bashApprovalGrants=drop\n",
+      );
+      expect(stdout).toContain(
+        "checkpoint-only  updated 2026-01-01T18:30:02.000Z\n",
+      );
+      expect(stdout).toContain("compacted  updated 2026-01-01T18:00:02.000Z\n");
+      expect(stdout).toContain(
+        "snapshotted  updated 2026-01-01T17:00:02.000Z\n",
+      );
+      expect(stdout).toContain("queued  updated 2026-01-01T16:00:02.000Z\n");
+      expect(stdout).toContain("tie-a  updated 2026-01-01T15:00:01.000Z\n");
+      expect(stdout).toContain("tie-b  updated 2026-01-01T15:00:01.000Z\n");
+      expect(stdout).toContain("empty  updated 2026-01-01T12:00:00.000Z\n");
+      expect(stdout).toContain("   fork: keel sessions fork older <new-id>\n");
+      expect(stdout).not.toContain("elsewhere");
+      expect(stdout).not.toContain("do not show this session");
       expect(fixture.stderr()).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -4820,22 +5101,23 @@ describe("CLI Main", () => {
 
       // Then
       expect(exitCode).toBe(0);
-      expect(fixture.stdout()).toBe(
-        [
-          `Sessions for workspace ${ledgerWorkspace}:`,
-          "malformed-checkpoint  updated 2026-01-01T18:00:01.000Z",
-          `   preview: ${malformedCheckpointPreview}`,
-          "   resume: keel --resume malformed-checkpoint",
-          "   fork-points: keel --resume malformed-checkpoint --fork-points",
-          "   fork: keel sessions fork malformed-checkpoint <new-id>",
-          "assistant-only  updated 2026-01-01T17:00:01.000Z",
-          "   preview: (no restored user messages)",
-          "   resume: keel --resume assistant-only",
-          "   fork-points: keel --resume assistant-only --fork-points",
-          "   fork: keel sessions fork assistant-only <new-id>",
-          "",
-        ].join("\n"),
+      const stdout = fixture.stdout();
+      expect(stdout).toContain(`Sessions for workspace ${ledgerWorkspace}:\n`);
+      expect(stdout).toContain(
+        "graph malformed-checkpoint root malformed-checkpoint  updated 2026-01-01T18:00:01.000Z\n",
       );
+      expect(stdout).toContain(
+        "malformed-checkpoint  updated 2026-01-01T18:00:01.000Z\n",
+      );
+      expect(stdout).toContain("   branch: main\n");
+      expect(stdout).toContain(`   preview: ${malformedCheckpointPreview}\n`);
+      expect(stdout).toContain(
+        "graph assistant-only root assistant-only  updated 2026-01-01T17:00:01.000Z\n",
+      );
+      expect(stdout).toContain(
+        "assistant-only  updated 2026-01-01T17:00:01.000Z\n",
+      );
+      expect(stdout).toContain("   preview: (no restored user messages)\n");
       expect(fixture.stderr()).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -4964,7 +5246,14 @@ describe("CLI Main", () => {
       ],
     });
     const forkRun = createRuntime(
-      ["sessions", "fork", "source", "target", "--before-user", "2"],
+      [
+        "sessions",
+        "fork",
+        "source",
+        "target",
+        "--before-message",
+        "msg_missing",
+      ],
       {
         cwd: workspace,
         env: {
@@ -4981,7 +5270,7 @@ describe("CLI Main", () => {
       expect(forkExitCode).toBe(1);
       expect(forkRun.stdout()).toBe("");
       expect(forkRun.stderr()).toBe(
-        'Error: cannot fork session "target": --before-user 2 exceeds restored user message count 1.\n',
+        'Error: cannot fork session "target": --before-message msg_missing does not match a restored message id in session "source".\n',
       );
       await expect(
         access(join(home, "sessions", "target", "ledger.jsonl")),
@@ -5015,7 +5304,14 @@ describe("CLI Main", () => {
       const forkInput = new PassThrough();
       forkInput.end("what did I ask you to remember?\n");
       const forkRun = createRuntime(
-        ["--resume", "source", "--fork", "target", "--fork-before-user", "2"],
+        [
+          "--resume",
+          "source",
+          "--fork",
+          "target",
+          "--fork-before-message",
+          "msg_missing",
+        ],
         {
           cwd: workspace,
           env: {
@@ -5035,7 +5331,7 @@ describe("CLI Main", () => {
       expect(forkExitCode).toBe(1);
       expect(forkRun.stdout()).toBe("");
       expect(forkRun.stderr()).toBe(
-        'Error: cannot fork session "target": --fork-before-user 2 exceeds restored user message count 1.\n',
+        'Error: cannot fork session "target": --fork-before-message msg_missing does not match a restored message id in session "source".\n',
       );
       await expect(
         access(join(home, "sessions", "target", "ledger.jsonl")),
@@ -5177,11 +5473,12 @@ describe("CLI Main", () => {
     await writeFile(
       ledgerPath,
       `${JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "session",
         id: "snapshot-queued",
         createdAt: "1970-01-01T00:00:00.000Z",
         workspace: ledgerWorkspace,
+        graph: rootGraph("snapshot-queued"),
       })}\n`,
       "utf8",
     );
@@ -5189,18 +5486,21 @@ describe("CLI Main", () => {
     await writeFile(
       ledgerPath,
       `\n${JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "snapshot",
         timestamp: "1970-01-01T00:00:00.001Z",
         reason: "size_threshold",
-        messages: [
-          { role: "user", content: "remember alpha" },
-          {
-            role: "assistant",
-            content: "Remembered: remember alpha",
-            toolCalls: [],
-          },
-        ],
+        messages: storedMessages(
+          [
+            { role: "user", content: "remember alpha" },
+            {
+              role: "assistant",
+              content: "Remembered: remember alpha",
+              toolCalls: [],
+            },
+          ],
+          "snapshot-queued",
+        ),
         pendingInputs: [
           {
             id: "snapshot-question",
@@ -5351,11 +5651,12 @@ describe("CLI Main", () => {
       join(home, "sessions", "broken", "ledger.jsonl"),
       [
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "session",
           id: "broken",
           createdAt: "1970-01-01T00:00:00.000Z",
           workspace,
+          graph: rootGraph("broken"),
         }),
         "{not-json",
       ].join("\n"),
@@ -5400,11 +5701,12 @@ describe("CLI Main", () => {
     await writeFile(
       ledgerPath,
       `${JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "session",
         id: "huge",
         createdAt: "1970-01-01T00:00:00.000Z",
         workspace,
+        graph: rootGraph("huge"),
       })}\n{not-json`,
       "utf8",
     );

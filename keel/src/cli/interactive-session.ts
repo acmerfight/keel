@@ -53,7 +53,7 @@ export type SessionPersistenceReason = "turn" | "compaction";
 
 export interface InteractiveForkSessionRequest {
   readonly targetSessionId: string;
-  readonly beforeUser?: number;
+  readonly beforeMessageId?: string;
 }
 
 interface InteractiveResolvedProviderBase {
@@ -166,7 +166,7 @@ interface ManualCompactCommand {
 interface ForkCommand {
   readonly kind: "fork";
   readonly targetSessionId: string;
-  readonly beforeUser?: number;
+  readonly beforeMessageId?: string;
   readonly pick?: true;
 }
 
@@ -187,13 +187,17 @@ type InteractiveCommand =
   | ForkCommand
   | InvalidInteractiveCommand;
 
+type ParseResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly message: string };
+
 function formatInteractiveHelp(): string {
   return [
     "Interactive commands:",
     "  /help              Show this help.",
     "  /undo              Restore the last edit checkpoint.",
     "  /compact [focus]   Summarize older conversation context with optional focus.",
-    "  /fork <target-id> [--before-user <n>]",
+    "  /fork <target-id> [--before-message <id>]",
     "                     Fork this named or resumed session without switching to it.",
     "  /fork <target-id> --pick",
     "                     Choose the fork point interactively.",
@@ -206,7 +210,7 @@ function formatInteractiveHelp(): string {
     "      Resume a saved interactive session.",
     "  keel --resume <id> --fork-points",
     "      List restored user-message fork points.",
-    "  keel sessions fork <source-id> <target-id> [--before-user <n>]",
+    "  keel sessions fork <source-id> <target-id> [--before-message <id>]",
     "      Fork a saved session into a new session.",
     "",
     "Controls:",
@@ -216,18 +220,11 @@ function formatInteractiveHelp(): string {
   ].join("\n");
 }
 
-function parseForkBeforeUser(raw: string | undefined): number | string {
+function parseForkBeforeMessage(raw: string | undefined): ParseResult<string> {
   if (raw === undefined || raw === "") {
-    return "Error: --before-user requires a value.";
+    return { ok: false, message: "Error: --before-message requires a value." };
   }
-  if (!/^[1-9][0-9]*$/u.test(raw)) {
-    return "Error: --before-user must be a positive integer.";
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    return "Error: --before-user must be a positive integer.";
-  }
-  return value;
+  return { ok: true, value: raw };
 }
 
 function parseForkCommandArgs(
@@ -250,9 +247,9 @@ function parseForkCommandArgs(
     };
   }
 
-  let beforeUser: number | undefined;
+  let beforeMessageId: string | undefined;
   let pick = false;
-  const beforeUserPrefix = "--before-user=";
+  const beforeMessagePrefix = "--before-message=";
   const optionArgs = args.slice(1);
   let skipNext = false;
   for (const [index, arg] of optionArgs.entries()) {
@@ -266,22 +263,24 @@ function parseForkCommandArgs(
       continue;
     }
 
-    if (arg === "--before-user") {
-      const parsed = parseForkBeforeUser(optionArgs[index + 1]);
-      if (typeof parsed === "string") {
-        return { kind: "invalid", message: parsed };
+    if (arg === "--before-message") {
+      const parsed = parseForkBeforeMessage(optionArgs[index + 1]);
+      if (!parsed.ok) {
+        return { kind: "invalid", message: parsed.message };
       }
-      beforeUser = parsed;
+      beforeMessageId = parsed.value;
       skipNext = true;
       continue;
     }
 
-    if (arg.startsWith(beforeUserPrefix)) {
-      const parsed = parseForkBeforeUser(arg.slice(beforeUserPrefix.length));
-      if (typeof parsed === "string") {
-        return { kind: "invalid", message: parsed };
+    if (arg.startsWith(beforeMessagePrefix)) {
+      const parsed = parseForkBeforeMessage(
+        arg.slice(beforeMessagePrefix.length),
+      );
+      if (!parsed.ok) {
+        return { kind: "invalid", message: parsed.message };
       }
-      beforeUser = parsed;
+      beforeMessageId = parsed.value;
       continue;
     }
 
@@ -291,17 +290,17 @@ function parseForkCommandArgs(
     };
   }
 
-  if (pick && beforeUser !== undefined) {
+  if (pick && beforeMessageId !== undefined) {
     return {
       kind: "invalid",
-      message: "Error: --pick cannot be combined with --before-user.",
+      message: "Error: --pick cannot be combined with --before-message.",
     };
   }
 
   return {
     kind: "fork",
     targetSessionId,
-    ...(beforeUser !== undefined ? { beforeUser } : {}),
+    ...(beforeMessageId !== undefined ? { beforeMessageId } : {}),
     ...(pick ? { pick } : {}),
   };
 }
@@ -375,7 +374,7 @@ function formatForkRequiresNamedSession(
 }
 
 interface ForkPointSelection {
-  readonly beforeUser?: number;
+  readonly choice: number;
 }
 
 interface ForkPointPickerSelection {
@@ -404,7 +403,7 @@ function parseForkPointSelection(
 ): ForkPointSelection | "cancelled" | "invalid" {
   const selection = rawSelection.trim().toLowerCase();
   if (selection === "0") {
-    return {};
+    return { choice: 0 };
   }
   if (selection === "q" || selection === "quit" || selection === "cancel") {
     return "cancelled";
@@ -417,7 +416,7 @@ function parseForkPointSelection(
   if (!Number.isSafeInteger(choice) || choice > maxChoice) {
     return "invalid";
   }
-  return { beforeUser: choice };
+  return { choice };
 }
 
 async function readForkPointPickerSelection(options: {
@@ -1088,11 +1087,15 @@ export async function runInteractiveSession(
             continue;
           }
           try {
+            const selectedPoint =
+              pickerResult.selection.choice === 0
+                ? undefined
+                : forkPoints.points[pickerResult.selection.choice - 1];
             options.writeStdout(
               options.forkSession({
                 targetSessionId: interactiveCommand.targetSessionId,
-                ...(pickerResult.selection.beforeUser !== undefined
-                  ? { beforeUser: pickerResult.selection.beforeUser }
+                ...(selectedPoint !== undefined
+                  ? { beforeMessageId: selectedPoint.messageId }
                   : {}),
               }),
             );

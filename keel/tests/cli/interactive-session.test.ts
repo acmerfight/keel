@@ -817,7 +817,7 @@ describe("Interactive Session", () => {
     let stdout = "";
     let stderr = "";
     let forkTarget = "";
-    let forkBeforeUser: number | undefined;
+    let forkBeforeMessageId: string | undefined;
     let providerResolved = false;
     const session = runInteractiveSession({
       cliArgs: { bashMode: "disabled" },
@@ -851,22 +851,22 @@ describe("Interactive Session", () => {
       formatCostReport: () => "",
       forkSession: (request) => {
         forkTarget = request.targetSessionId;
-        forkBeforeUser = request.beforeUser;
-        return 'Forked session "source" to "target" before restored user message 2.\nresume: keel --resume target\n';
+        forkBeforeMessageId = request.beforeMessageId;
+        return 'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n';
       },
     });
 
     // When
-    input.end("/fork target --before-user=2\n");
+    input.end("/fork target --before-message=msg_beta\n");
 
     // Then
     await session;
     expect(stdout).toBe(
-      'Forked session "source" to "target" before restored user message 2.\nresume: keel --resume target\n',
+      'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n',
     );
     expect(stderr).toBe("");
     expect(forkTarget).toBe("target");
-    expect(forkBeforeUser).toBe(2);
+    expect(forkBeforeMessageId).toBe("msg_beta");
     expect(providerResolved).toBe(false);
     expect(sigintHandlers.size).toBe(0);
   });
@@ -918,8 +918,16 @@ describe("Interactive Session", () => {
           points:
             listCalls === 1
               ? [
-                  { beforeUser: 1, preview: "remember alpha" },
-                  { beforeUser: 2, preview: "remember beta" },
+                  {
+                    choice: 1,
+                    messageId: "msg_alpha",
+                    preview: "remember alpha",
+                  },
+                  {
+                    choice: 2,
+                    messageId: "msg_beta",
+                    preview: "remember beta",
+                  },
                 ]
               : [],
         };
@@ -934,10 +942,10 @@ describe("Interactive Session", () => {
     expect(stdout).toBe(
       [
         'Fork points for session "source":',
-        "1. before user message 1: remember alpha",
-        "   use: /fork <new-id> --before-user 1",
-        "2. before user message 2: remember beta",
-        "   use: /fork <new-id> --before-user 2",
+        "1. before message msg_alpha: remember alpha",
+        "   use: /fork <new-id> --before-message msg_alpha",
+        "2. before message msg_beta: remember beta",
+        "   use: /fork <new-id> --before-message msg_beta",
         'No restored user messages in session "source".',
         "",
       ].join("\n"),
@@ -956,7 +964,7 @@ describe("Interactive Session", () => {
     let stdout = "";
     let stderr = "";
     let forkTarget = "";
-    let forkBeforeUser: number | undefined;
+    let forkBeforeMessageId: string | undefined;
     let providerResolved = false;
     const session = runInteractiveSession({
       cliArgs: { bashMode: "disabled" },
@@ -991,14 +999,14 @@ describe("Interactive Session", () => {
       listForkPoints: () => ({
         sessionId: "source",
         points: [
-          { beforeUser: 1, preview: "remember alpha" },
-          { beforeUser: 2, preview: "remember beta" },
+          { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
+          { choice: 2, messageId: "msg_beta", preview: "remember beta" },
         ],
       }),
       forkSession: (request) => {
         forkTarget = request.targetSessionId;
-        forkBeforeUser = request.beforeUser;
-        return 'Forked session "source" to "target" before restored user message 2.\nresume: keel --resume target\n';
+        forkBeforeMessageId = request.beforeMessageId;
+        return 'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n';
       },
     });
 
@@ -1011,31 +1019,31 @@ describe("Interactive Session", () => {
       [
         'Fork points for session "source":',
         "0. full restored history",
-        "1. before user message 1: remember alpha",
-        "2. before user message 2: remember beta",
+        "1. before message msg_alpha: remember alpha",
+        "2. before message msg_beta: remember beta",
         "",
         "Select fork point [0-2], or q to cancel:",
-        'Forked session "source" to "target" before restored user message 2.',
+        'Forked session "source" to "target" before message msg_beta.',
         "resume: keel --resume target",
         "",
       ].join("\n"),
     );
     expect(stderr).toBe("");
     expect(forkTarget).toBe("target");
-    expect(forkBeforeUser).toBe(2);
+    expect(forkBeforeMessageId).toBe("msg_beta");
     expect(providerResolved).toBe(false);
     expect(sigintHandlers.size).toBe(0);
   });
 
   test(`Given the interactive session is idle,
     When user picks full restored history,
-    Then the fork is created without a before-user fork point`, async () => {
+    Then the fork is created without a before-message fork point`, async () => {
     // Given
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     let stderr = "";
-    let forkBeforeUser: number | undefined = 1;
+    let forkBeforeMessageId: string | undefined = "msg_alpha";
     let providerResolved = false;
     const session = runInteractiveSession({
       cliArgs: { bashMode: "disabled" },
@@ -1073,10 +1081,12 @@ describe("Interactive Session", () => {
       formatCostReport: () => "",
       listForkPoints: () => ({
         sessionId: "source",
-        points: [{ beforeUser: 1, preview: "remember alpha" }],
+        points: [
+          { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
+        ],
       }),
       forkSession: (request) => {
-        forkBeforeUser = request.beforeUser;
+        forkBeforeMessageId = request.beforeMessageId;
         return 'Forked session "source" to "target".\nresume: keel --resume target\n';
       },
     });
@@ -1088,7 +1098,7 @@ describe("Interactive Session", () => {
     await session;
     expect(stdout).toContain('Forked session "source" to "target".\n');
     expect(stderr).toBe("");
-    expect(forkBeforeUser).toBeUndefined();
+    expect(forkBeforeMessageId).toBeUndefined();
     expect(providerResolved).toBe(false);
     expect(sigintHandlers.size).toBe(0);
   });
@@ -1135,7 +1145,9 @@ describe("Interactive Session", () => {
       formatCostReport: () => "",
       listForkPoints: () => ({
         sessionId: "source",
-        points: [{ beforeUser: 1, preview: "remember alpha" }],
+        points: [
+          { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
+        ],
       }),
       forkSession: () => {
         forkCalled = true;
@@ -1152,7 +1164,7 @@ describe("Interactive Session", () => {
       [
         'Fork points for session "source":',
         "0. full restored history",
-        "1. before user message 1: remember alpha",
+        "1. before message msg_alpha: remember alpha",
         "",
         "Select fork point [0-1], or q to cancel:",
         "",
@@ -1205,7 +1217,9 @@ describe("Interactive Session", () => {
       formatCostReport: () => "",
       listForkPoints: () => ({
         sessionId: "source",
-        points: [{ beforeUser: 1, preview: "remember alpha" }],
+        points: [
+          { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
+        ],
       }),
       forkSession: () => {
         throw "picker fork failed";
@@ -1221,7 +1235,7 @@ describe("Interactive Session", () => {
       [
         'Fork points for session "source":',
         "0. full restored history",
-        "1. before user message 1: remember alpha",
+        "1. before message msg_alpha: remember alpha",
         "",
         "Select fork point [0-1], or q to cancel:",
         "",
@@ -1301,7 +1315,7 @@ describe("Interactive Session", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     let stderr = "";
-    let forkBeforeUser: number | undefined;
+    let forkBeforeMessageId: string | undefined;
     let providerResolved = false;
     const consumedInputIds: string[][] = [];
     const initialQueuedInputs: readonly SessionQueuedInput[] = [
@@ -1355,13 +1369,13 @@ describe("Interactive Session", () => {
       listForkPoints: () => ({
         sessionId: "source",
         points: [
-          { beforeUser: 1, preview: "remember alpha" },
-          { beforeUser: 2, preview: "remember beta" },
+          { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
+          { choice: 2, messageId: "msg_beta", preview: "remember beta" },
         ],
       }),
       forkSession: (request) => {
-        forkBeforeUser = request.beforeUser;
-        return 'Forked session "source" to "target" before restored user message 2.\nresume: keel --resume target\n';
+        forkBeforeMessageId = request.beforeMessageId;
+        return 'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n';
       },
     });
 
@@ -1371,10 +1385,10 @@ describe("Interactive Session", () => {
     // Then
     await session;
     expect(stdout).toContain(
-      'Forked session "source" to "target" before restored user message 2.\n',
+      'Forked session "source" to "target" before message msg_beta.\n',
     );
     expect(stderr).toBe("");
-    expect(forkBeforeUser).toBe(2);
+    expect(forkBeforeMessageId).toBe("msg_beta");
     expect(consumedInputIds).toEqual([["queued-command", "queued-selection"]]);
     expect(providerResolved).toBe(false);
     expect(sigintHandlers.size).toBe(0);
@@ -1422,7 +1436,9 @@ describe("Interactive Session", () => {
       formatCostReport: () => "",
       listForkPoints: () => ({
         sessionId: "source",
-        points: [{ beforeUser: 1, preview: "remember alpha" }],
+        points: [
+          { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
+        ],
       }),
       forkSession: () => {
         forkCalled = true;
@@ -1439,7 +1455,7 @@ describe("Interactive Session", () => {
       [
         'Fork points for session "source":',
         "0. full restored history",
-        "1. before user message 1: remember alpha",
+        "1. before message msg_alpha: remember alpha",
         "",
         "Select fork point [0-1], or q to cancel:",
         "Select fork point [0-1], or q to cancel:",
@@ -1561,11 +1577,10 @@ describe("Interactive Session", () => {
     input.end(
       [
         "/fork",
-        "/fork --before-user 1",
-        "/fork target --before-user",
-        "/fork target --before-user=0",
-        "/fork target --before-user=9007199254740992",
-        "/fork target --pick --before-user 1",
+        "/fork --before-message msg_alpha",
+        "/fork target --before-message",
+        "/fork target --before-message=",
+        "/fork target --pick --before-message msg_alpha",
         "/fork target --pick=1",
         "/fork-points extra",
         "/fork target --all",
@@ -1580,10 +1595,9 @@ describe("Interactive Session", () => {
       [
         "Error: /fork requires <target-id>.",
         "Error: /fork requires <target-id>.",
-        "Error: --before-user requires a value.",
-        "Error: --before-user must be a positive integer.",
-        "Error: --before-user must be a positive integer.",
-        "Error: --pick cannot be combined with --before-user.",
+        "Error: --before-message requires a value.",
+        "Error: --before-message requires a value.",
+        "Error: --pick cannot be combined with --before-message.",
         'Error: unknown /fork option "--pick=1".',
         "Error: /fork-points does not accept arguments.",
         'Error: unknown /fork option "--all".',
@@ -3866,7 +3880,7 @@ describe("Interactive Session", () => {
     let forkWritten = false;
     const observedContexts: Message[][] = [];
     let forkTarget = "";
-    let forkBeforeUser: number | undefined;
+    let forkBeforeMessageId: string | undefined;
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
@@ -3917,7 +3931,7 @@ describe("Interactive Session", () => {
         for await (const event of stream) {
           if (event.type === "tool_start" && !forkWritten) {
             forkWritten = true;
-            input.write("/fork target --before-user 2\n");
+            input.write("/fork target --before-message msg_beta\n");
             input.end("after fork\n");
           } else if (event.type === "text") {
             stdout += event.text;
@@ -3930,8 +3944,8 @@ describe("Interactive Session", () => {
       formatCostReport: () => "",
       forkSession: (request) => {
         forkTarget = request.targetSessionId;
-        forkBeforeUser = request.beforeUser;
-        return 'Forked session "source" to "target" before restored user message 2.\nresume: keel --resume target\n';
+        forkBeforeMessageId = request.beforeMessageId;
+        return 'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n';
       },
     });
 
@@ -3943,14 +3957,14 @@ describe("Interactive Session", () => {
     expect(stdout).toBe(
       [
         "Tool turn done.",
-        'Forked session "source" to "target" before restored user message 2.',
+        'Forked session "source" to "target" before message msg_beta.',
         "resume: keel --resume target",
         "After fork done.",
         "",
       ].join("\n"),
     );
     expect(forkTarget).toBe("target");
-    expect(forkBeforeUser).toBe(2);
+    expect(forkBeforeMessageId).toBe("msg_beta");
     expect(observedContexts[1]).toEqual([
       { role: "user", content: "inspect package" },
       {
