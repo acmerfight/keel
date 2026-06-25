@@ -47,6 +47,19 @@ export type OpenAICompatibleToolParameters =
 
 type JsonObject = Readonly<Record<string, unknown>>;
 
+interface JsonSchemaObject extends JsonObject {
+  readonly additionalProperties?: unknown;
+  readonly description?: unknown;
+  readonly exclusiveMaximum?: unknown;
+  readonly exclusiveMinimum?: unknown;
+  readonly items?: unknown;
+  readonly maximum?: unknown;
+  readonly minimum?: unknown;
+  readonly properties?: unknown;
+  readonly required?: unknown;
+  readonly type?: unknown;
+}
+
 export function optionalToolArgument<Schema extends z.ZodType>(schema: Schema) {
   return z.preprocess(
     (value) => (value === null ? undefined : value),
@@ -142,26 +155,26 @@ function toolParameterType(
 }
 
 function integerMinimum(
-  schema: JsonObject,
+  schema: JsonSchemaObject,
   context: string,
 ): number | undefined {
-  const minimum = numberValue(schema["minimum"], `${context}.minimum`);
+  const minimum = numberValue(schema.minimum, `${context}.minimum`);
   if (minimum !== undefined) {
     return minimum;
   }
 
   const exclusiveMinimum = numberValue(
-    schema["exclusiveMinimum"],
+    schema.exclusiveMinimum,
     `${context}.exclusiveMinimum`,
   );
   return exclusiveMinimum === undefined ? undefined : exclusiveMinimum + 1;
 }
 
 function integerMaximum(
-  schema: JsonObject,
+  schema: JsonSchemaObject,
   context: string,
 ): number | undefined {
-  const maximum = numberValue(schema["maximum"], `${context}.maximum`);
+  const maximum = numberValue(schema.maximum, `${context}.maximum`);
   if (maximum === Number.MAX_SAFE_INTEGER) {
     return undefined;
   }
@@ -170,13 +183,13 @@ function integerMaximum(
   }
 
   const exclusiveMaximum = numberValue(
-    schema["exclusiveMaximum"],
+    schema.exclusiveMaximum,
     `${context}.exclusiveMaximum`,
   );
   return exclusiveMaximum === undefined ? undefined : exclusiveMaximum - 1;
 }
 
-function schemaObject(value: unknown, context: string): JsonObject {
+function schemaObject(value: unknown, context: string): JsonSchemaObject {
   if (isJsonObject(value)) {
     return value;
   }
@@ -203,11 +216,8 @@ function openAICompatibleToolParameterFromSchema(
   context: string,
 ): OpenAICompatibleToolParameter {
   const schema = schemaObject(value, context);
-  const type = toolParameterType(schema["type"], `${context}.type`);
-  const description = stringValue(
-    schema["description"],
-    `${context}.description`,
-  );
+  const type = toolParameterType(schema.type, `${context}.type`);
+  const description = stringValue(schema.description, `${context}.description`);
 
   switch (type) {
     case "string":
@@ -231,13 +241,13 @@ function openAICompatibleToolParameterFromSchema(
         type,
         ...(description !== undefined ? { description } : {}),
         items: openAICompatibleToolParameterFromSchema(
-          schema["items"],
+          schema.items,
           `${context}.items`,
         ),
       };
     case "object": {
       const additionalProperties = falseValue(
-        schema["additionalProperties"],
+        schema.additionalProperties,
         `${context}.additionalProperties`,
       );
       if (additionalProperties !== false) {
@@ -247,10 +257,10 @@ function openAICompatibleToolParameterFromSchema(
         type,
         ...(description !== undefined ? { description } : {}),
         properties: schemaProperties(
-          schema["properties"],
+          schema.properties,
           `${context}.properties`,
         ),
-        required: stringArray(schema["required"], `${context}.required`),
+        required: stringArray(schema.required, `${context}.required`),
         additionalProperties,
       };
     }

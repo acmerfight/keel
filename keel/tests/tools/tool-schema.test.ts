@@ -44,8 +44,9 @@ describe("tool schema helpers", () => {
         })
         .strict(),
     );
+    const { count } = parameters.properties;
 
-    expect(parameters.properties["count"]).toEqual({
+    expect(count).toEqual({
       type: "integer",
       description: "Bounded count.",
       minimum: 2,
@@ -95,24 +96,26 @@ describe("tool schema helpers", () => {
         .strict()
         .meta({ required: undefined }),
     );
+    const { count, items, nested, text } = parameters.properties;
+    const { free } = unboundedParameters.properties;
 
-    expect(parameters.properties["text"]).toEqual({ type: "string" });
-    expect(parameters.properties["count"]).toEqual({
+    expect(text).toEqual({ type: "string" });
+    expect(count).toEqual({
       type: "integer",
       minimum: 1,
     });
-    expect(parameters.properties["items"]).toEqual({
+    expect(items).toEqual({
       type: "array",
       items: { type: "string" },
     });
-    expect(parameters.properties["nested"]).toEqual({
+    expect(nested).toEqual({
       type: "object",
       properties: { value: { type: "string" } },
       required: ["value"],
       additionalProperties: false,
     });
     expect(optionalParameters.required).toEqual([]);
-    expect(unboundedParameters.properties["free"]).toEqual({ type: "integer" });
+    expect(free).toEqual({ type: "integer" });
     expect(missingRequiredParameters.required).toEqual([]);
   });
 
