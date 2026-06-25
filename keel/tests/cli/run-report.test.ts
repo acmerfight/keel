@@ -8,9 +8,7 @@ import { z } from "zod";
 import { runCli, runCliProcess } from "../../src/testing/cli-harness.ts";
 
 const runReportSchema = z.object({
-  schemaVersion: z.literal(1),
-  provider: z.string(),
-  model: z.string(),
+  schemaVersion: z.literal(2),
   turns: z.number().int().positive(),
   stopReason: z.string(),
   usage: z.object({
@@ -21,6 +19,26 @@ const runReportSchema = z.object({
   }),
   durationMs: z.number().nonnegative(),
   costUsd: z.number(),
+  modelsUsed: z.array(
+    z.object({
+      provider: z.string(),
+      model: z.string(),
+    }),
+  ),
+  usageByModel: z.array(
+    z.object({
+      provider: z.string(),
+      model: z.string(),
+      turns: z.number().int().nonnegative(),
+      usage: z.object({
+        inputTokens: z.number().int().nonnegative(),
+        cachedInputTokens: z.number().int().nonnegative(),
+        uncachedInputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
+      }),
+      costUsd: z.number(),
+    }),
+  ),
 });
 
 const requestModelSchema = z.object({
@@ -123,8 +141,16 @@ describe("CLI Run Report", () => {
       const report = runReportSchema.parse(
         JSON.parse(await readFile(reportPath, "utf8")),
       );
-      expect(report.provider).toBe("fake");
-      expect(report.model).toBe("fake");
+      expect(report.modelsUsed).toEqual([{ provider: "fake", model: "fake" }]);
+      expect(report.usageByModel).toEqual([
+        {
+          provider: "fake",
+          model: "fake",
+          turns: 3,
+          usage: report.usage,
+          costUsd: 0,
+        },
+      ]);
       expect(report.turns).toBe(3);
       expect(report.stopReason).toBe("completed");
       expect(report.costUsd).toBe(0);
@@ -228,8 +254,16 @@ describe("CLI Run Report", () => {
       const report = runReportSchema.parse(
         JSON.parse(await readFile(reportPath, "utf8")),
       );
-      expect(report.provider).toBe("fake");
-      expect(report.model).toBe("fake");
+      expect(report.modelsUsed).toEqual([{ provider: "fake", model: "fake" }]);
+      expect(report.usageByModel).toEqual([
+        {
+          provider: "fake",
+          model: "fake",
+          turns: 2,
+          usage: report.usage,
+          costUsd: 0,
+        },
+      ]);
       expect(report.turns).toBe(2);
       expect(report.stopReason).toBe("completed");
       expect(report.usage).toEqual({
@@ -241,6 +275,94 @@ describe("CLI Run Report", () => {
       expect(report.costUsd).toBe(0);
     } finally {
       child.kill("SIGKILL");
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive session switches models after a reported turn,
+    When the CLI writes a session report,
+    Then the report records each model instead of one misleading model`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-session-switch-report-"),
+    );
+    const reportPath = join(workspace, "session-report.json");
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(
+          sseTextReplyWithUsage("Hello from Qwen.", {
+            promptTokens: 20,
+            completionTokens: 4,
+          }),
+        );
+      });
+    });
+    await listen(server);
+    const { child, result } = runCliProcess(["--report", reportPath], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        DASHSCOPE_API_KEY: "test-key",
+        QWEN_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      stdin: "pipe",
+    });
+
+    try {
+      // When
+      child.stdin?.end("remember alpha\n/model qwen/qwen3.7-plus\nhello\n");
+
+      // Then
+      const exit = await withTimeout(
+        result,
+        5000,
+        "interactive CLI did not finish after switched stdin closed",
+      );
+      expect(exit.exitCode).toBe(0);
+      expect(exit.stderr).toBe("");
+      expect(exit.stdout).toContain("Remembered: remember alpha\n");
+      expect(exit.stdout).toContain("Model switched to qwen/qwen3.7-plus\n");
+      expect(exit.stdout).toContain("Hello from Qwen.");
+
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.modelsUsed).toEqual([
+        { provider: "fake", model: "fake" },
+        { provider: "qwen", model: "qwen3.7-plus" },
+      ]);
+      expect(report.usageByModel).toMatchObject([
+        {
+          provider: "fake",
+          model: "fake",
+          turns: 1,
+        },
+        {
+          provider: "qwen",
+          model: "qwen3.7-plus",
+          turns: 1,
+          usage: {
+            inputTokens: 20,
+            outputTokens: 4,
+          },
+        },
+      ]);
+      expect(report.turns).toBe(2);
+    } finally {
+      child.kill("SIGKILL");
+      await close(server);
       await rm(workspace, { recursive: true, force: true });
     }
   });
@@ -287,8 +409,9 @@ describe("CLI Run Report", () => {
       const report = runReportSchema.parse(
         JSON.parse(await readFile(reportPath, "utf8")),
       );
-      expect(report.provider).toBe("kimi");
-      expect(report.model).toBe("kimi-k2.6");
+      expect(report.modelsUsed).toEqual([
+        { provider: "kimi", model: "kimi-k2.6" },
+      ]);
       expect(report.costUsd).toBeGreaterThan(0);
     } finally {
       await close(server);
@@ -349,8 +472,9 @@ describe("CLI Run Report", () => {
       const report = runReportSchema.parse(
         JSON.parse(await readFile(reportPath, "utf8")),
       );
-      expect(report.provider).toBe("kimi");
-      expect(report.model).toBe("kimi-k2.6");
+      expect(report.modelsUsed).toEqual([
+        { provider: "kimi", model: "kimi-k2.6" },
+      ]);
       expect(report.stopReason).toBe("provider_length");
       expect(report.usage).toMatchObject({
         inputTokens: 10,
@@ -405,8 +529,9 @@ describe("CLI Run Report", () => {
       const report = runReportSchema.parse(
         JSON.parse(await readFile(reportPath, "utf8")),
       );
-      expect(report.provider).toBe("qwen");
-      expect(report.model).toBe("qwen3.7-max");
+      expect(report.modelsUsed).toEqual([
+        { provider: "qwen", model: "qwen3.7-max" },
+      ]);
       expect(report.costUsd).toBeGreaterThan(0);
     } finally {
       await close(server);
@@ -463,8 +588,9 @@ describe("CLI Run Report", () => {
       const report = runReportSchema.parse(
         JSON.parse(await readFile(reportPath, "utf8")),
       );
-      expect(report.provider).toBe("qwen");
-      expect(report.model).toBe("qwen3.7-plus");
+      expect(report.modelsUsed).toEqual([
+        { provider: "qwen", model: "qwen3.7-plus" },
+      ]);
       expect(report.usage.inputTokens).toBe(300_000);
       expect(report.costUsd).toBeCloseTo(0.84);
     } finally {
@@ -531,8 +657,9 @@ describe("CLI Run Report", () => {
       const report = runReportSchema.parse(
         JSON.parse(await readFile(reportPath, "utf8")),
       );
-      expect(report.provider).toBe("qwen");
-      expect(report.model).toBe("qwen3.7-plus");
+      expect(report.modelsUsed).toEqual([
+        { provider: "qwen", model: "qwen3.7-plus" },
+      ]);
       expect(report.costUsd).toBeGreaterThan(0);
     } finally {
       await close(server);
@@ -589,8 +716,9 @@ describe("CLI Run Report", () => {
       const report = runReportSchema.parse(
         JSON.parse(await readFile(reportPath, "utf8")),
       );
-      expect(report.provider).toBe("qwen");
-      expect(report.model).toBe("qwen3.6-flash");
+      expect(report.modelsUsed).toEqual([
+        { provider: "qwen", model: "qwen3.6-flash" },
+      ]);
       expect(report.usage.inputTokens).toBe(300_000);
       expect(report.costUsd).toBeCloseTo(0.34);
     } finally {

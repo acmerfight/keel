@@ -15,28 +15,8 @@ import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import type { ProviderId } from "../core/provider-id.ts";
+import { type RunReport, runReportSchema } from "./report-schema.ts";
 import { type EvalTask, loadEvalTasks } from "./task.ts";
-
-// Mirrors the CLI --report payload. The runner consumes the report through
-// the same file a user would, so this schema is the eval side of that
-// contract; bump expectations together with the CLI's schemaVersion.
-const runReportSchema = z.object({
-  schemaVersion: z.literal(1),
-  provider: z.string(),
-  model: z.string(),
-  turns: z.number().int().positive(),
-  stopReason: z.string(),
-  usage: z.object({
-    inputTokens: z.number().int().nonnegative(),
-    cachedInputTokens: z.number().int().nonnegative(),
-    uncachedInputTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
-  }),
-  durationMs: z.number().nonnegative(),
-  costUsd: z.number().nonnegative(),
-});
-
-type RunReport = z.infer<typeof runReportSchema>;
 
 const transcriptHeaderSchema = z.object({
   schemaVersion: z.literal(1),

@@ -842,6 +842,157 @@ describe("Interactive Session", () => {
     expect(sigintHandlers.size).toBe(0);
   });
 
+  test(`Given a resumed interactive session has an active model,
+    When user selects the same model before another prompt,
+    Then Keel reports the model is already active without persisting a switch`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    const resolvedSelections: ProviderSelection[] = [];
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialModelSelection: { providerId: "qwen", model: "qwen3.7-plus" },
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) => {
+        if (selection !== undefined) {
+          resolvedSelections.push(selection);
+        }
+        return resolvedProvider(
+          selection?.providerId ?? "fake",
+          selection?.model ?? "fake",
+          textProvider("unexpected turn"),
+        );
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      persistModelSwitch: () => {
+        throw new Error("same model should not persist a switch");
+      },
+      printAgentEvents: async () => {
+        throw new Error("same model command should not start a turn");
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("/model qwen/qwen3.7-plus\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe("Model already set to qwen/qwen3.7-plus\n");
+    expect(resolvedSelections).toEqual([
+      { providerId: "qwen", model: "qwen3.7-plus" },
+    ]);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given a named session has queued model-switch input before the first prompt,
+    When user selects a model before any turn,
+    Then Keel persists a switch from no previous model and consumes the command`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    const switches: Array<{
+      readonly from: {
+        readonly providerId: string;
+        readonly model: string;
+      } | null;
+      readonly to: { readonly providerId: string; readonly model: string };
+      readonly consumedInputIds: readonly string[];
+    }> = [];
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialQueuedInputs: [
+        {
+          id: "model-input",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          sequence: 1,
+          line: "/model qwen/qwen3.7-plus",
+        },
+        {
+          id: "prompt-input",
+          timestamp: "2026-01-01T00:00:01.000Z",
+          sequence: 2,
+          line: "first prompt",
+        },
+      ],
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) =>
+        resolvedProvider(
+          selection?.providerId ?? "fake",
+          selection?.model ?? "fake",
+          textProvider(
+            `${selection?.providerId ?? "fake"}:${selection?.model ?? "fake"}`,
+          ),
+        ),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      persistModelSwitch: (switchRecord) => {
+        switches.push(switchRecord);
+      },
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end();
+
+    // Then
+    await session;
+    expect(stdout).toContain("Model switched to qwen/qwen3.7-plus\n");
+    expect(stdout).toContain("qwen:qwen3.7-plus");
+    expect(switches).toEqual([
+      {
+        from: null,
+        to: { providerId: "qwen", model: "qwen3.7-plus" },
+        consumedInputIds: ["model-input"],
+      },
+    ]);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
   test(`Given the current history does not fit a selected target context window,
     When user enters /model for that target,
     Then Keel compacts with the old provider before accepting the switch`, async () => {
@@ -2007,6 +2158,14 @@ describe("Interactive Session", () => {
       readonly messages: readonly Message[];
       readonly consumedInputIds: readonly string[];
     }> = [];
+    const switches: Array<{
+      readonly from: {
+        readonly providerId: string;
+        readonly model: string;
+      } | null;
+      readonly to: { readonly providerId: string; readonly model: string };
+      readonly consumedInputIds: readonly string[];
+    }> = [];
     const targetRequestContexts: Message[][] = [];
     const initialMessages: readonly Message[] = [
       { role: "user", content: "large history ".repeat(3_000).trim() },
@@ -2090,6 +2249,9 @@ describe("Interactive Session", () => {
           consumedInputIds,
         });
       },
+      persistModelSwitch: (switchRecord) => {
+        switches.push(switchRecord);
+      },
       consumeQueuedInputs: () => {
         throw new Error("persisted model switch should not consume separately");
       },
@@ -2120,6 +2282,13 @@ describe("Interactive Session", () => {
     expect(JSON.stringify(persisted[0]?.messages)).toContain(
       "Persisted checkpoint summary.",
     );
+    expect(switches).toEqual([
+      {
+        from: { providerId: "fake", model: "fake" },
+        to: { providerId: "qwen", model: "tiny" },
+        consumedInputIds: [],
+      },
+    ]);
     expect(persisted[1]?.reason).toBe("turn");
     expect(persisted[1]?.consumedInputIds).toEqual(["target-input"]);
     expect(targetRequestContexts).toHaveLength(1);
@@ -2302,20 +2471,41 @@ describe("Interactive Session", () => {
   });
 
   test(`Given an interactive report already contains a completed turn,
-    When user enters /model for a different model,
-    Then the switch is rejected until model-switch reporting exists`, async () => {
+    When user switches models and continues,
+    Then the report groups usage and cost by the models that actually ran`, async () => {
     // Given
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     let stderr = "";
     let fakeReportTurns = 0;
+    let qwenReportTurns = 0;
+    const fakeUsage: Usage = {
+      inputTokens: 1_000,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 1_000,
+      outputTokens: 10,
+    };
+    const qwenUsage: Usage = {
+      inputTokens: 2_000,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 2_000,
+      outputTokens: 20,
+    };
     const fakeReportProvider: LLMProvider = {
       id: "fake",
       async *stream() {
         fakeReportTurns++;
         yield { type: "text", text: `fake report ${fakeReportTurns}` };
-        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        yield { type: "stop", reason: "stop", usage: fakeUsage };
+      },
+    };
+    const qwenReportProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        qwenReportTurns++;
+        yield { type: "text", text: `qwen report ${qwenReportTurns}` };
+        yield { type: "stop", reason: "stop", usage: qwenUsage };
       },
     };
     const session = runInteractiveSession({
@@ -2344,10 +2534,16 @@ describe("Interactive Session", () => {
           return resolvedProvider(
             "qwen",
             selection.model ?? "qwen3.7-plus",
-            textProvider("unexpected qwen"),
+            qwenReportProvider,
+            ONE_DOLLAR_PER_MILLION_INPUT,
           );
         }
-        return resolvedProvider("fake", "fake", fakeReportProvider);
+        return resolvedProvider(
+          "deepseek",
+          "deepseek-v4-flash",
+          fakeReportProvider,
+          ONE_DOLLAR_PER_MILLION_INPUT,
+        );
       },
       requireKnownCostModel: (resolved) => {
         if (resolved.costModel === null) {
@@ -2373,12 +2569,40 @@ describe("Interactive Session", () => {
     input.end("first prompt\n/model qwen/qwen3.7-plus\nsecond prompt\n");
 
     // Then
-    await session;
-    expect(stderr).toContain("model-switch reporting is implemented");
+    const result = await session;
+    expect(stderr).toBe("");
     expect(stdout).toContain("fake report 1");
-    expect(stdout).toContain("fake report 2");
-    expect(stdout).not.toContain("unexpected qwen");
-    expect(fakeReportTurns).toBe(2);
+    expect(stdout).toContain("qwen report 1");
+    expect(fakeReportTurns).toBe(1);
+    expect(qwenReportTurns).toBe(1);
+    expect(result.report?.modelsUsed).toEqual([
+      { provider: "deepseek", model: "deepseek-v4-flash" },
+      { provider: "qwen", model: "qwen3.7-plus" },
+    ]);
+    expect(result.report?.usageByModel).toEqual([
+      {
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        turns: 1,
+        usage: fakeUsage,
+        costUsd: 0.001,
+      },
+      {
+        provider: "qwen",
+        model: "qwen3.7-plus",
+        turns: 1,
+        usage: qwenUsage,
+        costUsd: 0.002,
+      },
+    ]);
+    expect(result.report?.end.turns).toBe(2);
+    expect(result.report?.end.usage).toEqual({
+      inputTokens: 3_000,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 3_000,
+      outputTokens: 30,
+    });
+    expect(result.report?.end.cost.spentUsd).toBeCloseTo(0.003);
     expect(sigintHandlers.size).toBe(0);
   });
 

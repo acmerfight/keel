@@ -145,6 +145,7 @@ function applySessionCatalogMutation(
     case "input_admitted":
     case "input_consumed":
     case "bash_approval_granted":
+    case "model_switch":
       return {
         ...state,
         updatedAt: record.timestamp,

@@ -98,9 +98,17 @@ Each trial appends one JSON line:
   "wallMs": 9182,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
-    "schemaVersion": 1,
-    "provider": "deepseek",
-    "model": "deepseek-v4-flash",
+    "schemaVersion": 2,
+    "modelsUsed": [{ "provider": "deepseek", "model": "deepseek-v4-flash" }],
+    "usageByModel": [
+      {
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "turns": 3,
+        "usage": { "inputTokens": 5210, "cachedInputTokens": 4100, "uncachedInputTokens": 1110, "outputTokens": 240 },
+        "costUsd": 0.000234
+      }
+    ],
     "turns": 3,
     "stopReason": "completed",
     "usage": { "inputTokens": 5210, "cachedInputTokens": 4100, "uncachedInputTokens": 1110, "outputTokens": 240 },

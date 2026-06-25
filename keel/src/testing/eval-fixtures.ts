@@ -3,9 +3,23 @@ import { writeFile } from "node:fs/promises";
 type EvalTrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
 
 export interface EvalRunReport {
-  readonly schemaVersion: 1;
-  readonly provider: string;
-  readonly model: string;
+  readonly schemaVersion: 2;
+  readonly modelsUsed: readonly {
+    readonly provider: string;
+    readonly model: string;
+  }[];
+  readonly usageByModel: readonly {
+    readonly provider: string;
+    readonly model: string;
+    readonly turns: number;
+    readonly usage: {
+      readonly inputTokens: number;
+      readonly cachedInputTokens: number;
+      readonly uncachedInputTokens: number;
+      readonly outputTokens: number;
+    };
+    readonly costUsd: number;
+  }[];
   readonly turns: number;
   readonly stopReason: string;
   readonly usage: {
@@ -53,20 +67,30 @@ export function evalRunReport(
   options: EvalRunReportOptions = {},
 ): EvalRunReport {
   const inputTokens = options.inputTokens ?? 100;
+  const usage = {
+    inputTokens,
+    cachedInputTokens: 0,
+    uncachedInputTokens: inputTokens,
+    outputTokens: options.outputTokens ?? 20,
+  };
+  const costUsd = options.costUsd ?? 0.001;
   return {
-    schemaVersion: 1,
-    provider: "deepseek",
-    model: "deepseek-v4-flash",
+    schemaVersion: 2,
+    modelsUsed: [{ provider: "deepseek", model: "deepseek-v4-flash" }],
+    usageByModel: [
+      {
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        turns: options.turns ?? 3,
+        usage,
+        costUsd,
+      },
+    ],
     turns: options.turns ?? 3,
     stopReason: "completed",
-    usage: {
-      inputTokens,
-      cachedInputTokens: 0,
-      uncachedInputTokens: inputTokens,
-      outputTokens: options.outputTokens ?? 20,
-    },
+    usage,
     durationMs: options.durationMs ?? 1000,
-    costUsd: options.costUsd ?? 0.001,
+    costUsd,
   };
 }
 
