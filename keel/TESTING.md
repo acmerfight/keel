@@ -61,6 +61,8 @@ This directory is excluded from coverage reports.
 
 Use `pnpm test:coverage` for final verification before pushing or merging. `pnpm test` is acceptable for fast local iteration, but PR-ready verification must run the coverage command so regressions in covered branches are visible.
 
+Run `pnpm coverage:patch` after `pnpm test:coverage` before pushing PR branches that change coverable code. It compares `origin/main...HEAD` against `coverage/lcov.info`, fails on changed measured lines with zero hits, and fails on changed measured branch lines with untaken `BRDA` records. This is a local preflight check; Codecov remains the authoritative merge gate.
+
 ## Coverage Triage
 
 Coverage gaps require triage, not automatic tests.

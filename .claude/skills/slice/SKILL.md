@@ -88,9 +88,9 @@ Run professional QA before opening or updating the PR.
 
 - Run Keel commands from `keel/` unless the slice is explicitly repo-level documentation or agent configuration.
 - Run targeted tests for iteration.
-- Run `pnpm lint`.
-- Run `pnpm typecheck`.
+- After file edits and formatting are complete, run independent local checks in parallel when practical: targeted tests, `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm eval:check`, and `pnpm knip`.
 - Run `pnpm test:coverage` for PR-ready verification. Use `pnpm test` only for fast local iteration.
+- Run `pnpm coverage:patch` after coverage and after commit, before push, when the slice changes coverable code.
 - For pure docs/skill-only changes, run the relevant metadata or Markdown validators and explain why the Keel test suite was not run.
 - Use a real DeepSeek key for end-to-end QA when the slice has provider-visible behavior and the key is available. Never fake this result.
 - Record exact commands and outcomes in the PR body.
