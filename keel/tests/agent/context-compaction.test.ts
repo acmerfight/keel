@@ -5,10 +5,8 @@ import {
   shouldCompactBeforeRequest,
 } from "../../src/agent/context-compaction.ts";
 import type { AgentEvent } from "../../src/agent/loop.ts";
-import {
-  createReadVisibilityState,
-  runAgentTurn,
-} from "../../src/agent/loop.ts";
+import { runAgentTurn } from "../../src/agent/loop.ts";
+import { createReadVisibilityState } from "../../src/agent/read-visibility.ts";
 import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,

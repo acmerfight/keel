@@ -11,12 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
-import {
-  createReadVisibilityState,
-  restorePostCompactionReads,
-  runAgent,
-  runAgentTurn,
-} from "../../src/agent/loop.ts";
+import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
+import { restorePostCompactionReads } from "../../src/agent/post-compaction-restore.ts";
+import { createReadVisibilityState } from "../../src/agent/read-visibility.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import { restoreLastEditCheckpoint } from "../../src/core/git.ts";
 import {
@@ -2187,6 +2184,83 @@ describe("File Editing", () => {
       ]);
       expect(readVisibility.hasRead(keepTargetPath)).toBe(true);
       expect(readVisibility.hasRead(goneTargetPath)).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given scoped AGENTS.md appears after a visible read,
+    When recent reads are restored,
+    Then the restored read publishes the newly visible scoped instructions`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "packages", "api", "src"), {
+      recursive: true,
+    });
+    const serverPath = join(workspace, "packages", "api", "src", "server.ts");
+    await writeFile(serverPath, "export const route = 'current';\n", "utf8");
+    const serverTargetPath = await realpath(serverPath);
+    await writeFile(
+      join(workspace, "packages", "api", "AGENTS.md"),
+      "API rule: preserve the exported route name.\n",
+      "utf8",
+    );
+    const instructionTargetPath = await realpath(
+      join(workspace, "packages", "api", "AGENTS.md"),
+    );
+    const messages: Message[] = [];
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(workspace);
+    readVisibility.applyVisibleToolExecutions([
+      { ok: true, content: "", readTargetPath: serverTargetPath },
+    ]);
+    let sequence = 0;
+
+    try {
+      // When
+      await restorePostCompactionReads({
+        workspace,
+        signal: freshSignal(),
+        readVisibility,
+        projectInstructionVisibility,
+        messages,
+        nextToolCallId: () => `post_compaction_read_${sequence++}`,
+      });
+
+      // Then
+      expect(messages).toEqual([
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            expect.objectContaining({
+              id: "post_compaction_read_0",
+              tool: "read",
+              path: serverTargetPath,
+            }),
+          ],
+        },
+        {
+          role: "tool",
+          toolCallId: "post_compaction_read_0",
+          content: [
+            "Project instructions from packages/api/AGENTS.md apply to this path:",
+            "> API rule: preserve the exported route name.",
+            "",
+            "export const route = 'current';",
+            "",
+          ].join("\n"),
+        },
+      ]);
+      expect(
+        projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
+      ).toEqual([
+        {
+          instructionPath: instructionTargetPath,
+          relativePath: "packages/api/AGENTS.md",
+        },
+      ]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

@@ -13,10 +13,8 @@ import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import type { ContextCompactionOptions } from "../../src/agent/context-compaction.ts";
-import {
-  type AgentEvent,
-  createReadVisibilityState,
-} from "../../src/agent/loop.ts";
+import type { AgentEvent } from "../../src/agent/loop.ts";
+import { createReadVisibilityState } from "../../src/agent/read-visibility.ts";
 import { parseInteractiveCommand } from "../../src/cli/interactive-session/commands.ts";
 import { executeModelSwitchCompaction } from "../../src/cli/interactive-session/model-switch-compact.ts";
 import type {
