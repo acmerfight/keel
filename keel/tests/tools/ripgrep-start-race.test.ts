@@ -171,4 +171,71 @@ describe("Ripgrep Start Failure Recovery", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test.sequential(`Given the caller aborts while ripgrep is starting,
+    When grep runs through the tool execution layer,
+    Then it preserves the abort error instead of reporting a recoverable search failure`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-rg-start-"));
+    await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
+    mockRipgrepStartFailure(
+      Object.assign(new Error("The operation was aborted"), {
+        code: "ABORT_ERR",
+        name: "AbortError",
+      }),
+    );
+    const { executeToolCall } = await import("../../src/tools/execution.ts");
+
+    try {
+      // When / Then
+      await expect(
+        executeToolCall({
+          workspace,
+          toolCall: {
+            id: "grep_1",
+            tool: "grep",
+            pattern: "needle",
+          },
+          signal: new AbortController().signal,
+          allowBash: false,
+        }),
+      ).rejects.toMatchObject({
+        name: "AbortError",
+        code: "ABORT_ERR",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.sequential(`Given ripgrep start fails with an unclassified operating system error,
+    When glob runs through the tool execution layer,
+    Then it preserves the original fatal error instead of widening recovery`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-rg-start-"));
+    await writeFile(join(workspace, "app.ts"), "export {}\n", "utf8");
+    mockRipgrepStartFailure(errno("spawn /test/rg EMFILE", "EMFILE"));
+    const { executeToolCall } = await import("../../src/tools/execution.ts");
+
+    try {
+      // When / Then
+      await expect(
+        executeToolCall({
+          workspace,
+          toolCall: {
+            id: "glob_1",
+            tool: "glob",
+            pattern: "**/*.ts",
+          },
+          signal: new AbortController().signal,
+          allowBash: false,
+        }),
+      ).rejects.toMatchObject({
+        code: "EMFILE",
+        message: "spawn /test/rg EMFILE",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 });
