@@ -14,6 +14,27 @@ Detailed engineering guidance for Keel. `AGENTS.md` and `CLAUDE.md` stay short b
 - In review, any `JSON.parse`, process output parsing, HTTP response parsing, or LLM argument parsing must show the schema boundary in the same module.
 - The pre-commit hook auto-formats staged files.
 
+## Pre-Release Compatibility
+
+Keel is not released yet. Prefer clean product model changes over compatibility
+shims for old internal data, unfinished CLI shapes, or draft schemas.
+
+Allowed breaking changes:
+
+- session ledger and snapshot records
+- report and eval JSON schemas
+- provider/model config structure
+- CLI command syntax that has not shipped in a release
+- internal module APIs and type shapes
+
+Do not break these invariants:
+
+- each merged slice must leave a runnable user entrypoint
+- workspace, permission, approval, and provider-visibility safety boundaries must
+  stay explicit and tested
+- destructive or security-sensitive behavior still needs BDD coverage at the
+  owning boundary
+
 ## Safety Boundary Discipline
 
 When code normalizes, resolves, parses, or transforms untrusted input before enforcing a policy, preserve every representation that can carry authorization meaning.

@@ -5,6 +5,13 @@
 north-star claim falsifiable: a change to the harness is good if and only
 if the numbers say so.
 
+Keel is pre-release, so eval work should support product work rather than
+replace it. Add or update eval tasks when fixing a real failure, preserving a
+regression, or validating a harness change. Do not choose standalone corpus
+growth ahead of unresolved daily-use gaps in interactive UX, provider/model
+switching, context reliability, edit reliability, session workflow, or approval
+ergonomics.
+
 ## How to run
 
 ```bash
@@ -185,11 +192,12 @@ analysis, SQL optimization, security filter bypass, and legacy data
 modernization), but they are still keel-native seed tasks rather than an
 official Terminal-Bench score.
 
-Grow the suite from real daily-use tasks: when keel fails or annoys you
-in real work, distill that session into a task directory. Once a task is
-accepted into the baseline, freeze its prompt and verifier before
-reporting trial results; if a later run exposes a task bug, fix the task
-and treat prior scores for that task version as invalid.
+Grow the suite from real daily-use tasks when doing the related product work:
+when keel fails or annoys you in real work, preserve the failure evidence and
+distill the failure mechanism into a task directory. Once a task is accepted
+into the baseline, freeze its prompt and verifier before reporting trial
+results; if a later run exposes a task bug, fix the task and treat prior scores
+for that task version as invalid.
 
 ## What this is not (yet)
 

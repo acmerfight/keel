@@ -41,6 +41,10 @@ Layer rules are enforced by `tests/invariants/boundaries.test.ts`:
 
 Build user-runnable vertical slices. After each PR, a user should be able to run a command and observe the improvement; avoid shipping only internal architecture unless it directly unlocks the slice.
 
+Keel is pre-release. Prefer clean breaking changes over compatibility shims for old internal schemas or unfinished command shapes, while keeping each slice runnable and preserving safety boundaries.
+
+Prioritize foundational usability before expansion. Interactive/provider/model/context/edit/session/approval gaps come before standalone eval-corpus work, marketplaces, MCP, IDE integration, or sub-agents. Add eval tasks when they are tied to a real product fix or preserved failure.
+
 Test behavior before implementation. Start with a failing GWTE test at the boundary that owns the risk, then make the smallest product change that passes it.
 
 Keep safety boundaries explicit. Preserve every representation that can carry authorization meaning, validate both requested and resolved paths before acting, and parse external data through schemas before business logic.

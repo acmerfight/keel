@@ -11,6 +11,11 @@ How to slice work in this project. Every task, feature, and iteration follows th
 4. **Build on the existing working system.** Do not rewrite or replace what already works.
 5. **Before opening a PR, verify:** can someone run the result and see it do something? If no, the slice is not done.
 
+Pre-release priority: choose foundational usability before measurement or
+expansion. If interactive use, provider/model selection, context safety, editing,
+session workflow, or approval behavior still blocks daily coding, do that before
+standalone eval-corpus growth, marketplaces, MCP, IDE integration, or sub-agents.
+
 ## The Rule
 
 Each deliverable is a vertical slice: a user can run it end-to-end and get a result. If a user can't use what you shipped, you shipped nothing.
