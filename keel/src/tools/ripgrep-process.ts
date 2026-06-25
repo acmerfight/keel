@@ -5,6 +5,12 @@ import { resolveRipgrep } from "./ripgrep.ts";
 
 const RIPGREP_KILL_GRACE_MS = 1_000;
 
+type RecoverableRipgrepStartErrorCode =
+  | "ENOENT"
+  | "EACCES"
+  | "EPERM"
+  | "EAGAIN";
+
 export interface RipgrepProcessOptions {
   readonly toolName: "grep" | "glob";
   readonly workspacePath: string;
@@ -17,6 +23,45 @@ export interface RipgrepProcessOptions {
 export interface RipgrepProcessResult {
   readonly code: number | null;
   readonly stderr: string;
+}
+
+function recoverableRipgrepStartErrorCode(
+  error: NodeJS.ErrnoException,
+): RecoverableRipgrepStartErrorCode | null {
+  if (
+    error.code === "ENOENT" ||
+    error.code === "EACCES" ||
+    error.code === "EPERM" ||
+    error.code === "EAGAIN"
+  ) {
+    return error.code;
+  }
+  return null;
+}
+
+function isAbortError(error: NodeJS.ErrnoException): boolean {
+  return error.name === "AbortError" || error.code === "ABORT_ERR";
+}
+
+function ripgrepStartRecovery(code: RecoverableRipgrepStartErrorCode): string {
+  if (code === "EAGAIN") {
+    return "The system could not start ripgrep because process resources are temporarily exhausted. Use ls/read with known paths, narrow the search, or retry after freeing system resources.";
+  }
+  if (code === "ENOENT") {
+    return "The bundled ripgrep binary disappeared after validation. Use ls/read with known paths, or ask the user to run keel --doctor and reinstall dependencies before searching again.";
+  }
+  return "The bundled ripgrep binary is not executable. Use ls/read with known paths, or ask the user to restore execute permissions and run keel --doctor before searching again.";
+}
+
+function ripgrepStartError(
+  options: RipgrepProcessOptions,
+  code: RecoverableRipgrepStartErrorCode,
+): KeelError {
+  return new KeelError(
+    "tool_search_unavailable",
+    `${options.toolName} failed: ripgrep could not start (${code})`,
+    ripgrepStartRecovery(code),
+  );
 }
 
 export async function runRipgrepProcess(
@@ -93,10 +138,18 @@ export async function runRipgrepProcess(
       stderr += chunk.toString();
     });
 
-    /* v8 ignore next 6: resolveRipgrep validates the binary before spawn; this only handles OS races. */
     child.on("error", (error: NodeJS.ErrnoException) => {
       cleanup();
       settle(() => {
+        if (isAbortError(error)) {
+          rejectResult(error);
+          return;
+        }
+        const code = recoverableRipgrepStartErrorCode(error);
+        if (code !== null) {
+          rejectResult(ripgrepStartError(options, code));
+          return;
+        }
         rejectResult(error);
       });
     });
