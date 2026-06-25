@@ -24,7 +24,7 @@ interface FsOverrides {
     path: PathLike,
   ) => ReturnType<typeof import("node:fs").lstatSync>;
   readonly linkSync?: FsModule["linkSync"];
-  readonly mkdirSync?: (path: PathLike) => void;
+  readonly mkdirSync?: FsModule["mkdirSync"];
   readonly openSync?: FsModule["openSync"];
   readonly realpathSync?: (path: PathLike) => string;
   readonly rmSync?: FsModule["rmSync"];
@@ -166,6 +166,148 @@ describe("Write Tool Race Handling", () => {
       expect(() =>
         executeWrite(workspace, "nested/io.txt", "content\n"),
       ).toThrow(originalError);
+    });
+  });
+
+  test(`Given a missing write parent segment is swapped to an outside symlink during parent creation,
+    When the write tool creates the nested parent,
+    Then it rejects without creating outside directories, files, temp files, or checkpoint`, async () => {
+    const workspace = await createGitWorkspace("keel-write-parent-race-");
+    const checkpoint = await checkpointPath(workspace);
+    const outside = await mkdtemp(join(tmpdir(), "keel-write-parent-outside-"));
+    const targetPath = join(workspace, "race", "nested", "new.txt");
+    const outsideNestedPath = join(outside, "nested");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let swapped = false;
+    const originalCwd = process.cwd();
+    const { executeWrite } = await importWriteWithFs({
+      mkdirSync: (path, options) => {
+        const pathText = String(path);
+        if (
+          !swapped &&
+          (pathText === "race" || pathText.endsWith(join("race", "nested")))
+        ) {
+          swapped = true;
+          actualFs.symlinkSync(outside, join(workspace, "race"), "dir");
+        }
+        return actualFs.mkdirSync(path, options);
+      },
+    });
+
+    try {
+      // When / Then
+      expectWriteError(
+        () => executeWrite(workspace, "race/nested/new.txt", "content\n"),
+        "tool_path_outside_workspace",
+        "outside the workspace",
+      );
+      expect(process.cwd()).toBe(originalCwd);
+      expect(swapped).toBe(true);
+      expect(await pathExists(outsideNestedPath)).toBe(false);
+      expect(await pathExists(join(outsideNestedPath, "new.txt"))).toBe(false);
+      expect(await pathExists(targetPath)).toBe(false);
+      expect(await pathExists(checkpoint)).toBe(false);
+      expect(await readdir(outside)).toEqual(
+        expect.not.arrayContaining([expect.stringContaining(".keel-write-")]),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a missing write parent segment becomes a regular file during parent creation,
+    When the write tool enters the created parent,
+    Then it reports a recoverable not-directory error`, async () => {
+    const workspace = await createGitWorkspace("keel-write-parent-file-race-");
+    const parentPath = join(workspace, "race");
+    const targetPath = join(parentPath, "nested", "new.txt");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let raced = false;
+    const { executeWrite } = await importWriteWithFs({
+      mkdirSync: (path, options) => {
+        const pathText = String(path);
+        if (
+          !raced &&
+          (pathText === "race" || pathText.endsWith(join("race", "nested")))
+        ) {
+          raced = true;
+          actualFs.writeFileSync(parentPath, "not a directory\n", "utf8");
+        }
+        return actualFs.mkdirSync(path, options);
+      },
+    });
+
+    try {
+      // When / Then
+      expectWriteError(
+        () => executeWrite(workspace, "race/nested/new.txt", "content\n"),
+        "tool_not_directory",
+        "parent path is not a directory",
+      );
+      expect(raced).toBe(true);
+      expect(await readFile(parentPath, "utf8")).toBe("not a directory\n");
+      expect(await pathExists(targetPath)).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given parent segment lookup fails unexpectedly during parent creation,
+    When the write tool checks the next parent segment,
+    Then it preserves the original terminal error`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const originalError = errno("EIO");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const { executeWrite } = await importWriteWithFs({
+        lstatSync: (path) => {
+          if (String(path) === "race") throw originalError;
+          return actualFs.lstatSync(path);
+        },
+      });
+
+      // When / Then
+      expect(() =>
+        executeWrite(workspace, "race/new.txt", "content\n"),
+      ).toThrow(originalError);
+    });
+  });
+
+  test(`Given a created parent directory loses search permission before entry,
+    When the write tool enters that parent,
+    Then it preserves the original terminal error`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const parentPath = join(workspace, "race");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      let restricted = false;
+      const { executeWrite } = await importWriteWithFs({
+        mkdirSync: (path, options) => {
+          const result = actualFs.mkdirSync(path, options);
+          const pathText = String(path);
+          if (!restricted && pathText.endsWith("race")) {
+            restricted = true;
+            actualFs.chmodSync(parentPath, 0);
+          }
+          return result;
+        },
+      });
+
+      try {
+        // When / Then
+        try {
+          executeWrite(workspace, "race/new.txt", "content\n");
+          throw new Error("Expected write tool to throw");
+        } catch (error) {
+          expect(error).toMatchObject({ code: "EACCES" });
+        }
+        expect(restricted).toBe(true);
+      } finally {
+        actualFs.chmodSync(parentPath, 0o700);
+      }
     });
   });
 
