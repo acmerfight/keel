@@ -21,6 +21,13 @@ interface InputTokenTieredCostModel {
 
 export type CostModel = FixedCostModel | InputTokenTieredCostModel;
 
+export const ZERO_COST_MODEL: CostModel = {
+  type: "fixed",
+  uncachedInputPerMillionTokens: 0,
+  cachedInputPerMillionTokens: 0,
+  outputPerMillionTokens: 0,
+};
+
 interface RequestCostInput {
   readonly usage: Usage;
 }

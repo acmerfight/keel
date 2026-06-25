@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import type { Server } from "node:net";
 import { describe, expect, test, vi } from "vitest";
 import {
+  capabilityNames,
   readProviderModelsDiagnostic,
   runDoctor,
 } from "../../src/cli/doctor.ts";
@@ -89,6 +90,20 @@ function close(server: Server): Promise<void> {
 }
 
 describe("CLI Doctor", () => {
+  test(`Given model metadata has no advertised capabilities,
+    When doctor formats the capability list,
+    Then it reports none`, () => {
+    // Given / When
+    const formatted = capabilityNames({
+      textInput: false,
+      toolCalls: false,
+      reasoning: false,
+    });
+
+    // Then
+    expect(formatted).toBe("none");
+  });
+
   test(`Given Qwen is selected by doctor flags,
     When user runs the offline doctor command,
     Then the CLI reports the selected provider config without calling the provider`, async () => {
@@ -711,7 +726,12 @@ describe("CLI Doctor", () => {
       "base url: https://api.deepseek.com (source: default)",
     );
     expect(result.stdout).toContain(
-      "context window: 256000 tokens (source: default)",
+      "context window: 1000000 tokens (source: registry)",
+    );
+    expect(result.stdout).toContain("model metadata: registry");
+    expect(result.stdout).toContain("max output: 384000 tokens");
+    expect(result.stdout).toContain(
+      "model capabilities: text-input, tool-calls, reasoning",
     );
     expect(result.stdout).toContain("cost model: known");
     expect(result.stdout).toContain("provider auth: skipped (missing API key)");

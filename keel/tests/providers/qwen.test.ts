@@ -2,10 +2,7 @@ import { createServer, type ServerResponse } from "node:http";
 import type { Server } from "node:net";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { z } from "zod";
-import {
-  createQwenProvider,
-  qwenCostModel,
-} from "../../src/llm/providers/qwen.ts";
+import { createQwenProvider } from "../../src/llm/providers/qwen.ts";
 import type { LLMEvent } from "../../src/llm/types.ts";
 
 function getPort(server: Server): number {
@@ -669,55 +666,5 @@ describe("Qwen Provider", () => {
       code: "provider_protocol_error",
       message: "Qwen stream chunk has invalid schema",
     });
-  });
-
-  test(`Given Qwen cost tracking is requested,
-    When the configured model is selected,
-    Then known fixed and tiered models return cost models`, () => {
-    // Given / When / Then
-    expect(qwenCostModel("qwen3.7-max")).toMatchObject({
-      type: "fixed",
-      uncachedInputPerMillionTokens: 2.5,
-      cachedInputPerMillionTokens: 0.25,
-      outputPerMillionTokens: 7.5,
-    });
-    expect(qwenCostModel("qwen3.7-plus")).toEqual({
-      type: "input-token-tiers",
-      tiers: [
-        {
-          startsAboveInputTokens: 0,
-          uncachedInputPerMillionTokens: 0.4,
-          cachedInputPerMillionTokens: 0.08,
-          outputPerMillionTokens: 1.6,
-        },
-        {
-          startsAboveInputTokens: 256_000,
-          uncachedInputPerMillionTokens: 1.2,
-          cachedInputPerMillionTokens: 0.24,
-          outputPerMillionTokens: 4.8,
-        },
-      ],
-    });
-    expect(qwenCostModel("qwen3.6-flash")).toEqual({
-      type: "input-token-tiers",
-      tiers: [
-        {
-          startsAboveInputTokens: 0,
-          uncachedInputPerMillionTokens: 0.25,
-          cachedInputPerMillionTokens: 0.05,
-          outputPerMillionTokens: 1.5,
-        },
-        {
-          startsAboveInputTokens: 256_000,
-          uncachedInputPerMillionTokens: 1,
-          cachedInputPerMillionTokens: 0.2,
-          outputPerMillionTokens: 4,
-        },
-      ],
-    });
-    expect(qwenCostModel("qwen3.6-flash-2026-04-16")).toEqual(
-      qwenCostModel("qwen3.6-flash"),
-    );
-    expect(qwenCostModel("qwen-unknown")).toBeNull();
   });
 });
