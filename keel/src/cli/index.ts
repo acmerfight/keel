@@ -54,6 +54,7 @@ import {
   type SessionQueuedInput,
   type SessionState,
   SessionStoreError,
+  type SessionStoreRuntime,
   sessionStoredMessages,
 } from "./session-store.ts";
 import { writeRunTranscript } from "./transcript.ts";
@@ -62,14 +63,12 @@ interface CliInput extends NodeJS.ReadableStream {
   readonly isTTY?: boolean;
 }
 
-export interface CliRuntime {
+export interface CliRuntime extends SessionStoreRuntime {
   readonly args: readonly string[];
   readonly cliEntry: string;
   readonly cwd: () => string;
-  readonly env: (key: string) => string | undefined;
   readonly input: CliInput;
   readonly platform: NodeJS.Platform;
-  readonly now: () => number;
   readonly writeStdout: (text: string) => void;
   readonly writeStderr: (text: string) => void;
   readonly onSigint: (handler: () => void) => void;
