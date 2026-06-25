@@ -1,5 +1,5 @@
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
-import { KeelError } from "../core/error.ts";
+import { isRecoverableToolErrorCode, KeelError } from "../core/error.ts";
 import {
   type RecordLastBatchCheckpointOperation,
   recordLastTaskCheckpoint,
@@ -17,6 +17,10 @@ import {
   normalizeProviderToolCall,
   toolCallConcurrency,
 } from "../tools/registry.ts";
+import {
+  createProjectInstructionVisibilityState,
+  type ProjectInstructionVisibilityState,
+} from "../tools/scoped-project-instructions.ts";
 import {
   type CompactMessagesResult,
   type ContextCompactionAccountingSnapshot,
@@ -121,6 +125,7 @@ export interface RunAgentTurnOptions {
   readonly bashPermission?: BashPermissionPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly readVisibility?: ReadVisibilityState;
+  readonly projectInstructionVisibility?: ProjectInstructionVisibilityState;
   readonly recordCheckpointOperations?: (
     operations: readonly RecordLastBatchCheckpointOperation[],
   ) => void;
@@ -225,6 +230,34 @@ export function createReadVisibilityState(): ReadVisibilityState {
 
 export function clearReadVisibilityState(state: ReadVisibilityState): void {
   state.clear();
+}
+
+function mutatedTargetPathsFromExecution(
+  execution: ToolExecution,
+): readonly string[] {
+  if (!execution.ok) {
+    return [];
+  }
+  const targetPaths: string[] = [];
+  if (execution.mutatedTargetPath !== undefined) {
+    targetPaths.push(execution.mutatedTargetPath);
+  }
+  if (execution.mutatedTargetPaths !== undefined) {
+    targetPaths.push(...execution.mutatedTargetPaths);
+  }
+  return targetPaths;
+}
+
+function publishVisibleProjectInstructions(
+  state: ProjectInstructionVisibilityState,
+  executions: readonly ToolExecution[],
+): void {
+  for (const execution of executions) {
+    if (execution.visibleProjectInstructionPaths === undefined) {
+      continue;
+    }
+    state.markInstructionPathsVisible(execution.visibleProjectInstructionPaths);
+  }
 }
 
 function addUsage(left: Usage, right: Usage): Usage {
@@ -549,19 +582,81 @@ interface RestoredPostCompactionRead {
   readonly complete: boolean;
 }
 
+interface RestoredPostCompactionProjectInstructions {
+  readonly toolCall: ToolCall;
+  readonly instructionPaths: readonly string[];
+  readonly content: string;
+  readonly complete: boolean;
+}
+
+function shouldSkipProjectInstructionRestore(error: unknown): boolean {
+  return error instanceof KeelError && isRecoverableToolErrorCode(error.code);
+}
+
 export async function restorePostCompactionReads(options: {
   readonly workspace: string;
   readonly signal: AbortSignal;
   readonly readVisibility: ReadVisibilityState;
+  readonly projectInstructionVisibility: ProjectInstructionVisibilityState;
   readonly messages: Message[];
   readonly nextToolCallId: () => string;
 }): Promise<void> {
   const targetPaths = options.readVisibility
     .visibleReadsMostRecentFirst()
     .slice(0, POST_COMPACTION_MAX_RESTORED_FILES);
+  const projectInstructionSnapshots =
+    options.projectInstructionVisibility.visibleInstructionsMostRecentFirst();
   clearReadVisibilityState(options.readVisibility);
+  options.projectInstructionVisibility.clear();
+  const restoredProjectInstructions: RestoredPostCompactionProjectInstructions[] =
+    [];
   const restored: RestoredPostCompactionRead[] = [];
   let totalChars = 0;
+
+  for (const snapshot of projectInstructionSnapshots) {
+    const remainingTotalChars = POST_COMPACTION_MAX_TOTAL_CHARS - totalChars;
+    if (remainingTotalChars <= 0) {
+      break;
+    }
+    let output: ReturnType<
+      ProjectInstructionVisibilityState["formatRestoreOutput"]
+    >;
+    try {
+      output =
+        options.projectInstructionVisibility.formatRestoreOutput(snapshot);
+    } catch (error) {
+      /* v8 ignore next 3: recoverable AGENTS.md reload failures are covered; unexpected restore failures must still abort the turn. */
+      if (!shouldSkipProjectInstructionRestore(error)) {
+        throw error;
+      }
+      continue;
+    }
+    if (output === null) {
+      continue;
+    }
+    const fittedContent = fitPostCompactionReadContent(
+      output.content,
+      Math.min(POST_COMPACTION_MAX_FILE_CHARS, remainingTotalChars),
+    );
+    totalChars += fittedContent.content.length;
+    restoredProjectInstructions.push({
+      toolCall: {
+        id: options.nextToolCallId(),
+        tool: "read",
+        path: snapshot.relativePath,
+      },
+      instructionPaths: output.instructionPaths,
+      content: fittedContent.content,
+      complete: fittedContent.complete,
+    });
+  }
+  for (const instruction of restoredProjectInstructions) {
+    if (instruction.complete) {
+      options.projectInstructionVisibility.markInstructionPathsVisible(
+        instruction.instructionPaths,
+      );
+    }
+  }
 
   for (const read of targetPaths) {
     const remainingTotalChars = POST_COMPACTION_MAX_TOTAL_CHARS - totalChars;
@@ -580,6 +675,7 @@ export async function restorePostCompactionReads(options: {
       toolCall,
       signal: options.signal,
       allowBash: false,
+      projectInstructions: options.projectInstructionVisibility,
     });
     if (!execution.ok || execution.readTargetPath === undefined) {
       continue;
@@ -597,15 +693,25 @@ export async function restorePostCompactionReads(options: {
     });
   }
 
-  if (restored.length === 0) {
+  if (restoredProjectInstructions.length === 0 && restored.length === 0) {
     return;
   }
 
   options.messages.push({
     role: "assistant",
     content: "",
-    toolCalls: restored.map((read) => read.toolCall),
+    toolCalls: [
+      ...restoredProjectInstructions.map((instruction) => instruction.toolCall),
+      ...restored.map((read) => read.toolCall),
+    ],
   });
+  for (const instruction of restoredProjectInstructions) {
+    options.messages.push({
+      role: "tool",
+      toolCallId: instruction.toolCall.id,
+      content: instruction.content,
+    });
+  }
   for (const read of restored) {
     options.messages.push({
       role: "tool",
@@ -614,6 +720,10 @@ export async function restorePostCompactionReads(options: {
     });
   }
   options.readVisibility.applyVisibleToolExecutions(
+    restored.filter((read) => read.complete).map((read) => read.execution),
+  );
+  publishVisibleProjectInstructions(
+    options.projectInstructionVisibility,
     restored.filter((read) => read.complete).map((read) => read.execution),
   );
 }
@@ -766,6 +876,9 @@ export async function* runAgentTurn(
     projectSessionLedgerToProviderMessages(sessionLedger);
   const priorToolCalls = priorToolCallsFromMessages(providerMessages);
   const readVisibility = options.readVisibility ?? createReadVisibilityState();
+  const projectInstructionVisibility =
+    options.projectInstructionVisibility ??
+    createProjectInstructionVisibilityState(workspace);
   let postCompactionReadSequence = 0;
   const config: CompactionConfig = {
     provider,
@@ -778,6 +891,7 @@ export async function* runAgentTurn(
         workspace,
         signal,
         readVisibility,
+        projectInstructionVisibility,
         messages: targetMessages,
         nextToolCallId: () =>
           `post_compaction_read_${postCompactionReadSequence++}`,
@@ -896,6 +1010,7 @@ export async function* runAgentTurn(
         readBeforeEdit: {
           hasRead: readVisibility.hasRead,
         },
+        projectInstructions: projectInstructionVisibility,
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
 
@@ -938,6 +1053,9 @@ export async function* runAgentTurn(
           yield { type: "tool_end", toolCall, ok: execution.ok };
           recordToolExecution(toolCall, execution);
           readVisibility.applyImmediateMutation(execution);
+          projectInstructionVisibility.applyMutationTargetPaths(
+            mutatedTargetPathsFromExecution(execution),
+          );
           completedToolExecutions.push(execution);
         }
       } else {
@@ -947,10 +1065,17 @@ export async function* runAgentTurn(
         yield { type: "tool_end", toolCall, ok: execution.ok };
         recordToolExecution(toolCall, execution);
         readVisibility.applyImmediateMutation(execution);
+        projectInstructionVisibility.applyMutationTargetPaths(
+          mutatedTargetPathsFromExecution(execution),
+        );
         completedToolExecutions.push(execution);
       }
     }
     readVisibility.applyVisibleToolExecutions(completedToolExecutions);
+    publishVisibleProjectInstructions(
+      projectInstructionVisibility,
+      completedToolExecutions,
+    );
 
     if (drainInjectedUserMessages !== undefined && !signal.aborted) {
       applySessionLedger(
@@ -968,6 +1093,9 @@ export async function* runAgent(
 ): AsyncGenerator<AgentEvent> {
   const messages: Message[] = [{ role: "user", content: options.userMessage }];
   const readVisibility = createReadVisibilityState();
+  const projectInstructionVisibility = createProjectInstructionVisibilityState(
+    options.workspace,
+  );
   const checkpointOperations: RecordLastBatchCheckpointOperation[] = [];
   try {
     yield* runAgentTurn({
@@ -979,6 +1107,7 @@ export async function* runAgent(
       allowBash: options.allowBash,
       stopPolicy: options.stopPolicy,
       readVisibility,
+      projectInstructionVisibility,
       recordCheckpointOperations: (operations) => {
         checkpointOperations.push(...operations);
       },

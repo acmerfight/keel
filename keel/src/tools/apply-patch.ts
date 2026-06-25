@@ -12,6 +12,7 @@ import {
 } from "./atomic-write.ts";
 import { type EditMatchSpan, locateUniqueEditSpan } from "./edit-match.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
+import type { ProjectInstructionVisibilityState } from "./scoped-project-instructions.ts";
 import { readEditableTextFileWithMetadata } from "./text-file.ts";
 import type { ToolResult } from "./types.ts";
 import {
@@ -31,6 +32,7 @@ interface ExecuteApplyPatchOptions {
   readonly readBeforeEdit?: {
     readonly hasRead: (targetPath: string) => boolean;
   };
+  readonly projectInstructions?: ProjectInstructionVisibilityState;
 }
 
 interface ApplyPatchToolResult extends ToolResult {
@@ -66,6 +68,7 @@ type PreparedPatchOperation =
       readonly path: string;
       readonly workspacePath: string;
       readonly targetPath: string;
+      readonly resolvedTargetPath: string;
       readonly parentPath: string;
       readonly afterContent: string;
     }
@@ -589,16 +592,26 @@ function prepareAddOperation(
   workspace: string,
   operation: Extract<ParsedPatchOperation, { readonly kind: "add" }>,
 ): PreparedPatchOperation {
-  const { workspacePath, targetPath, parentPath } =
+  const { workspacePath, targetPath, resolvedTargetPath, parentPath } =
     resolveWorkspaceCreateTarget(workspace, operation.path, "apply_patch");
   return {
     kind: "add",
     path: operation.path,
     workspacePath,
     targetPath,
+    resolvedTargetPath,
     parentPath,
     afterContent: addFileContent(operation.lines),
   };
+}
+
+function preparedMutationTargetPaths(
+  operation: PreparedPatchOperation,
+): readonly string[] {
+  if (operation.kind === "add") {
+    return [operation.targetPath, operation.resolvedTargetPath];
+  }
+  return [operation.targetPath];
 }
 
 function preparePatchOperations(
@@ -621,6 +634,16 @@ function preparePatchOperations(
       );
     }
     targetPaths.add(next.targetPath);
+    if (next.kind === "add" && next.resolvedTargetPath !== next.targetPath) {
+      if (targetPaths.has(next.resolvedTargetPath)) {
+        throw patchError(
+          "tool_invalid_patch",
+          `apply_patch failed: multiple operations target ${operation.path}`,
+          "Combine changes for the same file into one patch operation.",
+        );
+      }
+      targetPaths.add(next.resolvedTargetPath);
+    }
     prepared.push(next);
   }
   return prepared;
@@ -734,6 +757,7 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
 
 function validateAddTargetAfterMkdir(
   operation: Extract<PreparedPatchOperation, { readonly kind: "add" }>,
+  projectInstructions: ProjectInstructionVisibilityState | undefined,
 ): string {
   const realTargetPath = resolveWorkspaceCreateTargetAtAccess({
     workspacePath: operation.workspacePath,
@@ -752,11 +776,13 @@ function validateAddTargetAfterMkdir(
       "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
     );
   }
+  projectInstructions?.assertMutationAllowed([realTargetPath]);
   return realTargetPath;
 }
 
 function applyPreparedOperation(
   operation: PreparedPatchOperation,
+  options: ExecuteApplyPatchOptions,
 ): AppliedPatchOperation {
   if (operation.kind === "add") {
     createWorkspaceParentDirectories({
@@ -765,9 +791,12 @@ function applyPreparedOperation(
       toolName: "apply_patch",
       requestedPath: operation.path,
     });
-    const realTargetPath = validateAddTargetAfterMkdir(operation);
+    const realTargetPath = validateAddTargetAfterMkdir(
+      operation,
+      options.projectInstructions,
+    );
     const validateTargetAtAccess = (): void => {
-      validateAddTargetAfterMkdir(operation);
+      validateAddTargetAfterMkdir(operation, options.projectInstructions);
     };
     const validateOpenedTempAtAccess = (tempPath: string, fd: number): void => {
       assertWorkspaceOpenTargetAtAccess({
@@ -800,6 +829,7 @@ function applyPreparedOperation(
           "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
         );
       }
+      options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
       publishedTargetPath = accessTargetPath;
     };
     let result: AtomicWriteResult;
@@ -971,11 +1001,14 @@ export function executeApplyPatch(
 ): ApplyPatchToolResult {
   const operations = parsePatch(patch);
   const prepared = preparePatchOperations(workspace, operations, options);
+  options.projectInstructions?.assertMutationAllowed(
+    prepared.flatMap(preparedMutationTargetPaths),
+  );
   const applied: AppliedPatchOperation[] = [];
   let checkpointOperations: readonly RecordLastBatchCheckpointOperation[];
   try {
     for (const operation of prepared) {
-      const appliedOperation = applyPreparedOperation(operation);
+      const appliedOperation = applyPreparedOperation(operation, options);
       applied.push(appliedOperation);
       applied[applied.length - 1] = verifyAppliedOperation(appliedOperation);
     }

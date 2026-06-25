@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -86,6 +86,155 @@ function withTimeout<T>(
       },
     );
   });
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await readFile(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function expectInterruptedTurnPreservesVisibleScopedInstructions(
+  abortOutcome: "stop" | "throw",
+): Promise<void> {
+  const workspace = await mkdtemp(
+    join(tmpdir(), "keel-interactive-scoped-previsible-abort-"),
+  );
+  await mkdir(join(workspace, "packages", "api", "src"), {
+    recursive: true,
+  });
+  await writeFile(
+    join(workspace, "packages", "api", "AGENTS.md"),
+    "API rule: pre-visible instructions survive abort rollback.\n",
+    "utf8",
+  );
+  const targetPath = join(workspace, "packages", "api", "src", "new.ts");
+  let request = 0;
+  let cancelSeen: () => void = () => {};
+  const cancelReceived = new Promise<void>((resolve) => {
+    cancelSeen = resolve;
+  });
+  const provider: LLMProvider = {
+    id: "fake",
+    async *stream(options) {
+      request++;
+      if (request === 1) {
+        yield {
+          type: "tool_call",
+          id: "review_scoped_instructions",
+          tool: "write",
+          path: "packages/api/src/new.ts",
+          content: "export const value = 1;\n",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        return;
+      }
+      if (request === 2) {
+        yield { type: "text", text: "Reviewed" };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        return;
+      }
+      if (request === 3) {
+        yield { type: "text", text: "Cancel me" };
+        if (!options.signal.aborted) {
+          await new Promise<void>((resolve) => {
+            options.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+        }
+        if (abortOutcome === "throw") {
+          throw new Error("provider ignored abort before throwing");
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        return;
+      }
+      if (request === 4) {
+        yield {
+          type: "tool_call",
+          id: "retry_scoped_write",
+          tool: "write",
+          path: "packages/api/src/new.ts",
+          content: "export const value = 1;\n",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        return;
+      }
+      yield { type: "text", text: "Created" };
+      yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+    },
+  };
+  const input = new PassThrough();
+  const sigintHandlers = new Set<() => void>();
+  let stdout = "";
+  const session = runInteractiveSession({
+    cliArgs: { bashMode: "disabled" },
+    workspace,
+    platform: process.platform,
+    input,
+    writeStdout: (text) => {
+      stdout += text;
+    },
+    writeStderr: () => {},
+    onSigint: (handler) => {
+      sigintHandlers.add(handler);
+    },
+    offSigint: (handler) => {
+      sigintHandlers.delete(handler);
+    },
+    setExitCode: () => {},
+    forceExit: (code) => {
+      throw new ForcedExit(code);
+    },
+    resolveProvider: () => ({
+      provider,
+      providerId: "fake",
+      model: "fake",
+      costModel: ZERO_COST_MODEL,
+    }),
+    requireKnownCostModel: () => ZERO_COST_MODEL,
+    printAgentEvents: async (stream) => {
+      let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+      for await (const event of stream) {
+        if (event.type === "text") {
+          stdout += event.text;
+          if (event.text === "Cancel me") {
+            cancelSeen();
+            for (const handler of [...sigintHandlers]) {
+              handler();
+            }
+            input.write("retry create\n");
+          }
+          if (event.text === "Created") {
+            input.end();
+          }
+        } else if (event.type === "end") {
+          finalEnd = event;
+        }
+      }
+      return finalEnd;
+    },
+    formatCostReport: () => "",
+  });
+
+  try {
+    input.write("review scoped instructions\n");
+    input.write("cancel next turn\n");
+    await withTimeout(cancelReceived, 5000, "interrupted turn did not run");
+    await withTimeout(session, 5000, "session did not finish");
+
+    expect(await readFile(targetPath, "utf8")).toBe(
+      "export const value = 1;\n",
+    );
+    expect(stdout).toContain("Reviewed");
+    expect(stdout).toContain("Cancel me");
+    expect(stdout).toContain("Created");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 }
 
 describe("Interactive Session", () => {
@@ -4710,6 +4859,336 @@ describe("Interactive Session", () => {
     await session;
     expect(stdout).toBe("Cancel me\nSecond done\n");
     expect(observedUserContexts).toEqual([["first prompt"], ["second prompt"]]);
+  });
+
+  test(`Given an interrupted interactive turn exposed scoped project instructions,
+    When the next prompt mutates the same scoped path,
+    Then the cancelled visibility is not reused`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-interactive-scoped-abort-"),
+    );
+    await mkdir(join(workspace, "packages", "api", "src"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(workspace, "packages", "api", "AGENTS.md"),
+      "API rule: retry writes must still review this after abort.\n",
+      "utf8",
+    );
+    const targetPath = join(workspace, "packages", "api", "src", "new.ts");
+    let request = 0;
+    let workingSeen: () => void = () => {};
+    const workingReceived = new Promise<void>((resolve) => {
+      workingSeen = resolve;
+    });
+    let finalMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        request++;
+        if (request === 1) {
+          yield {
+            type: "tool_call",
+            id: "initial_write",
+            tool: "write",
+            path: "packages/api/src/new.ts",
+            content: "export const value = 1;\n",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (request === 2) {
+          yield { type: "text", text: "Working" };
+          if (!options.signal.aborted) {
+            await new Promise<void>((resolve) => {
+              options.signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+          }
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (request === 3) {
+          yield {
+            type: "tool_call",
+            id: "retry_write",
+            tool: "write",
+            path: "packages/api/src/new.ts",
+            content: "export const value = 1;\n",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        finalMessages = options.messages;
+        yield { type: "text", text: "Still blocked." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+            if (event.text === "Working") {
+              workingSeen();
+              for (const handler of [...sigintHandlers]) {
+                handler();
+              }
+              input.write("retry create\n");
+            }
+            if (event.text === "Still blocked.") {
+              input.end();
+            }
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("create then cancel\n");
+      await withTimeout(workingReceived, 5000, "interrupted turn did not run");
+
+      // Then
+      await session;
+      const retryMessage = finalMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "retry_write",
+      );
+      expect(retryMessage?.content).toContain(
+        "Project instructions from packages/api/AGENTS.md",
+      );
+      expect(retryMessage?.content).toContain(
+        "API rule: retry writes must still review this after abort.",
+      );
+      expect(await fileExists(targetPath)).toBe(false);
+      expect(stdout).toBe("Working\nStill blocked.\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given scoped project instructions were visible before an interrupted turn stops,
+    When the next prompt mutates the same scoped path,
+    Then the pre-turn visibility is still available`, async () => {
+    await expectInterruptedTurnPreservesVisibleScopedInstructions("stop");
+  });
+
+  test(`Given scoped project instructions were visible before an interrupted turn throws,
+    When the next prompt mutates the same scoped path,
+    Then the pre-turn visibility is still available`, async () => {
+    await expectInterruptedTurnPreservesVisibleScopedInstructions("throw");
+  });
+
+  test(`Given multiple scoped project instructions were visible before an interrupted turn,
+    When the next prompt compacts context,
+    Then restored instruction visibility keeps most-recent-first order`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-interactive-scoped-order-abort-"),
+    );
+    await mkdir(join(workspace, "packages", "ui", "src"), { recursive: true });
+    await mkdir(join(workspace, "packages", "api", "src"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(workspace, "packages", "ui", "AGENTS.md"),
+      "UI rule: restored order keeps this second.\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "packages", "api", "AGENTS.md"),
+      "API rule: restored order keeps this first.\n",
+      "utf8",
+    );
+    let actualRequest = 0;
+    let receiveSetupReady: () => void = () => {};
+    let receiveCancelText: () => void = () => {};
+    const setupReady = new Promise<void>((resolve) => {
+      receiveSetupReady = resolve;
+    });
+    const cancelTextReceived = new Promise<void>((resolve) => {
+      receiveCancelText = resolve;
+    });
+    let postAbortMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Summary before retry." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        actualRequest++;
+        if (actualRequest === 1) {
+          yield {
+            type: "tool_call",
+            id: "ui_write",
+            tool: "write",
+            path: "packages/ui/src/new.ts",
+            content: "export const value = 1;\n",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (actualRequest === 2) {
+          yield {
+            type: "tool_call",
+            id: "api_write",
+            tool: "write",
+            path: "packages/api/src/new.ts",
+            content: "export const value = 1;\n",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (actualRequest === 3) {
+          yield { type: "text", text: "Setup ready" };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (actualRequest === 4) {
+          yield { type: "text", text: "Cancel me" };
+          if (!options.signal.aborted) {
+            await new Promise<void>((resolve) => {
+              options.signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+          }
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        postAbortMessages = structuredClone([...options.messages]);
+        yield { type: "text", text: "Done" };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: {
+          contextWindowTokens: 10_000,
+          reserveTokens: 0,
+          keepRecentTokens: 1,
+        },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+            if (event.text === "Setup ready") {
+              receiveSetupReady();
+            }
+            if (event.text === "Cancel me") {
+              receiveCancelText();
+            }
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("surface scoped instructions\n");
+      await withTimeout(setupReady, 5000, "scoped setup turn did not finish");
+      input.write("cancel turn\n");
+      await withTimeout(cancelTextReceived, 5000, "cancel turn did not start");
+      for (const handler of [...sigintHandlers]) {
+        handler();
+      }
+      input.write(`${"retry after abort ".repeat(4000)}\n`);
+      input.end();
+
+      // Then
+      await withTimeout(session, 5000, "session did not finish");
+      const restoredInstructionPaths = postAbortMessages
+        .flatMap((message) =>
+          message.role === "assistant" ? message.toolCalls : [],
+        )
+        .filter(
+          (toolCall) =>
+            toolCall.tool === "read" &&
+            "path" in toolCall &&
+            typeof toolCall.path === "string" &&
+            toolCall.path.endsWith("/AGENTS.md"),
+        )
+        .map((toolCall) => ("path" in toolCall ? toolCall.path : ""));
+      expect(restoredInstructionPaths).toEqual([
+        "packages/api/AGENTS.md",
+        "packages/ui/AGENTS.md",
+      ]);
+      expect(stdout).toContain("Setup ready");
+      expect(stdout).toContain("Cancel me");
+      expect(stdout).toContain("Done");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test(`Given an interactive turn compacts context before it is interrupted,
