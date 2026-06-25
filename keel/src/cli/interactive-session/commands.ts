@@ -1,5 +1,7 @@
 import { errorMessage } from "../../core/error.ts";
+import { isProviderId } from "../../core/provider-id.ts";
 import { sanitizeStatusLineText } from "../output.ts";
+import type { ProviderSelection } from "../provider-config.ts";
 
 interface HelpCommand {
   readonly kind: "help";
@@ -12,6 +14,11 @@ interface UndoCommand {
 export interface ManualCompactCommand {
   readonly kind: "compact";
   readonly focusInstruction?: string;
+}
+
+interface ModelCommand {
+  readonly kind: "model";
+  readonly selection?: ProviderSelection;
 }
 
 interface ForkCommand {
@@ -33,6 +40,7 @@ interface InvalidInteractiveCommand {
 export type InteractiveCommand =
   | HelpCommand
   | UndoCommand
+  | ModelCommand
   | ManualCompactCommand
   | ForkPointsCommand
   | ForkCommand
@@ -47,6 +55,9 @@ export function formatInteractiveHelp(): string {
     "Interactive commands:",
     "  /help              Show this help.",
     "  /undo              Restore the last edit checkpoint.",
+    "  /model             Show the active provider/model.",
+    "  /model <provider>/<model>",
+    "                     Switch the active provider/model for later prompts.",
     "  /compact [focus]   Summarize older conversation context with optional focus.",
     "  /fork <target-id> [--before-message <id>]",
     "                     Fork this named or resumed session without switching to it.",
@@ -70,6 +81,42 @@ export function formatInteractiveHelp(): string {
     "  Ctrl-C             Interrupt the active turn or exit while idle.",
     "",
   ].join("\n");
+}
+
+function parseModelCommandArgs(
+  rawArgs: string | undefined,
+): ModelCommand | InvalidInteractiveCommand {
+  const target = rawArgs?.trim() ?? "";
+  if (target === "") {
+    return { kind: "model" };
+  }
+  if (/\s/u.test(target)) {
+    return {
+      kind: "invalid",
+      message: "Error: usage is /model <provider>/<model>.",
+    };
+  }
+  const slashIndex = target.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === target.length - 1) {
+    return {
+      kind: "invalid",
+      message: "Error: usage is /model <provider>/<model>.",
+    };
+  }
+  const providerId = target.slice(0, slashIndex);
+  if (!isProviderId(providerId)) {
+    return {
+      kind: "invalid",
+      message: `Error: unknown provider "${providerId}".`,
+    };
+  }
+  return {
+    kind: "model",
+    selection: {
+      providerId,
+      model: target.slice(slashIndex + 1),
+    },
+  };
 }
 
 function parseForkBeforeMessage(raw: string | undefined): ParseResult<string> {
@@ -175,6 +222,11 @@ export function parseInteractiveCommand(
       };
     }
     return { kind: "undo" };
+  }
+
+  const modelMatch = /^\/model(?:\s+(.*))?$/u.exec(trimmed);
+  if (modelMatch !== null) {
+    return parseModelCommandArgs(modelMatch[1]);
   }
 
   const forkPointsMatch = /^\/fork-points(?:\s+(.*))?$/u.exec(trimmed);

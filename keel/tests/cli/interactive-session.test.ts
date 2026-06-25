@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
+import type { ContextCompactionOptions } from "../../src/agent/context-compaction.ts";
 import type { AgentEvent } from "../../src/agent/loop.ts";
+import { parseInteractiveCommand } from "../../src/cli/interactive-session/commands.ts";
+import type {
+  InteractiveResolvedProvider,
+  ProviderSelection,
+} from "../../src/cli/interactive-session/types.ts";
 import { runInteractiveSession } from "../../src/cli/interactive-session.ts";
 import {
   createSessionStore,
@@ -17,6 +23,7 @@ import {
 } from "../../src/cli/session-store.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import { recordLastEditCheckpoint } from "../../src/core/git.ts";
+import type { ProviderId } from "../../src/core/provider-id.ts";
 import {
   createFakeProvider,
   fakeResponse,
@@ -86,6 +93,59 @@ function withTimeout<T>(
       },
     );
   });
+}
+
+function textProvider(text: string): LLMProvider {
+  return {
+    id: "fake",
+    async *stream() {
+      yield { type: "text", text };
+      yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+    },
+  };
+}
+
+function resolvedProvider(
+  providerId: ProviderId,
+  model: string,
+  provider: LLMProvider,
+  costModel: CostModel | null = ZERO_COST_MODEL,
+  contextCompaction?: ContextCompactionOptions,
+): InteractiveResolvedProvider {
+  switch (providerId) {
+    case "fake":
+      return {
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        ...(contextCompaction !== undefined ? { contextCompaction } : {}),
+      };
+    case "deepseek":
+      return {
+        provider,
+        providerId: "deepseek",
+        model,
+        costModel,
+        ...(contextCompaction !== undefined ? { contextCompaction } : {}),
+      };
+    case "kimi":
+      return {
+        provider,
+        providerId: "kimi",
+        model,
+        costModel,
+        ...(contextCompaction !== undefined ? { contextCompaction } : {}),
+      };
+    case "qwen":
+      return {
+        provider,
+        providerId: "qwen",
+        model,
+        costModel,
+        ...(contextCompaction !== undefined ? { contextCompaction } : {}),
+      };
+  }
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -341,6 +401,593 @@ describe("Interactive Session", () => {
     expect(stdout).toContain("keel sessions fork");
     expect(stderr).toBe("");
     expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given user enters /model command variants,
+    When the interactive parser handles valid and invalid model selections,
+    Then it accepts supported provider/model targets and rejects malformed input`, () => {
+    // Given / When / Then
+    expect(parseInteractiveCommand("/model deepseek/deepseek-v4")).toEqual({
+      kind: "model",
+      selection: { providerId: "deepseek", model: "deepseek-v4" },
+    });
+    expect(parseInteractiveCommand("/model qwen/qwen3.7 plus")).toEqual({
+      kind: "invalid",
+      message: "Error: usage is /model <provider>/<model>.",
+    });
+    expect(parseInteractiveCommand("/model /qwen3.7-plus")).toEqual({
+      kind: "invalid",
+      message: "Error: usage is /model <provider>/<model>.",
+    });
+    expect(parseInteractiveCommand("/model qwen/")).toEqual({
+      kind: "invalid",
+      message: "Error: usage is /model <provider>/<model>.",
+    });
+    expect(parseInteractiveCommand("/model anthropic/claude")).toEqual({
+      kind: "invalid",
+      message: 'Error: unknown provider "anthropic".',
+    });
+  });
+
+  test(`Given user enters malformed /model commands,
+    When the interactive session handles those local commands,
+    Then it reports usage errors without starting a provider turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("malformed /model should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("malformed /model should not start a model turn");
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end(
+      "/model qwen/qwen3.7 plus\n/model /qwen3.7-plus\n/model qwen/\n/model anthropic/claude\n",
+    );
+
+    // Then
+    await session;
+    expect(stderr).toContain("Error: usage is /model <provider>/<model>.");
+    expect(stderr).toContain('Error: unknown provider "anthropic".');
+    expect(stdout).toBe("");
+    expect(providerResolved).toBe(false);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given no prompt has run,
+    When user selects a model with /model before the first prompt,
+    Then the first provider request uses the selected provider and model`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    const resolvedSelections: ProviderSelection[] = [];
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) => {
+        if (selection !== undefined) {
+          resolvedSelections.push(selection);
+        }
+        const providerId = selection?.providerId ?? "fake";
+        const model = selection?.model ?? "fake";
+        return resolvedProvider(
+          providerId,
+          model,
+          textProvider(`${providerId}:${model}`),
+        );
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("/model qwen/qwen3.7-plus\nfirst prompt\n");
+
+    // Then
+    await session;
+    expect(stdout).toContain("qwen:qwen3.7-plus");
+    expect(resolvedSelections).toEqual([
+      { providerId: "qwen", model: "qwen3.7-plus" },
+    ]);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given an interactive session already used one model,
+    When user selects another model with /model,
+    Then the next prompt uses the selected provider and the command stays local`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    const observedProviderVisibleContent: string[] = [];
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) => {
+        const providerId = selection?.providerId ?? "fake";
+        const model = selection?.model ?? "fake";
+        const provider: LLMProvider = {
+          id: "fake",
+          async *stream(options) {
+            observedProviderVisibleContent.push(
+              JSON.stringify(options.messages),
+            );
+            yield { type: "text", text: `${providerId}:${model}` };
+            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          },
+        };
+        return resolvedProvider(providerId, model, provider);
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("first prompt\n/model qwen/qwen3.7-max\nsecond prompt\n");
+
+    // Then
+    await session;
+    expect(stdout).toContain("fake:fake");
+    expect(stdout).toContain("qwen:qwen3.7-max");
+    expect(observedProviderVisibleContent).toHaveLength(2);
+    expect(observedProviderVisibleContent[1]).not.toContain("/model");
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given the interactive session is idle,
+    When user enters /model without arguments,
+    Then the current model is printed without starting a model turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let providerStreams = 0;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () =>
+        resolvedProvider("fake", "fake", {
+          id: "fake",
+          async *stream() {
+            providerStreams++;
+            yield { type: "text", text: "unexpected" };
+            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          },
+        }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("/model should not start a model turn");
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("/model\n");
+
+    // Then
+    await session;
+    expect(stdout).toContain("Current model: fake/fake");
+    expect(stdout).toContain("Usage: /model <provider>/<model>");
+    expect(stderr).toBe("");
+    expect(providerStreams).toBe(0);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given interactive cost tracking is enabled,
+    When user selects a model with unknown pricing,
+    Then the switch fails before mutating the active model`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let fakeTurns = 0;
+    const fakeProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        fakeTurns++;
+        yield { type: "text", text: `fake reply ${fakeTurns}` };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled", maxCostUsd: 1 },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) => {
+        if (selection?.providerId === "kimi") {
+          return resolvedProvider(
+            "kimi",
+            selection.model ?? "kimi-k2.5",
+            textProvider("unexpected kimi"),
+            null,
+          );
+        }
+        return resolvedProvider("fake", "fake", fakeProvider);
+      },
+      requireKnownCostModel: (resolved) => {
+        if (resolved.costModel === null) {
+          throw new Error("unknown target pricing");
+        }
+        return resolved.costModel;
+      },
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("first prompt\n/model kimi/kimi-k2.5\nsecond prompt\n");
+
+    // Then
+    await session;
+    expect(stderr).toContain("unknown target pricing");
+    expect(stdout).toContain("fake reply 1");
+    expect(stdout).toContain("fake reply 2");
+    expect(stdout).not.toContain("unexpected kimi");
+    expect(fakeTurns).toBe(2);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given the selected model is already active,
+    When user enters /model for that same model,
+    Then the command is a no-op and does not add provider-visible history`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let resolveCalls = 0;
+    const observedProviderVisibleContent: string[] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        observedProviderVisibleContent.push(JSON.stringify(options.messages));
+        yield {
+          type: "text",
+          text: `turn ${observedProviderVisibleContent.length}`,
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        resolveCalls++;
+        return resolvedProvider("fake", "fake", provider);
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("first prompt\n/model fake/fake\nsecond prompt\n");
+
+    // Then
+    await session;
+    expect(stdout).toContain("Model already set to fake/fake");
+    expect(resolveCalls).toBe(1);
+    expect(observedProviderVisibleContent).toHaveLength(2);
+    expect(observedProviderVisibleContent[1]).not.toContain("/model");
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given the current history does not fit a selected target context window,
+    When user enters /model for that target,
+    Then the switch is rejected until model-switch compaction exists`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let oldProviderTurns = 0;
+    const oldProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        oldProviderTurns++;
+        yield { type: "text", text: `old provider ${oldProviderTurns}` };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) => {
+        if (selection?.providerId === "qwen") {
+          return resolvedProvider(
+            "qwen",
+            selection.model ?? "tiny",
+            textProvider("unexpected target"),
+            ZERO_COST_MODEL,
+            { contextWindowTokens: 1, reserveTokens: 0 },
+          );
+        }
+        return resolvedProvider("fake", "fake", oldProvider);
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("first prompt\n/model qwen/tiny\nsecond prompt\n");
+
+    // Then
+    await session;
+    expect(stderr).toContain(
+      "requires model-switch compaction, which is not implemented yet",
+    );
+    expect(stdout).toContain("old provider 1");
+    expect(stdout).toContain("old provider 2");
+    expect(stdout).not.toContain("unexpected target");
+    expect(oldProviderTurns).toBe(2);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given an interactive report already contains a completed turn,
+    When user enters /model for a different model,
+    Then the switch is rejected until model-switch reporting exists`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let fakeReportTurns = 0;
+    const fakeReportProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        fakeReportTurns++;
+        yield { type: "text", text: `fake report ${fakeReportTurns}` };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled", reportFile: "report.json" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) => {
+        if (selection?.providerId === "qwen") {
+          return resolvedProvider(
+            "qwen",
+            selection.model ?? "qwen3.7-plus",
+            textProvider("unexpected qwen"),
+          );
+        }
+        return resolvedProvider("fake", "fake", fakeReportProvider);
+      },
+      requireKnownCostModel: (resolved) => {
+        if (resolved.costModel === null) {
+          throw new Error("unknown target pricing");
+        }
+        return resolved.costModel;
+      },
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("first prompt\n/model qwen/qwen3.7-plus\nsecond prompt\n");
+
+    // Then
+    await session;
+    expect(stderr).toContain("model-switch reporting is implemented");
+    expect(stdout).toContain("fake report 1");
+    expect(stdout).toContain("fake report 2");
+    expect(stdout).not.toContain("unexpected qwen");
+    expect(fakeReportTurns).toBe(2);
     expect(sigintHandlers.size).toBe(0);
   });
 
