@@ -13,6 +13,7 @@ pnpm lint:fix       # biome check --write --error-on-warnings
 pnpm test           # vitest run
 pnpm test:watch     # vitest (watch mode)
 pnpm test:coverage  # Final verification: vitest run --coverage
+pnpm coverage:patch # Local PR patch coverage pre-check against origin/main
 pnpm eval:check     # Validate bundled eval task verifiers without provider calls
 pnpm knip           # Dead code detection
 ```
@@ -149,7 +150,7 @@ See [TESTING.md](TESTING.md). Summary:
 
 1. Only mock LLM (`fake` provider). No vi.mock, no mocking internals, no testing private functions. Everything else is real.
 2. BDD with GWTE format. Tests are executable specs for the boundary they cover.
-3. Final verification uses `pnpm test:coverage`, not `pnpm test`.
+3. Final verification uses `pnpm test:coverage`, not `pnpm test`, followed by `pnpm coverage:patch` before pushing PR branches that change coverable code.
 4. `agent/` and `cli/` titles must read as product behavior; `tools/`, `providers/`, and `invariants/` titles should read as tool, protocol, or architecture contracts. Keep fixture/protocol words out of `agent/` and `cli/` test titles.
 
 Control flow & boundaries:
