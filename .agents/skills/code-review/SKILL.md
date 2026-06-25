@@ -20,14 +20,18 @@ If the target is omitted, infer it only when the current thread or git state has
 
 ## Authorities
 
-Read only the docs needed for the touched area. Do not duplicate the rules in the review; cite them when they matter.
+Read only the docs needed for the touched area. Do not duplicate the rules in the review; cite them when they matter. Do not cite a project rule you have not read in this session.
 
-- root `AGENTS.md` for repo boundaries and submodule rules
-- `keel/AGENTS.md` and `keel/CLAUDE.md` for architecture, style, merge workflow, and development rules
-- `keel/TESTING.md` for test boundaries, GWTE naming, coverage triage, and reachable-behavior rules
-- `keel/SLICING.md` for vertical-slice expectations
-- `keel/ROADMAP.md` when reviewing priority, scope, or roadmap claims
-- `keel/EVALS.md` when reviewing eval tasks, quality claims, or eval workflow changes
+Load docs conditionally based on what the diff touches:
+
+| Diff touches | Must read |
+|---|---|
+| any file in `keel/` | `keel/CLAUDE.md` |
+| `tests/` or test-adjacent code | `keel/TESTING.md` |
+| `src/cli/`, `src/agent/`, or vertical-slice scope | `keel/SLICING.md` |
+| `ROADMAP.md`, or PR claims priority/scope | `keel/ROADMAP.md` |
+| `evals/`, `EVALS.md`, or eval workflow | `keel/EVALS.md` |
+| submodule paths or root boundaries | root `AGENTS.md` |
 
 ## Execution
 
@@ -57,9 +61,10 @@ When the target is a GitHub PR, post the final review as one PR comment after co
 
 Use this structure:
 
-1. Findings
-2. Merge Recommendation
-3. Summary
+1. Docs loaded (one-line list of doc names read for this review)
+2. Findings
+3. Merge Recommendation
+4. Summary
 
 Lead with findings, grouped by severity in this order:
 
