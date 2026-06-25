@@ -1,4 +1,3 @@
-import { mkdirSync } from "node:fs";
 import { KeelError } from "../core/error.ts";
 import {
   type RecordLastBatchCheckpointOperation,
@@ -10,6 +9,7 @@ import type { ToolResult } from "./types.ts";
 import {
   assertWorkspaceFileIdentityAtAccess,
   assertWorkspaceOpenTargetAtAccess,
+  createWorkspaceParentDirectories,
   type FileIdentity,
   findWorkspacePathsByIdentity,
   resolveWorkspaceCreateTarget,
@@ -41,21 +41,12 @@ export function executeWrite(
   const { workspacePath, targetPath, parentPath } =
     resolveWorkspaceCreateTarget(workspace, filePath, "write");
 
-  try {
-    mkdirSync(parentPath, { recursive: true });
-  } catch (error) {
-    if (
-      isErrnoException(error) &&
-      (error.code === "EEXIST" || error.code === "ENOTDIR")
-    ) {
-      throw new KeelError(
-        "tool_not_directory",
-        `write failed: parent path is not a directory: ${filePath}`,
-        "The parent path is a file, not a directory. Choose a different path.",
-      );
-    }
-    throw error;
-  }
+  createWorkspaceParentDirectories({
+    workspacePath,
+    parentPath,
+    toolName: "write",
+    requestedPath: filePath,
+  });
 
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
   const realTargetPath = resolveWorkspaceCreateTargetAtAccess({

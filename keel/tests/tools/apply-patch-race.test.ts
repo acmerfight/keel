@@ -2,6 +2,7 @@ import {
   access,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   writeFile,
@@ -10,12 +11,17 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
+import {
+  createGitWorkspace,
+  runGit as git,
+} from "../../src/testing/cli-harness.ts";
 
 type PathLike = Parameters<typeof import("node:fs").realpathSync>[0];
 type FsModule = typeof import("node:fs");
 
 interface FsOverrides {
   readonly linkSync?: FsModule["linkSync"];
+  readonly mkdirSync?: FsModule["mkdirSync"];
   readonly openSync?: FsModule["openSync"];
   readonly realpathSync?: (path: PathLike) => string;
   readonly renameSync?: FsModule["renameSync"];
@@ -50,6 +56,16 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+async function checkpointPath(workspace: string): Promise<string> {
+  const result = await git(workspace, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "keel/last-edit-checkpoint.json",
+  ]);
+  return result.stdout.trim();
+}
+
 async function importApplyPatchWithFs(
   overrides: FsOverrides,
 ): Promise<typeof import("../../src/tools/apply-patch.ts")> {
@@ -63,6 +79,60 @@ describe("Apply Patch Tool Race Handling", () => {
   afterEach(() => {
     vi.doUnmock("node:fs");
     vi.resetModules();
+  });
+
+  test(`Given a missing add-file parent segment is swapped to an outside symlink during parent creation,
+    When apply_patch creates the nested parent,
+    Then it rejects without creating outside directories, files, temp files, or checkpoint`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-patch-parent-race-");
+    const checkpoint = await checkpointPath(workspace);
+    const outside = await mkdtemp(join(tmpdir(), "keel-patch-parent-outside-"));
+    const targetPath = join(workspace, "race", "nested", "new.txt");
+    const outsideNestedPath = join(outside, "nested");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: race/nested/new.txt",
+      "+content",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let swapped = false;
+    const originalCwd = process.cwd();
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      mkdirSync: (path, options) => {
+        const pathText = String(path);
+        if (
+          !swapped &&
+          (pathText === "race" || pathText.endsWith(join("race", "nested")))
+        ) {
+          swapped = true;
+          actualFs.symlinkSync(outside, join(workspace, "race"), "dir");
+        }
+        return actualFs.mkdirSync(path, options);
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () => executeApplyPatch(workspace, patch),
+        "tool_path_outside_workspace",
+        "outside the workspace",
+      );
+      expect(process.cwd()).toBe(originalCwd);
+      expect(swapped).toBe(true);
+      expect(await pathExists(outsideNestedPath)).toBe(false);
+      expect(await pathExists(join(outsideNestedPath, "new.txt"))).toBe(false);
+      expect(await pathExists(targetPath)).toBe(false);
+      expect(await pathExists(checkpoint)).toBe(false);
+      expect(await readdir(outside)).toEqual(
+        expect.not.arrayContaining([expect.stringContaining(".keel-write-")]),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
   test(`Given an add-file parent is replaced by an outside symlink after validation,

@@ -1,4 +1,4 @@
-import { fstatSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { fstatSync, readFileSync, rmSync, statSync } from "node:fs";
 import { KeelError } from "../core/error.ts";
 import {
   type RecordLastBatchCheckpointOperation,
@@ -18,6 +18,7 @@ import {
   assertWorkspaceFileIdentityAtAccess,
   assertWorkspaceOpenTargetAtAccess,
   assertWorkspaceTargetAtAccess,
+  createWorkspaceParentDirectories,
   type FileIdentity,
   findWorkspacePathsByIdentity,
   resolveWorkspaceCreateTarget,
@@ -758,7 +759,12 @@ function applyPreparedOperation(
   operation: PreparedPatchOperation,
 ): AppliedPatchOperation {
   if (operation.kind === "add") {
-    mkdirSync(operation.parentPath, { recursive: true });
+    createWorkspaceParentDirectories({
+      workspacePath: operation.workspacePath,
+      parentPath: operation.parentPath,
+      toolName: "apply_patch",
+      requestedPath: operation.path,
+    });
     const realTargetPath = validateAddTargetAfterMkdir(operation);
     const validateTargetAtAccess = (): void => {
       validateAddTargetAfterMkdir(operation);
