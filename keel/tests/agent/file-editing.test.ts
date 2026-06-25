@@ -26,6 +26,7 @@ import {
 } from "../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../src/llm/types.ts";
 import { createGitWorkspace } from "../../src/testing/cli-harness.ts";
+import { createProjectInstructionVisibilityState } from "../../src/tools/scoped-project-instructions.ts";
 
 async function collect(
   source: AsyncIterable<AgentEvent>,
@@ -291,6 +292,242 @@ describe("File Editing", () => {
       expect(events).toContainEqual({
         type: "text",
         text: "Created the generated config.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a nested AGENTS.md applies to a requested file,
+    When the assistant reads that file,
+    Then the scoped project instructions are visible before the file content`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "packages", "api", "src"), {
+      recursive: true,
+    });
+    await mkdir(join(workspace, "packages", "web"), { recursive: true });
+    await writeFile(
+      join(workspace, "packages", "api", "AGENTS.md"),
+      "API rule: do not change handlers before reading the service contract.\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "packages", "web", "AGENTS.md"),
+      "Web rule: this sibling package must not apply.\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "packages", "api", "src", "server.ts"),
+      "export const server = 'api';\n",
+      "utf8",
+    );
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "scoped-agents-read",
+      async *stream(options) {
+        if (turn === 1) {
+          secondTurnMessages = options.messages;
+          yield { type: "text", text: "Read the API server." };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
+        yield {
+          type: "tool_call",
+          id: "read_api_server",
+          tool: "read",
+          path: "packages/api/src/server.ts",
+        };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "read the API server",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      const toolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(toolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "read_api_server",
+      });
+      const toolContent = toolMessage?.content;
+      if (toolContent === undefined) {
+        throw new Error("Expected read tool content");
+      }
+      expect(toolContent).toContain(
+        "Project instructions from packages/api/AGENTS.md",
+      );
+      expect(toolContent).toContain(
+        "API rule: do not change handlers before reading the service contract.",
+      );
+      expect(toolContent).not.toContain("Web rule:");
+      expect(toolContent.indexOf("Project instructions from")).toBeLessThan(
+        toolContent.indexOf("export const server = 'api';"),
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Read the API server.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a nested AGENTS.md applies to a new file,
+    When the assistant writes before seeing those instructions,
+    Then the first write is blocked and the retry can create the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "packages", "api"), { recursive: true });
+    await writeFile(
+      join(workspace, "packages", "api", "AGENTS.md"),
+      "API rule: new files must use the package header.\n",
+      "utf8",
+    );
+    const targetPath = join(workspace, "packages", "api", "src", "new.ts");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    let fileExistedBeforeRetry = false;
+    const provider: LLMProvider = {
+      id: "scoped-agents-write-retry",
+      async *stream(options) {
+        if (turn === 1) {
+          secondTurnMessages = options.messages;
+          try {
+            await readFile(targetPath, "utf8");
+            fileExistedBeforeRetry = true;
+          } catch {
+            fileExistedBeforeRetry = false;
+          }
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "retry_write",
+            tool: "write",
+            path: "packages/api/src/new.ts",
+            content: "// package header\nexport const value = 1;\n",
+          };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 2) {
+          yield { type: "text", text: "Created with scoped instructions." };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
+        yield {
+          type: "tool_call",
+          id: "initial_write",
+          tool: "write",
+          path: "packages/api/src/new.ts",
+          content: "export const value = 1;\n",
+        };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "create an API file",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      const failedToolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(failedToolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "initial_write",
+        content: expect.stringContaining(
+          "Project instructions from packages/api/AGENTS.md",
+        ),
+      });
+      expect(failedToolMessage?.content).toContain("Tool failed:");
+      expect(failedToolMessage?.content).toContain(
+        "API rule: new files must use the package header.",
+      );
+      expect(failedToolMessage?.content).toContain("Recovery:");
+      expect(fileExistedBeforeRetry).toBe(false);
+      expect(await readFile(targetPath, "utf8")).toBe(
+        "// package header\nexport const value = 1;\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Created with scoped instructions.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -655,6 +892,120 @@ describe("File Editing", () => {
     }
   });
 
+  test(`Given same-turn read output includes scoped AGENTS.md instructions,
+    When the assistant also edits that scoped file in the same response,
+    Then the edit is rejected until the instructions are visible in a later turn`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "packages", "api", "src"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(workspace, "packages", "api", "AGENTS.md"),
+      "API rule: edits must preserve the route contract.\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "packages", "api", "src", "server.ts"),
+      "export const route = 'old';\n",
+      "utf8",
+    );
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "same-turn-scoped-agents-read-edit",
+      async *stream(options) {
+        if (turn === 1) {
+          secondTurnMessages = options.messages;
+          yield { type: "text", text: "I will retry after reviewing AGENTS." };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
+        yield {
+          type: "tool_call",
+          id: "read_api_server",
+          tool: "read",
+          path: "packages/api/src/server.ts",
+        };
+        yield {
+          type: "tool_call",
+          id: "same_turn_scoped_edit",
+          tool: "edit",
+          path: "packages/api/src/server.ts",
+          edits: [{ oldText: "old", newText: "new" }],
+        };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "read and update the API server",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(
+        await readFile(
+          join(workspace, "packages", "api", "src", "server.ts"),
+          "utf8",
+        ),
+      ).toBe("export const route = 'old';\n");
+      const readMessage = secondTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "read_api_server",
+      );
+      const editMessage = secondTurnMessages.find(
+        (message) =>
+          message.role === "tool" &&
+          message.toolCallId === "same_turn_scoped_edit",
+      );
+      expect(readMessage?.content).toContain(
+        "Project instructions from packages/api/AGENTS.md",
+      );
+      expect(editMessage?.content).toContain(
+        "project instructions have not been reviewed",
+      );
+      expect(editMessage?.content).toContain(
+        "Project instructions from packages/api/AGENTS.md",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "I will retry after reviewing AGENTS.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the assistant already edited a file after reading it,
     When it requests another edit without rereading,
     Then the second edit is rejected and the first edit remains`, async () => {
@@ -971,6 +1322,409 @@ describe("File Editing", () => {
       expect(events).toContainEqual({
         type: "text",
         text: "Updated note.txt.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a scoped AGENTS.md read is compacted before the next model request,
+    When the assistant edits that scoped file without manually rereading,
+    Then the restored read re-injects the scoped instructions before the edit`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "packages", "api", "src"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(workspace, "packages", "api", "AGENTS.md"),
+      "API rule: preserve the exported route name.\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "packages", "api", "src", "server.ts"),
+      "export const route = 'old';\n",
+      "utf8",
+    );
+    let turn = 0;
+    const messages: Message[] = [
+      { role: "user", content: "read the API server" },
+    ];
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(workspace);
+    let editRequestMessages: readonly Message[] = [];
+    let finalMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "compacted-scoped-agents-read-before-edit",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "The API server was read earlier." };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_api_server",
+            tool: "read",
+            path: "packages/api/src/server.ts",
+          };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          yield { type: "text", text: "Read the API server." };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 2) {
+          turn++;
+          editRequestMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "edit_api_server",
+            tool: "edit",
+            path: "packages/api/src/server.ts",
+            edits: [{ oldText: "'current'", newText: "'fresh'" }],
+          };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
+        finalMessages = options.messages;
+        yield { type: "text", text: "Updated the API server." };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          readVisibility,
+          projectInstructionVisibility,
+        }),
+      );
+      await writeFile(
+        join(workspace, "packages", "api", "src", "server.ts"),
+        "export const route = 'current';\n",
+        "utf8",
+      );
+      messages.push({ role: "user", content: "freshen the API server" });
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          readVisibility,
+          projectInstructionVisibility,
+          contextCompaction: {
+            contextWindowTokens: 1,
+            reserveTokens: 0,
+            keepRecentTokens: 1,
+          },
+        }),
+      );
+
+      // Then
+      expect(
+        await readFile(
+          join(workspace, "packages", "api", "src", "server.ts"),
+          "utf8",
+        ),
+      ).toBe("export const route = 'fresh';\n");
+      const restoredInstructionMessage = editRequestMessages.find(
+        (message): message is Extract<Message, { readonly role: "tool" }> =>
+          message.role === "tool" &&
+          message.content.includes(
+            "Project instructions from packages/api/AGENTS.md",
+          ),
+      );
+      expect(restoredInstructionMessage?.toolCallId).toContain(
+        "post_compaction_read",
+      );
+      expect(restoredInstructionMessage?.content).toContain(
+        "Project instructions from packages/api/AGENTS.md",
+      );
+      expect(restoredInstructionMessage?.content).toContain(
+        "API rule: preserve the exported route name.",
+      );
+      const restoredFileReadMessage = editRequestMessages.find(
+        (message): message is Extract<Message, { readonly role: "tool" }> =>
+          message.role === "tool" &&
+          message.content.includes("export const route = 'current';"),
+      );
+      expect(restoredFileReadMessage?.toolCallId).toContain(
+        "post_compaction_read",
+      );
+      expect(restoredFileReadMessage?.content).toContain(
+        "export const route = 'current';",
+      );
+      const editMessage = finalMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "edit_api_server",
+      );
+      expect(editMessage?.content).toContain(
+        "Edited packages/api/src/server.ts",
+      );
+      expect(editMessage?.content).not.toContain(
+        "project instructions have not been reviewed",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Updated the API server.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given scoped AGENTS.md instructions became visible through a failed write before compaction,
+    When the assistant retries the write after compaction,
+    Then the restored instructions allow the retry to create the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "packages", "api"), { recursive: true });
+    await writeFile(
+      join(workspace, "packages", "api", "AGENTS.md"),
+      "API rule: retry writes must include the generated header.\n",
+      "utf8",
+    );
+    const targetPath = join(
+      workspace,
+      "packages",
+      "api",
+      "src",
+      "generated.ts",
+    );
+    let turn = 0;
+    const messages: Message[] = [
+      { role: "user", content: "create the generated API file" },
+    ];
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(workspace);
+    let retryRequestMessages: readonly Message[] = [];
+    let finalMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "compacted-failed-write-scoped-agents",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield {
+            type: "text",
+            text: "The failed write exposed scoped project instructions.",
+          };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "initial_write",
+            tool: "write",
+            path: "packages/api/src/generated.ts",
+            content: "export const generated = true;\n",
+          };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          yield {
+            type: "text",
+            text: "Reviewed the scoped project instructions.",
+          };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 2) {
+          turn++;
+          retryRequestMessages = options.messages;
+          yield {
+            type: "tool_call",
+            id: "retry_write",
+            tool: "write",
+            path: "packages/api/src/generated.ts",
+            content: "// generated header\nexport const generated = true;\n",
+          };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
+        finalMessages = options.messages;
+        yield { type: "text", text: "Created after compaction." };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          readVisibility,
+          projectInstructionVisibility,
+        }),
+      );
+      messages.push({ role: "user", content: "retry creating the file" });
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          readVisibility,
+          projectInstructionVisibility,
+          contextCompaction: {
+            contextWindowTokens: 1,
+            reserveTokens: 0,
+            keepRecentTokens: 1,
+          },
+        }),
+      );
+
+      // Then
+      expect(events.some((event) => event.type === "context_compacted")).toBe(
+        true,
+      );
+      expect(JSON.stringify(retryRequestMessages)).toContain(
+        "Project instructions from packages/api/AGENTS.md",
+      );
+      const retryToolMessage = finalMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "retry_write",
+      );
+      expect(retryToolMessage?.content).toBe(
+        "Wrote packages/api/src/generated.ts",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe(
+        "// generated header\nexport const generated = true;\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Created after compaction.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1389,6 +2143,8 @@ describe("File Editing", () => {
     const goneTargetPath = await realpath(gonePath);
     const messages: Message[] = [];
     const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(workspace);
     readVisibility.applyVisibleToolExecutions([
       { ok: true, content: "", readTargetPath: keepTargetPath },
       { ok: true, content: "", readTargetPath: goneTargetPath },
@@ -1402,6 +2158,7 @@ describe("File Editing", () => {
         workspace,
         signal: freshSignal(),
         readVisibility,
+        projectInstructionVisibility,
         messages,
         nextToolCallId: () => `post_compaction_read_${sequence++}`,
       });
@@ -1454,6 +2211,8 @@ describe("File Editing", () => {
     const largeATargetPath = await realpath(largeAPath);
     const messages: Message[] = [];
     const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(workspace);
     readVisibility.applyVisibleToolExecutions([
       { ok: true, content: "", readTargetPath: afterBudgetTargetPath },
       { ok: true, content: "", readTargetPath: tinyBudgetTargetPath },
@@ -1469,6 +2228,7 @@ describe("File Editing", () => {
         workspace,
         signal: freshSignal(),
         readVisibility,
+        projectInstructionVisibility,
         messages,
         nextToolCallId: () => `post_compaction_read_${sequence++}`,
       });
@@ -2159,6 +2919,141 @@ describe("File Editing", () => {
       expect(events).toContainEqual({
         type: "text",
         text: "Applied the patch.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a nested AGENTS.md applies to an apply_patch addition,
+    When the assistant patches before seeing those instructions,
+    Then the first patch is blocked and the retry can create the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "packages", "api"), { recursive: true });
+    await writeFile(
+      join(workspace, "packages", "api", "AGENTS.md"),
+      "API rule: patch additions need the generated header.\n",
+      "utf8",
+    );
+    const targetPath = join(workspace, "packages", "api", "src", "patched.ts");
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    let fileExistedBeforeRetry = false;
+    const provider: LLMProvider = {
+      id: "scoped-agents-apply-patch-retry",
+      async *stream(options) {
+        if (turn === 1) {
+          secondTurnMessages = options.messages;
+          try {
+            await readFile(targetPath, "utf8");
+            fileExistedBeforeRetry = true;
+          } catch {
+            fileExistedBeforeRetry = false;
+          }
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "retry_patch",
+            tool: "apply_patch",
+            patch: [
+              "*** Begin Patch",
+              "*** Add File: packages/api/src/patched.ts",
+              "+// generated header",
+              "+export const patched = true;",
+              "*** End Patch",
+            ].join("\n"),
+          };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (turn === 2) {
+          yield { type: "text", text: "Applied scoped patch." };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        turn++;
+        yield {
+          type: "tool_call",
+          id: "initial_patch",
+          tool: "apply_patch",
+          patch: [
+            "*** Begin Patch",
+            "*** Add File: packages/api/src/patched.ts",
+            "+export const patched = true;",
+            "*** End Patch",
+          ].join("\n"),
+        };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "patch in an API file",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      const failedToolMessage = secondTurnMessages.find(
+        (message) => message.role === "tool",
+      );
+      expect(failedToolMessage).toMatchObject({
+        role: "tool",
+        toolCallId: "initial_patch",
+        content: expect.stringContaining(
+          "Project instructions from packages/api/AGENTS.md",
+        ),
+      });
+      expect(failedToolMessage?.content).toContain("Tool failed:");
+      expect(failedToolMessage?.content).toContain(
+        "API rule: patch additions need the generated header.",
+      );
+      expect(failedToolMessage?.content).toContain("Recovery:");
+      expect(fileExistedBeforeRetry).toBe(false);
+      expect(await readFile(targetPath, "utf8")).toBe(
+        "// generated header\nexport const patched = true;\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Applied scoped patch.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

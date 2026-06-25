@@ -6,6 +6,7 @@ import type { CostReport, ReadVisibilityState } from "../../agent/loop.ts";
 import { restorePostCompactionReads } from "../../agent/loop.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { Message, Usage } from "../../llm/types.ts";
+import type { ProjectInstructionVisibilityState } from "../../tools/scoped-project-instructions.ts";
 import { formatContextCompactionReport } from "../output.ts";
 import {
   formatManualCompactionFailure,
@@ -25,6 +26,7 @@ export interface ManualCompactContext {
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
   readonly readVisibility: ReadVisibilityState;
+  readonly projectInstructionVisibility: ProjectInstructionVisibilityState;
   readonly nextPostCompactionReadToolCallId: () => string;
   readonly options: InteractiveSessionOptions;
   readonly recordCompactionCost: (
@@ -44,6 +46,7 @@ export async function executeManualCompaction(
     systemPrompt,
     signal,
     readVisibility,
+    projectInstructionVisibility,
     nextPostCompactionReadToolCallId,
     options,
     recordCompactionCost,
@@ -76,6 +79,7 @@ export async function executeManualCompaction(
         workspace,
         signal,
         readVisibility,
+        projectInstructionVisibility,
         messages,
         nextToolCallId: nextPostCompactionReadToolCallId,
       });

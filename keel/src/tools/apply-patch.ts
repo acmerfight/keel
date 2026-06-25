@@ -12,6 +12,7 @@ import {
 } from "./atomic-write.ts";
 import { type EditMatchSpan, locateUniqueEditSpan } from "./edit-match.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
+import type { ProjectInstructionVisibilityState } from "./scoped-project-instructions.ts";
 import { readEditableTextFileWithMetadata } from "./text-file.ts";
 import type { ToolResult } from "./types.ts";
 import {
@@ -31,6 +32,7 @@ interface ExecuteApplyPatchOptions {
   readonly readBeforeEdit?: {
     readonly hasRead: (targetPath: string) => boolean;
   };
+  readonly projectInstructions?: ProjectInstructionVisibilityState;
 }
 
 interface ApplyPatchToolResult extends ToolResult {
@@ -971,6 +973,9 @@ export function executeApplyPatch(
 ): ApplyPatchToolResult {
   const operations = parsePatch(patch);
   const prepared = preparePatchOperations(workspace, operations, options);
+  options.projectInstructions?.assertMutationAllowed(
+    prepared.map((operation) => operation.targetPath),
+  );
   const applied: AppliedPatchOperation[] = [];
   let checkpointOperations: readonly RecordLastBatchCheckpointOperation[];
   try {
