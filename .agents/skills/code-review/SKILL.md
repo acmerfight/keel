@@ -26,7 +26,7 @@ Load docs conditionally based on what the diff touches:
 
 | Diff touches | Must read |
 |---|---|
-| any file in `keel/` | `keel/CLAUDE.md` |
+| any file in `keel/` | `keel/CLAUDE.md`, `keel/DEVELOPMENT.md` |
 | `tests/` or test-adjacent code | `keel/TESTING.md` |
 | `src/cli/`, `src/agent/`, or vertical-slice scope | `keel/SLICING.md` |
 | `ROADMAP.md`, or PR claims priority/scope | `keel/ROADMAP.md` |

@@ -89,6 +89,8 @@ Prefer the highest product boundary that still gives a clear, stable failure:
 
 Any tool behavior that changes agent control flow also needs at least one `tests/agent/` case. Tool tests prove the tool boundary; agent tests prove the loop reacts correctly. This applies to recoverable tool failures, retry paths, stop conditions, tool-call limits, and any tool result that should change the next LLM turn.
 
+When testing real failure paths, include uncooperative callees if the caller owns user-visible recovery, retry, timeout, cleanup, or exit behavior. Inject failures through test boundaries such as the fake provider, a local server, or the test runtime, not production-only hooks. Env switches are acceptable only for documented runtime behavior.
+
 This means new user-facing behavior should usually add agent coverage, CLI-visible behavior should add a CLI smoke test, and control-flow-sensitive tool behavior should add agent coverage. It does not mean provider or tool boundary tests should be promoted into agent or CLI tests when the risk lives at that narrower boundary.
 
 For safety boundaries, derive tests from invariants instead of implementation shape. Include cases where the requested input and resolved target differ, and assert the policy holds for every security-relevant representation.

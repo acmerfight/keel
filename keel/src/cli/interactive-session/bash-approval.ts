@@ -65,6 +65,7 @@ export function interactiveBashPermissionPolicy(
           `cwd: ${escapeApprovalText(request.cwd)}`,
           `$ ${escapeApprovalText(request.command)}`,
           ...prefixApprovalLine,
+          "Approved command output may be sent to the provider unredacted.",
           "[y] allow once, [s] allow exact command for session, [n] deny; any other input denies: ",
         ].join("\n"),
       );
