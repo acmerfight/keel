@@ -6,6 +6,8 @@ import {
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import type { ToolExecution } from "./builtin.ts";
 import { executeBuiltinToolCall, type ToolCall } from "./registry.ts";
+import type { ProjectInstructionVisibilityState } from "./scoped-project-instructions.ts";
+import { ScopedProjectInstructionsNotVisibleError } from "./scoped-project-instructions.ts";
 
 export interface ExecuteToolCallOptions {
   readonly workspace: string;
@@ -16,6 +18,7 @@ export interface ExecuteToolCallOptions {
   readonly readBeforeEdit?: {
     readonly hasRead: (targetPath: string) => boolean;
   };
+  readonly projectInstructions?: ProjectInstructionVisibilityState;
 }
 
 export type { ToolExecution } from "./builtin.ts";
@@ -33,6 +36,12 @@ function toolFailureMessage(error: RecoverableToolError): string {
   return `Tool failed: ${error.message}\nRecovery: ${error.recovery}`;
 }
 
+function scopedProjectInstructionsFailureMessage(
+  error: ScopedProjectInstructionsNotVisibleError,
+): string {
+  return `Tool failed: ${error.message}\nRecovery: ${error.recovery}`;
+}
+
 export async function executeToolCall(
   options: ExecuteToolCallOptions,
 ): Promise<ToolExecution> {
@@ -40,6 +49,13 @@ export async function executeToolCall(
   try {
     return await executeBuiltinToolCall(context, toolCall);
   } catch (error) {
+    if (error instanceof ScopedProjectInstructionsNotVisibleError) {
+      return {
+        content: scopedProjectInstructionsFailureMessage(error),
+        ok: false,
+        visibleProjectInstructionPaths: error.instructionPaths,
+      };
+    }
     if (!isRecoverableToolError(error)) {
       throw error;
     }

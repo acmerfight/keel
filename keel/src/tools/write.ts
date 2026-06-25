@@ -5,6 +5,7 @@ import {
 } from "../core/git.ts";
 import { createTextFileAtomically } from "./atomic-write.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
+import type { ProjectInstructionVisibilityState } from "./scoped-project-instructions.ts";
 import type { ToolResult } from "./types.ts";
 import {
   assertWorkspaceFileIdentityAtAccess,
@@ -19,6 +20,10 @@ import {
 interface WriteToolResult extends ToolResult {
   readonly targetPath: string;
   readonly checkpointOperation: RecordLastBatchCheckpointOperation;
+}
+
+interface WriteToolOptions {
+  readonly projectInstructions?: ProjectInstructionVisibilityState;
 }
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
@@ -37,9 +42,14 @@ export function executeWrite(
   workspace: string,
   filePath: string,
   content: string,
+  options: WriteToolOptions = {},
 ): WriteToolResult {
-  const { workspacePath, targetPath, parentPath } =
+  const { workspacePath, targetPath, resolvedTargetPath, parentPath } =
     resolveWorkspaceCreateTarget(workspace, filePath, "write");
+  options.projectInstructions?.assertMutationAllowed([
+    targetPath,
+    resolvedTargetPath,
+  ]);
 
   createWorkspaceParentDirectories({
     workspacePath,
@@ -59,6 +69,7 @@ export function executeWrite(
   if (projectIgnorePolicy.isIgnored(realTargetPath, false)) {
     throw ignoredPathError(filePath);
   }
+  options.projectInstructions?.assertMutationAllowed([realTargetPath]);
 
   const validateTargetAtAccess = (): string => {
     const accessTargetPath = resolveWorkspaceCreateTargetAtAccess({
@@ -71,6 +82,7 @@ export function executeWrite(
     if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
       throw ignoredPathError(filePath);
     }
+    options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
     return accessTargetPath;
   };
   const validateOpenedTempAtAccess = (tempPath: string, fd: number): void => {
@@ -97,6 +109,7 @@ export function executeWrite(
     if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
       throw ignoredPathError(filePath);
     }
+    options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
     publishedTargetPath = accessTargetPath;
   };
   try {

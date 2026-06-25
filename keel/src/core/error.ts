@@ -19,6 +19,7 @@ const recoverableToolErrorCodes = [
   "tool_path_ignored",
   "tool_path_outside_workspace",
   "tool_patch_hunk_not_found",
+  "tool_project_instructions_not_visible",
   "tool_read_offset_out_of_range",
   "tool_search_unavailable",
   "tool_unsupported_patch_operation",

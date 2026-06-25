@@ -40,6 +40,7 @@ export interface WorkspaceCreateTarget {
   readonly workspacePath: string;
   readonly requestedPath: string;
   readonly targetPath: string;
+  readonly resolvedTargetPath: string;
   readonly parentPath: string;
 }
 
@@ -495,11 +496,20 @@ export function resolveWorkspaceCreateTarget(
   if (!existingAncestorStat.isDirectory()) {
     throw notDirectoryError(toolName, requestedPath);
   }
+  const targetFromExistingAncestor = relative(
+    existingAncestorPath,
+    absoluteRequestedPath,
+  );
+  const resolvedTargetPath = resolve(
+    existingAncestorRealPath,
+    targetFromExistingAncestor,
+  );
 
   return {
     workspacePath,
     requestedPath: absoluteRequestedPath,
     targetPath: absoluteRequestedPath,
+    resolvedTargetPath,
     parentPath,
   };
 }

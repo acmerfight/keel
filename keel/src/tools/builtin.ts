@@ -8,6 +8,7 @@ import { executeGlob } from "./glob.ts";
 import { executeGrep } from "./grep.ts";
 import { executeLs } from "./ls.ts";
 import { executeRead } from "./read.ts";
+import type { ProjectInstructionVisibilityState } from "./scoped-project-instructions.ts";
 import {
   applyPatchToolArgumentsSchema,
   bashToolArgumentsSchema,
@@ -24,6 +25,10 @@ import {
   toolArgumentKeys,
   toolRequiredArgumentKeys,
 } from "./tool-schema.ts";
+import {
+  resolveWorkspaceCreateTarget,
+  resolveWorkspaceTarget,
+} from "./workspace-path.ts";
 import { executeWrite } from "./write.ts";
 
 type ToolArgShape = z.ZodRawShape;
@@ -68,6 +73,7 @@ export interface BuiltinToolExecutionContext {
   readonly readBeforeEdit?: {
     readonly hasRead: (targetPath: string) => boolean;
   };
+  readonly projectInstructions?: ProjectInstructionVisibilityState;
 }
 
 export interface ToolExecution {
@@ -78,6 +84,7 @@ export interface ToolExecution {
   readonly readTargetLimit?: number;
   readonly mutatedTargetPath?: string;
   readonly mutatedTargetPaths?: readonly string[];
+  readonly visibleProjectInstructionPaths?: readonly string[];
   readonly checkpointOperations?: readonly RecordLastBatchCheckpointOperation[];
 }
 
@@ -272,15 +279,22 @@ const readTool = defineTool({
   },
   risk: { kind: "workspace-read" },
   concurrency: { kind: "parallel-safe" },
-  execute: ({ workspace }, args) => {
+  execute: ({ workspace, projectInstructions }, args) => {
     const result = executeRead(workspace, args.path, {
       offset: args.offset,
       limit: args.limit,
     });
+    const scopedOutput = projectInstructions?.formatReadOutput(
+      result.targetPath,
+      result.content,
+    );
     return {
-      content: result.content,
+      content: scopedOutput?.content ?? result.content,
       ok: true,
       readTargetPath: result.targetPath,
+      ...(scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0
+        ? { visibleProjectInstructionPaths: scopedOutput.instructionPaths }
+        : {}),
       ...(args.offset !== undefined ? { readTargetOffset: args.offset } : {}),
       ...(args.limit !== undefined ? { readTargetLimit: args.limit } : {}),
     };
@@ -360,12 +374,22 @@ const grepTool = defineTool({
   },
   risk: { kind: "workspace-read" },
   concurrency: { kind: "parallel-safe" },
-  execute: async ({ workspace, signal }, args) => {
+  execute: async ({ workspace, signal, projectInstructions }, args) => {
     const result = await executeGrep(workspace, args.pattern, {
       ...(args.path !== undefined ? { path: args.path } : {}),
       signal,
     });
-    return { content: result.content, ok: true };
+    const scopedOutput = projectInstructions?.formatInspectionOutput(
+      result.inspectionTargetPaths,
+      result.content,
+    );
+    return {
+      content: scopedOutput?.content ?? result.content,
+      ok: true,
+      ...(scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0
+        ? { visibleProjectInstructionPaths: scopedOutput.instructionPaths }
+        : {}),
+    };
   },
 });
 
@@ -391,7 +415,11 @@ const editTool = defineTool({
     kind: "exclusive",
     reason: "May mutate workspace files.",
   },
-  execute: ({ workspace, readBeforeEdit }, args) => {
+  execute: ({ workspace, readBeforeEdit, projectInstructions }, args) => {
+    if (projectInstructions !== undefined) {
+      const target = resolveWorkspaceTarget(workspace, args.path, "edit");
+      projectInstructions.assertMutationAllowed([target.targetPath]);
+    }
     const edits = args.edits.map((edit) => ({
       oldText: edit.oldText,
       newText: edit.newText,
@@ -428,8 +456,21 @@ const writeTool = defineTool({
     kind: "exclusive",
     reason: "Creates workspace files.",
   },
-  execute: ({ workspace }, args) => {
-    const result = executeWrite(workspace, args.path, args.content);
+  execute: ({ workspace, projectInstructions }, args) => {
+    if (projectInstructions !== undefined) {
+      const target = resolveWorkspaceCreateTarget(
+        workspace,
+        args.path,
+        "write",
+      );
+      projectInstructions.assertMutationAllowed([
+        target.targetPath,
+        target.resolvedTargetPath,
+      ]);
+    }
+    const result = executeWrite(workspace, args.path, args.content, {
+      ...(projectInstructions !== undefined ? { projectInstructions } : {}),
+    });
     return {
       content: result.content,
       ok: true,
@@ -459,9 +500,10 @@ const applyPatchTool = defineTool({
     kind: "exclusive",
     reason: "May mutate multiple workspace files.",
   },
-  execute: ({ workspace, readBeforeEdit }, args) => {
+  execute: ({ workspace, readBeforeEdit, projectInstructions }, args) => {
     const result = executeApplyPatch(workspace, args.patch, {
       ...(readBeforeEdit !== undefined ? { readBeforeEdit } : {}),
+      ...(projectInstructions !== undefined ? { projectInstructions } : {}),
     });
     return {
       content: result.content,

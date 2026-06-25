@@ -15,6 +15,7 @@ import {
 } from "../core/git.ts";
 import type { Message, Usage } from "../llm/types.ts";
 import { bashModeExposesTool } from "../permissions/bash.ts";
+import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
 import {
   formatInteractiveForkPicker,
   formatInteractiveSessionForkPoints,
@@ -168,6 +169,9 @@ export async function runInteractiveSession(
     return currentSessionCostReport();
   };
   const readVisibility = createReadVisibilityState();
+  const projectInstructionVisibility = createProjectInstructionVisibilityState(
+    options.workspace,
+  );
   let postCompactionReadSequence = 0;
 
   options.onSigint(abortActiveTurn);
@@ -198,6 +202,7 @@ export async function runInteractiveSession(
           case "restored":
             options.writeStdout(`Restored ${result.restoredLabel}\n`);
             clearReadVisibilityState(readVisibility);
+            projectInstructionVisibility.clear();
             messages.push({
               role: "user",
               content: undoRestoredContextMessage(result.restoredLabel),
@@ -255,6 +260,7 @@ export async function runInteractiveSession(
             systemPrompt,
             signal: compactAbortController.signal,
             readVisibility,
+            projectInstructionVisibility,
             nextPostCompactionReadToolCallId: () =>
               `post_compaction_read_${postCompactionReadSequence++}`,
             options,
@@ -334,6 +340,11 @@ export async function runInteractiveSession(
       resolved ??= options.resolveProvider(userMessage);
       reportProvider ??= resolved;
       const messagesBeforeTurn = messages.slice();
+      const projectInstructionPathsBeforeTurnOldestFirst = [
+        ...projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
+      ]
+        .reverse()
+        .map((snapshot) => snapshot.instructionPath);
       const checkpointOperations: RecordLastBatchCheckpointOperation[] = [];
       const turnStartSequence = lineReader.sequence();
       const drainedInjectedLines: QueuedLine[] = [];
@@ -368,6 +379,7 @@ export async function runInteractiveSession(
             ? { contextCompaction: resolved.contextCompaction }
             : {}),
           readVisibility,
+          projectInstructionVisibility,
           recordCheckpointOperations: (operations) => {
             checkpointOperations.push(...operations);
           },
@@ -401,6 +413,10 @@ export async function runInteractiveSession(
         const finalEnd = await options.printAgentEvents(stream);
         if (turnAbortController.signal.aborted) {
           messages.splice(0, messages.length, ...messagesBeforeTurn);
+          projectInstructionVisibility.clear();
+          projectInstructionVisibility.markInstructionPathsVisible(
+            projectInstructionPathsBeforeTurnOldestFirst,
+          );
           const restoredLines = [
             ...drainedInjectedLines,
             ...deferredInputLines,
@@ -436,6 +452,10 @@ export async function runInteractiveSession(
           throw error;
         }
         messages.splice(0, messages.length, ...messagesBeforeTurn);
+        projectInstructionVisibility.clear();
+        projectInstructionVisibility.markInstructionPathsVisible(
+          projectInstructionPathsBeforeTurnOldestFirst,
+        );
         const restoredLines = [...drainedInjectedLines, ...deferredInputLines];
         restoreDrainedInput(restoredLines);
         options.writeStdout("\n");

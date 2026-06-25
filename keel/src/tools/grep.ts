@@ -33,6 +33,11 @@ interface RipgrepMatch {
   readonly line: string;
 }
 
+interface GrepToolResult extends ToolResult {
+  readonly matchTargetPaths: readonly string[];
+  readonly inspectionTargetPaths: readonly string[];
+}
+
 const ripgrepMatchSchema = z.object({
   type: z.literal("match"),
   data: z.object({
@@ -71,22 +76,27 @@ function parseRipgrepMatch(line: string): RipgrepMatch | null {
 
 function formatGrepResult(
   pattern: string,
-  matches: readonly string[],
+  matches: readonly {
+    readonly output: string;
+    readonly targetPath: string;
+  }[],
   options: {
     readonly truncated: boolean;
     readonly partial: boolean;
   },
-): ToolResult {
+): GrepToolResult {
   if (matches.length === 0) {
     return {
       content: [
         `No matches found for "${pattern}"`,
         ...(options.partial ? [RIPGREP_INACCESSIBLE_WARNING] : []),
       ].join("\n"),
+      matchTargetPaths: [],
+      inspectionTargetPaths: [],
     };
   }
 
-  const output = [...matches];
+  const output = matches.map((match) => match.output);
 
   if (options.truncated) {
     output.push(
@@ -97,7 +107,11 @@ function formatGrepResult(
     output.push(RIPGREP_INACCESSIBLE_WARNING);
   }
 
-  return { content: output.join("\n") };
+  return {
+    content: output.join("\n"),
+    matchTargetPaths: matches.map((match) => match.targetPath),
+    inspectionTargetPaths: matches.map((match) => match.targetPath),
+  };
 }
 
 function ripgrepArgs(
@@ -126,15 +140,30 @@ function ripgrepArgs(
   ];
 }
 
+function resolveGrepMatchTargetPath(
+  workspacePath: string,
+  absoluteMatchPath: string,
+): string | null {
+  try {
+    return resolveWorkspaceTarget(workspacePath, absoluteMatchPath, "grep")
+      .targetPath;
+  } catch {
+    return null;
+  }
+}
+
 async function runRipgrep(
   workspacePath: string,
   targetPath: string,
   pattern: string,
   signal?: AbortSignal,
   timeoutMs: number = DEFAULT_RIPGREP_TIMEOUT_MS,
-): Promise<ToolResult> {
+): Promise<GrepToolResult> {
   let killedForLimit = false;
-  const matches: string[] = [];
+  const matches: {
+    readonly output: string;
+    readonly targetPath: string;
+  }[] = [];
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
 
   const result = await runRipgrepProcess({
@@ -153,11 +182,17 @@ async function runRipgrep(
         ? resolve(match.path)
         : resolve(workspacePath, match.path);
       if (projectIgnorePolicy.isIgnored(absoluteMatchPath, false)) return;
+      const matchTargetPath = resolveGrepMatchTargetPath(
+        workspacePath,
+        absoluteMatchPath,
+      );
+      if (matchTargetPath === null) return;
 
       const matchPath = normalizeRipgrepPath(workspacePath, match.path);
-      matches.push(
-        `${matchPath}:${match.lineNumber}:${truncateLineForDisplay(match.line)}`,
-      );
+      matches.push({
+        output: `${matchPath}:${match.lineNumber}:${truncateLineForDisplay(match.line)}`,
+        targetPath: matchTargetPath,
+      });
 
       if (matches.length >= MAX_GREP_MATCHES) {
         killedForLimit = true;
@@ -203,7 +238,7 @@ export async function executeGrep(
   workspace: string,
   pattern: string,
   options: GrepOptions = {},
-): Promise<ToolResult> {
+): Promise<GrepToolResult> {
   if (pattern === "") {
     throw new KeelError(
       "tool_empty_pattern",
@@ -260,11 +295,15 @@ export async function executeGrep(
     }
   }
 
-  return await runRipgrep(
+  const result = await runRipgrep(
     workspacePath,
     displayPath(workspacePath, targetPath),
     pattern,
     options.signal,
     options.timeoutMs,
   );
+  return {
+    ...result,
+    inspectionTargetPaths: [targetPath, ...result.matchTargetPaths],
+  };
 }
