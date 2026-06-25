@@ -1729,6 +1729,141 @@ describe("Session Store", () => {
     }
   });
 
+  test(`Given the session home blocks lock directory creation,
+    When a user starts a named session,
+    Then lock acquisition fails closed`, async () => {
+    // Given
+    const homeParent = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const home = join(homeParent, "not-a-directory");
+    await writeFile(home, "file");
+
+    try {
+      // When / Then
+      expect(() =>
+        acquireSessionLock({
+          sessionId: "lock-blocked",
+          runtime: runtime(home),
+        }),
+      ).toThrow(SessionStoreError);
+    } finally {
+      await rm(homeParent, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a stale session lock cannot be removed,
+    When the same session lock is acquired again,
+    Then lock acquisition fails closed`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const sessionPath = join(home, "sessions", "stale-blocked");
+    const lockPath = join(sessionPath, "active.lock");
+    await mkdir(lockPath, { recursive: true });
+    await writeFile(
+      join(lockPath, "owner.json"),
+      `${JSON.stringify({
+        pid: 999_999_999,
+        token: "stale",
+        createdAt: "1970-01-01T00:00:00.000Z",
+      })}\n`,
+      "utf8",
+    );
+    await chmod(sessionPath, 0o500);
+
+    try {
+      // When / Then
+      expect(() =>
+        acquireSessionLock({
+          sessionId: "stale-blocked",
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow(SessionStoreError);
+    } finally {
+      await chmod(sessionPath, 0o700);
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a session lock has an unreadable owner record,
+    When the same session lock is acquired again,
+    Then the lock is treated as active instead of being removed`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const lockPath = join(home, "sessions", "bad-owner", "active.lock");
+    await mkdir(lockPath, { recursive: true });
+    await writeFile(join(lockPath, "owner.json"), "{not-json", "utf8");
+
+    try {
+      // When / Then
+      expect(() =>
+        acquireSessionLock({
+          sessionId: "bad-owner",
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow(SessionStoreError);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a session lock cannot be released,
+    When the active lock is released,
+    Then release fails closed`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const sessionPath = join(home, "sessions", "release-blocked");
+    const lock = acquireSessionLock({
+      sessionId: "release-blocked",
+      runtime: runtime(home),
+    });
+    await chmod(sessionPath, 0o500);
+
+    try {
+      // When / Then
+      expect(() => {
+        lock.release();
+      }).toThrow(SessionStoreError);
+    } finally {
+      await chmod(sessionPath, 0o700);
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a session lock owner no longer matches the lock token,
+    When the active lock is released,
+    Then the owner lock is left in place`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const lock = acquireSessionLock({
+      sessionId: "token-mismatch",
+      runtime: runtime(home),
+    });
+    const lockPath = join(home, "sessions", "token-mismatch", "active.lock");
+    await writeFile(
+      join(lockPath, "owner.json"),
+      `${JSON.stringify({
+        pid: process.pid,
+        token: "different-token",
+        createdAt: "1970-01-01T00:00:00.000Z",
+      })}\n`,
+      "utf8",
+    );
+
+    try {
+      // When
+      lock.release();
+
+      // Then
+      expect(() =>
+        acquireSessionLock({
+          sessionId: "token-mismatch",
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow(SessionStoreError);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given KEEL_HOME is not configured,
     When a user checks whether a fresh session name can be created,
     Then the default session home is accepted without creating a ledger`, () => {
@@ -3275,7 +3410,7 @@ describe("Session Store", () => {
     await writeFile(
       join(home, "sessions", "future", "ledger.jsonl"),
       `${JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         type: "session",
         id: "future",
         createdAt: "1970-01-01T00:00:00.000Z",
@@ -3292,7 +3427,7 @@ describe("Session Store", () => {
           workspace,
           runtime: runtime(home),
         }),
-      ).toThrow(SessionStoreError);
+      ).toThrow(/unsupported session schema version 3/u);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
