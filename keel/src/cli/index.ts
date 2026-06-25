@@ -43,6 +43,7 @@ import {
   listSessionCatalog,
   persistSessionBashApprovalGrant,
   persistSessionMessages,
+  persistSessionModelSwitch,
   persistSessionQueuedInput,
   resumeSessionStore,
   type SessionCatalog,
@@ -51,6 +52,7 @@ import {
   type SessionForkPointRecord,
   type SessionForkPolicyRecord,
   type SessionLock,
+  type SessionModelSelection,
   type SessionQueuedInput,
   type SessionState,
   SessionStoreError,
@@ -484,6 +486,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         let session: SessionState | undefined;
         let activeSessionId: string | undefined;
         let persistedMessages: readonly Message[] = [];
+        let initialModelSelection: SessionModelSelection | undefined;
         if (cliArgs.sessionId !== undefined) {
           activeSessionId = cliArgs.sessionId;
           ensureSessionCanBeCreated({
@@ -521,10 +524,43 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           }
           activeSessionId = session.id;
           persistedMessages = session.messages;
+          initialModelSelection = session.activeModel;
+          if (cliArgs.providerId !== undefined || cliArgs.model !== undefined) {
+            const overrideProviderId =
+              cliArgs.providerId ?? session.activeModel?.providerId;
+            const override = resolveInteractiveProvider("", runtime, {
+              ...(overrideProviderId !== undefined
+                ? { providerId: overrideProviderId }
+                : {}),
+              ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
+            });
+            const overrideSelection = {
+              providerId: override.providerId,
+              model: override.model,
+            };
+            const previousSelection = session.activeModel ?? null;
+            if (
+              previousSelection === null ||
+              overrideSelection.providerId !== previousSelection.providerId ||
+              overrideSelection.model !== previousSelection.model
+            ) {
+              persistSessionModelSwitch({
+                session,
+                from: previousSelection,
+                to: overrideSelection,
+                runtime,
+              });
+              runtime.writeStdout(
+                `Model overridden to ${overrideSelection.providerId}/${overrideSelection.model} for resumed session.\n`,
+              );
+            }
+            initialModelSelection = overrideSelection;
+          }
         }
         let sessionPersistence:
           | {
               readonly initialMessages: readonly Message[];
+              readonly initialModelSelection?: SessionModelSelection;
               readonly initialQueuedInputs: readonly SessionQueuedInput[];
               readonly persistQueuedInput: (input: {
                 readonly sequence: number;
@@ -538,6 +574,11 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
                 reason: SessionPersistenceReason,
                 consumedInputIds: readonly string[],
               ) => void;
+              readonly persistModelSwitch: (switchRecord: {
+                readonly from: SessionModelSelection | null;
+                readonly to: SessionModelSelection;
+                readonly consumedInputIds: readonly string[];
+              }) => void;
               readonly forkSession: (
                 request: InteractiveForkSessionRequest,
               ) => string;
@@ -616,6 +657,9 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           const initialSession = session;
           sessionPersistence = {
             initialMessages: initialSession?.messages ?? [],
+            ...(initialModelSelection !== undefined
+              ? { initialModelSelection }
+              : {}),
             initialQueuedInputs: initialSession?.pendingInputs ?? [],
             initialBashApprovalGrants: initialSession?.bashApprovalGrants ?? [],
             persistQueuedInput: (input: {
@@ -648,6 +692,19 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
                 runtime,
                 reason,
                 consumedInputIds,
+              });
+            },
+            persistModelSwitch: (switchRecord: {
+              readonly from: SessionModelSelection | null;
+              readonly to: SessionModelSelection;
+              readonly consumedInputIds: readonly string[];
+            }) => {
+              persistSessionModelSwitch({
+                session: ensureActiveSession(),
+                from: switchRecord.from,
+                to: switchRecord.to,
+                runtime,
+                consumedInputIds: switchRecord.consumedInputIds,
               });
             },
             forkSession: forkActiveSession,
@@ -708,8 +765,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           interactiveResult.report !== undefined
         ) {
           writeRunReport(cliArgs.reportFile, {
-            provider: interactiveResult.report.provider,
-            model: interactiveResult.report.model,
+            usageByModel: interactiveResult.report.usageByModel,
             end: interactiveResult.report.end,
             durationMs: runtime.now() - startedAt,
           });
@@ -799,8 +855,15 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
     if (cliArgs.reportFile !== undefined && finalEnd !== undefined) {
       assertEndEventHasCost(finalEnd);
       writeRunReport(cliArgs.reportFile, {
-        provider: resolved.provider.id,
-        model: resolved.model,
+        usageByModel: [
+          {
+            provider: resolved.provider.id,
+            model: resolved.model,
+            turns: finalEnd.turns,
+            usage: finalEnd.usage,
+            costUsd: finalEnd.cost.spentUsd,
+          },
+        ],
         end: finalEnd,
         durationMs: runtime.now() - startedAt,
       });

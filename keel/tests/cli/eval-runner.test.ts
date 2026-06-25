@@ -13,8 +13,19 @@ const resultLineSchema = z.object({
   outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
   report: z
     .object({
-      provider: z.string(),
-      model: z.string(),
+      schemaVersion: z.literal(2),
+      modelsUsed: z.array(
+        z.object({
+          provider: z.string(),
+          model: z.string(),
+        }),
+      ),
+      usageByModel: z.array(
+        z.object({
+          provider: z.string(),
+          model: z.string(),
+        }),
+      ),
     })
     .optional(),
   transcriptPath: z.string().optional(),
@@ -99,9 +110,22 @@ const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 const VALID_REPORT = {
-  schemaVersion: 1,
-  provider: "fake",
-  model: "fake",
+  schemaVersion: 2,
+  modelsUsed: [{ provider: "fake", model: "fake" }],
+  usageByModel: [
+    {
+      provider: "fake",
+      model: "fake",
+      turns: 1,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+      costUsd: 0,
+    },
+  ],
   turns: 1,
   stopReason: "completed",
   usage: {
@@ -440,9 +464,9 @@ describe("Eval Runner", () => {
         "const reportIndex = args.indexOf('--report');",
         "writeFileSync('agent-args.json', JSON.stringify(args), 'utf8');",
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-        "  schemaVersion: 1,",
-        "  provider: 'qwen',",
-        "  model: 'qwen3.7-plus',",
+        "  schemaVersion: 2,",
+        "  modelsUsed: [{ provider: 'qwen', model: 'qwen3.7-plus' }],",
+        "  usageByModel: [{ provider: 'qwen', model: 'qwen3.7-plus', turns: 1, usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 }, costUsd: 0 }],",
         "  turns: 1,",
         "  stopReason: 'completed',",
         "  usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 },",
@@ -472,7 +496,9 @@ describe("Eval Runner", () => {
           taskId: "provider-selection",
           pass: true,
           outcome: "verified",
-          report: { provider: "qwen", model: "qwen3.7-plus" },
+          report: {
+            modelsUsed: [{ provider: "qwen", model: "qwen3.7-plus" }],
+          },
         },
       ]);
     } finally {
@@ -512,9 +538,9 @@ describe("Eval Runner", () => {
         "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
         'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n\', \'utf8\');',
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-        "  schemaVersion: 1,",
-        "  provider: 'fake',",
-        "  model: 'fake',",
+        "  schemaVersion: 2,",
+        "  modelsUsed: [{ provider: 'fake', model: 'fake' }],",
+        "  usageByModel: [{ provider: 'fake', model: 'fake', turns: 1, usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 }, costUsd: 0 }],",
         "  turns: 1,",
         "  stopReason: 'completed',",
         "  usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 },",
@@ -579,9 +605,9 @@ describe("Eval Runner", () => {
         "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
         'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n\', \'utf8\');',
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-        "  schemaVersion: 1,",
-        "  provider: 'fake',",
-        "  model: 'fake',",
+        "  schemaVersion: 2,",
+        "  modelsUsed: [{ provider: 'fake', model: 'fake' }],",
+        "  usageByModel: [{ provider: 'fake', model: 'fake', turns: 1, usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 }, costUsd: 0 }],",
         "  turns: 1,",
         "  stopReason: 'completed',",
         "  usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 },",
@@ -660,9 +686,9 @@ describe("Eval Runner", () => {
         "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
         transcriptAction,
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-        "  schemaVersion: 1,",
-        "  provider: 'fake',",
-        "  model: 'fake',",
+        "  schemaVersion: 2,",
+        "  modelsUsed: [{ provider: 'fake', model: 'fake' }],",
+        "  usageByModel: [{ provider: 'fake', model: 'fake', turns: 1, usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 }, costUsd: 0 }],",
         "  turns: 1,",
         "  stopReason: 'completed',",
         "  usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 },",

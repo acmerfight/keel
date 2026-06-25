@@ -49,11 +49,13 @@ import {
 import type {
   EndEvent,
   EndEventWithCost,
+  InteractiveReportModelUsage,
   InteractiveResolvedProvider,
   InteractiveSessionOptions,
   InteractiveSessionResult,
   ProviderSelection,
 } from "./interactive-session/types.ts";
+import type { SessionModelSelection } from "./session-store.ts";
 
 export type {
   InteractiveForkSessionRequest,
@@ -65,6 +67,15 @@ export type {
 
 function formatActiveModel(resolved: InteractiveResolvedProvider): string {
   return `${resolved.providerId}/${resolved.model}`;
+}
+
+function modelSelectionFromResolved(
+  resolved: InteractiveResolvedProvider,
+): SessionModelSelection {
+  return {
+    providerId: resolved.providerId,
+    model: resolved.model,
+  };
 }
 
 function resolveSelectedProvider(
@@ -117,11 +128,57 @@ export async function runInteractiveSession(
     },
   );
   let activeAbortController: AbortController | null = null;
-  let reportProvider: InteractiveResolvedProvider | null = null;
   let sessionUsage = EMPTY_USAGE;
   let sessionTurns = 0;
   let sessionCostUsd = 0;
   let sessionStopReason = "completed";
+  const reportUsageByModel = new Map<string, InteractiveReportModelUsage>();
+  const reportModelKey = (selection: SessionModelSelection): string =>
+    `${selection.providerId}/${selection.model}`;
+  const recordReportUsage = (
+    selection: SessionModelSelection,
+    usage: Usage,
+    turns: number,
+    costUsd: number,
+  ) => {
+    const key = reportModelKey(selection);
+    const current = reportUsageByModel.get(key);
+    if (current === undefined) {
+      reportUsageByModel.set(key, {
+        provider: selection.providerId,
+        model: selection.model,
+        turns,
+        usage,
+        costUsd,
+      });
+      return;
+    }
+    reportUsageByModel.set(key, {
+      provider: current.provider,
+      model: current.model,
+      turns: current.turns + turns,
+      usage: addUsage(current.usage, usage),
+      costUsd: current.costUsd + costUsd,
+    });
+  };
+  const resolveActiveProvider = (
+    userMessage: string,
+  ): InteractiveResolvedProvider => {
+    resolved ??= options.resolveProvider(
+      userMessage,
+      options.initialModelSelection,
+    );
+    return resolved;
+  };
+  const resolvedForUsageAttribution = (): InteractiveResolvedProvider => {
+    /* v8 ignore next 3: usage is only recorded during resolved provider turns or compactions. */
+    if (resolved === null) {
+      throw new Error(
+        "internal: cannot attribute usage before model resolution",
+      );
+    }
+    return resolved;
+  };
   const restoreDrainedInput = (lines: readonly QueuedLine[]) => {
     if (lines.length === 0) {
       return;
@@ -172,10 +229,17 @@ export async function runInteractiveSession(
     usage: Usage,
     costModel: CostModel,
   ): CostReport => {
-    sessionUsage = addUsage(sessionUsage, usage);
-    sessionCostUsd += calculateRequestCostBatchUsd(
+    const costUsd = calculateRequestCostBatchUsd(
       { requests: [{ usage }] },
       costModel,
+    );
+    sessionUsage = addUsage(sessionUsage, usage);
+    sessionCostUsd += costUsd;
+    recordReportUsage(
+      modelSelectionFromResolved(resolvedForUsageAttribution()),
+      usage,
+      0,
+      costUsd,
     );
     return currentSessionCostReport();
   };
@@ -183,10 +247,17 @@ export async function runInteractiveSession(
     sessionUsage = addUsage(sessionUsage, end.usage);
     sessionTurns += end.turns;
     sessionStopReason = end.stopReason;
+    const turnCostUsd = end.cost?.spentUsd ?? 0;
+    recordReportUsage(
+      modelSelectionFromResolved(resolvedForUsageAttribution()),
+      end.usage,
+      end.turns,
+      turnCostUsd,
+    );
     if (end.cost === undefined) {
       return undefined;
     }
-    sessionCostUsd += end.cost.spentUsd;
+    sessionCostUsd += turnCostUsd;
     return currentSessionCostReport();
   };
   const readVisibility = createReadVisibilityState();
@@ -252,7 +323,7 @@ export async function runInteractiveSession(
       if (interactiveCommand?.kind === "model") {
         try {
           if (interactiveCommand.selection === undefined) {
-            resolved ??= resolveSelectedProvider(options, userMessage);
+            resolved = resolveActiveProvider(userMessage);
             options.writeStdout(
               `Current model: ${formatActiveModel(resolved)}\nUsage: /model <provider>/<model>\n`,
             );
@@ -260,24 +331,19 @@ export async function runInteractiveSession(
             continue;
           }
 
+          let previousResolved: InteractiveResolvedProvider | null =
+            resolved ??
+            (options.initialModelSelection !== undefined
+              ? resolveActiveProvider(userMessage)
+              : null);
           if (
-            resolved !== null &&
-            resolved.providerId === interactiveCommand.selection.providerId &&
-            resolved.model === interactiveCommand.selection.model
+            previousResolved !== null &&
+            previousResolved.providerId ===
+              interactiveCommand.selection.providerId &&
+            previousResolved.model === interactiveCommand.selection.model
           ) {
             options.writeStdout(
-              `Model already set to ${formatActiveModel(resolved)}\n`,
-            );
-            consumeQueuedInputLines([rawInput]);
-            continue;
-          }
-
-          if (
-            options.cliArgs.reportFile !== undefined &&
-            reportProvider !== null
-          ) {
-            options.writeStderr(
-              "Error: /model after a reported turn is not supported yet; start a new session or omit --report until model-switch reporting is implemented.\n",
+              `Model already set to ${formatActiveModel(previousResolved)}\n`,
             );
             consumeQueuedInputLines([rawInput]);
             continue;
@@ -299,7 +365,8 @@ export async function runInteractiveSession(
             })
           ) {
             const currentResolved: InteractiveResolvedProvider =
-              resolved ?? resolveSelectedProvider(options, userMessage);
+              previousResolved ?? resolveActiveProvider(userMessage);
+            previousResolved = currentResolved;
             resolved = currentResolved;
             const compactAbortController = new AbortController();
             activeAbortController = compactAbortController;
@@ -335,6 +402,19 @@ export async function runInteractiveSession(
               options.persistSessionMessages !== undefined;
           }
           resolved = nextResolved;
+          if (options.persistModelSwitch !== undefined) {
+            options.persistModelSwitch({
+              from:
+                previousResolved === null
+                  ? null
+                  : modelSelectionFromResolved(previousResolved),
+              to: modelSelectionFromResolved(nextResolved),
+              consumedInputIds: consumedByPersistence
+                ? []
+                : queuedInputIds([rawInput]),
+            });
+            consumedByPersistence = true;
+          }
           options.writeStdout(
             `Model switched to ${formatActiveModel(resolved)}\n`,
           );
@@ -463,8 +543,7 @@ export async function runInteractiveSession(
         consumeQueuedInputLines([rawInput]);
         continue;
       }
-      resolved ??= options.resolveProvider(userMessage);
-      reportProvider ??= resolved;
+      resolved = resolveActiveProvider(userMessage);
       const messagesBeforeTurn = messages.slice();
       const projectInstructionPathsBeforeTurnOldestFirst = [
         ...projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
@@ -600,15 +679,14 @@ export async function runInteractiveSession(
     input.close();
   }
   const reportEnd = currentReportEnd();
-  if (
-    options.cliArgs.reportFile !== undefined &&
-    reportProvider !== null &&
-    reportEnd !== undefined
-  ) {
+  if (options.cliArgs.reportFile !== undefined && reportEnd !== undefined) {
     return {
       report: {
-        provider: reportProvider.providerId,
-        model: reportProvider.model,
+        modelsUsed: [...reportUsageByModel.values()].map((entry) => ({
+          provider: entry.provider,
+          model: entry.model,
+        })),
+        usageByModel: [...reportUsageByModel.values()],
         end: reportEnd,
       },
     };

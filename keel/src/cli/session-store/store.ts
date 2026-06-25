@@ -18,6 +18,8 @@ import {
 import {
   SESSION_SCHEMA_VERSION,
   type SessionGraphRecord,
+  type SessionModelSelection,
+  type SessionModelSwitch,
   type SessionPersistenceReason,
   type SessionQueuedInput,
   type SessionRecords,
@@ -39,10 +41,13 @@ import {
 } from "./records.ts";
 import { isoTimestamp } from "./runtime.ts";
 import {
+  appendReplayModelSwitch,
   appendSessionSnapshotIfNeeded,
   consumeReplayInputs,
+  copySessionModelSelection,
   hasMessagePrefix,
   messageArraysEqual,
+  rebaseReplayModelSwitchesAfterReplace,
   replaceReplayMessages,
   replayStateForSession,
   sessionRecordWithConsumedInputIds,
@@ -87,6 +92,38 @@ function createEmptySessionStore(options: {
   });
 }
 
+function sessionModelSelectionsEqual(
+  left: SessionModelSelection,
+  right: SessionModelSelection,
+): boolean {
+  return left.providerId === right.providerId && left.model === right.model;
+}
+
+function modelSwitchesForForkPoint(options: {
+  readonly source: SessionState;
+  readonly forkedMessageCount: number;
+  readonly timestamp: string;
+}): readonly SessionModelSwitch[] {
+  let activeModel: SessionModelSelection | undefined;
+  for (const modelSwitch of replayStateForSession(options.source)
+    .modelSwitches) {
+    if (modelSwitch.messageOrdinal <= options.forkedMessageCount) {
+      activeModel = modelSwitch.to;
+    }
+  }
+  if (activeModel === undefined) {
+    return [];
+  }
+  return [
+    {
+      timestamp: options.timestamp,
+      from: null,
+      to: copySessionModelSelection(activeModel),
+      messageOrdinal: 0,
+    },
+  ];
+}
+
 export function forkSessionStore(options: {
   readonly source: SessionState;
   readonly targetSessionId: string;
@@ -123,6 +160,13 @@ export function forkSessionStore(options: {
     targetSessionId: options.targetSessionId,
     forkPoint: forkSelection.forkPoint,
   });
+  const timestamp = isoTimestamp(options.runtime);
+  const modelSwitches = modelSwitchesForForkPoint({
+    source: options.source,
+    forkedMessageCount: storedMessages.length,
+    timestamp,
+  });
+  const activeModel = modelSwitches.at(-1)?.to;
   const session = createEmptySessionStore({
     sessionId: options.targetSessionId,
     workspace: options.source.workspace,
@@ -137,12 +181,25 @@ export function forkSessionStore(options: {
     storedMessages,
     pendingInputsById: new Map(),
     bashApprovalGrants: [],
+    ...(activeModel !== undefined
+      ? { activeModel: copySessionModelSelection(activeModel) }
+      : {}),
+    modelSwitches,
   });
+  if (activeModel !== undefined) {
+    appendJsonLine(session.filePath, {
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      type: "model_switch",
+      timestamp,
+      from: null,
+      to: copySessionModelSelection(activeModel),
+    });
+  }
   if (storedMessages.length > 0) {
     appendJsonLine(session.filePath, {
       schemaVersion: SESSION_SCHEMA_VERSION,
       type: "append",
-      timestamp: isoTimestamp(options.runtime),
+      timestamp,
       reason: "turn",
       messages: storedMessages.map(copyStoredMessage),
     });
@@ -185,6 +242,8 @@ export function resumeSessionStore(options: {
   let storedMessages: StoredMessage[] = [];
   const pendingInputsById = new Map<string, SessionQueuedInput>();
   let bashApprovalGrants: BashApprovalGrant[] = [];
+  let activeModel: SessionModelSelection | undefined;
+  let modelSwitches: SessionModelSwitch[] = [];
   for (const record of records.mutations) {
     switch (record.type) {
       case "append":
@@ -196,6 +255,33 @@ export function resumeSessionStore(options: {
         break;
       case "replace":
         storedMessages = record.messages.map(copyStoredMessage);
+        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
+        modelSwitches =
+          activeModel === undefined
+            ? []
+            : [
+                {
+                  timestamp: record.timestamp,
+                  from: null,
+                  to: copySessionModelSelection(activeModel),
+                  messageOrdinal: 0,
+                },
+              ];
+        break;
+      case "model_switch":
+        activeModel = copySessionModelSelection(record.to);
+        modelSwitches = [
+          ...modelSwitches,
+          {
+            timestamp: record.timestamp,
+            from:
+              record.from === null
+                ? null
+                : copySessionModelSelection(record.from),
+            to: copySessionModelSelection(record.to),
+            messageOrdinal: storedMessages.length,
+          },
+        ];
         consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         break;
       case "input_admitted":
@@ -217,7 +303,7 @@ export function resumeSessionStore(options: {
           ];
         }
         break;
-      case "snapshot":
+      case "snapshot": {
         storedMessages = record.messages.map(copyStoredMessage);
         pendingInputsById.clear();
         for (const input of record.pendingInputs) {
@@ -226,7 +312,40 @@ export function resumeSessionStore(options: {
         bashApprovalGrants = (record.bashApprovalGrants ?? []).filter(
           (grant) => !bashApprovalGrantHasRedactionMarker(grant),
         );
+        const snapshotModelSwitches = record.modelSwitches ?? [];
+        const snapshotActiveSwitch = snapshotModelSwitches.at(-1);
+        if (
+          record.activeModel !== undefined &&
+          (snapshotActiveSwitch === undefined ||
+            !sessionModelSelectionsEqual(
+              snapshotActiveSwitch.to,
+              record.activeModel,
+            ))
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": snapshot active model is missing matching model switch history.`,
+          );
+        }
+        if (
+          record.activeModel === undefined &&
+          snapshotModelSwitches.length > 0
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": snapshot model switch history is missing active model.`,
+          );
+        }
+        modelSwitches = snapshotModelSwitches.map((modelSwitch) => ({
+          timestamp: modelSwitch.timestamp,
+          from:
+            modelSwitch.from === null
+              ? null
+              : copySessionModelSelection(modelSwitch.from),
+          to: copySessionModelSelection(modelSwitch.to),
+          messageOrdinal: modelSwitch.messageOrdinal,
+        }));
+        activeModel = modelSwitches.at(-1)?.to;
         break;
+      }
     }
   }
   const messages = messagesFromStoredMessages(storedMessages);
@@ -240,6 +359,10 @@ export function resumeSessionStore(options: {
     storedMessages,
     pendingInputsById,
     bashApprovalGrants,
+    ...(activeModel !== undefined
+      ? { activeModel: copySessionModelSelection(activeModel) }
+      : {}),
+    modelSwitches,
   });
 }
 
@@ -306,13 +429,14 @@ export function persistSessionMessages(options: {
     return [...currentMessages];
   }
 
+  const timestamp = isoTimestamp(options.runtime);
   appendJsonLine(
     options.session.filePath,
     sessionRecordWithConsumedInputIds(
       {
         schemaVersion: SESSION_SCHEMA_VERSION,
         type: "replace",
-        timestamp: isoTimestamp(options.runtime),
+        timestamp,
         reason: options.reason,
         messages: currentStoredMessages.map(copyStoredMessage),
       },
@@ -320,12 +444,51 @@ export function persistSessionMessages(options: {
     ),
   );
   replaceReplayMessages(replayState, currentStoredMessages);
+  rebaseReplayModelSwitchesAfterReplace(replayState, timestamp);
   consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
   appendSessionSnapshotIfNeeded({
     session: options.session,
     runtime: options.runtime,
   });
   return [...currentMessages];
+}
+
+export function persistSessionModelSwitch(options: {
+  readonly session: SessionState;
+  readonly from: SessionModelSelection | null;
+  readonly to: SessionModelSelection;
+  readonly runtime: SessionStoreRuntime;
+  readonly consumedInputIds?: readonly string[];
+}): void {
+  const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
+  const timestamp = isoTimestamp(options.runtime);
+  appendJsonLine(
+    options.session.filePath,
+    sessionRecordWithConsumedInputIds(
+      {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "model_switch",
+        timestamp,
+        from:
+          options.from === null
+            ? null
+            : copySessionModelSelection(options.from),
+        to: copySessionModelSelection(options.to),
+      },
+      consumedInputIds,
+    ),
+  );
+  const replayState = replayStateForSession(options.session);
+  appendReplayModelSwitch(replayState, {
+    timestamp,
+    from: options.from,
+    to: options.to,
+  });
+  consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
 }
 
 export function persistSessionBashApprovalGrant(options: {

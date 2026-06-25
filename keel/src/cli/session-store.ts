@@ -11,6 +11,7 @@ export type {
   SessionForkPointRecord,
   SessionForkPolicyRecord,
   SessionLock,
+  SessionModelSelection,
   SessionPersistenceReason,
   SessionQueuedInput,
   SessionState,
@@ -24,6 +25,7 @@ export {
   forkSessionStore,
   persistSessionBashApprovalGrant,
   persistSessionMessages,
+  persistSessionModelSwitch,
   persistSessionQueuedInput,
   resumeSessionStore,
 } from "./session-store/store.ts";
