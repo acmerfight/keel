@@ -128,13 +128,14 @@ describe("CLI Text Reply", () => {
         "       keel /undo",
         "",
         "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
-        "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
+        "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Approved or trusted command output may be sent to the provider unredacted. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
         "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
-        "--transcript writes provider-visible run messages as schema-versioned JSONL.",
+        "--transcript writes a best-effort redacted provider-visible one-shot transcript as schema-versioned JSONL. Live provider requests are not redacted.",
+        "--session/--resume persist interactive provider context with best-effort at-rest redaction. Live provider requests may still include raw user and tool content.",
         "--fork-points lists restored user message ids for sessions fork --before-message; it requires --resume.",
         "--fork-before-message cuts a fork before the restored message id; it requires --resume and --fork.",
         "--before-message cuts a sessions fork before the restored message id.",
-        "--transcript-dir writes one provider-visible transcript JSONL file per eval trial.",
+        "--transcript-dir writes one best-effort redacted provider-visible transcript JSONL file per eval trial.",
         "--provider and --model override provider env for the current run.",
         "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, DEEPSEEK_MODEL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
         "Context compaction uses an estimated 256000-token default window for real providers; set KEEL_CONTEXT_WINDOW_TOKENS for a model-specific window.",
@@ -172,6 +173,12 @@ describe("CLI Text Reply", () => {
       expect(exit.stdout).toContain("/compact [focus]");
       expect(exit.stdout).toContain("keel sessions");
       expect(exit.stdout).toContain("keel sessions fork");
+      const sessionVisibilityNote =
+        "Session ledgers are best-effort redacted at rest; live provider requests may include raw content.";
+      expect(exit.stdout).toContain(sessionVisibilityNote);
+      expect(exit.stdout.indexOf(sessionVisibilityNote)).toBeLessThan(
+        exit.stdout.indexOf("  keel sessions"),
+      );
     } finally {
       child.kill("SIGKILL");
     }

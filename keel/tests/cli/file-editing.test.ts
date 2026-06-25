@@ -558,7 +558,7 @@ describe("CLI File Editing", () => {
 
   test(`Given a one-shot transcript captures a secret-like tool result,
     When user runs the CLI with transcript persistence,
-    Then the transcript stores a redacted marker instead of the raw secret`, async () => {
+    Then the transcript is redacted while live provider history stays unchanged`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-transcript-"));
     const transcriptPath = join(workspace, "transcript.jsonl");
@@ -570,6 +570,7 @@ describe("CLI File Editing", () => {
       "utf8",
     );
     let requestCount = 0;
+    const capturedBodies: unknown[] = [];
     const server = createServer((req, res) => {
       if (req.url !== "/chat/completions") {
         res.writeHead(404);
@@ -577,8 +578,12 @@ describe("CLI File Editing", () => {
         return;
       }
 
-      req.resume();
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
       req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
         requestCount++;
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
@@ -618,12 +623,22 @@ describe("CLI File Editing", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe("Inspected secret.txt.\n");
       expect(result.stderr).toBe("Tool: read secret.txt\n");
+      expect(capturedBodies).toHaveLength(2);
       const transcript = await readFile(transcriptPath, "utf8");
       expect(transcript).not.toContain("sk-secret-213");
       expect(transcript).not.toContain("env-secret-213");
       expect(transcript).not.toContain(githubToken);
       expect(transcript).not.toContain(googleApiKey);
       expect(transcript).toContain("[REDACTED_SECRET]");
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      const liveToolMessage = secondRequest.messages?.find(
+        (message) =>
+          message.role === "tool" && message.tool_call_id === "call_read",
+      );
+      expect(liveToolMessage?.content).toContain("sk-secret-213");
+      expect(liveToolMessage?.content).toContain("env-secret-213");
+      expect(liveToolMessage?.content).toContain(githubToken);
+      expect(liveToolMessage?.content).toContain(googleApiKey);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
