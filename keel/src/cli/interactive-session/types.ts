@@ -6,11 +6,13 @@ import type { ProviderId } from "../../core/provider-id.ts";
 import type { LLMProvider, Message } from "../../llm/types.ts";
 import type { BashApprovalGrant, BashMode } from "../../permissions/bash.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
+import type { ProviderSelection } from "../provider-config.ts";
 import type {
   SessionPersistenceReason,
   SessionQueuedInput,
 } from "../session-store.ts";
 
+export type { ProviderSelection } from "../provider-config.ts";
 export type { SessionPersistenceReason } from "../session-store.ts";
 
 export type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
@@ -81,6 +83,7 @@ export interface InteractiveSessionOptions {
   readonly forceExit: (code: number) => never;
   readonly resolveProvider: (
     userMessage: string,
+    selection?: ProviderSelection,
   ) => InteractiveResolvedProvider;
   readonly requireKnownCostModel: (
     resolved: InteractiveResolvedProvider,

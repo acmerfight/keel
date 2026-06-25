@@ -1,6 +1,6 @@
 import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
 import type { CostModel } from "../core/cost.ts";
-import type { ProviderId } from "../core/provider-id.ts";
+import { isProviderId, type ProviderId } from "../core/provider-id.ts";
 import {
   createDeepseekProvider,
   deepseekCostModel,
@@ -190,15 +190,6 @@ function realContextCompactionOptions(
     contextWindowTokens:
       positiveIntegerEnv(runtime, "KEEL_CONTEXT_WINDOW_TOKENS") ?? 256_000,
   };
-}
-
-function isProviderId(value: string): value is ProviderId {
-  return (
-    value === "fake" ||
-    value === "deepseek" ||
-    value === "kimi" ||
-    value === "qwen"
-  );
 }
 
 function selectedProvider(
