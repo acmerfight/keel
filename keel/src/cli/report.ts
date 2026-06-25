@@ -6,16 +6,26 @@ import type { EndEvent } from "./output.ts";
 // script comparing runs across keel versions). Bump schemaVersion on any
 // breaking change to the shape.
 interface RunReportInput {
-  readonly provider: string;
-  readonly model: string;
+  readonly usageByModel: readonly RunReportModelUsage[];
   readonly end: EndEventWithCost;
   readonly durationMs: number;
 }
 
-interface RunReport {
-  readonly schemaVersion: 1;
+interface RunReportModelUsage {
   readonly provider: string;
   readonly model: string;
+  readonly turns: number;
+  readonly usage: Extract<AgentEvent, { readonly type: "end" }>["usage"];
+  readonly costUsd: number;
+}
+
+interface RunReport {
+  readonly schemaVersion: 2;
+  readonly modelsUsed: readonly {
+    readonly provider: string;
+    readonly model: string;
+  }[];
+  readonly usageByModel: readonly RunReportModelUsage[];
   readonly turns: number;
   readonly stopReason: string;
   readonly usage: Extract<AgentEvent, { readonly type: "end" }>["usage"];
@@ -37,9 +47,18 @@ export function assertEndEventHasCost(
 export function writeRunReport(filePath: string, input: RunReportInput): void {
   const cost = input.end.cost;
   const report: RunReport = {
-    schemaVersion: 1,
-    provider: input.provider,
-    model: input.model,
+    schemaVersion: 2,
+    modelsUsed: input.usageByModel.map((entry) => ({
+      provider: entry.provider,
+      model: entry.model,
+    })),
+    usageByModel: input.usageByModel.map((entry) => ({
+      provider: entry.provider,
+      model: entry.model,
+      turns: entry.turns,
+      usage: entry.usage,
+      costUsd: entry.costUsd,
+    })),
     turns: input.end.turns,
     stopReason: input.end.stopReason,
     usage: input.end.usage,

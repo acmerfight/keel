@@ -1,24 +1,9 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
+import { type RunReport, runReportSchema } from "./report-schema.ts";
 
 const outcomes = ["verified", "verify_failed", "timeout", "crashed"] as const;
-
-const runReportSchema = z.object({
-  schemaVersion: z.literal(1),
-  provider: z.string(),
-  model: z.string(),
-  turns: z.number().int().positive(),
-  stopReason: z.string(),
-  usage: z.object({
-    inputTokens: z.number().int().nonnegative(),
-    cachedInputTokens: z.number().int().nonnegative(),
-    uncachedInputTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
-  }),
-  durationMs: z.number().nonnegative(),
-  costUsd: z.number().nonnegative(),
-});
 
 const evalResultLineSchema = z.object({
   schemaVersion: z.literal(1),
@@ -33,7 +18,6 @@ const evalResultLineSchema = z.object({
   transcriptPath: z.string().optional(),
 });
 
-type RunReport = z.infer<typeof runReportSchema>;
 type ResultLine = z.infer<typeof evalResultLineSchema>;
 type TrialOutcome = z.infer<typeof evalResultLineSchema>["outcome"];
 

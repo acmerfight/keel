@@ -1,3 +1,4 @@
+import type { ProviderId } from "../../core/provider-id.ts";
 import type { Message } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
 
@@ -69,6 +70,18 @@ export interface SessionHeaderRecord {
   readonly graph: SessionGraphRecord;
 }
 
+export interface SessionModelSelection {
+  readonly providerId: ProviderId;
+  readonly model: string;
+}
+
+export interface SessionModelSwitch {
+  readonly timestamp: string;
+  readonly from: SessionModelSelection | null;
+  readonly to: SessionModelSelection;
+  readonly messageOrdinal: number;
+}
+
 export interface AppendSessionRecord {
   readonly schemaVersion: 2;
   readonly type: "append";
@@ -84,6 +97,15 @@ export interface ReplaceSessionRecord {
   readonly timestamp: string;
   readonly reason: "turn" | "compaction";
   readonly messages: readonly StoredMessage[];
+  readonly consumedInputIds?: readonly string[];
+}
+
+export interface ModelSwitchSessionRecord {
+  readonly schemaVersion: 2;
+  readonly type: "model_switch";
+  readonly timestamp: string;
+  readonly from: SessionModelSelection | null;
+  readonly to: SessionModelSelection;
   readonly consumedInputIds?: readonly string[];
 }
 
@@ -118,11 +140,14 @@ export interface SnapshotSessionRecord {
   readonly messages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
   readonly bashApprovalGrants?: readonly BashApprovalGrant[];
+  readonly activeModel?: SessionModelSelection;
+  readonly modelSwitches?: readonly SessionModelSwitch[];
 }
 
 export type SessionMutationRecord =
   | AppendSessionRecord
   | ReplaceSessionRecord
+  | ModelSwitchSessionRecord
   | InputAdmittedSessionRecord
   | InputConsumedSessionRecord
   | BashApprovalGrantedSessionRecord
@@ -152,6 +177,8 @@ export interface SessionState {
   readonly storedMessages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
   readonly bashApprovalGrants: readonly BashApprovalGrant[];
+  readonly activeModel?: SessionModelSelection;
+  readonly modelSwitches: readonly SessionModelSwitch[];
   readonly [sessionReplayStateKey]: SessionReplayState;
 }
 
@@ -195,6 +222,8 @@ export interface SessionReplayState {
   readonly storedMessages: StoredMessage[];
   readonly pendingInputsById: Map<string, SessionQueuedInput>;
   readonly bashApprovalGrants: BashApprovalGrant[];
+  activeModel?: SessionModelSelection;
+  readonly modelSwitches: SessionModelSwitch[];
 }
 
 export type ObjectValue =

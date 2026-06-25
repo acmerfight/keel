@@ -3,11 +3,12 @@ import type { AgentEvent, CostReport } from "../../agent/loop.ts";
 import type { ProjectInstructions } from "../../agent/prompt.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
-import type { LLMProvider, Message } from "../../llm/types.ts";
+import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
 import type { BashApprovalGrant, BashMode } from "../../permissions/bash.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
 import type { ProviderSelection } from "../provider-config.ts";
 import type {
+  SessionModelSelection,
   SessionPersistenceReason,
   SessionQueuedInput,
 } from "../session-store.ts";
@@ -59,6 +60,7 @@ export interface InteractiveSessionOptions {
   readonly platform: NodeJS.Platform;
   readonly projectInstructions?: ProjectInstructions;
   readonly initialMessages?: readonly Message[];
+  readonly initialModelSelection?: SessionModelSelection;
   readonly initialQueuedInputs?: readonly SessionQueuedInput[];
   readonly initialBashApprovalGrants?: readonly BashApprovalGrant[];
   readonly persistQueuedInput?: (input: {
@@ -71,6 +73,11 @@ export interface InteractiveSessionOptions {
     reason: SessionPersistenceReason,
     consumedInputIds: readonly string[],
   ) => void;
+  readonly persistModelSwitch?: (switchRecord: {
+    readonly from: SessionModelSelection | null;
+    readonly to: SessionModelSelection;
+    readonly consumedInputIds: readonly string[];
+  }) => void;
   readonly forkSession?: (request: InteractiveForkSessionRequest) => string;
   readonly listForkPoints?: () => SessionForkPoints;
   readonly persistBashApprovalGrant?: (grant: BashApprovalGrant) => void;
@@ -94,10 +101,21 @@ export interface InteractiveSessionOptions {
   readonly formatCostReport: (cost: CostReport, maxUsd: number) => string;
 }
 
+export interface InteractiveReportModelUsage {
+  readonly provider: ProviderId;
+  readonly model: string;
+  readonly turns: number;
+  readonly usage: Usage;
+  readonly costUsd: number;
+}
+
 export interface InteractiveSessionResult {
   readonly report?: {
-    readonly provider: ProviderId;
-    readonly model: string;
+    readonly modelsUsed: readonly {
+      readonly provider: ProviderId;
+      readonly model: string;
+    }[];
+    readonly usageByModel: readonly InteractiveReportModelUsage[];
     readonly end: EndEventWithCost;
   };
 }

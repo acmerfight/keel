@@ -11,9 +11,27 @@ import {
 } from "../../src/testing/eval-fixtures.ts";
 
 const runReportSchema = z.object({
-  schemaVersion: z.literal(1),
-  provider: z.string(),
-  model: z.string(),
+  schemaVersion: z.literal(2),
+  modelsUsed: z.array(
+    z.object({
+      provider: z.string(),
+      model: z.string(),
+    }),
+  ),
+  usageByModel: z.array(
+    z.object({
+      provider: z.string(),
+      model: z.string(),
+      turns: z.number().int().nonnegative(),
+      usage: z.object({
+        inputTokens: z.number().int().nonnegative(),
+        cachedInputTokens: z.number().int().nonnegative(),
+        uncachedInputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
+      }),
+      costUsd: z.number(),
+    }),
+  ),
   turns: z.number().int().positive(),
   stopReason: z.string(),
   usage: z.object({
@@ -137,8 +155,7 @@ describe("CLI Eval", () => {
         outcome: "verified",
       });
       expect(line?.report).toMatchObject({
-        provider: "fake",
-        model: "fake",
+        modelsUsed: [{ provider: "fake", model: "fake" }],
         turns: 3,
         stopReason: "completed",
       });
@@ -329,6 +346,70 @@ describe("CLI Eval", () => {
     }
   });
 
+  test(`Given an eval result contains an obsolete v1 run report,
+    When user compares it with a current result file,
+    Then the CLI rejects the old report schema`, async () => {
+    // Given
+    const root = await mkdtemp(join(tmpdir(), "keel-eval-compare-old-report-"));
+    const baseFile = join(root, "base.jsonl");
+    const headFile = join(root, "head.jsonl");
+    await writeFile(
+      baseFile,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        timestamp: "2026-06-22T00:00:00.000Z",
+        keelVersion: "0.0.1",
+        taskId: "old-report",
+        trial: 1,
+        pass: true,
+        outcome: "verified",
+        wallMs: 1000,
+        report: {
+          schemaVersion: 1,
+          provider: "deepseek",
+          model: "deepseek-v4-flash",
+          turns: 2,
+          stopReason: "completed",
+          usage: {
+            inputTokens: 20,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 20,
+            outputTokens: 4,
+          },
+          durationMs: 900,
+          costUsd: 0.001,
+        },
+      })}\n`,
+      "utf8",
+    );
+    await writeResultFile(headFile, [
+      resultLine({
+        taskId: "old-report",
+        trial: 1,
+        pass: true,
+        report: runReport(),
+      }),
+    ]);
+
+    try {
+      // When
+      const result = await runCli(
+        ["eval", "compare", "--base", baseFile, "--head", headFile],
+        { cwd: root, env: { KEEL_PROVIDER: "unknown" } },
+      );
+
+      // Then
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(baseFile);
+      expect(result.stderr).toContain(
+        "line 1 is not a schemaVersion 1 eval result",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given provider env would select an invalid provider,
     When user runs keel eval with a provider override,
     Then the eval uses the selected provider for the trial`, async () => {
@@ -359,8 +440,7 @@ describe("CLI Eval", () => {
 
       const lines = await readResultLines(outFile);
       expect(lines[0]?.report).toMatchObject({
-        provider: "fake",
-        model: "fake",
+        modelsUsed: [{ provider: "fake", model: "fake" }],
         stopReason: "completed",
       });
     } finally {

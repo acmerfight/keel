@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { providerIds } from "../../core/provider-id.ts";
 import type { Message } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
 import { builtinToolCallSchema } from "../../tools/builtin.ts";
@@ -10,12 +11,15 @@ import {
 import { sessionStoreError } from "./errors.ts";
 import {
   type AppendSessionRecord,
+  type ModelSwitchSessionRecord,
   type ReplaceSessionRecord,
   SESSION_SCHEMA_VERSION,
   type SessionForkPointRecord,
   type SessionForkPolicyRecord,
   type SessionGraphRecord,
   type SessionHeaderRecord,
+  type SessionModelSelection,
+  type SessionModelSwitch,
   type SessionMutationRecord,
   type SessionQueuedInput,
   type SnapshotSessionRecord,
@@ -118,6 +122,22 @@ const sessionHeaderSchema = z
 
 const consumedInputIdsSchema = z.array(z.string());
 
+const sessionModelSelectionSchema = z
+  .object({
+    providerId: z.enum(providerIds),
+    model: z.string().min(1),
+  })
+  .strict();
+
+const sessionModelSwitchSchema = z
+  .object({
+    timestamp: z.string(),
+    from: sessionModelSelectionSchema.nullable(),
+    to: sessionModelSelectionSchema,
+    messageOrdinal: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const appendRecordSchema = z
   .object({
     schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
@@ -136,6 +156,17 @@ const replaceRecordSchema = z
     timestamp: z.string(),
     reason: z.enum(["turn", "compaction"]),
     messages: z.array(storedMessageSchema),
+    consumedInputIds: consumedInputIdsSchema.optional(),
+  })
+  .strict();
+
+const modelSwitchRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("model_switch"),
+    timestamp: z.string(),
+    from: sessionModelSelectionSchema.nullable(),
+    to: sessionModelSelectionSchema,
     consumedInputIds: consumedInputIdsSchema.optional(),
   })
   .strict();
@@ -208,6 +239,8 @@ const snapshotRecordSchema = z
     messages: z.array(storedMessageSchema),
     pendingInputs: z.array(queuedInputSchema),
     bashApprovalGrants: z.array(bashApprovalGrantSchema).optional(),
+    activeModel: sessionModelSelectionSchema.optional(),
+    modelSwitches: z.array(sessionModelSwitchSchema).optional(),
   })
   .strict();
 
@@ -220,6 +253,7 @@ const schemaVersionProbeSchema = z
 const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   appendRecordSchema,
   replaceRecordSchema,
+  modelSwitchRecordSchema,
   inputAdmittedRecordSchema,
   inputConsumedRecordSchema,
   bashApprovalGrantedRecordSchema,
@@ -230,6 +264,8 @@ type RawMessage = z.infer<typeof messageSchema>;
 type RawStoredMessage = z.infer<typeof storedMessageSchema>;
 type RawSessionQueuedInput = z.infer<typeof queuedInputSchema>;
 type RawBashApprovalGrant = z.infer<typeof bashApprovalGrantSchema>;
+type RawSessionModelSelection = z.infer<typeof sessionModelSelectionSchema>;
+type RawSessionModelSwitch = z.infer<typeof sessionModelSwitchSchema>;
 type RawSessionHeaderRecord = z.infer<typeof sessionHeaderSchema>;
 type RawSessionMutationRecord = z.infer<typeof sessionMutationRecordSchema>;
 
@@ -369,6 +405,29 @@ function toSessionHeaderRecord(
   };
 }
 
+function toSessionModelSelection(
+  selection: RawSessionModelSelection,
+): SessionModelSelection {
+  return {
+    providerId: selection.providerId,
+    model: selection.model,
+  };
+}
+
+function toSessionModelSwitch(
+  modelSwitch: RawSessionModelSwitch,
+): SessionModelSwitch {
+  return {
+    timestamp: modelSwitch.timestamp,
+    from:
+      modelSwitch.from === null
+        ? null
+        : toSessionModelSelection(modelSwitch.from),
+    to: toSessionModelSelection(modelSwitch.to),
+    messageOrdinal: modelSwitch.messageOrdinal,
+  };
+}
+
 function appendConsumedInputIds(
   record: AppendSessionRecord,
   inputIds: readonly string[] | undefined,
@@ -378,9 +437,13 @@ function appendConsumedInputIds(
   inputIds: readonly string[] | undefined,
 ): ReplaceSessionRecord;
 function appendConsumedInputIds(
-  record: AppendSessionRecord | ReplaceSessionRecord,
+  record: ModelSwitchSessionRecord,
   inputIds: readonly string[] | undefined,
-): AppendSessionRecord | ReplaceSessionRecord {
+): ModelSwitchSessionRecord;
+function appendConsumedInputIds(
+  record: AppendSessionRecord | ReplaceSessionRecord | ModelSwitchSessionRecord,
+  inputIds: readonly string[] | undefined,
+): AppendSessionRecord | ReplaceSessionRecord | ModelSwitchSessionRecord {
   if (inputIds === undefined) {
     return record;
   }
@@ -486,6 +549,18 @@ function toSessionMutationRecord(
         },
         record.consumedInputIds,
       );
+    case "model_switch":
+      return appendConsumedInputIds(
+        {
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          type: "model_switch",
+          timestamp: record.timestamp,
+          from:
+            record.from === null ? null : toSessionModelSelection(record.from),
+          to: toSessionModelSelection(record.to),
+        },
+        record.consumedInputIds,
+      );
     case "input_admitted":
       return {
         schemaVersion: SESSION_SCHEMA_VERSION,
@@ -522,6 +597,12 @@ function toSessionMutationRecord(
               bashApprovalGrants:
                 record.bashApprovalGrants.map(toBashApprovalGrant),
             }
+          : {}),
+        ...(record.activeModel !== undefined
+          ? { activeModel: toSessionModelSelection(record.activeModel) }
+          : {}),
+        ...(record.modelSwitches !== undefined
+          ? { modelSwitches: record.modelSwitches.map(toSessionModelSwitch) }
           : {}),
       };
   }
