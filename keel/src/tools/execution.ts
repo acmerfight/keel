@@ -39,7 +39,7 @@ function toolFailureMessage(error: RecoverableToolError): string {
 function scopedProjectInstructionsFailureMessage(
   error: ScopedProjectInstructionsNotVisibleError,
 ): string {
-  return `Tool failed: ${error.message}\nRecovery: ${error.recovery ?? "Review the project instructions above, then retry the tool call only if it still follows them."}`;
+  return `Tool failed: ${error.message}\nRecovery: ${error.recovery}`;
 }
 
 export async function executeToolCall(

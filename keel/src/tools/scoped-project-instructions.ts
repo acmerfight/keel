@@ -16,10 +16,16 @@ import {
   hasBinaryControlBytes,
   isBinarySample,
 } from "./text-file.ts";
-import { isInsideWorkspace, resolveWorkspaceTarget } from "./workspace-path.ts";
+import {
+  assertWorkspaceOpenTargetAtAccess,
+  isInsideWorkspace,
+  resolveWorkspaceTarget,
+} from "./workspace-path.ts";
 
 const PROJECT_INSTRUCTIONS_FILE = "AGENTS.md";
 const MAX_PROJECT_INSTRUCTIONS_BYTES = 50 * 1024;
+const PROJECT_INSTRUCTIONS_NOT_VISIBLE_RECOVERY =
+  "Review the project instructions above, then retry the tool call only if it still follows them.";
 
 interface ScopedProjectInstructionsFile {
   readonly path: string;
@@ -42,6 +48,10 @@ export interface ProjectInstructionVisibilityState {
     targetPath: string,
     content: string,
   ) => ScopedProjectInstructionsOutput;
+  readonly formatInspectionOutput: (
+    targetPaths: readonly string[],
+    content: string,
+  ) => ScopedProjectInstructionsOutput;
   readonly formatRestoreOutput: (
     snapshot: VisibleProjectInstructionSnapshot,
   ) => ScopedProjectInstructionsOutput | null;
@@ -56,14 +66,17 @@ export interface ProjectInstructionVisibilityState {
 
 export class ScopedProjectInstructionsNotVisibleError extends KeelError {
   readonly instructionPaths: readonly string[];
+  override readonly recovery: string;
 
   constructor(instructionPaths: readonly string[], instructionsBlock: string) {
+    const recovery = PROJECT_INSTRUCTIONS_NOT_VISIBLE_RECOVERY;
     super(
       "tool_project_instructions_not_visible",
       `project instructions have not been reviewed for this path:\n\n${instructionsBlock}`,
-      "Review the project instructions above, then retry the tool call only if it still follows them.",
+      recovery,
     );
     this.instructionPaths = instructionPaths;
+    this.recovery = recovery;
   }
 }
 
@@ -94,23 +107,50 @@ function projectInstructionsNotFileError(relativePath: string): KeelError {
   );
 }
 
+function projectInstructionsIgnoredError(relativePath: string): KeelError {
+  return new KeelError(
+    "tool_path_ignored",
+    `project instructions failed: ignored path: ${relativePath}`,
+    "Ask the user to unignore AGENTS.md or choose a file outside this ignored scope.",
+  );
+}
+
 function pathExists(filePath: string): boolean {
   return lstatSync(filePath, { throwIfNoEntry: false }) !== undefined;
 }
 
-function readProjectInstructionsBytes(
-  targetPath: string,
-  relativePath: string,
-): Buffer {
-  const fd = openSync(targetPath, "r");
+function readProjectInstructionsBytes(input: {
+  readonly workspacePath: string;
+  readonly targetPath: string;
+  readonly relativePath: string;
+  readonly projectIgnorePolicy: ReturnType<typeof createProjectIgnorePolicy>;
+}): { readonly bytes: Buffer; readonly targetPath: string } {
+  const fd = openSync(input.targetPath, "r");
   try {
-    const reportedSize = fstatSync(fd).size;
+    const openedStat = fstatSync(fd);
+    if (!openedStat.isFile()) {
+      throw projectInstructionsNotFileError(input.relativePath);
+    }
+    const openedTargetPath = assertWorkspaceOpenTargetAtAccess({
+      workspacePath: input.workspacePath,
+      targetPath: input.targetPath,
+      toolName: "read",
+      requestedPath: input.relativePath,
+      fd,
+    });
+    if (input.projectIgnorePolicy.isIgnored(openedTargetPath, false)) {
+      throw projectInstructionsIgnoredError(input.relativePath);
+    }
+    const reportedSize = openedStat.size;
     if (reportedSize > MAX_PROJECT_INSTRUCTIONS_BYTES) {
-      throw projectInstructionsTooLargeError(relativePath, reportedSize);
+      throw projectInstructionsTooLargeError(input.relativePath, reportedSize);
     }
     const bytes = Buffer.allocUnsafe(reportedSize);
     const bytesRead = readSync(fd, bytes, 0, bytes.length, 0);
-    return bytes.subarray(0, bytesRead);
+    return {
+      bytes: bytes.subarray(0, bytesRead),
+      targetPath: openedTargetPath,
+    };
   } finally {
     closeSync(fd);
   }
@@ -145,26 +185,21 @@ function loadScopedProjectInstructionsFile(
   const targetStat = statSync(target.targetPath);
   const targetIsDirectory = targetStat.isDirectory();
   const projectIgnorePolicy = createProjectIgnorePolicy(target.workspacePath);
-  if (
-    projectIgnorePolicy.isIgnored(target.requestedPath, targetIsDirectory) ||
-    projectIgnorePolicy.isIgnored(target.targetPath, targetIsDirectory)
-  ) {
-    throw new KeelError(
-      "tool_path_ignored",
-      `project instructions failed: ignored path: ${relativePath}`,
-      "Ask the user to unignore AGENTS.md or choose a file outside this ignored scope.",
-    );
+  if (projectIgnorePolicy.isIgnored(target.targetPath, targetIsDirectory)) {
+    throw projectInstructionsIgnoredError(relativePath);
   }
   if (!targetStat.isFile()) {
     throw projectInstructionsNotFileError(relativePath);
   }
 
-  const bytes = readProjectInstructionsBytes(target.targetPath, relativePath);
+  const { bytes, targetPath } = readProjectInstructionsBytes({
+    workspacePath,
+    targetPath: target.targetPath,
+    relativePath,
+    projectIgnorePolicy,
+  });
   const sample = bytes.subarray(0, BINARY_SAMPLE_BYTES);
-  if (
-    isBinarySample(target.targetPath, sample) ||
-    hasBinaryControlBytes(bytes)
-  ) {
+  if (isBinarySample(targetPath, sample) || hasBinaryControlBytes(bytes)) {
     throw projectInstructionsBinaryError(relativePath);
   }
   const content = decodeProjectInstructions(bytes, relativePath).trimEnd();
@@ -172,40 +207,32 @@ function loadScopedProjectInstructionsFile(
     return undefined;
   }
   return {
-    path: target.targetPath,
+    path: targetPath,
     relativePath,
     content,
   };
 }
 
 function targetDirectoryForInstructions(targetPath: string): string {
-  return dirname(targetPath);
-}
-
-function relativeTargetDirectory(
-  workspacePath: string,
-  targetPath: string,
-): string | null {
-  const targetDir = targetDirectoryForInstructions(targetPath);
-  const targetDirFromWorkspace = relative(workspacePath, targetDir);
-  if (
-    targetDirFromWorkspace.startsWith("..") ||
-    isAbsolute(targetDirFromWorkspace)
-  ) {
-    return null;
+  try {
+    if (statSync(targetPath).isDirectory()) {
+      return targetPath;
+    }
+  } catch {
+    return dirname(targetPath);
   }
-  return targetDirFromWorkspace;
+  return dirname(targetPath);
 }
 
 function candidateInstructionRelativePaths(
   workspacePath: string,
   targetPath: string,
 ): readonly string[] {
-  const targetDirFromWorkspace = relativeTargetDirectory(
+  const targetDirFromWorkspace = relative(
     workspacePath,
-    targetPath,
+    targetDirectoryForInstructions(targetPath),
   );
-  if (targetDirFromWorkspace === null || targetDirFromWorkspace === "") {
+  if (targetDirFromWorkspace === "") {
     return [];
   }
 
@@ -319,22 +346,30 @@ export function createProjectInstructionVisibilityState(
       ),
     );
 
+  const createScopedInstructionsOutput = (
+    targetPaths: readonly string[],
+    content: string,
+  ): ScopedProjectInstructionsOutput => {
+    const missingInstructions = missingInstructionsForTargets(targetPaths);
+    if (missingInstructions.length === 0) {
+      return { content, instructionPaths: [] };
+    }
+    return {
+      content: [
+        formatProjectInstructionsBlock(missingInstructions),
+        content,
+      ].join("\n\n"),
+      instructionPaths: missingInstructions.map(
+        (instruction) => instruction.path,
+      ),
+    };
+  };
+
   return {
-    formatReadOutput: (targetPath, content) => {
-      const missingInstructions = missingInstructionsForTargets([targetPath]);
-      if (missingInstructions.length === 0) {
-        return { content, instructionPaths: [] };
-      }
-      return {
-        content: [
-          formatProjectInstructionsBlock(missingInstructions),
-          content,
-        ].join("\n\n"),
-        instructionPaths: missingInstructions.map(
-          (instruction) => instruction.path,
-        ),
-      };
-    },
+    formatReadOutput: (targetPath, content) =>
+      createScopedInstructionsOutput([targetPath], content),
+    formatInspectionOutput: (targetPaths, content) =>
+      createScopedInstructionsOutput(targetPaths, content),
     formatRestoreOutput: (snapshot) => {
       const file = loadScopedProjectInstructionsFile(
         workspacePath,

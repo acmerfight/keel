@@ -374,12 +374,22 @@ const grepTool = defineTool({
   },
   risk: { kind: "workspace-read" },
   concurrency: { kind: "parallel-safe" },
-  execute: async ({ workspace, signal }, args) => {
+  execute: async ({ workspace, signal, projectInstructions }, args) => {
     const result = await executeGrep(workspace, args.pattern, {
       ...(args.path !== undefined ? { path: args.path } : {}),
       signal,
     });
-    return { content: result.content, ok: true };
+    const scopedOutput = projectInstructions?.formatInspectionOutput(
+      result.inspectionTargetPaths,
+      result.content,
+    );
+    return {
+      content: scopedOutput?.content ?? result.content,
+      ok: true,
+      ...(scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0
+        ? { visibleProjectInstructionPaths: scopedOutput.instructionPaths }
+        : {}),
+    };
   },
 });
 
@@ -453,9 +463,14 @@ const writeTool = defineTool({
         args.path,
         "write",
       );
-      projectInstructions.assertMutationAllowed([target.targetPath]);
+      projectInstructions.assertMutationAllowed([
+        target.targetPath,
+        target.resolvedTargetPath,
+      ]);
     }
-    const result = executeWrite(workspace, args.path, args.content);
+    const result = executeWrite(workspace, args.path, args.content, {
+      ...(projectInstructions !== undefined ? { projectInstructions } : {}),
+    });
     return {
       content: result.content,
       ok: true,

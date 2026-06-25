@@ -1523,6 +1523,9 @@ describe("File Editing", () => {
       expect(restoredFileReadMessage?.content).toContain(
         "export const route = 'current';",
       );
+      expect(restoredFileReadMessage?.content).not.toContain(
+        "Project instructions from packages/api/AGENTS.md",
+      );
       const editMessage = finalMessages.find(
         (message) =>
           message.role === "tool" && message.toolCallId === "edit_api_server",
@@ -2184,6 +2187,161 @@ describe("File Editing", () => {
       ]);
       expect(readVisibility.hasRead(keepTargetPath)).toBe(true);
       expect(readVisibility.hasRead(goneTargetPath)).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given visible scoped AGENTS.md disappears before post-compaction restoration,
+    When recent project instructions are restored,
+    Then stale scoped instructions are skipped`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "packages", "api"), { recursive: true });
+    const instructionPath = join(workspace, "packages", "api", "AGENTS.md");
+    await writeFile(
+      instructionPath,
+      "API rule: do not replay me after deletion.\n",
+      "utf8",
+    );
+    const instructionTargetPath = await realpath(instructionPath);
+    const messages: Message[] = [];
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(workspace);
+    projectInstructionVisibility.markInstructionPathsVisible([
+      instructionTargetPath,
+    ]);
+    await rm(instructionPath);
+    let sequence = 0;
+
+    try {
+      // When
+      await restorePostCompactionReads({
+        workspace,
+        signal: freshSignal(),
+        readVisibility,
+        projectInstructionVisibility,
+        messages,
+        nextToolCallId: () => `post_compaction_read_${sequence++}`,
+      });
+
+      // Then
+      expect(messages).toEqual([]);
+      expect(sequence).toBe(0);
+      expect(
+        projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
+      ).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given visible scoped AGENTS.md becomes invalid before post-compaction restoration,
+    When recent project instructions are restored,
+    Then invalid scoped instructions are skipped without aborting the turn`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "packages", "api"), { recursive: true });
+    const instructionPath = join(workspace, "packages", "api", "AGENTS.md");
+    await writeFile(
+      instructionPath,
+      "API rule: do not replay me after invalidation.\n",
+      "utf8",
+    );
+    const instructionTargetPath = await realpath(instructionPath);
+    const messages: Message[] = [];
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(workspace);
+    projectInstructionVisibility.markInstructionPathsVisible([
+      instructionTargetPath,
+    ]);
+    await writeFile(instructionPath, "a".repeat(50 * 1024 + 1), "utf8");
+    let sequence = 0;
+
+    try {
+      // When
+      await restorePostCompactionReads({
+        workspace,
+        signal: freshSignal(),
+        readVisibility,
+        projectInstructionVisibility,
+        messages,
+        nextToolCallId: () => `post_compaction_read_${sequence++}`,
+      });
+
+      // Then
+      expect(messages).toEqual([]);
+      expect(sequence).toBe(0);
+      expect(
+        projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
+      ).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given scoped AGENTS.md snapshots exhaust the post-compaction restore budget,
+    When recent project instructions are restored,
+    Then restoration stops before replaying more instructions`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const instructionTargets: string[] = [];
+    for (const packageName of ["pkg-a", "pkg-b", "pkg-c", "pkg-d"]) {
+      const packagePath = join(workspace, "packages", packageName);
+      await mkdir(packagePath, { recursive: true });
+      const instructionPath = join(packagePath, "AGENTS.md");
+      const marker = packageName.slice(-1);
+      await writeFile(
+        instructionPath,
+        `${packageName} rule\n${marker.repeat(22_000)}`,
+        "utf8",
+      );
+      instructionTargets.push(await realpath(instructionPath));
+    }
+    const messages: Message[] = [];
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(workspace);
+    projectInstructionVisibility.markInstructionPathsVisible(
+      instructionTargets,
+    );
+    let sequence = 0;
+
+    try {
+      // When
+      await restorePostCompactionReads({
+        workspace,
+        signal: freshSignal(),
+        readVisibility,
+        projectInstructionVisibility,
+        messages,
+        nextToolCallId: () => `post_compaction_read_${sequence++}`,
+      });
+
+      // Then
+      expect(sequence).toBe(3);
+      const restoredToolMessages = messages.filter(
+        (message): message is Extract<Message, { readonly role: "tool" }> =>
+          message.role === "tool",
+      );
+      expect(restoredToolMessages).toHaveLength(3);
+      expect(
+        restoredToolMessages.reduce(
+          (total, message) => total + message.content.length,
+          0,
+        ),
+      ).toBe(50_000);
+      expect(JSON.stringify(messages)).toContain(
+        "Project instructions from packages/pkg-d/AGENTS.md",
+      );
+      expect(JSON.stringify(messages)).not.toContain(
+        "Project instructions from packages/pkg-a/AGENTS.md",
+      );
+      expect(
+        projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
+      ).toEqual([]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

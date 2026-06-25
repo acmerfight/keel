@@ -675,6 +675,47 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test.skipIf(process.platform === "win32")(
+    `Given a patch adds the same real file through a symlinked parent,
+    When apply_patch validates the prepared operations,
+    Then it rejects the duplicate real target before writing the file`,
+    async () => {
+      // Given
+      const workspace = await createWorkspace();
+      await mkdir(join(workspace, "packages", "api", "src"), {
+        recursive: true,
+      });
+      await symlink(
+        join(workspace, "packages", "api", "src"),
+        join(workspace, "api-link"),
+      );
+      const patch = [
+        "*** Begin Patch",
+        "*** Add File: packages/api/src/new.ts",
+        "+export const value = 1;",
+        "*** Add File: api-link/new.ts",
+        "+export const value = 2;",
+        "*** End Patch",
+      ].join("\n");
+
+      try {
+        // When / Then
+        expectApplyPatchError(
+          () => executeApplyPatch(workspace, patch),
+          "tool_invalid_patch",
+          "multiple operations target api-link/new.ts",
+        );
+        await expect(
+          readFile(join(workspace, "packages", "api", "src", "new.ts"), "utf8"),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
+
   test(`Given a patch add target already exists,
     When apply_patch validates the patch,
     Then it rejects the patch without clobbering the existing file`, async () => {

@@ -1,5 +1,5 @@
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
-import { KeelError } from "../core/error.ts";
+import { isRecoverableToolErrorCode, KeelError } from "../core/error.ts";
 import {
   type RecordLastBatchCheckpointOperation,
   recordLastTaskCheckpoint,
@@ -589,6 +589,10 @@ interface RestoredPostCompactionProjectInstructions {
   readonly complete: boolean;
 }
 
+function shouldSkipProjectInstructionRestore(error: unknown): boolean {
+  return error instanceof KeelError && isRecoverableToolErrorCode(error.code);
+}
+
 export async function restorePostCompactionReads(options: {
   readonly workspace: string;
   readonly signal: AbortSignal;
@@ -614,8 +618,19 @@ export async function restorePostCompactionReads(options: {
     if (remainingTotalChars <= 0) {
       break;
     }
-    const output =
-      options.projectInstructionVisibility.formatRestoreOutput(snapshot);
+    let output: ReturnType<
+      ProjectInstructionVisibilityState["formatRestoreOutput"]
+    >;
+    try {
+      output =
+        options.projectInstructionVisibility.formatRestoreOutput(snapshot);
+    } catch (error) {
+      /* v8 ignore next 3: recoverable AGENTS.md reload failures are covered; unexpected restore failures must still abort the turn. */
+      if (!shouldSkipProjectInstructionRestore(error)) {
+        throw error;
+      }
+      continue;
+    }
     if (output === null) {
       continue;
     }
@@ -634,6 +649,13 @@ export async function restorePostCompactionReads(options: {
       content: fittedContent.content,
       complete: fittedContent.complete,
     });
+  }
+  for (const instruction of restoredProjectInstructions) {
+    if (instruction.complete) {
+      options.projectInstructionVisibility.markInstructionPathsVisible(
+        instruction.instructionPaths,
+      );
+    }
   }
 
   for (const read of targetPaths) {
@@ -696,13 +718,6 @@ export async function restorePostCompactionReads(options: {
       toolCallId: read.toolCall.id,
       content: read.content,
     });
-  }
-  for (const instruction of restoredProjectInstructions) {
-    if (instruction.complete) {
-      options.projectInstructionVisibility.markInstructionPathsVisible(
-        instruction.instructionPaths,
-      );
-    }
   }
   options.readVisibility.applyVisibleToolExecutions(
     restored.filter((read) => read.complete).map((read) => read.execution),

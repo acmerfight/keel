@@ -340,6 +340,11 @@ export async function runInteractiveSession(
       resolved ??= options.resolveProvider(userMessage);
       reportProvider ??= resolved;
       const messagesBeforeTurn = messages.slice();
+      const projectInstructionPathsBeforeTurnOldestFirst = [
+        ...projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
+      ]
+        .reverse()
+        .map((snapshot) => snapshot.instructionPath);
       const checkpointOperations: RecordLastBatchCheckpointOperation[] = [];
       const turnStartSequence = lineReader.sequence();
       const drainedInjectedLines: QueuedLine[] = [];
@@ -408,6 +413,10 @@ export async function runInteractiveSession(
         const finalEnd = await options.printAgentEvents(stream);
         if (turnAbortController.signal.aborted) {
           messages.splice(0, messages.length, ...messagesBeforeTurn);
+          projectInstructionVisibility.clear();
+          projectInstructionVisibility.markInstructionPathsVisible(
+            projectInstructionPathsBeforeTurnOldestFirst,
+          );
           const restoredLines = [
             ...drainedInjectedLines,
             ...deferredInputLines,
@@ -443,6 +452,10 @@ export async function runInteractiveSession(
           throw error;
         }
         messages.splice(0, messages.length, ...messagesBeforeTurn);
+        projectInstructionVisibility.clear();
+        projectInstructionVisibility.markInstructionPathsVisible(
+          projectInstructionPathsBeforeTurnOldestFirst,
+        );
         const restoredLines = [...drainedInjectedLines, ...deferredInputLines];
         restoreDrainedInput(restoredLines);
         options.writeStdout("\n");
