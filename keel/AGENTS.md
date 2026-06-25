@@ -20,124 +20,76 @@ pnpm knip           # Dead code detection
 
 ## Architecture
 
-```
+```text
 src/
-  cli/         → Entry point
-  core/        → error, logger, git, cost
-  agent/       → Agent loop, prompt
-  llm/         → Provider abstraction (DeepSeek, Kimi, Qwen, fake, OpenAI-compatible shared runtime)
-  permissions/ → Tool permission policies
-  testing/     → Test support code (CLI harnesses, fixture factories)
-  tools/       → bash, edit, glob, grep, ls, read, write
+  cli/         -> Entry point
+  core/        -> error, logger, git, cost
+  agent/       -> Agent loop, prompt
+  llm/         -> Provider abstraction (DeepSeek, Kimi, Qwen, fake, OpenAI-compatible shared runtime)
+  permissions/ -> Tool permission policies
+  testing/     -> Test support code (CLI harnesses, fixture factories)
+  tools/       -> bash, edit, glob, grep, ls, read, write
 ```
 
-Layer rules (enforced by `tests/invariants/boundaries.test.ts`):
+Layer rules are enforced by `tests/invariants/boundaries.test.ts`:
+
 - `agent/` does not import `fs`, `child_process`, or `cli/`
 - `llm/` does not import `cli/` or `agent/`
 - `cli/` does not import `testing/`
 
-## Code Style
+## Core Principles
+
+Build user-runnable vertical slices. After each PR, a user should be able to run a command and observe the improvement; avoid shipping only internal architecture unless it directly unlocks the slice.
+
+Test behavior before implementation. Start with a failing GWTE test at the boundary that owns the risk, then make the smallest product change that passes it.
+
+Keep safety boundaries explicit. Preserve every representation that can carry authorization meaning, validate both requested and resolved paths before acting, and parse external data through schemas before business logic.
+
+Be honest about shell and provider visibility. Bash approval is user consent, not sandboxing. Live provider requests may include raw user text and tool output; transcript/session redaction is only best-effort at-rest hygiene.
+
+Use types as contracts. Required runtime data should be required in the type, absence should be semantic, and guards should not defend against states trusted internal types already exclude.
+
+Prefer concrete code. Keep control flow local and linear; add abstraction only for current proven duplication or a real boundary.
+
+## Topic Docs
+
+- [DEVELOPMENT.md](DEVELOPMENT.md) - code style, type precision, safety boundaries, shell/provider visibility semantics, and abstraction discipline.
+- [TESTING.md](TESTING.md) - BDD style, test boundaries, coverage triage, and verification expectations.
+- [SLICING.md](SLICING.md) - vertical slicing rules and how to choose a runnable slice boundary.
+- [ROADMAP.md](ROADMAP.md) - north-star goals and priority-ordered capability gaps.
+- [EVALS.md](EVALS.md) - harness eval task format, execution, and result interpretation.
+
+When a workflow skill is triggered, follow that skill's description and `SKILL.md` exactly. If it names required files, read each named file directly; do not treat this index as a replacement for skill-specific reading requirements.
+
+## Hard Rules
 
 - Biome handles formatting and linting. Do not use ESLint or Prettier.
-- No comments unless the WHY is non-obvious.
-- All interface properties `readonly`.
-- Use function property syntax for interface methods (`readonly fn: (x: T) => R`), not method syntax (`fn(x: T): R`). Method syntax bypasses `strictFunctionTypes`.
-- No `as` type assertions. Use type guards, `satisfies`, or schema validation (Zod) to prove types. `as const` is allowed.
-- External data boundaries must parse `unknown` through an explicit schema before business logic. Use Zod for JSON from HTTP/SSE, LLM/tool arguments, child process stdout, config files, disk JSON, and environment-derived structured data. Do not use `Record<string, unknown>` property-access helpers for known external protocols; model the protocol shape with a schema and access typed data only after `safeParse` or `parse`.
-- In review, any `JSON.parse`, process output parsing, HTTP response parsing, or LLM argument parsing must show the schema boundary in the same module.
-- Pre-commit hook auto-formats staged files.
-
-### Safety Boundary Discipline
-
-When code normalizes, resolves, parses, or transforms untrusted input before enforcing a policy, preserve every representation that can carry authorization meaning.
-
-Validate both the requested representation and the resolved representation before acting. A helper must not collapse policy-relevant context into one "clean" value before access checks.
-
-Edit fuzzy matching is only a locator. Replacement must splice the original file content by the matched source span; never rewrite a file from normalized matching text.
-
-### Shell Safety Semantics
-
-Keel's project ignore policy is enforced by the built-in file tools: `read`, `ls`, `glob`, `grep`, `edit`, and `write`. `bash` is disabled by default. When enabled with `--allow-bash` or `--bash-policy trusted`, it is trusted shell mode: commands run with the current OS user's permissions and may read or modify gitignored files. `--bash-policy ask` adds per-command user approval in interactive sessions, but it is still approval, not an OS sandbox. Do not describe bash approval as preserving the file-tool ignore boundary unless a real permission or sandbox layer exists.
-
-### Abstraction Discipline
-
-Prefer concrete, linear code. Add abstraction only when it makes current code simpler, not future code imaginable.
-
-- Start with the direct implementation for the slice in front of you.
-- Abstract after the second real use case, proven duplication, or a clear external boundary.
-- Keep control flow local and sequential when possible.
-- Use indirection only when it names a real domain concept or protects a real boundary.
-- Remove extension points that are not exercised by current behavior.
-- Extract when inline detail obscures the calling function's control flow. Don't extract when the detail IS the function's primary job — process lifecycle wiring in a spawn wrapper, accumulator state transitions in a parser, etc.
-
-## Type Precision
-
-Default to required. Only use `?` or `| undefined` when you can name the semantic reason.
-
-Decision:
-
-1. "Does this field always exist at runtime?" → required
-2. "Is absence meaningful (not the same as a default value)?" → `?` (property can be omitted)
-3. "Must be present, but value can be explicitly nothing?" → `| null`
-4. Never use `| undefined` on data types — with `exactOptionalPropertyTypes`, use `?` for absence or redesign to avoid it
-
-Common mistakes:
-
-- ❌ `?` because "the caller might not pass it" — put defaults in a factory function
-- ❌ `?` because "it might be zero/empty string" — zero and empty string are values, not absence
-- ❌ `Partial<T>` as the data type — use it only at call boundaries (function params, spread overrides)
-- ❌ Broad truthy/falsy checks for sentinel values — use `value === null`, `value !== undefined`, `value === ""`, or `value === 0` to name the exact state being checked
-
-Pattern:
-
-```typescript
-// Data type: all required
-interface Response {
-  readonly text: string;
-  readonly tokenize: boolean;
-  readonly usage: Usage;
-}
-
-// Construction: factory with defaults
-function response(text: string, tokenize = false, usage = DEFAULT_USAGE): Response {
-  return { text, tokenize, usage };
-}
-```
-
-When `?` IS correct:
-
-- Config the user may omit (absence = use system default)
-- External API fields that may be absent
-- PATCH DTOs (only send changed fields)
-
-Litmus test: if you would write `?? defaultValue` every time you read this field, it is required — the default belongs in a factory, not in the type.
-
-Signature honesty: a function's parameter type is its contract, not a convenience wrapper for the caller. If the function's job is "append a message," accept `Message`, not `Message | null`. The null-guard belongs at the call site where the conditional is visible.
-
-Corollary: trust correct types. Do not guard against states an already-trusted internal type excludes — in source or tests. Runtime checks that enforce domain predicates the type system cannot encode (workspace safety, range constraints, protocol validity) are not redundant.
-
-Decision: "Does the type permit this state?" No → delete the check. Yes → either narrow the type or keep the guard if the predicate is beyond the type system's reach.
+- All interface properties are `readonly`; use function property syntax for interface functions.
+- No `as` type assertions. Use type guards, `satisfies`, or schema validation. `as const` is allowed.
+- Parse external data through explicit Zod schemas before business logic.
+- Preserve security-relevant path representations until policy checks are complete.
+- Bash is trusted shell mode, not a sandbox. Approved or trusted shell output can be sent to the provider unredacted.
+- Transcript/session redaction is best-effort at-rest hygiene. Live provider requests are not a secret boundary.
+- Keep implementations concrete. Add abstraction only for current proven duplication or a real boundary.
 
 ## Development
 
-**BDD: test first, then implement.** Every feature starts with a failing test in GWTE format. Write the test, watch it fail, then write the minimum code to make it pass. Do not write implementation code without a corresponding test.
+BDD first. Every feature starts with a failing GWTE test unless the change is pure mechanical docs/refactor and cannot change behavior.
 
-**Vertical slicing.** Every deliverable is end-to-end: a user can run it and get a result. See [SLICING.md](SLICING.md).
+Every deliverable is a vertical slice: after the PR, a user can run a command and observe the result. See [SLICING.md](SLICING.md).
 
-Before choosing the next feature, inspect the current product entrypoint. Prefer the smallest user-runnable slice over the next internal architecture step. Examples in SLICING.md are illustrative, not a fixed roadmap.
+Pick the highest-priority roadmap gap that can ship as a bounded vertical slice. Re-check the current product entrypoint before choosing work.
 
-**Choosing what to build next:** [ROADMAP.md](ROADMAP.md) defines the north-star goals (replace Codex CLI / Claude Code for daily coding; exceed Claude Code / Codex / Kimi Code in measured harness execution quality) and a priority-ordered gap list. Pick the highest-priority gap that can ship as a vertical slice.
+## Merge To Main
 
-## Merge to Main
+Never push directly to `main`.
 
-Never push directly to main. Always use a PR and wait for CI to pass. Workflow:
+1. Create a feature branch.
+2. Push and open a PR.
+3. Wait for CI: typecheck, build, lint, test coverage, knip.
+4. Squash merge to `main`; it is the only allowed merge strategy.
 
-1. Create a feature branch
-2. Push and open a PR
-3. Wait for CI (typecheck → build → lint → test:coverage → knip) to pass
-4. Squash merge to main (only merge strategy allowed)
-
-PR summary format (English, diff against latest main before writing):
+PR summary format, written in English against latest `main`:
 
 - **Problem:** what was wrong or missing
 - **Solution:** what this PR changes
@@ -146,16 +98,9 @@ PR summary format (English, diff against latest main before writing):
 
 ## Testing
 
-See [TESTING.md](TESTING.md). Summary:
+See [TESTING.md](TESTING.md). Short version:
 
-1. Only mock LLM (`fake` provider). No vi.mock, no mocking internals, no testing private functions. Everything else is real.
-2. BDD with GWTE format. Tests are executable specs for the boundary they cover.
-3. Final verification uses `pnpm test:coverage`, not `pnpm test`, followed by `pnpm coverage:patch` before pushing PR branches that change coverable code.
-4. `agent/` and `cli/` titles must read as product behavior; `tools/`, `providers/`, and `invariants/` titles should read as tool, protocol, or architecture contracts. Keep fixture/protocol words out of `agent/` and `cli/` test titles.
-
-Control flow & boundaries:
-
-5. Tool behavior that changes agent control flow needs at least one `tests/agent/` case.
-6. Agent tests cover control-flow classes, not every tool sequence. Keep tool/provider/state risks at their owning boundary.
-7. Coverage gaps require triage, not automatic tests: cover reachable behavior, remove unreachable branches, document necessary guards, and never mock impossible states just to satisfy coverage. See [TESTING.md Coverage Triage](TESTING.md#coverage-triage) for entrypoint, state, and safety-boundary rules.
-8. When testing real failure paths (not unreachable states; see rule 7), include uncooperative callees if the caller owns user-visible recovery, retry, timeout, cleanup, or exit behavior. Inject failures through test boundaries (fake provider, local server, test runtime), not production code. Env switches are OK only for documented runtime behavior.
+1. Only mock the LLM through the `fake` provider; everything else is real.
+2. BDD with GWTE titles.
+3. PR-ready verification uses `pnpm test:coverage`, then `pnpm coverage:patch` when coverable code changed.
+4. Put tests at the boundary that owns the risk: CLI for user-visible CLI behavior, agent for loop control flow, provider for protocol, tools for tool contracts, invariants for architecture.

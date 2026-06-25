@@ -42,6 +42,7 @@ Use current state, not memory.
 2. Read project intent and process:
    - root `AGENTS.md`
    - `keel/AGENTS.md` and `keel/CLAUDE.md`
+   - `keel/DEVELOPMENT.md`
    - `keel/ROADMAP.md`
    - `keel/SLICING.md`
    - `keel/TESTING.md`

@@ -55,6 +55,7 @@ export function formatInteractiveHelp(): string {
     "  /fork-points       List restored user-message fork points.",
     "",
     "Session commands:",
+    "      Session ledgers are best-effort redacted at rest; live provider requests may include raw content.",
     "  keel sessions",
     "      List saved interactive sessions.",
     "  keel --resume <id>",

@@ -43,6 +43,7 @@ If the user later asks to merge, use `/merge-pr <target>` for merge and cleanup.
 2. Read the active project guidance before choosing or changing code:
    - root `AGENTS.md`
    - `keel/AGENTS.md` and `keel/CLAUDE.md`
+   - `keel/DEVELOPMENT.md`
    - `keel/TESTING.md`
    - `keel/SLICING.md`
    - `keel/ROADMAP.md` when choosing or justifying the next slice

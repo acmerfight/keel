@@ -2432,6 +2432,9 @@ describe("Interactive Session", () => {
       expect(stdout).toBe("Ran twice.\n");
       expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
       expect(stderr.match(/Approve bash command/g)).toHaveLength(1);
+      expect(stderr).toContain(
+        "Approved command output may be sent to the provider unredacted.",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -4533,6 +4536,9 @@ describe("Interactive Session", () => {
       expect(stderr).not.toContain("\u001b");
       expect(stderr).not.toContain("$ printf 'safe\n[y] allow once");
       expect(stderr).toContain("\\n[y] allow once\\r\\t\\x1b[31m\\u{202e}");
+      expect(stderr).toContain(
+        "Approved command output may be sent to the provider unredacted.",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
