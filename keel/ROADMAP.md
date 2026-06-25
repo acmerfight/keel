@@ -30,6 +30,22 @@ slice (see [SLICING.md](SLICING.md)). The priority order here answers
 list, not a fixed sequence: re-check the current product entrypoint
 before every pick, and re-triage this file when reality changes.
 
+Do not mistake measurement infrastructure for the next product slice while
+basic daily-use capabilities are still incomplete. Eval coverage is how keel
+proves a harness change helped; it is not a replacement for the missing
+interactive, provider/model, context, edit, session, and approval capabilities
+that make keel usable in the first place. Until keel is credible as a daily
+coding agent, prefer the highest user-runnable P0/P1 product gap over a
+standalone eval-corpus-growth slice. Add or update eval tasks when they are
+attached to a real product fix or when a real failure must be preserved for
+regression, but do not let eval work displace foundational usability.
+
+Keel is pre-release. Optimize the roadmap for a coherent first usable product,
+not for compatibility with old internal schemas or unfinished command shapes.
+Breaking session, report, eval, or provider-config formats is acceptable when it
+simplifies the product model, as long as each merged slice remains runnable and
+safety boundaries stay intact.
+
 ## Current State (2026-06)
 
 What a user can do today:
@@ -119,6 +135,13 @@ Known limits that shape the priorities below:
 - Eval results compare keel across versions; cross-agent comparisons are
   intentionally deferred until the core coding loop is more complete and the
   suite has a larger real-task corpus.
+- Workflow expansion features are not the current bottleneck. Local explicit
+  skills are useful once the basic interactive/provider/context/edit/session
+  loop is usable; sub-agents, MCP, marketplaces, and IDE integration should wait
+  until keel is credible as a standalone coding agent. These features depend on
+  stable tool, permission, session, context, report, and failure-recovery
+  semantics; before that, they multiply unresolved failure modes instead of
+  improving task success.
 
 ## P0 — Blocks daily use or makes the quality goal unfalsifiable
 
@@ -165,8 +188,11 @@ Known limits that shape the priorities below:
    bash-driven test fixing, long-file editing, stale edit recovery,
    repeated-string disambiguation, test-preserving bug fixes, and
    pattern-following feature additions. Result comparison now reports per-task
-   score and efficiency deltas with transcript paths for regressions. The next
-   work is corpus growth from real daily-use failures. External agent runners
+   score and efficiency deltas with transcript paths for regressions. Keep
+   growing the corpus when a real daily-use failure is being fixed or preserved,
+   but do not choose standalone corpus growth ahead of the unresolved daily-use
+   gaps in interactive UX, provider/model switching, context reliability, edit
+   reliability, session workflow, or approval ergonomics. External agent runners
    and cross-agent same-model comparisons should wait until the basic daily-use
    capabilities below are stronger and `keel eval` has enough real usage to make
    the comparison meaningful.
@@ -219,6 +245,11 @@ Codex/Claude Code — or directly moves the eval numbers.
   created file, apply_patch batch, or multi-file task checkpoint. Remaining
   work is broader command grouping and user-facing controls for choosing older
   checkpoints.
+- **Local workflow skills** — explicit, local, user-invoked workflows for
+  repeatable project tasks such as slicing, review, merge cleanup, release, or
+  eval-task creation. Do this after the core interactive/provider/context/edit
+  loop is usable, and before sub-agents. First slices should load local skill
+  instructions only; no marketplace, auto-activation, or multi-agent execution.
 
 ## P2 — After the replacement works
 
@@ -228,6 +259,7 @@ Not needed to switch; revisit once P0/P1 are done.
 - Sub-agents
 - Plan mode
 - IDE integration
+- Skill marketplace or automatic skill activation
 - OS-level sandboxing for bash (Seatbelt on macOS, bubblewrap on Linux —
   the codex pattern), upgrading **Bash approval hardening** from approval
   to enforcement
