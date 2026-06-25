@@ -149,9 +149,7 @@ function readSessionHeaderLine(filePath: string, ledgerSize: number): string {
     0,
     Math.min(ledgerSize, SESSION_LEDGER_HEADER_READ_MAX_BYTES),
   );
-  const newlineIndex = sample.indexOf("\n");
-  const headerLine =
-    newlineIndex === -1 ? sample : sample.slice(0, newlineIndex);
+  const [headerLine = ""] = sample.split("\n", 1);
   if (headerLine === "") {
     sessionStoreError(
       `Error: cannot load session ledger ${filePath}: ledger has no session header.`,
@@ -164,8 +162,8 @@ function readCompleteTailSessionJsonLines(
   filePath: string,
   ledgerSize: number,
 ): readonly string[] {
-  const tailStart = Math.max(0, ledgerSize - SESSION_LEDGER_RESUME_MAX_BYTES);
-  const readStart = tailStart === 0 ? 0 : tailStart - 1;
+  const tailStart = ledgerSize - SESSION_LEDGER_RESUME_MAX_BYTES;
+  const readStart = tailStart - 1;
   const tail = readSessionLedgerRange(
     filePath,
     readStart,

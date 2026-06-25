@@ -1,3 +1,4 @@
+import { errorMessage } from "../../core/error.ts";
 import { sanitizeStatusLineText } from "../output.ts";
 
 interface HelpCommand {
@@ -204,8 +205,7 @@ export function parseInteractiveCommand(
 }
 
 export function formatInteractiveCommandFailure(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return `${sanitizeStatusLineText(message)}\n`;
+  return `${sanitizeStatusLineText(errorMessage(error))}\n`;
 }
 
 export function undoRestoredContextMessage(filePath: string): string {
@@ -213,8 +213,7 @@ export function undoRestoredContextMessage(filePath: string): string {
 }
 
 export function formatManualCompactionFailure(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return `Context compaction failed: ${sanitizeStatusLineText(message)}\n`;
+  return `Context compaction failed: ${sanitizeStatusLineText(errorMessage(error))}\n`;
 }
 
 export function formatForkRequiresNamedSession(

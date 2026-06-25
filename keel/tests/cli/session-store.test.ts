@@ -1805,6 +1805,36 @@ describe("Session Store", () => {
     }
   });
 
+  test(`Given a session lock has a structurally invalid owner record,
+    When the same session lock is acquired again,
+    Then the lock is treated as active instead of being removed`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const lockPath = join(home, "sessions", "invalid-owner", "active.lock");
+    await mkdir(lockPath, { recursive: true });
+    await writeFile(
+      join(lockPath, "owner.json"),
+      `${JSON.stringify({
+        pid: "not-a-number",
+        token: "invalid",
+        createdAt: "1970-01-01T00:00:00.000Z",
+      })}\n`,
+      "utf8",
+    );
+
+    try {
+      // When / Then
+      expect(() =>
+        acquireSessionLock({
+          sessionId: "invalid-owner",
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow(SessionStoreError);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a session lock cannot be released,
     When the active lock is released,
     Then release fails closed`, async () => {

@@ -147,11 +147,11 @@ export function createLineReader(
       });
     },
     readLineAfter: (sequence, signal) => {
-      const queuedIndex = queued.findIndex((line) => line.sequence > sequence);
-      if (queuedIndex >= 0) {
-        const queuedLine = queued[queuedIndex];
-        queued.splice(queuedIndex, 1);
-        return Promise.resolve(queuedLine?.line ?? null);
+      for (const [index, queuedLine] of queued.entries()) {
+        if (queuedLine.sequence > sequence) {
+          queued.splice(index, 1);
+          return Promise.resolve(queuedLine.line);
+        }
       }
       if (closed) {
         return Promise.resolve(null);
@@ -164,6 +164,7 @@ export function createLineReader(
         let waiter: LineWaiter;
         const onAbort = () => {
           const index = freshWaiters.indexOf(waiter);
+          /* v8 ignore next 3: while the abort listener is registered, the waiter is registered; this guard is defensive against future lifecycle changes. */
           if (index >= 0) {
             freshWaiters.splice(index, 1);
           }
