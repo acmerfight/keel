@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { z } from "zod";
-import type { ProviderId } from "../core/provider-id.ts";
+import { type ProviderId, providerIds } from "../core/provider-id.ts";
 import {
   type BashMode,
   type BashPolicy,
@@ -111,7 +111,7 @@ export const USAGE = [
 
 const maxCostSchema = z.coerce.number().finite().positive();
 const bashPolicySchema = z.enum(["ask", "deny", "trusted"]);
-const providerIdSchema = z.enum(["fake", "deepseek", "kimi", "qwen"]);
+const providerIdSchema = z.enum(providerIds);
 const trialsSchema = z.coerce.number().int().positive();
 
 function parseMaxCost(raw: string | undefined): ParseResult<number> {

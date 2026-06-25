@@ -292,6 +292,85 @@ describe("CLI Text Reply", () => {
     }
   });
 
+  test(`Given user starts an interactive session,
+    When user switches provider and model with /model,
+    Then the next prompt uses the selected provider and model`, async () => {
+    // Given
+    let receiveRequestModel: (model: string) => void = () => {};
+    const requestModelReceived = new Promise<string>((resolve) => {
+      receiveRequestModel = resolve;
+    });
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      req.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        receiveRequestModel(requestModelSchema.parse(JSON.parse(body)).model);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(
+          sseTextReplyWithUsage("interactive switched Qwen", {
+            promptTokens: 10,
+            promptCacheHitTokens: 0,
+            promptCacheMissTokens: 10,
+            completionTokens: 3,
+          }),
+        );
+      });
+    });
+    await listen(server);
+    const { child, result } = runCliProcess(
+      [],
+      {
+        KEEL_PROVIDER: "fake",
+        DASHSCOPE_API_KEY: "test-key",
+        QWEN_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_FORCE_INTERACTIVE: "1",
+      },
+      { stdin: "pipe" },
+    );
+    child.stdin?.on("error", () => {});
+
+    try {
+      // When
+      child.stdin?.write("/model qwen/qwen3.7-plus\n");
+      child.stdin?.write("hello selected provider\n");
+      child.stdin?.end();
+
+      // Then
+      const requestModel = await withTimeout(
+        requestModelReceived,
+        5000,
+        "interactive CLI did not send a switched provider request",
+      );
+      const exit = await withTimeout(
+        result,
+        5000,
+        "interactive CLI did not finish after stdin closed",
+      );
+      expect(exit.exitCode).toBe(0);
+      expect(exit.signal).toBeNull();
+      expect(exit.stdout).toContain("Model switched to qwen/qwen3.7-plus\n");
+      expect(exit.stdout).toContain("interactive switched Qwen\n");
+      expect(exit.stderr).toBe("");
+      expect(requestModel).toBe("qwen3.7-plus");
+    } finally {
+      child.kill("SIGKILL");
+      await close(server);
+    }
+  });
+
   test(`Given an interactive session is waiting for input,
     When user interrupts the idle session,
     Then the CLI exits as interrupted`, async () => {

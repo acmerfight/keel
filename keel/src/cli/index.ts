@@ -686,13 +686,19 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
             exitCode = code;
           },
           forceExit: runtime.forceExit,
-          resolveProvider: (message) =>
-            resolveInteractiveProvider(message, runtime, {
-              ...(cliArgs.providerId !== undefined
-                ? { providerId: cliArgs.providerId }
-                : {}),
-              ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
-            }),
+          resolveProvider: (message, selection) =>
+            resolveInteractiveProvider(
+              message,
+              runtime,
+              selection ?? {
+                ...(cliArgs.providerId !== undefined
+                  ? { providerId: cliArgs.providerId }
+                  : {}),
+                ...(cliArgs.model !== undefined
+                  ? { model: cliArgs.model }
+                  : {}),
+              },
+            ),
           requireKnownCostModel,
           printAgentEvents: (stream) => printAgentEvents(stream, runtime),
           formatCostReport,

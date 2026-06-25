@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline/promises";
+import { shouldCompactBeforeRequest } from "../agent/context-compaction.ts";
 import type { CostReport } from "../agent/loop.ts";
 import {
   clearReadVisibilityState,
@@ -48,6 +49,7 @@ import type {
   InteractiveResolvedProvider,
   InteractiveSessionOptions,
   InteractiveSessionResult,
+  ProviderSelection,
 } from "./interactive-session/types.ts";
 
 export type {
@@ -57,6 +59,40 @@ export type {
   InteractiveSessionResult,
   SessionPersistenceReason,
 } from "./interactive-session/types.ts";
+
+function formatActiveModel(resolved: InteractiveResolvedProvider): string {
+  return `${resolved.providerId}/${resolved.model}`;
+}
+
+function resolveSelectedProvider(
+  options: InteractiveSessionOptions,
+  userMessage: string,
+  selection?: ProviderSelection,
+): InteractiveResolvedProvider {
+  const next = options.resolveProvider(userMessage, selection);
+  if (shouldTrackInteractiveCost(options.cliArgs)) {
+    options.requireKnownCostModel(next);
+  }
+  return next;
+}
+
+function switchWouldOverflowTargetContext(options: {
+  readonly systemPrompt: string;
+  readonly messages: readonly Message[];
+  readonly target: InteractiveResolvedProvider;
+  readonly bashToolVisible: boolean;
+}): boolean {
+  if (options.messages.length === 0) {
+    return false;
+  }
+  return shouldCompactBeforeRequest(
+    options.systemPrompt,
+    options.messages,
+    options.target.contextCompaction,
+    undefined,
+    { allowBash: options.bashToolVisible },
+  );
+}
 
 export async function runInteractiveSession(
   options: InteractiveSessionOptions,
@@ -226,6 +262,69 @@ export async function runInteractiveSession(
             consumeQueuedInputLines([rawInput]);
             break;
         }
+        continue;
+      }
+      if (interactiveCommand?.kind === "model") {
+        try {
+          if (interactiveCommand.selection === undefined) {
+            resolved ??= resolveSelectedProvider(options, userMessage);
+            options.writeStdout(
+              `Current model: ${formatActiveModel(resolved)}\nUsage: /model <provider>/<model>\n`,
+            );
+            consumeQueuedInputLines([rawInput]);
+            continue;
+          }
+
+          if (
+            resolved !== null &&
+            resolved.providerId === interactiveCommand.selection.providerId &&
+            resolved.model === interactiveCommand.selection.model
+          ) {
+            options.writeStdout(
+              `Model already set to ${formatActiveModel(resolved)}\n`,
+            );
+            consumeQueuedInputLines([rawInput]);
+            continue;
+          }
+
+          if (
+            options.cliArgs.reportFile !== undefined &&
+            reportProvider !== null
+          ) {
+            options.writeStderr(
+              "Error: /model after a reported turn is not supported yet; start a new session or omit --report until model-switch reporting is implemented.\n",
+            );
+            consumeQueuedInputLines([rawInput]);
+            continue;
+          }
+
+          const nextResolved = resolveSelectedProvider(
+            options,
+            userMessage,
+            interactiveCommand.selection,
+          );
+          if (
+            switchWouldOverflowTargetContext({
+              systemPrompt,
+              messages,
+              target: nextResolved,
+              bashToolVisible: bashModeExposesTool(options.cliArgs.bashMode),
+            })
+          ) {
+            options.writeStderr(
+              `Error: switching to ${formatActiveModel(nextResolved)} requires model-switch compaction, which is not implemented yet.\n`,
+            );
+            consumeQueuedInputLines([rawInput]);
+            continue;
+          }
+          resolved = nextResolved;
+          options.writeStdout(
+            `Model switched to ${formatActiveModel(resolved)}\n`,
+          );
+        } catch (error) {
+          options.writeStderr(formatInteractiveCommandFailure(error));
+        }
+        consumeQueuedInputLines([rawInput]);
         continue;
       }
       if (interactiveCommand?.kind === "fork-points") {
