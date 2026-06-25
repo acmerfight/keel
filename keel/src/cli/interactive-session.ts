@@ -1,5 +1,4 @@
 import { createInterface } from "node:readline/promises";
-import { shouldCompactBeforeRequest } from "../agent/context-compaction.ts";
 import type { CostReport } from "../agent/loop.ts";
 import {
   clearReadVisibilityState,
@@ -43,6 +42,10 @@ import {
   trimQueuedLine,
 } from "./interactive-session/line-reader.ts";
 import { executeManualCompaction } from "./interactive-session/manual-compact.ts";
+import {
+  executeModelSwitchCompaction,
+  modelSwitchRequiresCompaction,
+} from "./interactive-session/model-switch-compact.ts";
 import type {
   EndEvent,
   EndEventWithCost,
@@ -74,24 +77,6 @@ function resolveSelectedProvider(
     options.requireKnownCostModel(next);
   }
   return next;
-}
-
-function switchWouldOverflowTargetContext(options: {
-  readonly systemPrompt: string;
-  readonly messages: readonly Message[];
-  readonly target: InteractiveResolvedProvider;
-  readonly bashToolVisible: boolean;
-}): boolean {
-  if (options.messages.length === 0) {
-    return false;
-  }
-  return shouldCompactBeforeRequest(
-    options.systemPrompt,
-    options.messages,
-    options.target.contextCompaction,
-    undefined,
-    { allowBash: options.bashToolVisible },
-  );
 }
 
 export async function runInteractiveSession(
@@ -303,24 +288,66 @@ export async function runInteractiveSession(
             userMessage,
             interactiveCommand.selection,
           );
+          let consumedByPersistence = false;
+          let modelSwitchCost: CostReport | undefined;
           if (
-            switchWouldOverflowTargetContext({
+            modelSwitchRequiresCompaction({
               systemPrompt,
               messages,
               target: nextResolved,
-              bashToolVisible: bashModeExposesTool(options.cliArgs.bashMode),
+              cliArgs: options.cliArgs,
             })
           ) {
-            options.writeStderr(
-              `Error: switching to ${formatActiveModel(nextResolved)} requires model-switch compaction, which is not implemented yet.\n`,
+            const currentResolved: InteractiveResolvedProvider =
+              resolved ?? resolveSelectedProvider(options, userMessage);
+            resolved = currentResolved;
+            const compactAbortController = new AbortController();
+            activeAbortController = compactAbortController;
+            try {
+              const compaction = await executeModelSwitchCompaction({
+                current: currentResolved,
+                target: nextResolved,
+                workspace: options.workspace,
+                messages,
+                systemPrompt,
+                signal: compactAbortController.signal,
+                readVisibility,
+                projectInstructionVisibility,
+                nextPostCompactionReadToolCallId: () =>
+                  `post_compaction_read_${postCompactionReadSequence++}`,
+                options,
+                recordCompactionCost,
+              });
+              if (compaction.status === "rejected") {
+                consumeQueuedInputLines([rawInput]);
+                continue;
+              }
+              modelSwitchCost = compaction.cost;
+            } finally {
+              activeAbortController = null;
+            }
+            options.persistSessionMessages?.(
+              messages,
+              "compaction",
+              queuedInputIds([rawInput]),
             );
-            consumeQueuedInputLines([rawInput]);
-            continue;
+            consumedByPersistence =
+              options.persistSessionMessages !== undefined;
           }
           resolved = nextResolved;
           options.writeStdout(
             `Model switched to ${formatActiveModel(resolved)}\n`,
           );
+          if (modelSwitchCost?.budgetExceeded === true) {
+            if (!consumedByPersistence) {
+              consumeQueuedInputLines([rawInput]);
+            }
+            sessionStopReason = "cost_budget";
+            break;
+          }
+          if (consumedByPersistence) {
+            continue;
+          }
         } catch (error) {
           options.writeStderr(formatInteractiveCommandFailure(error));
         }
