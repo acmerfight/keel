@@ -19,6 +19,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "coverage:patch": "node --experimental-strip-types scripts/coverage-patch.ts --compare-branch origin/main --coverage coverage/lcov.info --fail-under 100",
     "eval:check": "node --experimental-strip-types src/cli/index.ts eval --check",
     "knip": "knip",
     "postinstall": "simple-git-hooks"
