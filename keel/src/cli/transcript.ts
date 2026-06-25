@@ -1,6 +1,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Message } from "../llm/types.ts";
+import {
+  redactMessageForPersistence,
+  redactTextForPersistence,
+} from "./persistence-redaction.ts";
 
 interface RunTranscriptInput {
   readonly provider: string;
@@ -35,9 +39,12 @@ export function writeRunTranscript(
       type: "transcript",
       provider: input.provider,
       model: input.model,
-      systemPrompt: input.systemPrompt,
+      systemPrompt: redactTextForPersistence(input.systemPrompt),
     },
-    ...input.messages.map((message) => ({ type: "message" as const, message })),
+    ...input.messages.map((message) => ({
+      type: "message" as const,
+      message: redactMessageForPersistence(message),
+    })),
   ];
   writeFileSync(
     filePath,

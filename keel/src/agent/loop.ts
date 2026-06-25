@@ -61,6 +61,7 @@ type ContextCompactionReason = "proactive" | "overflow_recovery";
 const POST_COMPACTION_MAX_RESTORED_FILES = 5;
 const POST_COMPACTION_MAX_FILE_CHARS = 20_000;
 const POST_COMPACTION_MAX_TOTAL_CHARS = 50_000;
+const VISIBLE_READS_MAX_ENTRIES = 256;
 
 export type AgentEvent =
   | { readonly type: "text"; readonly text: string }
@@ -174,6 +175,16 @@ export interface ReadVisibilityState {
 
 export function createReadVisibilityState(): ReadVisibilityState {
   const visibleReads = new Map<string, VisibleReadSnapshot>();
+  const evictOldestVisibleReads = (): void => {
+    while (visibleReads.size > VISIBLE_READS_MAX_ENTRIES) {
+      const [oldestTargetPath] = visibleReads.keys();
+      /* v8 ignore next 3: size is above the cap, so the map has an oldest key. */
+      if (oldestTargetPath === undefined) {
+        return;
+      }
+      visibleReads.delete(oldestTargetPath);
+    }
+  };
   const applyMutation = (execution: ToolExecution): void => {
     if (execution.ok && execution.mutatedTargetPath !== undefined) {
       visibleReads.delete(execution.mutatedTargetPath);
@@ -205,6 +216,7 @@ export function createReadVisibilityState(): ReadVisibilityState {
               ? { limit: execution.readTargetLimit }
               : {}),
           });
+          evictOldestVisibleReads();
         }
       }
     },

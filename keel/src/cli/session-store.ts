@@ -21,6 +21,11 @@ import type { Message, ToolCall } from "../llm/types.ts";
 import type { BashApprovalGrant } from "../permissions/bash.ts";
 import { builtinToolCallSchema } from "../tools/builtin.ts";
 import { toolCallCanonicalArguments } from "../tools/registry.ts";
+import {
+  hasPersistenceRedactionMarker,
+  redactMessageForPersistence,
+  redactTextForPersistence,
+} from "./persistence-redaction.ts";
 
 const SESSION_SCHEMA_VERSION = 2;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
@@ -734,6 +739,15 @@ function copyStoredMessage(storedMessage: StoredMessage): StoredMessage {
   };
 }
 
+function redactStoredMessageForPersistence(
+  storedMessage: StoredMessage,
+): StoredMessage {
+  return {
+    id: storedMessage.id,
+    message: redactMessageForPersistence(storedMessage.message),
+  };
+}
+
 function messagesFromStoredMessages(
   storedMessages: readonly StoredMessage[],
 ): readonly Message[] {
@@ -828,7 +842,7 @@ function toSessionQueuedInput(
     id: input.id,
     timestamp: input.timestamp,
     sequence: input.sequence,
-    line: input.line,
+    line: redactTextForPersistence(input.line),
   };
 }
 
@@ -849,8 +863,49 @@ function copyBashApprovalGrant(grant: BashApprovalGrant): BashApprovalGrant {
   }
 }
 
+function redactBashApprovalGrantForPersistence(
+  grant: BashApprovalGrant,
+): BashApprovalGrant {
+  switch (grant.type) {
+    case "exact":
+      return {
+        type: "exact",
+        cwd: grant.cwd,
+        command: redactTextForPersistence(grant.command),
+      };
+    case "prefix":
+      return {
+        type: "prefix",
+        cwd: grant.cwd,
+        argvPrefix: grant.argvPrefix.map(redactTextForPersistence),
+      };
+  }
+}
+
+function bashApprovalGrantHasRedactionMarker(
+  grant: BashApprovalGrant,
+): boolean {
+  switch (grant.type) {
+    case "exact":
+      return hasPersistenceRedactionMarker(grant.command);
+    case "prefix":
+      return grant.argvPrefix.some(hasPersistenceRedactionMarker);
+  }
+}
+
+function redactSessionQueuedInputForPersistence(
+  input: SessionQueuedInput,
+): SessionQueuedInput {
+  return {
+    id: input.id,
+    timestamp: input.timestamp,
+    sequence: input.sequence,
+    line: redactTextForPersistence(input.line),
+  };
+}
+
 function toBashApprovalGrant(grant: RawBashApprovalGrant): BashApprovalGrant {
-  return copyBashApprovalGrant(grant);
+  return redactBashApprovalGrantForPersistence(grant);
 }
 
 function toSessionMutationRecord(
@@ -1189,7 +1244,9 @@ function formatResumeSessionLoadError(error: unknown): string {
 }
 
 function normalizeSessionPreview(content: string): string {
-  const normalized = content.replace(/\s+/gu, " ").trim();
+  const normalized = redactTextForPersistence(content)
+    .replace(/\s+/gu, " ")
+    .trim();
   if (normalized.length <= SESSION_CATALOG_PREVIEW_MAX_LENGTH) {
     return normalized;
   }
@@ -1665,7 +1722,7 @@ function appendSessionSnapshotIfNeeded(options: {
 
   const replayState = replayStateForSession(options.session);
   const bashApprovalGrants = replayState.bashApprovalGrants.map(
-    copyBashApprovalGrant,
+    redactBashApprovalGrantForPersistence,
   );
   appendJsonLine(options.session.filePath, {
     schemaVersion: SESSION_SCHEMA_VERSION,
@@ -1673,7 +1730,9 @@ function appendSessionSnapshotIfNeeded(options: {
     timestamp: isoTimestamp(options.runtime),
     reason: "size_threshold",
     messages: replayState.storedMessages.map(copyStoredMessage),
-    pendingInputs: pendingInputsInReplayOrder(replayState.pendingInputsById),
+    pendingInputs: pendingInputsInReplayOrder(
+      replayState.pendingInputsById,
+    ).map(redactSessionQueuedInputForPersistence),
     ...(bashApprovalGrants.length > 0 ? { bashApprovalGrants } : {}),
   });
 }
@@ -1720,7 +1779,8 @@ function storedMessagesForProviderMessages(options: {
   readonly messages: readonly Message[];
   readonly previousStoredMessages: readonly StoredMessage[];
 }): readonly StoredMessage[] {
-  return options.messages.map((message, index) => {
+  const redactedMessages = options.messages.map(redactMessageForPersistence);
+  return redactedMessages.map((message, index) => {
     const previous = options.previousStoredMessages[index];
     if (previous !== undefined && messagesEqual(previous.message, message)) {
       return copyStoredMessage(previous);
@@ -1880,7 +1940,10 @@ export function forkSessionStore(options: {
           beforeMessageId: options.forkPoint.beforeMessageId,
           optionName: options.forkPoint.optionName,
         });
-  const messages = messagesFromStoredMessages(forkSelection.storedMessages);
+  const storedMessages = forkSelection.storedMessages.map(
+    redactStoredMessageForPersistence,
+  );
+  const messages = messagesFromStoredMessages(storedMessages);
   validateCompletedTranscript(options.targetSessionId, messages, "fork");
   const graph = forkSessionGraph({
     source: options.source,
@@ -1898,17 +1961,17 @@ export function forkSessionStore(options: {
     filePath: session.filePath,
     workspace: session.workspace,
     graph,
-    storedMessages: forkSelection.storedMessages,
+    storedMessages,
     pendingInputsById: new Map(),
     bashApprovalGrants: [],
   });
-  if (forkSelection.storedMessages.length > 0) {
+  if (storedMessages.length > 0) {
     appendJsonLine(session.filePath, {
       schemaVersion: SESSION_SCHEMA_VERSION,
       type: "append",
       timestamp: isoTimestamp(options.runtime),
       reason: "turn",
-      messages: forkSelection.storedMessages.map(copyStoredMessage),
+      messages: storedMessages.map(copyStoredMessage),
     });
   }
   appendSessionSnapshotIfNeeded({
@@ -2005,10 +2068,12 @@ export function resumeSessionStore(options: {
         consumeReplayInputs(pendingInputsById, record.inputIds);
         break;
       case "bash_approval_granted":
-        bashApprovalGrants = [
-          ...bashApprovalGrants,
-          copyBashApprovalGrant(record.grant),
-        ];
+        if (!bashApprovalGrantHasRedactionMarker(record.grant)) {
+          bashApprovalGrants = [
+            ...bashApprovalGrants,
+            copyBashApprovalGrant(record.grant),
+          ];
+        }
         break;
       case "snapshot":
         storedMessages = record.messages.map(copyStoredMessage);
@@ -2016,8 +2081,8 @@ export function resumeSessionStore(options: {
         for (const input of record.pendingInputs) {
           pendingInputsById.set(input.id, input);
         }
-        bashApprovalGrants = (record.bashApprovalGrants ?? []).map(
-          copyBashApprovalGrant,
+        bashApprovalGrants = (record.bashApprovalGrants ?? []).filter(
+          (grant) => !bashApprovalGrantHasRedactionMarker(grant),
         );
         break;
     }
@@ -2126,14 +2191,16 @@ export function persistSessionBashApprovalGrant(options: {
   readonly grant: BashApprovalGrant;
   readonly runtime: SessionStoreRuntime;
 }): void {
-  const grant = copyBashApprovalGrant(options.grant);
+  const grant = redactBashApprovalGrantForPersistence(options.grant);
   appendJsonLine(options.session.filePath, {
     schemaVersion: SESSION_SCHEMA_VERSION,
     type: "bash_approval_granted",
     timestamp: isoTimestamp(options.runtime),
     grant,
   });
-  replayStateForSession(options.session).bashApprovalGrants.push(grant);
+  if (!bashApprovalGrantHasRedactionMarker(grant)) {
+    replayStateForSession(options.session).bashApprovalGrants.push(grant);
+  }
   appendSessionSnapshotIfNeeded({
     session: options.session,
     runtime: options.runtime,
@@ -2152,17 +2219,19 @@ export function persistSessionQueuedInput(options: {
     sequence: options.sequence,
     line: options.line,
   };
+  const persistedQueuedInput =
+    redactSessionQueuedInputForPersistence(queuedInput);
   appendJsonLine(options.session.filePath, {
     schemaVersion: SESSION_SCHEMA_VERSION,
     type: "input_admitted",
     timestamp: queuedInput.timestamp,
     id: queuedInput.id,
     sequence: queuedInput.sequence,
-    line: queuedInput.line,
+    line: persistedQueuedInput.line,
   });
   replayStateForSession(options.session).pendingInputsById.set(
-    queuedInput.id,
-    queuedInput,
+    persistedQueuedInput.id,
+    persistedQueuedInput,
   );
   return queuedInput;
 }

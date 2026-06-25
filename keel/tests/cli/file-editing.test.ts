@@ -98,7 +98,7 @@ function sseEditToolCall(): string {
   });
 }
 
-function sseReadToolCall(): string {
+function sseReadToolCall(path = "note.txt"): string {
   return sseData({
     choices: [
       {
@@ -111,7 +111,7 @@ function sseReadToolCall(): string {
               function: {
                 name: "read",
                 arguments: JSON.stringify({
-                  path: "note.txt",
+                  path,
                 }),
               },
             },
@@ -550,6 +550,80 @@ describe("CLI File Editing", () => {
         tool_call_id: "call_write",
         content: "Wrote config.json",
       });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a one-shot transcript captures a secret-like tool result,
+    When user runs the CLI with transcript persistence,
+    Then the transcript stores a redacted marker instead of the raw secret`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-transcript-"));
+    const transcriptPath = join(workspace, "transcript.jsonl");
+    const githubToken = `ghp_${"C".repeat(36)}`;
+    const googleApiKey = `AIza${"D".repeat(35)}`;
+    await writeFile(
+      join(workspace, "secret.txt"),
+      `before sk-secret-213 after ${githubToken}\nAPI_KEY=env-secret-213\nGOOGLE_API_KEY=${googleApiKey}\n`,
+      "utf8",
+    );
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      req.resume();
+      req.on("end", () => {
+        requestCount++;
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+
+        if (requestCount === 1) {
+          res.write(sseReadToolCall("secret.txt"));
+          res.write(
+            sseEditToolFinish({ prompt_tokens: 20, completion_tokens: 5 }),
+          );
+        } else {
+          res.write(sseTextReply("Inspected secret.txt."));
+          res.write(sseStopFinish({ prompt_tokens: 30, completion_tokens: 3 }));
+        }
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(
+        ["--transcript", transcriptPath, "inspect secret.txt"],
+        {
+          cwd: workspace,
+          env: {
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Inspected secret.txt.\n");
+      expect(result.stderr).toBe("Tool: read secret.txt\n");
+      const transcript = await readFile(transcriptPath, "utf8");
+      expect(transcript).not.toContain("sk-secret-213");
+      expect(transcript).not.toContain("env-secret-213");
+      expect(transcript).not.toContain(githubToken);
+      expect(transcript).not.toContain(googleApiKey);
+      expect(transcript).toContain("[REDACTED_SECRET]");
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
