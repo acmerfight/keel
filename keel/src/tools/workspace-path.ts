@@ -3,6 +3,7 @@ import {
   existsSync,
   fstatSync,
   lstatSync,
+  mkdirSync,
   readdirSync,
   realpathSync,
   type Stats,
@@ -15,6 +16,7 @@ import {
   join,
   relative,
   resolve,
+  sep,
 } from "node:path";
 import { KeelError } from "../core/error.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
@@ -63,6 +65,13 @@ interface WorkspaceIdentityTargetInput extends WorkspaceAccessTargetInput {
 
 interface WorkspaceCreateTargetAccessInput extends WorkspaceAccessTargetInput {
   readonly parentPath: string;
+}
+
+interface WorkspaceParentDirectoriesInput {
+  readonly workspacePath: string;
+  readonly parentPath: string;
+  readonly toolName: FileToolName;
+  readonly requestedPath: string;
 }
 
 export function isInsideWorkspace(workspace: string, target: string): boolean {
@@ -172,6 +181,87 @@ export function resolveWorkspaceCreateTargetAtAccess(
     throw outsideWorkspaceError(input.toolName, input.requestedPath);
   }
   return resolve(parentRealPath, basename(input.targetPath));
+}
+
+function workspaceParentSegments(
+  input: WorkspaceParentDirectoriesInput,
+): readonly string[] {
+  const parentFromWorkspace = relative(input.workspacePath, input.parentPath);
+  if (parentFromWorkspace === "") return [];
+  /* v8 ignore next 3: resolveWorkspaceCreateTarget constrains parentPath before parent creation. */
+  if (parentFromWorkspace.startsWith("..") || isAbsolute(parentFromWorkspace)) {
+    throw outsideWorkspaceError(input.toolName, input.requestedPath);
+  }
+  return parentFromWorkspace.split(sep).filter((segment) => segment !== "");
+}
+
+function assertCurrentDirectoryInsideWorkspace(
+  input: WorkspaceParentDirectoriesInput,
+): void {
+  const currentRealPath = realpathSync(".");
+  if (!isInsideWorkspace(input.workspacePath, currentRealPath)) {
+    throw outsideWorkspaceError(input.toolName, input.requestedPath);
+  }
+}
+
+function childEntryExistsForParentCreate(segment: string): boolean {
+  try {
+    lstatSync(segment);
+    return true;
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function createChildDirectorySegment(
+  segment: string,
+  input: WorkspaceParentDirectoriesInput,
+): void {
+  try {
+    mkdirSync(segment);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "EEXIST") return;
+    if (isErrnoException(error) && error.code === "ENOTDIR") {
+      throw notDirectoryError(input.toolName, input.requestedPath);
+    }
+    /* v8 ignore next 1: unexpected chdir failures are OS-level faults; preserve the original error. */
+    throw error;
+  }
+}
+
+function enterChildDirectorySegment(
+  segment: string,
+  input: WorkspaceParentDirectoriesInput,
+): void {
+  try {
+    process.chdir(segment);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOTDIR") {
+      throw notDirectoryError(input.toolName, input.requestedPath);
+    }
+    throw error;
+  }
+  assertCurrentDirectoryInsideWorkspace(input);
+}
+
+export function createWorkspaceParentDirectories(
+  input: WorkspaceParentDirectoriesInput,
+): void {
+  const segments = workspaceParentSegments(input);
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(input.workspacePath);
+    assertCurrentDirectoryInsideWorkspace(input);
+    for (const segment of segments) {
+      if (!childEntryExistsForParentCreate(segment)) {
+        createChildDirectorySegment(segment, input);
+      }
+      enterChildDirectorySegment(segment, input);
+    }
+  } finally {
+    process.chdir(originalCwd);
+  }
 }
 
 function remapRequestedPath(
