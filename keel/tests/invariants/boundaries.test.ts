@@ -89,4 +89,42 @@ describe("module boundaries", () => {
 
     expect(forbidden).toEqual([]);
   });
+
+  test(`interactive compaction helpers depend on dedicated post-compaction restore`, () => {
+    const files = [
+      "src/cli/interactive-session/manual-compact.ts",
+      "src/cli/interactive-session/model-switch-compact.ts",
+    ];
+
+    for (const file of files) {
+      const source = readFileSync(file, "utf8");
+      const specifiers = importSpecifiers(source);
+      expect(
+        source,
+        `${file} must not import restore behavior from the agent loop`,
+      ).not.toMatch(
+        /\bimport\s*\{[\s\S]*\brestorePostCompactionReads\b[\s\S]*\}\s*from\s+["']\.\.\/\.\.\/agent\/loop\.ts["']/u,
+      );
+      expect(specifiers).toContain("../../agent/post-compaction-restore.ts");
+    }
+  });
+
+  test(`src/agent/loop.ts does not re-export visibility or compaction restore helpers`, () => {
+    const source = readFileSync("src/agent/loop.ts", "utf8");
+    const helperNames =
+      "ReadVisibilityState|createReadVisibilityState|clearReadVisibilityState|restorePostCompactionReads";
+
+    expect(source).not.toMatch(
+      new RegExp(
+        `\\bexport\\s+(?:async\\s+)?(?:interface|function|const|class|type)\\s+(?:${helperNames})\\b`,
+        "u",
+      ),
+    );
+    expect(source).not.toMatch(
+      new RegExp(
+        `\\bexport\\s*\\{[\\s\\S]*?\\b(?:${helperNames})\\b[\\s\\S]*?\\}`,
+        "u",
+      ),
+    );
+  });
 });

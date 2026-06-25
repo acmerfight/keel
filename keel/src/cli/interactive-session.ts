@@ -1,11 +1,11 @@
 import { createInterface } from "node:readline/promises";
 import type { CostReport } from "../agent/loop.ts";
+import { runAgentTurn } from "../agent/loop.ts";
+import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import {
   clearReadVisibilityState,
   createReadVisibilityState,
-  runAgentTurn,
-} from "../agent/loop.ts";
-import { buildAgentSystemPrompt } from "../agent/prompt.ts";
+} from "../agent/read-visibility.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
 import {

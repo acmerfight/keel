@@ -1,5 +1,5 @@
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
-import { isRecoverableToolErrorCode, KeelError } from "../core/error.ts";
+import { KeelError } from "../core/error.ts";
 import {
   type RecordLastBatchCheckpointOperation,
   recordLastTaskCheckpoint,
@@ -32,6 +32,11 @@ import {
   contextCompactionStatsForCurrentMessages,
   shouldCompactBeforeRequest,
 } from "./context-compaction.ts";
+import { restorePostCompactionReads } from "./post-compaction-restore.ts";
+import {
+  createReadVisibilityState,
+  type ReadVisibilityState,
+} from "./read-visibility.ts";
 import {
   appendSessionLedgerMessage,
   appendSessionLedgerMessages,
@@ -62,10 +67,6 @@ interface CostTrackingOptions {
 // otherwise it is the stop policy's reason label (e.g. "cost_budget",
 // "repeated_tool_call", "turn_limit").
 type ContextCompactionReason = "proactive" | "overflow_recovery";
-const POST_COMPACTION_MAX_RESTORED_FILES = 5;
-const POST_COMPACTION_MAX_FILE_CHARS = 20_000;
-const POST_COMPACTION_MAX_TOTAL_CHARS = 50_000;
-const VISIBLE_READS_MAX_ENTRIES = 256;
 
 export type AgentEvent =
   | { readonly type: "text"; readonly text: string }
@@ -160,76 +161,6 @@ interface AgentTurn {
 interface AgentTurnStop {
   readonly usage: Usage;
   readonly reason: LLMStopReason;
-}
-
-interface VisibleReadSnapshot {
-  readonly targetPath: string;
-  readonly offset?: number;
-  readonly limit?: number;
-}
-
-export interface ReadVisibilityState {
-  readonly hasRead: (targetPath: string) => boolean;
-  readonly visibleReadsMostRecentFirst: () => readonly VisibleReadSnapshot[];
-  readonly clear: () => void;
-  readonly applyImmediateMutation: (execution: ToolExecution) => void;
-  readonly applyVisibleToolExecutions: (
-    executions: readonly ToolExecution[],
-  ) => void;
-}
-
-export function createReadVisibilityState(): ReadVisibilityState {
-  const visibleReads = new Map<string, VisibleReadSnapshot>();
-  const evictOldestVisibleReads = (): void => {
-    while (visibleReads.size > VISIBLE_READS_MAX_ENTRIES) {
-      const [oldestTargetPath] = visibleReads.keys();
-      /* v8 ignore next 3: size is above the cap, so the map has an oldest key. */
-      if (oldestTargetPath === undefined) {
-        return;
-      }
-      visibleReads.delete(oldestTargetPath);
-    }
-  };
-  const applyMutation = (execution: ToolExecution): void => {
-    if (execution.ok && execution.mutatedTargetPath !== undefined) {
-      visibleReads.delete(execution.mutatedTargetPath);
-    }
-    if (execution.ok && execution.mutatedTargetPaths !== undefined) {
-      for (const targetPath of execution.mutatedTargetPaths) {
-        visibleReads.delete(targetPath);
-      }
-    }
-  };
-  return {
-    hasRead: (targetPath) => visibleReads.has(targetPath),
-    visibleReadsMostRecentFirst: () => [...visibleReads.values()].reverse(),
-    clear: () => visibleReads.clear(),
-    applyImmediateMutation: applyMutation,
-    applyVisibleToolExecutions: (executions) => {
-      for (const execution of executions) {
-        if (!execution.ok) continue;
-        applyMutation(execution);
-        if (execution.readTargetPath !== undefined) {
-          // Delete+set refreshes Map insertion order so iteration is recency ordered.
-          visibleReads.delete(execution.readTargetPath);
-          visibleReads.set(execution.readTargetPath, {
-            targetPath: execution.readTargetPath,
-            ...(execution.readTargetOffset !== undefined
-              ? { offset: execution.readTargetOffset }
-              : {}),
-            ...(execution.readTargetLimit !== undefined
-              ? { limit: execution.readTargetLimit }
-              : {}),
-          });
-          evictOldestVisibleReads();
-        }
-      }
-    },
-  };
-}
-
-export function clearReadVisibilityState(state: ReadVisibilityState): void {
-  state.clear();
 }
 
 function mutatedTargetPathsFromExecution(
@@ -547,185 +478,6 @@ async function attemptContextCompaction(
     config.costTracking,
   );
   return finalResult;
-}
-
-function fitPostCompactionReadContent(
-  content: string,
-  maxChars: number,
-): { readonly content: string; readonly complete: boolean } {
-  if (content.length <= maxChars) {
-    return { content, complete: true };
-  }
-  let omittedChars = content.length - maxChars;
-  for (;;) {
-    const marker = `\n\n[Post-compaction read snapshot truncated: omitted ${omittedChars} chars]`;
-    if (marker.length >= maxChars) {
-      return { content: marker.slice(0, maxChars), complete: false };
-    }
-    const prefixLength = maxChars - marker.length;
-    const nextOmittedChars = content.length - prefixLength;
-    if (nextOmittedChars === omittedChars) {
-      return {
-        content: `${content.slice(0, prefixLength)}${marker}`,
-        complete: false,
-      };
-    }
-    // Marker digit width depends on omittedChars, so settle to the exact count.
-    omittedChars = nextOmittedChars;
-  }
-}
-
-interface RestoredPostCompactionRead {
-  readonly toolCall: ToolCall;
-  readonly execution: ToolExecution;
-  readonly content: string;
-  readonly complete: boolean;
-}
-
-interface RestoredPostCompactionProjectInstructions {
-  readonly toolCall: ToolCall;
-  readonly instructionPaths: readonly string[];
-  readonly content: string;
-  readonly complete: boolean;
-}
-
-function shouldSkipProjectInstructionRestore(error: unknown): boolean {
-  return error instanceof KeelError && isRecoverableToolErrorCode(error.code);
-}
-
-export async function restorePostCompactionReads(options: {
-  readonly workspace: string;
-  readonly signal: AbortSignal;
-  readonly readVisibility: ReadVisibilityState;
-  readonly projectInstructionVisibility: ProjectInstructionVisibilityState;
-  readonly messages: Message[];
-  readonly nextToolCallId: () => string;
-}): Promise<void> {
-  const targetPaths = options.readVisibility
-    .visibleReadsMostRecentFirst()
-    .slice(0, POST_COMPACTION_MAX_RESTORED_FILES);
-  const projectInstructionSnapshots =
-    options.projectInstructionVisibility.visibleInstructionsMostRecentFirst();
-  clearReadVisibilityState(options.readVisibility);
-  options.projectInstructionVisibility.clear();
-  const restoredProjectInstructions: RestoredPostCompactionProjectInstructions[] =
-    [];
-  const restored: RestoredPostCompactionRead[] = [];
-  let totalChars = 0;
-
-  for (const snapshot of projectInstructionSnapshots) {
-    const remainingTotalChars = POST_COMPACTION_MAX_TOTAL_CHARS - totalChars;
-    if (remainingTotalChars <= 0) {
-      break;
-    }
-    let output: ReturnType<
-      ProjectInstructionVisibilityState["formatRestoreOutput"]
-    >;
-    try {
-      output =
-        options.projectInstructionVisibility.formatRestoreOutput(snapshot);
-    } catch (error) {
-      /* v8 ignore next 3: recoverable AGENTS.md reload failures are covered; unexpected restore failures must still abort the turn. */
-      if (!shouldSkipProjectInstructionRestore(error)) {
-        throw error;
-      }
-      continue;
-    }
-    if (output === null) {
-      continue;
-    }
-    const fittedContent = fitPostCompactionReadContent(
-      output.content,
-      Math.min(POST_COMPACTION_MAX_FILE_CHARS, remainingTotalChars),
-    );
-    totalChars += fittedContent.content.length;
-    restoredProjectInstructions.push({
-      toolCall: {
-        id: options.nextToolCallId(),
-        tool: "read",
-        path: snapshot.relativePath,
-      },
-      instructionPaths: output.instructionPaths,
-      content: fittedContent.content,
-      complete: fittedContent.complete,
-    });
-  }
-  for (const instruction of restoredProjectInstructions) {
-    if (instruction.complete) {
-      options.projectInstructionVisibility.markInstructionPathsVisible(
-        instruction.instructionPaths,
-      );
-    }
-  }
-
-  for (const read of targetPaths) {
-    const remainingTotalChars = POST_COMPACTION_MAX_TOTAL_CHARS - totalChars;
-    if (remainingTotalChars <= 0) {
-      break;
-    }
-    const toolCall: ToolCall = {
-      id: options.nextToolCallId(),
-      tool: "read",
-      path: read.targetPath,
-      ...(read.offset !== undefined ? { offset: read.offset } : {}),
-      ...(read.limit !== undefined ? { limit: read.limit } : {}),
-    };
-    const execution = await executeToolCall({
-      workspace: options.workspace,
-      toolCall,
-      signal: options.signal,
-      allowBash: false,
-      projectInstructions: options.projectInstructionVisibility,
-    });
-    if (!execution.ok || execution.readTargetPath === undefined) {
-      continue;
-    }
-    const fittedContent = fitPostCompactionReadContent(
-      execution.content,
-      Math.min(POST_COMPACTION_MAX_FILE_CHARS, remainingTotalChars),
-    );
-    totalChars += fittedContent.content.length;
-    restored.push({
-      toolCall,
-      execution,
-      content: fittedContent.content,
-      complete: fittedContent.complete,
-    });
-  }
-
-  if (restoredProjectInstructions.length === 0 && restored.length === 0) {
-    return;
-  }
-
-  options.messages.push({
-    role: "assistant",
-    content: "",
-    toolCalls: [
-      ...restoredProjectInstructions.map((instruction) => instruction.toolCall),
-      ...restored.map((read) => read.toolCall),
-    ],
-  });
-  for (const instruction of restoredProjectInstructions) {
-    options.messages.push({
-      role: "tool",
-      toolCallId: instruction.toolCall.id,
-      content: instruction.content,
-    });
-  }
-  for (const read of restored) {
-    options.messages.push({
-      role: "tool",
-      toolCallId: read.toolCall.id,
-      content: read.content,
-    });
-  }
-  options.readVisibility.applyVisibleToolExecutions(
-    restored.filter((read) => read.complete).map((read) => read.execution),
-  );
-  publishVisibleProjectInstructions(
-    options.projectInstructionVisibility,
-    restored.filter((read) => read.complete).map((read) => read.execution),
-  );
 }
 
 async function* streamTurnWithOverflowRecovery(
