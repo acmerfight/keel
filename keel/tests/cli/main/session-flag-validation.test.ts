@@ -1,0 +1,357 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, test } from "vitest";
+import { runCliMain } from "../../../src/cli/index.ts";
+import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
+
+describe("CLI Main - Session Flag Validation", () => {
+  test(`Given resume is passed without a session id,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--resume="]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --resume requires a value.\n");
+  });
+
+  test(`Given session is passed without a session id,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--session"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --session requires a value.\n");
+  });
+
+  test(`Given session is passed with an empty equals value,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--session="]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --session requires a value.\n");
+  });
+
+  test(`Given resume is passed without a following value,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--resume"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --resume requires a value.\n");
+  });
+
+  test(`Given fork is passed without a target session id,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--resume", "demo", "--fork"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --fork requires a value.\n");
+  });
+
+  test(`Given fork is passed with an empty equals value,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--resume", "demo", "--fork="]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --fork requires a value.\n");
+  });
+
+  test(`Given fork is passed without a source session,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--fork", "target"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --fork requires --resume <id>.\n");
+  });
+
+  test(`Given fork-before-message is passed without a value,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork",
+      "target",
+      "--fork-before-message",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-before-message requires a value.\n",
+    );
+  });
+
+  test(`Given fork-before-message is passed with an empty equals value,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork",
+      "target",
+      "--fork-before-message=",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-before-message requires a value.\n",
+    );
+  });
+
+  test(`Given fork-before-message is passed without a fork target,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork-before-message",
+      "msg_demo",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-before-message requires --resume <id> --fork <new-id>.\n",
+    );
+  });
+
+  test(`Given fork-points is passed without a source session,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime(["--fork-points"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-points requires --resume <id>.\n",
+    );
+  });
+
+  test(`Given fork-points is combined with a fork target,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork-points",
+      "--fork",
+      "target",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-points cannot be combined with --fork.\n",
+    );
+  });
+
+  test(`Given fork-points is combined with a fork point,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork-points",
+      "--fork-before-message",
+      "msg_demo",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-points cannot be combined with --fork-before-message.\n",
+    );
+  });
+
+  test(`Given fork-points is combined with a prompt,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork-points",
+      "hello",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-points cannot be combined with a message.\n",
+    );
+  });
+
+  test(`Given fork-points is combined with transcript output,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    // Given
+    const fixture = createRuntime([
+      "--resume",
+      "source",
+      "--fork-points",
+      "--transcript",
+      "out.jsonl",
+    ]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-points cannot be combined with --transcript.\n",
+    );
+  });
+
+  test(`Given fork-points names a missing source session,
+    When the CLI main reads fork points,
+    Then it reports the resume error without starting interactive mode`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const fixture = createRuntime(["--resume", "missing", "--fork-points"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain(
+        'Error: cannot resume session "missing": session ledger not found at ',
+      );
+      expect(fixture.stderr()).toContain(
+        join(home, "sessions", "missing", "ledger.jsonl"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given session and resume flags are combined,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--session", "demo", "--resume", "demo"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --session cannot be combined with --resume.\n",
+    );
+  });
+
+  test(`Given a session flag is used with a one-shot prompt,
+    When the CLI main parses the request,
+    Then it returns a validation error because sessions are interactive-only`, async () => {
+    // Given
+    const fixture = createRuntime(["--session=demo", "hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --session and --resume are only supported for interactive sessions.\n",
+    );
+  });
+});
