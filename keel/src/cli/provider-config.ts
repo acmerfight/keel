@@ -319,6 +319,30 @@ function parseCliRemoveDemo(message: string): CliPatchRequest | null {
   };
 }
 
+function parseCliMoveDemo(message: string): CliPatchRequest | null {
+  const prefix = "move ";
+  const toToken = " to ";
+  if (!message.startsWith(prefix)) return null;
+
+  const body = message.slice(prefix.length);
+  const toIndex = body.indexOf(toToken);
+  if (toIndex < 0) return null;
+
+  const sourcePath = body.slice(0, toIndex);
+  const targetPath = body.slice(toIndex + toToken.length);
+  if (sourcePath === "" || targetPath === "") return null;
+
+  return {
+    readPath: sourcePath,
+    patch: [
+      "*** Begin Patch",
+      `*** Update File: ${sourcePath}`,
+      `*** Move to: ${targetPath}`,
+      "*** End Patch",
+    ].join("\n"),
+  };
+}
+
 const ZERO_USAGE = {
   inputTokens: 0,
   cachedInputTokens: 0,
@@ -588,7 +612,9 @@ export function inspectProviderConfig(
 
 function createCliFakeProvider(userMessage: string): LLMProvider {
   const patch =
-    parseCliPatchDemo(userMessage) ?? parseCliRemoveDemo(userMessage);
+    parseCliPatchDemo(userMessage) ??
+    parseCliRemoveDemo(userMessage) ??
+    parseCliMoveDemo(userMessage);
   if (patch !== null) {
     let turn = 0;
     return {

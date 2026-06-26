@@ -1,10 +1,12 @@
 import {
   access,
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -131,6 +133,108 @@ describe("Apply Patch Tool", () => {
       await expect(readFile(targetPath, "utf8")).rejects.toMatchObject({
         code: "ENOENT",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch moves and updates one read text file,
+    When apply_patch validates and applies the patch,
+    Then it removes the old path, writes the new path, and records undo operations`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-move-");
+    const workspacePath = await realpath(workspace);
+    const sourcePath = join(workspacePath, "src", "old.ts");
+    const targetPath = join(workspacePath, "src", "new.ts");
+    await mkdir(join(workspacePath, "src"));
+    await writeFile(sourcePath, "export const value = 1;\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(sourcePath, 0o755);
+    }
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: src/old.ts",
+      "*** Move to: src/new.ts",
+      "@@",
+      "-export const value = 1;",
+      "+export const value = 2;",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (path) => path === sourcePath,
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nR src/old.ts -> src/new.ts");
+      expect(result.targetPaths).toEqual([sourcePath, targetPath]);
+      await expect(readFile(sourcePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await readFile(targetPath, "utf8")).toBe(
+        "export const value = 2;\n",
+      );
+      if (process.platform !== "win32") {
+        expect((await stat(targetPath)).mode & 0o777).toBe(0o755);
+      }
+      expect(result.checkpointOperations).toEqual([
+        {
+          operation: "delete",
+          filePath: sourcePath,
+          beforeContent: "export const value = 1;\n",
+          mode: expect.any(Number),
+        },
+        {
+          operation: "create",
+          filePath: targetPath,
+          afterContent: "export const value = 2;\n",
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch moves a file to an existing destination,
+    When apply_patch prevalidates the move,
+    Then it rejects the patch without changing either file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspacePath, "old.txt"), "old\n", "utf8");
+    await writeFile(join(workspacePath, "new.txt"), "existing\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: old.txt",
+      "*** Move to: new.txt",
+      "@@",
+      "-old",
+      "+moved",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (path) => path === join(workspacePath, "old.txt"),
+            },
+          }),
+        "tool_file_exists",
+        "file already exists: new.txt",
+      );
+      expect(await readFile(join(workspacePath, "old.txt"), "utf8")).toBe(
+        "old\n",
+      );
+      expect(await readFile(join(workspacePath, "new.txt"), "utf8")).toBe(
+        "existing\n",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -631,12 +735,6 @@ describe("Apply Patch Tool", () => {
         message: "has no old lines",
       },
       {
-        patch:
-          "*** Begin Patch\n*** Update File: renamed.txt\n*** Move to: new.txt\n*** End Patch",
-        code: "tool_unsupported_patch_operation",
-        message: "Move to is not supported",
-      },
-      {
         patch: "*** Begin Patch\n*** Update File: bad.txt\n*** End Patch",
         code: "tool_invalid_patch",
         message: "has no hunks",
@@ -1068,6 +1166,54 @@ describe("Apply Patch Tool", () => {
       expect(await readFile(join(workspace, "obsolete.txt"), "utf8")).toBe(
         "obsolete\n",
       );
+      await expect(
+        readFile(join(workspace, "private", "secret.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch add target resolves through a symlink to a gitignored directory after an earlier move,
+    When apply_patch rejects the later add during execution,
+    Then it rolls back the earlier move`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, ".gitignore"), "private/\n", "utf8");
+    await writeFile(join(workspace, "old.txt"), "old\n", "utf8");
+    await mkdir(join(workspace, "private"));
+    await symlink("private", join(workspace, "link"));
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: old.txt",
+      "*** Move to: moved.txt",
+      "*** Add File: link/secret.txt",
+      "+secret",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "old.txt"),
+            },
+          }),
+        "tool_path_ignored",
+        "ignored path: link/secret.txt",
+      );
+      expect(await readFile(join(workspace, "old.txt"), "utf8")).toBe("old\n");
+      await expect(
+        readFile(join(workspace, "moved.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       await expect(
         readFile(join(workspace, "private", "secret.txt"), "utf8"),
       ).rejects.toMatchObject({

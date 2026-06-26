@@ -37,6 +37,7 @@ export interface AtomicWriteTextFileOptions {
 }
 
 export interface AtomicCreateTextFileOptions {
+  readonly mode?: number;
   readonly beforeAccess?: () => void;
   readonly beforeWrite?: (tempPath: string, fd: number) => void;
   readonly beforePublish?: () => void;
@@ -239,15 +240,22 @@ export function createTextFileAtomically(
   let cleanupPath = tempPath;
   let identity: FileIdentity | null = null;
   let published = false;
+  const mode = options.mode;
   try {
     options.beforeAccess?.();
-    fd = openSync(tempPath, "wx", 0o666);
+    fd = openSync(tempPath, "wx", mode ?? 0o666);
     identity = fileIdentityFromStats(fstatSync(fd));
     const openedTempPath = realpathSync(tempPath);
     assertOpenedFileMatchesPath(fd, openedTempPath);
     cleanupPath = openedTempPath;
     options.beforeWrite?.(openedTempPath, fd);
+    if (mode !== undefined) {
+      fchmodSync(fd, mode);
+    }
     writeFileSync(fd, content, "utf8");
+    if (mode !== undefined) {
+      fchmodSync(fd, mode);
+    }
     fsyncSync(fd);
     closeSync(fd);
     fd = null;

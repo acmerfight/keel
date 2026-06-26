@@ -436,6 +436,43 @@ describe("CLI Undo", () => {
     }
   });
 
+  test(`Given Keel moves a file through apply_patch in a git workspace,
+    When user runs the undo command,
+    Then the original path is restored and the moved path is removed`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    await commitFile(workspace, "old.txt", "old\n");
+
+    try {
+      const patch = await runCli(["move old.txt to new.txt"], {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "fake" },
+      });
+      expect(patch.exitCode).toBe(0);
+      await expect(
+        readFile(join(workspace, "old.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await readFile(join(workspace, "new.txt"), "utf8")).toBe("old\n");
+
+      // When
+      const undo = await runCli(["/undo"], { cwd: workspace });
+
+      // Then
+      expect(undo.exitCode).toBe(0);
+      expect(undo.stdout).toBe("Restored 2 files\n");
+      expect(await readFile(join(workspace, "old.txt"), "utf8")).toBe("old\n");
+      await expect(
+        readFile(join(workspace, "new.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the user's git index has staged changes,
     When Keel edits and undoes a different file,
     Then the staged changes are preserved`, async () => {

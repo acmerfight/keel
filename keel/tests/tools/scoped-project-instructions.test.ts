@@ -832,6 +832,65 @@ describe("Scoped Project Instructions", () => {
     }
   });
 
+  test(`Given scoped AGENTS.md applies to an apply_patch move destination,
+    When the instructions are not visible,
+    Then the move is blocked before either path is changed`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "packages", "api", "src"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(workspace, "packages", "api", "AGENTS.md"),
+      "API rule: moved files need scoped review.\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "old.ts"),
+      "export const moved = false;\n",
+      "utf8",
+    );
+    const projectInstructions =
+      createProjectInstructionVisibilityState(workspace);
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        toolCall: {
+          id: "patch_move_api_file",
+          tool: "apply_patch",
+          patch: [
+            "*** Begin Patch",
+            "*** Update File: old.ts",
+            "*** Move to: packages/api/src/moved.ts",
+            "*** End Patch",
+          ].join("\n"),
+        },
+        signal: freshSignal(),
+        allowBash: false,
+        projectInstructions,
+      });
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain(
+        "Project instructions from packages/api/AGENTS.md",
+      );
+      expect(result.content).toContain(
+        "API rule: moved files need scoped review.",
+      );
+      expect(await readFile(join(workspace, "old.ts"), "utf8")).toBe(
+        "export const moved = false;\n",
+      );
+      expect(
+        await fileExists(join(workspace, "packages", "api", "src", "moved.ts")),
+      ).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given scoped instructions are visible and AGENTS.md is mutated,
     When a later mutation targets that scope,
     Then the visibility state requires the new instructions to be reviewed again`, async () => {
