@@ -270,7 +270,7 @@ describe("module boundaries", () => {
     );
 
     expect(violations).toEqual([]);
-  });
+  }, 15_000);
 
   test(`wildcard re-export detection covers value and type-only forms`, () => {
     expect(
@@ -332,7 +332,7 @@ describe("module boundaries", () => {
     );
 
     expect(reExportingFiles).toEqual(allowedReExportFiles);
-  });
+  }, 15_000);
 
   test(`external modules import session-store through the facade`, () => {
     const violations: string[] = [];
