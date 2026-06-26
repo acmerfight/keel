@@ -17,12 +17,17 @@ import {
   formatExternalSessionForkPoints,
   sessionForkPointsFromStoredMessages,
 } from "./fork-points.ts";
+import { createStableInteractiveDisplay } from "./interactive-session/display.ts";
 import {
   type InteractiveForkSessionRequest,
   runInteractiveSession,
   type SessionPersistenceReason,
 } from "./interactive-session.ts";
-import { formatCostReport, printAgentEvents } from "./output.ts";
+import {
+  formatCostReport,
+  printAgentEvents,
+  printStableInteractiveAgentEvents,
+} from "./output.ts";
 import {
   loadProjectInstructions,
   ProjectInstructionsError,
@@ -78,6 +83,7 @@ export interface CliRuntime extends SessionStoreRuntime {
   readonly cwd: () => string;
   readonly input: CliInput;
   readonly platform: NodeJS.Platform;
+  readonly stderrIsTTY?: boolean;
   readonly writeStdout: (text: string) => void;
   readonly writeStderr: (text: string) => void;
   readonly onSigint: (handler: () => void) => void;
@@ -801,6 +807,13 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         }
         const projectInstructions = loadProjectInstructions(workspace);
         const startedAt = runtime.now();
+        const interactiveDisplay =
+          runtime.input.isTTY === true
+            ? createStableInteractiveDisplay(runtime, {
+                inputEchoesToDisplay: runtime.stderrIsTTY === true,
+              })
+            : undefined;
+        interactiveDisplay?.writeIntro();
         const interactiveResult = await runInteractiveSession({
           cliArgs,
           workspace,
@@ -810,11 +823,20 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           ...(sessionPersistence !== undefined ? sessionPersistence : {}),
           input: runtime.input,
           writeStdout: (text) => {
-            runtime.writeStdout(text);
+            (interactiveDisplay ?? runtime).writeStdout(text);
           },
           writeStderr: (text) => {
-            runtime.writeStderr(text);
+            (interactiveDisplay ?? runtime).writeStderr(text);
           },
+          ...(interactiveDisplay !== undefined
+            ? { renderPrompt: interactiveDisplay.renderPrompt }
+            : {}),
+          ...(interactiveDisplay !== undefined
+            ? { acceptInput: interactiveDisplay.acceptInput }
+            : {}),
+          ...(interactiveDisplay !== undefined
+            ? { closePrompt: interactiveDisplay.closePrompt }
+            : {}),
           onSigint: (handler) => {
             runtime.onSigint(handler);
           },
@@ -839,7 +861,10 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
               },
             ),
           requireKnownCostModel,
-          printAgentEvents: (stream) => printAgentEvents(stream, runtime),
+          printAgentEvents: (stream) =>
+            interactiveDisplay === undefined
+              ? printAgentEvents(stream, runtime)
+              : printStableInteractiveAgentEvents(stream, interactiveDisplay),
           formatCostReport,
         });
         if (
@@ -1004,6 +1029,7 @@ function defaultRuntime(): CliRuntime {
     env: (key) => process.env[key],
     input: process.stdin,
     platform: process.platform,
+    stderrIsTTY: process.stderr.isTTY === true,
     now: () => Date.now(),
     writeStdout: (text) => {
       process.stdout.write(text);
