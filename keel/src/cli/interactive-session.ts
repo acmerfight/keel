@@ -294,8 +294,15 @@ export async function runInteractiveSession(
   options.onSigint(abortActiveTurn);
   try {
     for (;;) {
+      if (lineReader.needsInput()) {
+        options.renderPrompt?.();
+      }
       const rawInput = await lineReader.readLine();
-      if (rawInput === null) break;
+      if (rawInput === null) {
+        options.closePrompt?.();
+        break;
+      }
+      options.acceptInput?.();
       const rawLine = rawInput.line;
       const userMessage = rawLine.trim();
       if (userMessage === "") {

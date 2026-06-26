@@ -18,6 +18,8 @@ export function createRuntime(
     readonly cwd?: string;
     readonly env?: Record<string, string>;
     readonly input?: PassThrough;
+    readonly inputIsTTY?: boolean;
+    readonly stderrIsTTY?: boolean;
     readonly onStderr?: (text: string) => void;
     readonly onSigint?: (handler: () => void) => void;
     readonly offSigint?: (handler: () => void) => void;
@@ -26,6 +28,16 @@ export function createRuntime(
   let stdout = "";
   let stderr = "";
   const input = options.input ?? new PassThrough();
+  const stderrIsTTY = options.stderrIsTTY ?? options.inputIsTTY === true;
+  if (options.inputIsTTY === true) {
+    Object.defineProperty(input, "isTTY", { value: true });
+    if (stderrIsTTY) {
+      // TTY display tests treat stderr() as rendered terminal chrome plus cooked-mode input echo.
+      input.on("data", (chunk: Buffer | string) => {
+        stderr += chunk.toString();
+      });
+    }
+  }
 
   return {
     runtime: {
@@ -35,6 +47,7 @@ export function createRuntime(
       env: (key) => options.env?.[key],
       input,
       platform: process.platform,
+      stderrIsTTY,
       now: () => 0,
       writeStdout: (text) => {
         stdout += text;

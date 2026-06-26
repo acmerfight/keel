@@ -10,6 +10,7 @@ export interface LineReader {
   readonly drainLinesAfter: (sequence: number) => readonly QueuedLine[];
   readonly restoreLines: (lines: readonly QueuedLine[]) => void;
   readonly sequence: () => number;
+  readonly needsInput: () => boolean;
 }
 
 export interface QueuedLine {
@@ -199,5 +200,6 @@ export function createLineReader(
       queued.sort((left, right) => left.sequence - right.sequence);
     },
     sequence: () => currentSequence,
+    needsInput: () => queued.length === 0 && !closed,
   };
 }

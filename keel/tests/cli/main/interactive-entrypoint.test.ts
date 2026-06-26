@@ -1,8 +1,16 @@
-import { access, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { requestWithMessagesSchema } from "../../../src/testing/cli-main-schemas.ts";
@@ -15,7 +23,22 @@ import {
   getPort,
   listen,
   sseTextReplyWithUsage,
+  sseToolCall,
+  sseToolFinish,
 } from "../../../src/testing/provider-sse-fixtures.ts";
+
+async function waitForCondition(
+  condition: () => boolean,
+  message: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (condition()) {
+      return;
+    }
+    await delay(5);
+  }
+  throw new Error(message);
+}
 
 describe("CLI Main - Interactive Entrypoint", () => {
   test(`Given provider and model flags are used for an interactive session,
@@ -217,6 +240,311 @@ describe("CLI Main - Interactive Entrypoint", () => {
       await rm(workspace, { recursive: true, force: true });
       await rm(outside, { recursive: true, force: true });
     }
+  });
+
+  test(`Given the user starts a real interactive terminal session,
+    When the assistant uses a tool and then replies,
+    Then the display keeps prompts and status separate from assistant output`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-"));
+    await writeFile(join(workspace, "note.txt"), "hello from note\n", "utf8");
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(sseToolCall("call_read", "read", { path: "note.txt" }));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Read done."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input,
+      inputIsTTY: true,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      input.write("read note.txt\n");
+      input.end();
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Read done.\n");
+      expect(fixture.stderr()).toBe(
+        [
+          "Keel interactive session\n",
+          "keel> read note.txt\n",
+          "status: Tool: read note.txt\n",
+          "assistant:\n",
+        ].join(""),
+      );
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_read",
+        content: "hello from note\n",
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given stderr is redirected from a real interactive terminal session,
+    When the assistant uses a tool and then replies,
+    Then the stderr log keeps prompts and status on separate lines`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-log-"));
+    await writeFile(join(workspace, "note.txt"), "hello from note\n", "utf8");
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(sseToolCall("call_read", "read", { path: "note.txt" }));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Read done."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      input.write("read note.txt\n");
+      input.end();
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Read done.\n");
+      expect(fixture.stderr()).toBe(
+        [
+          "Keel interactive session\n",
+          "keel> \n",
+          "status: Tool: read note.txt\n",
+          "assistant:\n",
+        ].join(""),
+      );
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_read",
+        content: "hello from note\n",
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given bash approval is required in a real interactive terminal session,
+    When the assistant asks to run a command,
+    Then the approval prompt is separated from the input prompt and still accepts a fresh answer`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-bash-"));
+    const command =
+      "node -e \"require('node:fs').writeFileSync('approved.txt', 'yes')\"";
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(sseToolCall("call_bash", "bash", { command }));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Ran."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    let approvalAnswered = false;
+    const fixture = createRuntime(["--bash-policy", "ask"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input,
+      inputIsTTY: true,
+      onStderr: (text) => {
+        if (text.includes("Approve bash command?") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.write("y\n");
+          input.end();
+        }
+      },
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      input.write("run approved command\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(await readFile(join(workspace, "approved.txt"), "utf8")).toBe(
+        "yes",
+      );
+      expect(fixture.stdout()).toBe("Ran.\n");
+      expect(fixture.stderr()).toContain(
+        `Keel interactive session\nkeel> run approved command\nstatus: Tool: bash ${command}\nApprove bash command?\n`,
+      );
+      expect(fixture.stderr()).toContain("assistant:\n");
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_bash",
+        content: "Exit code: 0\n\n(no output)",
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a real interactive terminal session handles a local command,
+    When the user asks for help and then sends a prompt,
+    Then the next input prompt is still visible before the assistant replies`, async () => {
+    // Given
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      env: { KEEL_PROVIDER: "fake" },
+      input,
+      inputIsTTY: true,
+    });
+
+    // When
+    const run = runCliMain(fixture.runtime);
+    input.write("/help\n");
+    await waitForCondition(
+      () =>
+        fixture.stderr() ===
+        ["Keel interactive session\n", "keel> /help\n", "keel> "].join(""),
+      "interactive help did not return to a visible prompt",
+    );
+    input.end("hello\n");
+    const exitCode = await run;
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toContain("Interactive commands:\n");
+    expect(fixture.stdout()).toContain("Remembered: hello\n");
+    expect(fixture.stderr()).toContain(
+      [
+        "Keel interactive session\n",
+        "keel> /help\n",
+        "keel> hello\n",
+        "assistant:\n",
+      ].join(""),
+    );
+  });
+
+  test(`Given a real interactive terminal session waits at an empty prompt,
+    When stdin closes,
+    Then the prompt line is closed before exit`, async () => {
+    // Given
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      env: { KEEL_PROVIDER: "fake" },
+      input,
+      inputIsTTY: true,
+    });
+
+    // When
+    const run = runCliMain(fixture.runtime);
+    await waitForCondition(
+      () => fixture.stderr() === "Keel interactive session\nkeel> ",
+      "interactive session did not render the initial prompt",
+    );
+    input.end();
+    const exitCode = await run;
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Keel interactive session\nkeel> \n");
   });
 
   test(`Given interactive mode has cost tracking enabled,
