@@ -1,6 +1,9 @@
+import type { WorkflowSkill } from "../../agent/prompt.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
 import type { Message } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
+
+export type { WorkflowSkill };
 
 export const SESSION_SCHEMA_VERSION = 2;
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
@@ -68,6 +71,7 @@ export interface SessionHeaderRecord {
   readonly createdAt: string;
   readonly workspace: string;
   readonly graph: SessionGraphRecord;
+  readonly workflowSkill?: WorkflowSkill;
 }
 
 export interface SessionModelSelection {
@@ -179,6 +183,7 @@ export interface SessionState {
   readonly bashApprovalGrants: readonly BashApprovalGrant[];
   readonly activeModel?: SessionModelSelection;
   readonly modelSwitches: readonly SessionModelSwitch[];
+  readonly workflowSkill?: WorkflowSkill;
   readonly [sessionReplayStateKey]: SessionReplayState;
 }
 

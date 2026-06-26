@@ -88,7 +88,7 @@ function parseError(message: string): ParseResult<never> {
 
 export const USAGE = [
   "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] [--skill <name>] <message>",
-  "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id> [--fork-points | --fork <new-id> [--fork-before-message <id>]]]",
+  "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--skill <name>] [--session <id> | --resume <id> [--fork-points | --fork <new-id> [--fork-before-message <id>]]]",
   "       keel --doctor [--offline] [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
   "       keel sessions",
   "       keel sessions fork <source-id> <target-id> [--before-message <id>]",
@@ -101,7 +101,7 @@ export const USAGE = [
   "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Approved or trusted command output may be sent to the provider unredacted. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
   "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
   "--transcript writes a best-effort redacted provider-visible one-shot transcript as schema-versioned JSONL. Live provider requests are not redacted.",
-  "--skill loads .agents/skills/<name>/SKILL.md as explicit workflow guidance for the current one-shot run.",
+  "--skill loads .agents/skills/<name>/SKILL.md as explicit workflow guidance for the current run.",
   "--session/--resume persist interactive provider context with best-effort at-rest redaction. Live provider requests may still include raw user and tool content.",
   "--fork-points lists restored user message ids for sessions fork --before-message; it requires --resume.",
   "--fork-before-message cuts a fork before the restored message id; it requires --resume and --fork.",

@@ -6,11 +6,20 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
+import { requestWithMessagesSchema } from "../../../src/testing/cli-main-schemas.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
+import {
+  close,
+  getPort,
+  listen,
+  sseTextReplyWithUsage,
+} from "../../../src/testing/provider-sse-fixtures.ts";
 
 interface WriteSkillOptions {
   readonly descriptionQuote?: "none" | "single" | "double";
@@ -343,6 +352,33 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given a missing local workflow skill is selected,
+    When the CLI starts an interactive run,
+    Then it reports the missing skill before contacting a provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-interactive-missing-"),
+    );
+    const fixture = createRuntime(["--skill", "missing"], {
+      cwd: workspace,
+      env: { KEEL_FORCE_INTERACTIVE: "1" },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        'Error: workflow skill "missing" was not found in .agents/skills.\n',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the local workflow skill root exists without the selected skill,
     When the CLI starts a one-shot run,
     Then it reports the missing skill before contacting a provider`, async () => {
@@ -394,16 +430,52 @@ describe("CLI Main - Skills", () => {
     }
   });
 
-  test(`Given a workflow skill flag has no one-shot prompt,
-    When the CLI starts,
-    Then it rejects the skill before starting interactive mode`, async () => {
+  test(`Given a workflow skill is selected for an interactive run,
+    When the user sends an interactive prompt,
+    Then the provider-visible system prompt includes that skill body`, async () => {
     // Given
     const workspace = await mkdtemp(
-      join(tmpdir(), "keel-cli-skill-no-prompt-"),
+      join(tmpdir(), "keel-cli-skill-interactive-"),
     );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a PR using the project checklist.",
+      "Read PR comments first.\nRun coverage before declaring ready.",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Done."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.end("review PR 123\n");
     const fixture = createRuntime(["--skill", "review"], {
       cwd: workspace,
-      env: { KEEL_FORCE_INTERACTIVE: "1" },
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input,
     });
 
     try {
@@ -411,13 +483,361 @@ describe("CLI Main - Skills", () => {
       const exitCode = await runCliMain(fixture.runtime);
 
       // Then
-      expect(exitCode).toBe(1);
-      expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toBe(
-        "Error: --skill is only supported for one-shot runs.\n",
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Done.\n");
+      expect(fixture.stderr()).toBe("");
+      const request = requestWithMessagesSchema.parse(capturedBodies[0]);
+      const system = request.messages?.find(
+        (message) => message.role === "system",
+      );
+      if (system === undefined) {
+        throw new Error("provider request had no system message");
+      }
+      expect(system.content).toContain(
+        "Workflow skill review from .agents/skills/review/SKILL.md",
+      );
+      expect(system.content).toContain("> Read PR comments first.");
+      expect(system.content).toContain(
+        "> Run coverage before declaring ready.",
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named interactive session starts with a workflow skill,
+    When the session is resumed after the skill file changes,
+    Then the resumed provider-visible system prompt reuses the persisted skill body`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-resume-workspace-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-skill-resume-home-"));
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a PR using the project checklist.",
+      "Original review workflow body.",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Done."));
+      });
+    });
+    await listen(server);
+    const firstInput = new PassThrough();
+    firstInput.end("review PR 123\n");
+    const firstRun = createRuntime(["--session", "demo", "--skill", "review"], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input: firstInput,
+    });
+
+    try {
+      const firstExitCode = await runCliMain(firstRun.runtime);
+      await writeSkill(
+        workspace,
+        "review",
+        "Review a PR using the project checklist.",
+        "Changed review workflow body.",
+      );
+      const secondInput = new PassThrough();
+      secondInput.end("continue\n");
+      const secondRun = createRuntime(["--resume", "demo"], {
+        cwd: workspace,
+        env: {
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+        input: secondInput,
+      });
+
+      // When
+      const secondExitCode = await runCliMain(secondRun.runtime);
+
+      // Then
+      expect(firstExitCode).toBe(0);
+      expect(secondExitCode).toBe(0);
+      expect(firstRun.stderr()).toBe("");
+      expect(secondRun.stderr()).toBe("");
+      const resumedRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      const system = resumedRequest.messages?.find(
+        (message) => message.role === "system",
+      );
+      if (system === undefined) {
+        throw new Error("provider request had no system message");
+      }
+      expect(system.content).toContain("> Original review workflow body.");
+      expect(system.content).not.toContain("Changed review workflow body.");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named interactive session already has a workflow skill,
+    When the user resumes it with a different workflow skill,
+    Then the CLI rejects the conflicting skill before contacting a provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-conflict-workspace-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-skill-conflict-home-"));
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a PR using the project checklist.",
+      "Review workflow body.",
+    );
+    await writeSkill(
+      workspace,
+      "merge-pr",
+      "Merge a reviewed PR.",
+      "Merge workflow body.",
+    );
+    const firstInput = new PassThrough();
+    firstInput.end("review PR 123\n");
+    const firstRun = createRuntime(["--session", "demo", "--skill", "review"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: firstInput,
+    });
+
+    try {
+      const firstExitCode = await runCliMain(firstRun.runtime);
+      const secondInput = new PassThrough();
+      secondInput.end("continue\n");
+      const secondRun = createRuntime(
+        ["--resume", "demo", "--skill", "merge-pr"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "fake",
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+          },
+          input: secondInput,
+        },
+      );
+
+      // When
+      const secondExitCode = await runCliMain(secondRun.runtime);
+
+      // Then
+      expect(firstExitCode).toBe(0);
+      expect(secondExitCode).toBe(1);
+      expect(secondRun.stdout()).toBe("");
+      expect(secondRun.stderr()).toBe(
+        'Error: session "demo" already uses workflow skill "review"; cannot resume it with workflow skill "merge-pr".\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named interactive session already has a workflow skill,
+    When the user lists fork points with a different workflow skill,
+    Then the CLI rejects the conflicting skill before formatting fork points`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-fork-points-conflict-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-fork-points-conflict-home-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a PR using the project checklist.",
+      "Review workflow body.",
+    );
+    const firstInput = new PassThrough();
+    firstInput.end("review PR 123\n");
+    const firstRun = createRuntime(["--session", "demo", "--skill", "review"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: firstInput,
+    });
+
+    try {
+      const firstExitCode = await runCliMain(firstRun.runtime);
+      const secondRun = createRuntime(
+        ["--resume", "demo", "--fork-points", "--skill", "merge-pr"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "fake",
+            KEEL_HOME: home,
+          },
+        },
+      );
+
+      // When
+      const secondExitCode = await runCliMain(secondRun.runtime);
+
+      // Then
+      expect(firstExitCode).toBe(0);
+      expect(secondExitCode).toBe(1);
+      expect(secondRun.stdout()).toBe("");
+      expect(secondRun.stderr()).toBe(
+        'Error: session "demo" already uses workflow skill "review"; cannot resume it with workflow skill "merge-pr".\n',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named interactive session was created without a workflow skill,
+    When the user resumes it with a workflow skill,
+    Then the CLI rejects adding new workflow guidance to the restored session`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-missing-session-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-missing-session-home-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a PR using the project checklist.",
+      "Review workflow body.",
+    );
+    const firstInput = new PassThrough();
+    firstInput.end("remember alpha\n");
+    const firstRun = createRuntime(["--session", "demo"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: firstInput,
+    });
+
+    try {
+      const firstExitCode = await runCliMain(firstRun.runtime);
+      const secondInput = new PassThrough();
+      secondInput.end("continue\n");
+      const secondRun = createRuntime(
+        ["--resume", "demo", "--skill", "review"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "fake",
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+          },
+          input: secondInput,
+        },
+      );
+
+      // When
+      const secondExitCode = await runCliMain(secondRun.runtime);
+
+      // Then
+      expect(firstExitCode).toBe(0);
+      expect(secondExitCode).toBe(1);
+      expect(secondRun.stdout()).toBe("");
+      expect(secondRun.stderr()).toBe(
+        'Error: session "demo" has no workflow skill; cannot resume it with workflow skill "review".\n',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named interactive session already has a workflow skill,
+    When the user resumes it with the same workflow skill name,
+    Then the CLI continues the session without reloading a new workflow skill`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-same-workspace-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-skill-same-home-"));
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a PR using the project checklist.",
+      "Review workflow body.",
+    );
+    const firstInput = new PassThrough();
+    firstInput.end("remember alpha\n");
+    const firstRun = createRuntime(["--session", "demo", "--skill", "review"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: firstInput,
+    });
+
+    try {
+      const firstExitCode = await runCliMain(firstRun.runtime);
+      const secondInput = new PassThrough();
+      secondInput.end("what did I ask you to remember?\n");
+      const secondRun = createRuntime(
+        ["--resume", "demo", "--skill", "review"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "fake",
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+          },
+          input: secondInput,
+        },
+      );
+
+      // When
+      const secondExitCode = await runCliMain(secondRun.runtime);
+
+      // Then
+      expect(firstExitCode).toBe(0);
+      expect(secondExitCode).toBe(0);
+      expect(secondRun.stdout()).toBe("Earlier you said: remember alpha\n");
+      expect(secondRun.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   });
 

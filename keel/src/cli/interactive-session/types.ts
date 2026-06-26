@@ -1,6 +1,6 @@
 import type { ContextCompactionOptions } from "../../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../../agent/loop.ts";
-import type { ProjectInstructions } from "../../agent/prompt.ts";
+import type { ProjectInstructions, WorkflowSkill } from "../../agent/prompt.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
@@ -61,6 +61,7 @@ export interface InteractiveSessionOptions {
   readonly workspace: string;
   readonly platform: NodeJS.Platform;
   readonly projectInstructions?: ProjectInstructions;
+  readonly workflowSkill?: WorkflowSkill;
   readonly initialMessages?: readonly Message[];
   readonly initialModelSelection?: SessionModelSelection;
   readonly initialQueuedInputs?: readonly SessionQueuedInput[];
