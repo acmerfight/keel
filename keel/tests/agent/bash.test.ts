@@ -538,6 +538,185 @@ describe("Bash Commands", () => {
     }
   });
 
+  test(`Given a project verification command requests bash approval,
+    When the approval prompt is prepared,
+    Then it describes verification risk and offers only that command family`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const seenRisks: string[] = [];
+    const offeredFamilies: string[] = [];
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        seenRisks.push(request.assessment.risk);
+        if (request.prefixApproval !== undefined) {
+          offeredFamilies.push(request.prefixApproval.display);
+        }
+        return { type: "deny", message: "checked metadata only" };
+      },
+    });
+
+    try {
+      // When
+      await bashPermission.review({
+        command: "pnpm typecheck",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(seenRisks).toEqual(["project-verification"]);
+      expect(offeredFamilies).toEqual(["pnpm typecheck"]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a workspace-writing command requests bash approval,
+    When the approval prompt is prepared,
+    Then it describes write risk without offering a command family`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const seenRisks: string[] = [];
+    let offeredFamily = false;
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        seenRisks.push(request.assessment.risk);
+        offeredFamily = request.prefixApproval !== undefined;
+        return { type: "deny", message: "checked metadata only" };
+      },
+    });
+
+    try {
+      // When
+      await bashPermission.review({
+        command: "pnpm lint:fix",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(seenRisks).toEqual(["workspace-write"]);
+      expect(offeredFamily).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project verification family is approved for the session,
+    When a later matching command adds a mutating flag,
+    Then the later command asks again without offering that family`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const promptedRequests: {
+      readonly command: string;
+      readonly risk: string;
+      readonly family: string | null;
+    }[] = [];
+    let promptCount = 0;
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        promptCount++;
+        promptedRequests.push({
+          command: request.command,
+          risk: request.assessment.risk,
+          family: request.prefixApproval?.display ?? null,
+        });
+        if (promptCount === 1) {
+          return { type: "allow", scope: "session-prefix" };
+        }
+        return { type: "deny", message: "do not write" };
+      },
+    });
+
+    try {
+      // When
+      await bashPermission.review({
+        command: "pnpm lint",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+      await bashPermission.review({
+        command: "pnpm lint -- --write",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(promptedRequests).toEqual([
+        {
+          command: "pnpm lint",
+          risk: "project-verification",
+          family: "pnpm lint",
+        },
+        {
+          command: "pnpm lint -- --write",
+          risk: "workspace-write",
+          family: null,
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given project verification commands include mutating flag forms,
+    When approval prompts are prepared,
+    Then each command is described as workspace-writing without a family`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const promptedRequests: {
+      readonly command: string;
+      readonly risk: string;
+      readonly family: string | null;
+    }[] = [];
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        promptedRequests.push({
+          command: request.command,
+          risk: request.assessment.risk,
+          family: request.prefixApproval?.display ?? null,
+        });
+        return { type: "deny", message: "do not write" };
+      },
+    });
+
+    try {
+      // When
+      for (const command of [
+        "pnpm lint -- --write=true",
+        "pnpm lint -- --fix=unsafe",
+        "pnpm test -- -uw",
+      ]) {
+        await bashPermission.review({
+          command,
+          cwd: workspace,
+          signal: freshSignal(),
+        });
+      }
+
+      // Then
+      expect(promptedRequests).toEqual([
+        {
+          command: "pnpm lint -- --write=true",
+          risk: "workspace-write",
+          family: null,
+        },
+        {
+          command: "pnpm lint -- --fix=unsafe",
+          risk: "workspace-write",
+          family: null,
+        },
+        {
+          command: "pnpm test -- -uw",
+          risk: "workspace-write",
+          family: null,
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a shell command family is approved for the session,
     When the assistant runs a matching command in another workspace,
     Then the other workspace asks for permission again`, async () => {
