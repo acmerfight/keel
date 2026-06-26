@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/loop.ts";
 import {
   printAgentEvents,
+  printStableInteractiveAgentEvents,
   sanitizeStatusLineText,
 } from "../../src/cli/output.ts";
 
@@ -319,6 +320,100 @@ describe("CLI Output", () => {
     expect(stdout).toBe("Done.");
     expect(stderr).toBe(
       "Context compacted: overflow recovery (7 -> 4 messages, ~1200 -> ~300 tokens, stale tool output 1 (8000 -> 160 chars, ~2000 -> ~40 tokens))\n",
+    );
+    expect(finalEnd?.stopReason).toBe("completed");
+  });
+
+  test(`Given a stable interactive display receives status events and streamed text,
+    When the CLI prints agent events,
+    Then status lines stay separate and the assistant header is written once`, async () => {
+    // Given
+    let stdout = "";
+    let stderr = "";
+
+    // When
+    const finalEnd = await printStableInteractiveAgentEvents(
+      agentEvents([
+        {
+          type: "context_compacted",
+          reason: "proactive",
+          beforeMessageCount: 10,
+          afterMessageCount: 5,
+          beforeEstimatedTokens: 20000,
+          afterEstimatedTokens: 4000,
+          toolOutputsCompacted: 0,
+          toolOutputCharsBefore: 0,
+          toolOutputCharsAfter: 0,
+          toolOutputEstimatedTokensBefore: 0,
+          toolOutputEstimatedTokensAfter: 0,
+        },
+        {
+          type: "provider_retry",
+          provider: "deepseek",
+          reason: "provider_rate_limited",
+          attempt: 2,
+          maxRetries: 3,
+          delayMs: 123.4,
+        },
+        {
+          type: "tool_start",
+          toolCall: {
+            id: "read_1",
+            tool: "read",
+            path: "note.txt",
+          },
+        },
+        {
+          type: "tool_end",
+          toolCall: {
+            id: "read_1",
+            tool: "read",
+            path: "note.txt",
+          },
+          ok: true,
+        },
+        {
+          type: "tool_end",
+          toolCall: {
+            id: "edit_1",
+            tool: "edit",
+            path: "note.txt",
+            edits: [{ oldText: "old", newText: "new" }],
+          },
+          ok: false,
+        },
+        { type: "text", text: "Do" },
+        { type: "text", text: "ne." },
+        {
+          type: "end",
+          usage: ZERO_USAGE,
+          turns: 1,
+          stopReason: "completed",
+        },
+      ]),
+      {
+        writeStdout: (text) => {
+          stdout += text;
+        },
+        writeAssistantHeader: () => {
+          stderr += "assistant:\n";
+        },
+        writeStatusLine: (text) => {
+          stderr += `status: ${text}\n`;
+        },
+      },
+    );
+
+    // Then
+    expect(stdout).toBe("Done.");
+    expect(stderr).toBe(
+      [
+        "status: Context compacted: proactive (10 -> 5 messages, ~20000 -> ~4000 tokens)\n",
+        "status: Provider retry: deepseek rate limited (attempt 2/3 in 123ms)\n",
+        "status: Tool: read note.txt\n",
+        "status: Tool failed: edit note.txt\n",
+        "assistant:\n",
+      ].join(""),
     );
     expect(finalEnd?.stopReason).toBe("completed");
   });

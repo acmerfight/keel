@@ -7,6 +7,12 @@ interface CliOutputRuntime {
   readonly writeStderr: (text: string) => void;
 }
 
+interface StableInteractiveOutputRuntime {
+  readonly writeStdout: (text: string) => void;
+  readonly writeAssistantHeader: () => void;
+  readonly writeStatusLine: (text: string) => void;
+}
+
 export type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 
 function formatUsd(value: number): string {
@@ -162,6 +168,54 @@ export async function printAgentEvents(
       }
     } else if (event.type === "end") {
       finalEnd = event;
+    }
+  }
+  return finalEnd;
+}
+
+export async function printStableInteractiveAgentEvents(
+  stream: AsyncIterable<AgentEvent>,
+  runtime: StableInteractiveOutputRuntime,
+): Promise<EndEvent | undefined> {
+  let finalEnd: EndEvent | undefined;
+  let assistantHeaderWritten = false;
+  for await (const event of stream) {
+    switch (event.type) {
+      case "text":
+        if (!assistantHeaderWritten) {
+          runtime.writeAssistantHeader();
+          assistantHeaderWritten = true;
+        }
+        runtime.writeStdout(sanitizeAssistantText(event.text));
+        break;
+      case "context_compacted":
+        runtime.writeStatusLine(
+          formatContextCompactionReport({
+            ...event,
+            reasonLabel: contextCompactionReasonLabel(event.reason),
+          }).trimEnd(),
+        );
+        break;
+      case "provider_retry":
+        runtime.writeStatusLine(
+          `Provider retry: ${sanitizeToolLabel(event.provider)} ${providerRetryReasonLabel(event.reason)} (attempt ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)}ms)`,
+        );
+        break;
+      case "tool_start":
+        runtime.writeStatusLine(
+          `Tool: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}`,
+        );
+        break;
+      case "tool_end":
+        if (!event.ok) {
+          runtime.writeStatusLine(
+            `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}`,
+          );
+        }
+        break;
+      case "end":
+        finalEnd = event;
+        break;
     }
   }
   return finalEnd;

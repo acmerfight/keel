@@ -87,6 +87,9 @@ export interface InteractiveSessionOptions {
   readonly input: NodeJS.ReadableStream;
   readonly writeStdout: (text: string) => void;
   readonly writeStderr: (text: string) => void;
+  readonly renderPrompt?: () => void;
+  readonly acceptInput?: () => void;
+  readonly closePrompt?: () => void;
   readonly onSigint: (handler: () => void) => void;
   readonly offSigint: (handler: () => void) => void;
   readonly setExitCode: (code: number) => void;
