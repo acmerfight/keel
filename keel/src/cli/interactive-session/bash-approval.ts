@@ -55,7 +55,7 @@ export function interactiveBashPermissionPolicy(
         request.prefixApproval === undefined
           ? []
           : [
-              `[p] allow command family for session: ${escapeApprovalText(
+              `[p] allow ${request.prefixApproval.promptLabel} for session: ${escapeApprovalText(
                 request.prefixApproval.display,
               )}`,
             ];
@@ -64,6 +64,9 @@ export function interactiveBashPermissionPolicy(
           "Approve bash command?",
           `cwd: ${escapeApprovalText(request.cwd)}`,
           `$ ${escapeApprovalText(request.command)}`,
+          `risk: ${request.assessment.risk} - ${escapeApprovalText(
+            request.assessment.summary,
+          )}`,
           ...prefixApprovalLine,
           "Approved command output may be sent to the provider unredacted.",
           "[y] allow once, [s] allow exact command for session, [n] deny; any other input denies: ",
