@@ -3,7 +3,7 @@
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { runAgent } from "../agent/loop.ts";
-import { buildAgentSystemPrompt } from "../agent/prompt.ts";
+import { buildAgentSystemPrompt, type WorkflowSkill } from "../agent/prompt.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import type { Message } from "../llm/types.ts";
 import {
@@ -142,6 +142,37 @@ function formatSessionForkPoint(forkPoint: SessionForkPointRecord): string {
 
 function formatSessionForkPolicy(policy: SessionForkPolicyRecord): string {
   return `transcript=${policy.transcript}, pendingInputs=${policy.pendingInputs}, queuedInputs=${policy.queuedInputs}, bashApprovalGrants=${policy.bashApprovalGrants}`;
+}
+
+interface ResumedWorkflowSkillOptions {
+  readonly session: SessionState;
+  readonly requestedSkillName?: string;
+}
+
+function ensureResumedWorkflowSkillMatchesRequest(
+  options: ResumedWorkflowSkillOptions,
+): void {
+  const workflowSkill = options.session.workflowSkill;
+  if (options.requestedSkillName === undefined) {
+    return;
+  }
+  if (workflowSkill === undefined) {
+    throw new SessionStoreError(
+      `Error: session "${options.session.id}" has no workflow skill; cannot resume it with workflow skill "${options.requestedSkillName}".`,
+    );
+  }
+  if (workflowSkill.name !== options.requestedSkillName) {
+    throw new SessionStoreError(
+      `Error: session "${options.session.id}" already uses workflow skill "${workflowSkill.name}"; cannot resume it with workflow skill "${options.requestedSkillName}".`,
+    );
+  }
+}
+
+function resolveResumedWorkflowSkill(
+  options: ResumedWorkflowSkillOptions,
+): WorkflowSkill | undefined {
+  ensureResumedWorkflowSkillMatchesRequest(options);
+  return options.session.workflowSkill;
 }
 
 interface SessionCatalogGraphGroup {
@@ -440,6 +471,12 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         workspace: runtime.cwd(),
         runtime,
       });
+      ensureResumedWorkflowSkillMatchesRequest({
+        session,
+        ...(cliArgs.skillName !== undefined
+          ? { requestedSkillName: cliArgs.skillName }
+          : {}),
+      });
       runtime.writeStdout(
         formatExternalSessionForkPoints(
           sessionForkPointsFromStoredMessages({
@@ -470,12 +507,6 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
   if (!userMessage && cliArgs.transcriptFile !== undefined) {
     runtime.writeStderr(
       "Error: --transcript is only supported for one-shot runs.\n",
-    );
-    return 1;
-  }
-  if (!userMessage && cliArgs.skillName !== undefined) {
-    runtime.writeStderr(
-      "Error: --skill is only supported for one-shot runs.\n",
     );
     return 1;
   }
@@ -519,6 +550,11 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         let activeSessionId: string | undefined;
         let persistedMessages: readonly Message[] = [];
         let initialModelSelection: SessionModelSelection | undefined;
+        let workflowSkill =
+          cliArgs.resumeSessionId === undefined &&
+          cliArgs.skillName !== undefined
+            ? loadWorkflowSkill(workspace, cliArgs.skillName)
+            : undefined;
         if (cliArgs.sessionId !== undefined) {
           activeSessionId = cliArgs.sessionId;
           ensureSessionCanBeCreated({
@@ -530,6 +566,12 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
             sessionId: cliArgs.resumeSessionId,
             workspace,
             runtime,
+          });
+          const resumedWorkflowSkill = resolveResumedWorkflowSkill({
+            session: resumedSession,
+            ...(cliArgs.skillName !== undefined
+              ? { requestedSkillName: cliArgs.skillName }
+              : {}),
           });
           if (cliArgs.forkSessionId !== undefined) {
             ensureSessionCanBeCreated({
@@ -554,6 +596,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           } else {
             session = resumedSession;
           }
+          workflowSkill = resumedWorkflowSkill;
           activeSessionId = session.id;
           persistedMessages = session.messages;
           initialModelSelection = session.activeModel;
@@ -632,6 +675,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
                 sessionId,
                 workspace,
                 runtime,
+                ...(workflowSkill !== undefined ? { workflowSkill } : {}),
               });
               session = activeSession;
               persistedMessages = activeSession.messages;
@@ -757,6 +801,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
           workspace,
           platform: runtime.platform,
           ...(projectInstructions !== undefined ? { projectInstructions } : {}),
+          ...(workflowSkill !== undefined ? { workflowSkill } : {}),
           ...(sessionPersistence !== undefined ? sessionPersistence : {}),
           input: runtime.input,
           writeStdout: (text) => {
@@ -812,6 +857,10 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
         return 1;
       }
       if (error instanceof ProjectInstructionsError) {
+        runtime.writeStderr(`${error.message}\n`);
+        return 1;
+      }
+      if (error instanceof WorkflowSkillError) {
         runtime.writeStderr(`${error.message}\n`);
         return 1;
       }

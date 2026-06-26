@@ -24,6 +24,7 @@ import {
   type SessionQueuedInput,
   type SnapshotSessionRecord,
   type StoredMessage,
+  type WorkflowSkill,
 } from "./model.ts";
 
 const toolCallSchema = builtinToolCallSchema;
@@ -109,6 +110,14 @@ const sessionGraphRecordSchema = z
   })
   .strict();
 
+const workflowSkillSchema = z
+  .object({
+    relativePath: z.string(),
+    name: z.string(),
+    content: z.string(),
+  })
+  .strict();
+
 const sessionHeaderSchema = z
   .object({
     schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
@@ -117,6 +126,7 @@ const sessionHeaderSchema = z
     createdAt: z.string(),
     workspace: z.string(),
     graph: sessionGraphRecordSchema,
+    workflowSkill: workflowSkillSchema.optional(),
   })
   .strict();
 
@@ -392,6 +402,24 @@ function copySessionGraphRecord(graph: SessionGraphRecord): SessionGraphRecord {
   };
 }
 
+function copyWorkflowSkill(skill: WorkflowSkill): WorkflowSkill {
+  return {
+    relativePath: skill.relativePath,
+    name: skill.name,
+    content: skill.content,
+  };
+}
+
+function redactWorkflowSkillForPersistence(
+  skill: WorkflowSkill,
+): WorkflowSkill {
+  return {
+    relativePath: skill.relativePath,
+    name: skill.name,
+    content: redactTextForPersistence(skill.content),
+  };
+}
+
 function toSessionHeaderRecord(
   record: RawSessionHeaderRecord,
 ): SessionHeaderRecord {
@@ -402,6 +430,9 @@ function toSessionHeaderRecord(
     createdAt: record.createdAt,
     workspace: record.workspace,
     graph: copySessionGraphRecord(record.graph),
+    ...(record.workflowSkill !== undefined
+      ? { workflowSkill: copyWorkflowSkill(record.workflowSkill) }
+      : {}),
   };
 }
 
@@ -745,6 +776,7 @@ export {
   copySessionForkPointRecord,
   copySessionGraphRecord,
   copyStoredMessage,
+  copyWorkflowSkill,
   messagesFromStoredMessages,
   parseProviderVisibleMessages,
   parseSessionHeaderRecord,
@@ -753,5 +785,6 @@ export {
   redactBashApprovalGrantForPersistence,
   redactSessionQueuedInputForPersistence,
   redactStoredMessageForPersistence,
+  redactWorkflowSkillForPersistence,
   validateCompletedTranscript,
 };

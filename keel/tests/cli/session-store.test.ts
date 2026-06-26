@@ -204,6 +204,130 @@ describe("Session Store", () => {
     }
   });
 
+  test(`Given a named interactive session starts with a workflow skill,
+    When the session is resumed and forked,
+    Then the selected workflow skill is restored with the session context`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const workflowSkill = {
+      name: "review",
+      relativePath: ".agents/skills/review/SKILL.md",
+      content: "Read PR comments first.",
+    };
+
+    try {
+      createSessionStore({
+        sessionId: "skilled",
+        workspace,
+        runtime: runtime(home),
+        workflowSkill,
+      });
+
+      // When
+      const resumed = resumeSessionStore({
+        sessionId: "skilled",
+        workspace,
+        runtime: runtime(home, 1),
+      });
+      const forked = forkSessionStore({
+        source: resumed,
+        targetSessionId: "skilled-fork",
+        runtime: runtime(home, 2),
+      });
+      const resumedFork = resumeSessionStore({
+        sessionId: "skilled-fork",
+        workspace,
+        runtime: runtime(home, 3),
+      });
+
+      // Then
+      expect(resumed.workflowSkill).toEqual(workflowSkill);
+      expect(forked.workflowSkill).toEqual(workflowSkill);
+      expect(resumedFork.workflowSkill).toEqual(workflowSkill);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a workflow skill contains secret-like provider-visible text,
+    When the named session is persisted and resumed,
+    Then the ledger stores redacted workflow skill content at rest`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const workflowSkill = {
+      name: "review",
+      relativePath: ".agents/skills/review/SKILL.md",
+      content:
+        "Use API_KEY=sk-secret-213 and Bearer live-secret-213-token during review.",
+    };
+
+    try {
+      const session = createSessionStore({
+        sessionId: "redacted-skill",
+        workspace,
+        runtime: runtime(home),
+        workflowSkill,
+      });
+
+      // When
+      const ledger = await readFile(session.filePath, "utf8");
+      const resumed = resumeSessionStore({
+        sessionId: "redacted-skill",
+        workspace,
+        runtime: runtime(home, 1),
+      });
+
+      // Then
+      expect(session.workflowSkill?.content).toContain("sk-secret-213");
+      expect(ledger).not.toContain("sk-secret-213");
+      expect(ledger).not.toContain("live-secret-213-token");
+      expect(ledger).toContain("[REDACTED_SECRET]");
+      expect(resumed.workflowSkill?.content).toContain("[REDACTED_SECRET]");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a workflow skill would make the session header exceed the bounded header reader,
+    When the named session is created,
+    Then the session store rejects the oversized header before writing it`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const workflowSkill = {
+      name: "review",
+      relativePath: ".agents/skills/review/SKILL.md",
+      content: '"'.repeat(70 * 1024),
+    };
+
+    try {
+      // When / Then
+      expect(() =>
+        createSessionStore({
+          sessionId: "oversized-skill-header",
+          workspace,
+          runtime: runtime(home),
+          workflowSkill,
+        }),
+      ).toThrow(SessionStoreError);
+      expect(() =>
+        createSessionStore({
+          sessionId: "oversized-skill-header",
+          workspace,
+          runtime: runtime(home),
+          workflowSkill,
+        }),
+      ).toThrow("session header is too large");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given session persistence captures secret-like provider-visible messages,
     When the ledger and bounded snapshot are written,
     Then persisted records store redacted markers instead of the raw secret`, async () => {

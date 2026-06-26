@@ -20,12 +20,14 @@ import {
   type SessionStoreRuntime,
   type StoredMessage,
   sessionReplayStateKey,
+  type WorkflowSkill,
 } from "./model.ts";
 import {
   copyBashApprovalGrant,
   copyMessage,
   copySessionGraphRecord,
   copyStoredMessage,
+  copyWorkflowSkill,
   messagesFromStoredMessages,
   redactBashApprovalGrantForPersistence,
   redactSessionQueuedInputForPersistence,
@@ -207,6 +209,7 @@ function sessionStateFromReplay(options: {
   readonly bashApprovalGrants: readonly BashApprovalGrant[];
   readonly activeModel?: SessionModelSelection;
   readonly modelSwitches?: readonly SessionModelSwitch[];
+  readonly workflowSkill?: WorkflowSkill;
 }): SessionState {
   const graph = copySessionGraphRecord(options.graph);
   const storedMessages = options.storedMessages.map(copyStoredMessage);
@@ -222,6 +225,10 @@ function sessionStateFromReplay(options: {
   const modelSwitches = (options.modelSwitches ?? []).map(
     copySessionModelSwitch,
   );
+  const workflowSkill =
+    options.workflowSkill === undefined
+      ? undefined
+      : copyWorkflowSkill(options.workflowSkill);
   const replayState = {
     storedMessages: storedMessages.map(copyStoredMessage),
     pendingInputsById,
@@ -241,6 +248,7 @@ function sessionStateFromReplay(options: {
     bashApprovalGrants,
     ...(activeModel !== undefined ? { activeModel } : {}),
     modelSwitches,
+    ...(workflowSkill !== undefined ? { workflowSkill } : {}),
   };
   return session;
 }
