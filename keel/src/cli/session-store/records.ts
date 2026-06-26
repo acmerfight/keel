@@ -8,6 +8,10 @@ import {
   redactMessageForPersistence,
   redactTextForPersistence,
 } from "../persistence-redaction.ts";
+import {
+  isWorkflowSkillResourcePath,
+  MAX_WORKFLOW_SKILL_RESOURCE_PATHS,
+} from "../workflow-skill-contract.ts";
 import { sessionStoreError } from "./errors.ts";
 import {
   type AppendSessionRecord,
@@ -114,6 +118,14 @@ const workflowSkillSchema = z
   .object({
     relativePath: z.string(),
     name: z.string(),
+    resourcePaths: z
+      .array(
+        z.string().refine(isWorkflowSkillResourcePath, {
+          message:
+            "must be a skill-relative path under references/, scripts/, or assets/",
+        }),
+      )
+      .max(MAX_WORKFLOW_SKILL_RESOURCE_PATHS),
     content: z.string(),
   })
   .strict();
@@ -406,6 +418,7 @@ function copyWorkflowSkill(skill: WorkflowSkill): WorkflowSkill {
   return {
     relativePath: skill.relativePath,
     name: skill.name,
+    resourcePaths: [...skill.resourcePaths],
     content: skill.content,
   };
 }
@@ -416,6 +429,7 @@ function redactWorkflowSkillForPersistence(
   return {
     relativePath: skill.relativePath,
     name: skill.name,
+    resourcePaths: skill.resourcePaths.map(redactTextForPersistence),
     content: redactTextForPersistence(skill.content),
   };
 }

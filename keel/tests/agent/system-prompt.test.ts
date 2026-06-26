@@ -78,6 +78,7 @@ describe("Agent System Prompt", () => {
     const workflowSkill = {
       relativePath: ".agents/skills/review/SKILL.md",
       name: "review",
+      resourcePaths: ["references/checklist.md", "scripts/verify.ts"],
       content:
         "Read the PR comments first.\nFollow the project testing rules before reporting.",
     };
@@ -93,6 +94,15 @@ describe("Agent System Prompt", () => {
     expect(prompt).toContain(
       "Workflow skill review from .agents/skills/review/SKILL.md",
     );
+    expect(prompt).toContain("Skill base directory: .agents/skills/review");
+    expect(prompt).toContain(
+      "Relative paths in this workflow skill resolve from that directory.",
+    );
+    expect(prompt).toContain(
+      "When using tools, join skill resource paths to the skill base directory.",
+    );
+    expect(prompt).toContain("- references/checklist.md");
+    expect(prompt).toContain("- scripts/verify.ts");
     expect(prompt).toContain("> Read the PR comments first.");
     expect(prompt).toContain(
       "> Follow the project testing rules before reporting.",
@@ -100,6 +110,32 @@ describe("Agent System Prompt", () => {
     expect(prompt).toMatch(
       /Workflow skill[\s\S]*directly selected[\s\S]*current user request/i,
     );
+  });
+
+  test(`Given restored workflow skill metadata lacks a parent directory,
+    When the agent's system prompt is built,
+    Then the skill base directory falls back to the workspace root`, () => {
+    // Given
+    const workflowSkill = {
+      relativePath: "SKILL.md",
+      name: "review",
+      resourcePaths: [],
+      content: "Read the restored workflow body.",
+    };
+
+    // When
+    const prompt = buildAgentSystemPrompt({
+      workspace: "/tmp/project-with-restored-skill",
+      platform: "linux",
+      workflowSkill,
+    });
+
+    // Then
+    expect(prompt).toContain("Skill base directory: .");
+    expect(prompt).toContain(
+      "Available skill resource paths: none discovered under references/, scripts/, or assets/.",
+    );
+    expect(prompt).toContain("> Read the restored workflow body.");
   });
 
   test(`Given project instructions contain delimiter-like text,

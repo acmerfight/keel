@@ -26,6 +26,7 @@ import {
   type SessionCatalogEntry,
   type SessionCatalogReplayState,
   type SessionCatalogWarning,
+  type SessionCatalogWorkflowSkill,
   type SessionHeaderRecord,
   type SessionMutationRecord,
   type SessionRecords,
@@ -171,7 +172,24 @@ function sessionCatalogEntry(records: SessionRecords): SessionCatalogEntry {
     createdAt: records.header.createdAt,
     updatedAt: state.updatedAt,
     graph: copySessionGraphRecord(records.header.graph),
+    ...(records.header.workflowSkill !== undefined
+      ? {
+          workflowSkill: sessionCatalogWorkflowSkill(
+            records.header.workflowSkill,
+          ),
+        }
+      : {}),
     preview: catalogPreviewValue(state.preview),
+  };
+}
+
+function sessionCatalogWorkflowSkill(skill: {
+  readonly name: string;
+  readonly relativePath: string;
+}): SessionCatalogWorkflowSkill {
+  return {
+    name: skill.name,
+    relativePath: skill.relativePath,
   };
 }
 

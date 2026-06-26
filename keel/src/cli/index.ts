@@ -112,6 +112,11 @@ function sessionCatalogEntryLines(
     ...(entry.graph.parentSessionId !== null
       ? [`${detailIndent}parent: ${entry.graph.parentSessionId}`]
       : []),
+    ...(entry.workflowSkill !== undefined
+      ? [
+          `${detailIndent}workflow skill: ${entry.workflowSkill.name} (${entry.workflowSkill.relativePath})`,
+        ]
+      : []),
     ...(entry.graph.forkPoint !== null
       ? [
           `${detailIndent}fork point: ${formatSessionForkPoint(entry.graph.forkPoint)}`,
