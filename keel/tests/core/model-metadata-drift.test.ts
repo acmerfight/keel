@@ -1,8 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
+  classifyModelMetadataAgainstModelsDev,
   diffModelMetadataAgainstModelsDev,
-  formatModelMetadataDriftReport,
-  formatUntrackedModelsDevModelsReport,
+  formatAcceptedModelMetadataDriftReport,
+  formatModelMetadataCheckReport,
+  hasActionableModelMetadataFindings,
+  type ModelMetadataDriftCheckResult,
   parseModelsDevCatalog,
   unmonitoredKnownModelMetadataEntries,
   untrackedModelsDevModels,
@@ -106,17 +109,20 @@ describe("Model Metadata Drift", () => {
 
     // When
     const drift = diffModelMetadataAgainstModelsDev(catalog);
+    const classified = classifyModelMetadataAgainstModelsDev(catalog);
 
     // Then
     expect(drift).toEqual([]);
+    expect(classified).toEqual({
+      actionableDrift: [],
+      acceptedDrift: [],
+      unmonitoredRegistryEntries: [],
+      actionableUntracked: [],
+      acceptedUntracked: [],
+    });
+    expect(hasActionableModelMetadataFindings(classified)).toBe(false);
     expect(unmonitoredKnownModelMetadataEntries()).toEqual([]);
     expect(untrackedModelsDevModels(catalog)).toEqual([]);
-    expect(formatModelMetadataDriftReport(drift)).toBe(
-      "No model metadata drift detected against models.dev.",
-    );
-    expect(formatUntrackedModelsDevModelsReport([])).toBe(
-      "No untracked models.dev models detected.",
-    );
   });
 
   test(`Given a models.dev fixture with a changed price,
@@ -166,13 +172,6 @@ describe("Model Metadata Drift", () => {
         ],
       },
     ]);
-    expect(formatModelMetadataDriftReport(drift)).toBe(
-      [
-        "Model metadata drift detected against models.dev:",
-        "- deepseek/deepseek-v4-flash (models.dev deepseek/deepseek-v4-flash)",
-        "  costModel.outputPerMillionTokens: registry=0.28 models.dev=0.29",
-      ].join("\n"),
-    );
   });
 
   test(`Given a models.dev fixture uses the context window as Kimi output,
@@ -218,6 +217,150 @@ describe("Model Metadata Drift", () => {
             field: "maxOutputTokens",
             registryValue: "32768",
             modelsDevValue: "262144",
+          },
+        ],
+      },
+    ]);
+  });
+
+  test(`Given a reviewed models.dev placeholder differs from the registry,
+    When metadata drift is classified,
+    Then the exact reviewed difference is accepted without actionable drift`, () => {
+    // Given
+    const catalog = parseModelsDevCatalog({
+      moonshotai: {
+        models: {
+          "kimi-k2.6": {
+            limit: { context: 262_144, output: 262_144 },
+            reasoning: true,
+            tool_call: true,
+            cost: {
+              input: 0.95,
+              cache_read: 0.16,
+              output: 4,
+            },
+          },
+        },
+      },
+    });
+
+    // When
+    const result = classifyModelMetadataAgainstModelsDev(catalog, {
+      targets: [
+        {
+          providerId: "kimi",
+          model: "kimi-k2.6",
+          modelsDevProviderId: "moonshotai",
+          modelsDevModel: "kimi-k2.6",
+        },
+      ],
+      acceptedDifferences: [
+        {
+          providerId: "kimi",
+          model: "kimi-k2.6",
+          modelsDevProviderId: "moonshotai",
+          modelsDevModel: "kimi-k2.6",
+          field: "maxOutputTokens",
+          registryValue: "32768",
+          modelsDevValue: "262144",
+          reviewedAt: "2026-06-26",
+          reason:
+            "models.dev currently mirrors the Kimi context window into the output limit.",
+        },
+      ],
+      acceptedUntrackedModels: [],
+    });
+
+    // Then
+    expect(result.actionableDrift).toEqual([]);
+    expect(result.acceptedDrift).toEqual([
+      {
+        providerId: "kimi",
+        model: "kimi-k2.6",
+        modelsDevProviderId: "moonshotai",
+        modelsDevModel: "kimi-k2.6",
+        differences: [
+          {
+            field: "maxOutputTokens",
+            registryValue: "32768",
+            modelsDevValue: "262144",
+            reviewedAt: "2026-06-26",
+            reason:
+              "models.dev currently mirrors the Kimi context window into the output limit.",
+          },
+        ],
+      },
+    ]);
+    expect(formatAcceptedModelMetadataDriftReport(result.acceptedDrift)).toBe(
+      [
+        "Accepted model metadata drift against models.dev:",
+        "- kimi/kimi-k2.6 (models.dev moonshotai/kimi-k2.6)",
+        "  maxOutputTokens: registry=32768 models.dev=262144 (reviewed 2026-06-26; models.dev currently mirrors the Kimi context window into the output limit.)",
+      ].join("\n"),
+    );
+  });
+
+  test(`Given a reviewed models.dev placeholder later changes value,
+    When metadata drift is classified,
+    Then the stale review no longer suppresses actionable drift`, () => {
+    // Given
+    const catalog = parseModelsDevCatalog({
+      moonshotai: {
+        models: {
+          "kimi-k2.6": {
+            limit: { context: 262_144, output: 131_072 },
+            reasoning: true,
+            tool_call: true,
+            cost: {
+              input: 0.95,
+              cache_read: 0.16,
+              output: 4,
+            },
+          },
+        },
+      },
+    });
+
+    // When
+    const result = classifyModelMetadataAgainstModelsDev(catalog, {
+      targets: [
+        {
+          providerId: "kimi",
+          model: "kimi-k2.6",
+          modelsDevProviderId: "moonshotai",
+          modelsDevModel: "kimi-k2.6",
+        },
+      ],
+      acceptedDifferences: [
+        {
+          providerId: "kimi",
+          model: "kimi-k2.6",
+          modelsDevProviderId: "moonshotai",
+          modelsDevModel: "kimi-k2.6",
+          field: "maxOutputTokens",
+          registryValue: "32768",
+          modelsDevValue: "262144",
+          reviewedAt: "2026-06-26",
+          reason:
+            "models.dev currently mirrors the Kimi context window into the output limit.",
+        },
+      ],
+      acceptedUntrackedModels: [],
+    });
+
+    // Then
+    expect(result.acceptedDrift).toEqual([]);
+    expect(result.actionableDrift).toEqual([
+      {
+        providerId: "kimi",
+        model: "kimi-k2.6",
+        modelsDevProviderId: "moonshotai",
+        modelsDevModel: "kimi-k2.6",
+        differences: [
+          {
+            field: "maxOutputTokens",
+            registryValue: "32768",
+            modelsDevValue: "131072",
           },
         ],
       },
@@ -638,13 +781,106 @@ describe("Model Metadata Drift", () => {
         modelsDevModel: "qwen3.6-plus",
       },
     ]);
-    expect(formatUntrackedModelsDevModelsReport(untracked)).toBe(
-      [
-        "Untracked models.dev models detected:",
-        "- deepseek/deepseek-v5-preview (models.dev deepseek/deepseek-v5-preview)",
-        "- kimi/kimi-k2.7-code (models.dev moonshotai/kimi-k2.7-code)",
-        "- qwen/qwen3.6-plus (models.dev alibaba/qwen3.6-plus)",
-      ].join("\n"),
+  });
+
+  test(`Given models.dev includes reviewed and new current-family models missing locally,
+    When metadata drift is classified,
+    Then reviewed untracked models are separated from actionable additions`, () => {
+    // Given
+    const catalog = parseModelsDevCatalog({
+      alibaba: {
+        models: {
+          "qwen3.6-new": {},
+          "qwen3.6-plus": {},
+        },
+      },
+    });
+
+    // When
+    const result = classifyModelMetadataAgainstModelsDev(catalog, {
+      targets: [],
+      acceptedDifferences: [],
+      acceptedUntrackedModels: [
+        {
+          providerId: "qwen",
+          modelsDevProviderId: "alibaba",
+          modelsDevModel: "qwen3.6-plus",
+          reviewedAt: "2026-06-26",
+          reason:
+            "Current-family model is known in models.dev but not yet added to Keel's curated registry.",
+        },
+      ],
+    });
+
+    // Then
+    expect(result.actionableUntracked).toEqual([
+      {
+        providerId: "qwen",
+        modelsDevProviderId: "alibaba",
+        modelsDevModel: "qwen3.6-new",
+      },
+    ]);
+    expect(result.acceptedUntracked).toEqual([
+      {
+        providerId: "qwen",
+        modelsDevProviderId: "alibaba",
+        modelsDevModel: "qwen3.6-plus",
+        reviewedAt: "2026-06-26",
+        reason:
+          "Current-family model is known in models.dev but not yet added to Keel's curated registry.",
+      },
+    ]);
+    expect(formatModelMetadataCheckReport(result)).toContain(
+      "- qwen/qwen3.6-plus (models.dev alibaba/qwen3.6-plus; reviewed 2026-06-26; Current-family model is known in models.dev but not yet added to Keel's curated registry.)",
+    );
+  });
+
+  test(`Given a classified metadata result has actionable findings,
+    When the full check report is formatted,
+    Then every actionable section is visible`, () => {
+    // Given
+    const result: ModelMetadataDriftCheckResult = {
+      actionableDrift: [
+        {
+          providerId: "deepseek",
+          model: "deepseek-v4-flash",
+          modelsDevProviderId: "deepseek",
+          modelsDevModel: "deepseek-v4-flash",
+          differences: [
+            {
+              field: "costModel.outputPerMillionTokens",
+              registryValue: "0.28",
+              modelsDevValue: "0.29",
+            },
+          ],
+        },
+      ],
+      acceptedDrift: [],
+      unmonitoredRegistryEntries: ["qwen/qwen-new"],
+      actionableUntracked: [
+        {
+          providerId: "qwen",
+          modelsDevProviderId: "alibaba",
+          modelsDevModel: "qwen3.6-new",
+        },
+      ],
+      acceptedUntracked: [],
+    };
+
+    // When
+    const report = formatModelMetadataCheckReport(result);
+
+    // Then
+    expect(hasActionableModelMetadataFindings(result)).toBe(true);
+    expect(report).toContain(
+      "Actionable model metadata drift detected against models.dev:",
+    );
+    expect(report).toContain("Unmonitored registry entries: qwen/qwen-new");
+    expect(report).toContain(
+      "Actionable untracked models.dev models detected:",
+    );
+    expect(report).toContain(
+      "- qwen/qwen3.6-new (models.dev alibaba/qwen3.6-new)",
     );
   });
 });
