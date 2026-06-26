@@ -69,6 +69,19 @@ function formatActiveModel(resolved: InteractiveResolvedProvider): string {
   return `${resolved.providerId}/${resolved.model}`;
 }
 
+function modelSwitchUnknownContextMessage(
+  target: InteractiveResolvedProvider,
+): string | null {
+  if (
+    (target.modelMetadata !== undefined &&
+      target.modelMetadata.status !== "unknown") ||
+    target.contextCompaction !== undefined
+  ) {
+    return null;
+  }
+  return `Error: cannot switch to ${formatActiveModel(target)} because model metadata is unavailable; set KEEL_CONTEXT_WINDOW_TOKENS to configure the target context window.`;
+}
+
 function modelSelectionFromResolved(
   resolved: InteractiveResolvedProvider,
 ): SessionModelSelection {
@@ -354,6 +367,15 @@ export async function runInteractiveSession(
             userMessage,
             interactiveCommand.selection,
           );
+          if (messages.length > 0) {
+            const unknownContextMessage =
+              modelSwitchUnknownContextMessage(nextResolved);
+            if (unknownContextMessage !== null) {
+              options.writeStderr(`${unknownContextMessage}\n`);
+              consumeQueuedInputLines([rawInput]);
+              continue;
+            }
+          }
           let consumedByPersistence = false;
           let modelSwitchCost: CostReport | undefined;
           if (

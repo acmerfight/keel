@@ -205,9 +205,9 @@ describe("Provider Config", () => {
     expect(resolved.contextCompaction).toBeUndefined();
   });
 
-  test(`Given a real provider uses default config,
+  test(`Given a real provider uses a catalogued default model,
     When provider config is resolved,
-    Then context compaction uses the default provider window`, () => {
+    Then context compaction uses the model metadata context window`, () => {
     // Given
     const env = {
       KEEL_PROVIDER: "deepseek",
@@ -220,7 +220,7 @@ describe("Provider Config", () => {
     // Then
     expect(resolved.providerId).toBe("deepseek");
     expect(resolved.contextCompaction).toEqual({
-      contextWindowTokens: 256_000,
+      contextWindowTokens: 1_000_000,
     });
   });
 
@@ -265,6 +265,101 @@ describe("Provider Config", () => {
       source: "KEEL_CONTEXT_WINDOW_TOKENS",
     });
     expect(diagnostic.issues).toEqual([]);
+  });
+
+  test(`Given a catalogued provider model is selected,
+    When provider config diagnostics are inspected,
+    Then diagnostics report registry metadata and capabilities`, () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "qwen",
+      DASHSCOPE_API_KEY: "test-key",
+      QWEN_MODEL: "qwen3.7-plus",
+    };
+
+    // When
+    const diagnostic = inspectProviderConfig(runtime(env));
+
+    // Then
+    expect(diagnostic.providerId).toBe("qwen");
+    expect(diagnostic.model).toBe("qwen3.7-plus");
+    expect(diagnostic.contextWindow).toEqual({
+      status: "enabled",
+      tokens: 1_000_000,
+      source: "registry",
+    });
+    expect(diagnostic.modelMetadata).toEqual({
+      status: "known",
+      source: "registry",
+      maxOutputTokens: 65_536,
+      capabilities: {
+        textInput: true,
+        toolCalls: true,
+        reasoning: true,
+      },
+    });
+    expect(diagnostic.costModel).toBe("known");
+    expect(diagnostic.issues).toEqual([]);
+  });
+
+  test(`Given an uncatalogued real provider model is selected,
+    When provider config diagnostics are inspected,
+    Then diagnostics fail closed on missing context metadata`, () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "qwen",
+      DASHSCOPE_API_KEY: "test-key",
+      QWEN_MODEL: "qwen-future",
+    };
+
+    // When
+    const diagnostic = inspectProviderConfig(runtime(env));
+    const resolved = resolveProvider("Hello", runtime(env));
+
+    // Then
+    expect(resolved.providerId).toBe("qwen");
+    expect(resolved.contextCompaction).toBeUndefined();
+    expect(diagnostic.contextWindow).toEqual({ status: "unknown" });
+    expect(diagnostic.modelMetadata).toEqual({ status: "unknown" });
+    expect(diagnostic.issues).toEqual([
+      {
+        severity: "warning",
+        message:
+          "model metadata is unavailable for qwen/qwen-future; context window and capabilities are unknown",
+      },
+      {
+        severity: "warning",
+        message: "cost tracking is unavailable for model qwen-future",
+      },
+    ]);
+  });
+
+  test(`Given an uncatalogued real provider model has an explicit context override,
+    When provider config is resolved,
+    Then the override supplies the target context window`, () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "qwen",
+      DASHSCOPE_API_KEY: "test-key",
+      QWEN_MODEL: "qwen-future",
+      KEEL_CONTEXT_WINDOW_TOKENS: "4096",
+    };
+
+    // When
+    const resolved = resolveProvider("Hello", runtime(env));
+    const diagnostic = inspectProviderConfig(runtime(env));
+
+    // Then
+    expect(resolved.providerId).toBe("qwen");
+    expect(resolved.contextCompaction).toEqual({
+      contextWindowTokens: 4096,
+    });
+    expect(diagnostic.contextWindow).toEqual({
+      status: "enabled",
+      tokens: 4096,
+      source: "KEEL_CONTEXT_WINDOW_TOKENS",
+    });
+    expect(diagnostic.modelMetadata).toEqual({ status: "unknown" });
   });
 
   test(`Given provider and model are selected by CLI options,
@@ -339,8 +434,8 @@ describe("Provider Config", () => {
       },
       model: "deepseek-future-default",
       costModel: null,
-      contextCompaction: { contextWindowTokens: 256_000 },
       modelSource: "default",
+      modelMetadata: { status: "unknown" },
     } satisfies ResolvedProvider;
 
     // When / Then

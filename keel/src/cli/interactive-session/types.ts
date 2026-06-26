@@ -2,6 +2,7 @@ import type { ContextCompactionOptions } from "../../agent/context-compaction.ts
 import type { AgentEvent, CostReport } from "../../agent/loop.ts";
 import type { ProjectInstructions } from "../../agent/prompt.ts";
 import type { CostModel } from "../../core/cost.ts";
+import type { ModelMetadata } from "../../core/model-metadata.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
 import type { BashApprovalGrant, BashMode } from "../../permissions/bash.ts";
@@ -34,6 +35,7 @@ interface InteractiveResolvedProviderBase {
   readonly provider: LLMProvider;
   readonly model: string;
   readonly contextCompaction?: ContextCompactionOptions;
+  readonly modelMetadata?: ModelMetadata;
 }
 
 export type InteractiveResolvedProvider =

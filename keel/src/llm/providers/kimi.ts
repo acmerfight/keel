@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { CostModel } from "../../core/cost.ts";
 import { KeelError } from "../../core/error.ts";
 import type { Usage } from "../types.ts";
 import {
@@ -7,14 +6,6 @@ import {
   type OpenAICompatibleStreamState,
   type ProviderRetryConfig,
 } from "./openai-compatible.ts";
-
-// Kimi K2.6 prices are per 1M tokens.
-export const KIMI_K2_6_COST_MODEL: CostModel = {
-  type: "fixed",
-  uncachedInputPerMillionTokens: 0.95,
-  cachedInputPerMillionTokens: 0.16,
-  outputPerMillionTokens: 4,
-};
 
 const kimiUsageSchema = z
   .object({

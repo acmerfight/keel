@@ -1,16 +1,16 @@
 import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
-import type { CostModel } from "../core/cost.ts";
+import { type CostModel, ZERO_COST_MODEL } from "../core/cost.ts";
+import {
+  type ModelCapabilities,
+  type ModelMetadata,
+  modelCostModel,
+  modelMetadata,
+} from "../core/model-metadata.ts";
 import { isProviderId, type ProviderId } from "../core/provider-id.ts";
-import {
-  createDeepseekProvider,
-  deepseekCostModel,
-} from "../llm/providers/deepseek.ts";
+import { createDeepseekProvider } from "../llm/providers/deepseek.ts";
 import { createFakeProvider, fakeResponse } from "../llm/providers/fake.ts";
-import {
-  createKimiProvider,
-  KIMI_K2_6_COST_MODEL,
-} from "../llm/providers/kimi.ts";
-import { createQwenProvider, qwenCostModel } from "../llm/providers/qwen.ts";
+import { createKimiProvider } from "../llm/providers/kimi.ts";
+import { createQwenProvider } from "../llm/providers/qwen.ts";
 import type { LLMProvider } from "../llm/types.ts";
 import type { InteractiveResolvedProvider } from "./interactive-session.ts";
 
@@ -52,7 +52,7 @@ type BaseUrlSource =
   | "KIMI_BASE_URL"
   | "QWEN_BASE_URL"
   | "default";
-type ContextWindowSource = "KEEL_CONTEXT_WINDOW_TOKENS" | "default";
+type ContextWindowSource = "KEEL_CONTEXT_WINDOW_TOKENS" | "registry";
 
 type PositiveIntegerEnv =
   | { readonly status: "unset" }
@@ -89,6 +89,7 @@ export type BaseUrlDiagnostic =
 
 export type ContextWindowDiagnostic =
   | { readonly status: "disabled" }
+  | { readonly status: "unknown" }
   | {
       readonly status: "enabled";
       readonly tokens: number;
@@ -100,6 +101,15 @@ export type ContextWindowDiagnostic =
       readonly message: string;
     };
 
+export type ModelMetadataDiagnostic =
+  | {
+      readonly status: "known";
+      readonly source: "registry";
+      readonly maxOutputTokens: number | null;
+      readonly capabilities: ModelCapabilities;
+    }
+  | { readonly status: "unknown" };
+
 export interface ProviderConfigDiagnostic {
   readonly providerId: ProviderId;
   readonly providerSource: ProviderSource;
@@ -108,6 +118,7 @@ export interface ProviderConfigDiagnostic {
   readonly apiKey: ApiKeyDiagnostic;
   readonly baseUrl: BaseUrlDiagnostic;
   readonly contextWindow: ContextWindowDiagnostic;
+  readonly modelMetadata: ModelMetadataDiagnostic;
   readonly costModel: "known" | "unknown";
   readonly issues: readonly ProviderDiagnosticIssue[];
 }
@@ -118,7 +129,6 @@ type ResolvedProviderBase<
 > = InteractiveResolvedProvider & {
   readonly providerId: Id;
   readonly costModel: Cost;
-  readonly contextCompaction?: ContextCompactionOptions;
   readonly modelSource?: ModelSource;
 };
 
@@ -183,13 +193,21 @@ function fakeContextCompactionOptions(
     : { contextWindowTokens };
 }
 
-function realContextCompactionOptions(
+function contextCompactionOptions(
   runtime: ProviderConfigRuntime,
-): ContextCompactionOptions {
-  return {
-    contextWindowTokens:
-      positiveIntegerEnv(runtime, "KEEL_CONTEXT_WINDOW_TOKENS") ?? 256_000,
-  };
+  metadata: ModelMetadata,
+): ContextCompactionOptions | undefined {
+  const contextWindowTokens = positiveIntegerEnv(
+    runtime,
+    "KEEL_CONTEXT_WINDOW_TOKENS",
+  );
+  if (contextWindowTokens !== undefined) {
+    return { contextWindowTokens };
+  }
+  if (metadata.status === "unknown" || metadata.contextWindowTokens === null) {
+    return undefined;
+  }
+  return { contextWindowTokens: metadata.contextWindowTokens };
 }
 
 function selectedProvider(
@@ -290,25 +308,11 @@ const ZERO_USAGE = {
   outputTokens: 0,
 };
 
-const ZERO_COST_MODEL: CostModel = {
-  type: "fixed",
-  uncachedInputPerMillionTokens: 0,
-  cachedInputPerMillionTokens: 0,
-  outputPerMillionTokens: 0,
-};
-
-function kimiCostModel(model: string): CostModel | null {
-  if (model === "kimi-k2.6") return KIMI_K2_6_COST_MODEL;
-  return null;
-}
-
 interface ProviderProfileBase {
   readonly defaultModel: string;
   readonly modelEnvKey?: Exclude<ModelSource, "--model" | "default">;
   readonly apiKeyEnvKeys: readonly string[];
   readonly missingApiKeyMessage: string;
-  readonly contextWindowDefaultTokens?: number;
-  readonly costModel: (model: string) => CostModel | null;
 }
 
 type ProviderProfile =
@@ -326,7 +330,6 @@ const PROVIDER_PROFILES = {
     defaultModel: "fake",
     apiKeyEnvKeys: [],
     missingApiKeyMessage: "Error: fake provider does not require an API key.",
-    costModel: () => ZERO_COST_MODEL,
   },
   deepseek: {
     defaultModel: "deepseek-v4-flash",
@@ -336,8 +339,6 @@ const PROVIDER_PROFILES = {
       "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.",
     baseUrlEnvKey: "DEEPSEEK_BASE_URL",
     defaultBaseUrl: "https://api.deepseek.com",
-    contextWindowDefaultTokens: 256_000,
-    costModel: deepseekCostModel,
   },
   kimi: {
     defaultModel: "kimi-k2.6",
@@ -347,8 +348,6 @@ const PROVIDER_PROFILES = {
       "Error: KIMI_API_KEY is required. Set the API key to use Kimi.",
     baseUrlEnvKey: "KIMI_BASE_URL",
     defaultBaseUrl: "https://api.moonshot.cn/v1",
-    contextWindowDefaultTokens: 256_000,
-    costModel: kimiCostModel,
   },
   qwen: {
     defaultModel: "qwen3.7-max",
@@ -358,8 +357,6 @@ const PROVIDER_PROFILES = {
       "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
     baseUrlEnvKey: "QWEN_BASE_URL",
     defaultBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    contextWindowDefaultTokens: 256_000,
-    costModel: qwenCostModel,
   },
 } satisfies Record<ProviderId, ProviderProfile>;
 
@@ -458,7 +455,7 @@ function inspectBaseUrl(
 
 function inspectContextWindow(
   runtime: ProviderConfigRuntime,
-  profile: ProviderProfile,
+  metadata: ModelMetadata,
 ): ContextWindowDiagnostic {
   const configured = readPositiveIntegerEnv(
     runtime,
@@ -481,14 +478,30 @@ function inspectContextWindow(
       break;
   }
 
-  const defaultTokens = profile.contextWindowDefaultTokens;
-  if (defaultTokens === undefined) {
+  if (metadata.status === "unknown") {
+    return { status: "unknown" };
+  }
+  if (metadata.contextWindowTokens === null) {
     return { status: "disabled" };
   }
   return {
     status: "enabled",
-    tokens: defaultTokens,
-    source: "default",
+    tokens: metadata.contextWindowTokens,
+    source: "registry",
+  };
+}
+
+function inspectModelMetadata(
+  metadata: ModelMetadata,
+): ModelMetadataDiagnostic {
+  if (metadata.status === "unknown") {
+    return { status: "unknown" };
+  }
+  return {
+    status: "known",
+    source: metadata.source,
+    maxOutputTokens: metadata.maxOutputTokens,
+    capabilities: metadata.capabilities,
   };
 }
 
@@ -504,9 +517,12 @@ export function inspectProviderConfig(
   const profile = providerProfile(provider.providerId);
   const selected = selectedModelFromProfile(runtime, selection, profile);
   const apiKey = inspectApiKey(runtime, profile);
-  const contextWindow = inspectContextWindow(runtime, profile);
+  const metadata = modelMetadata(provider.providerId, selected.model);
+  const contextWindow = inspectContextWindow(runtime, metadata);
   const costModel =
-    profile.costModel(selected.model) === null ? "unknown" : "known";
+    modelCostModel(provider.providerId, selected.model) === null
+      ? "unknown"
+      : "known";
   const issues: ProviderDiagnosticIssue[] = [];
 
   if (apiKey.status === "missing") {
@@ -520,6 +536,13 @@ export function inspectProviderConfig(
     issues.push({
       severity: "error",
       message: contextWindow.message,
+    });
+  }
+
+  if (metadata.status === "unknown") {
+    issues.push({
+      severity: "warning",
+      message: `model metadata is unavailable for ${provider.providerId}/${selected.model}; context window and capabilities are unknown`,
     });
   }
 
@@ -538,6 +561,7 @@ export function inspectProviderConfig(
     apiKey,
     baseUrl: inspectBaseUrl(runtime, profile),
     contextWindow,
+    modelMetadata: inspectModelMetadata(metadata),
     costModel,
     issues,
   };
@@ -700,11 +724,13 @@ export function resolveProvider(
   switch (providerId) {
     case "fake": {
       const contextCompaction = fakeContextCompactionOptions(runtime);
+      const metadata = modelMetadata("fake", "fake");
       return {
         providerId: "fake",
         provider: createCliFakeProvider(userMessage),
         model: "fake",
         costModel: ZERO_COST_MODEL,
+        modelMetadata: metadata,
         ...(contextCompaction !== undefined ? { contextCompaction } : {}),
       };
     }
@@ -713,7 +739,8 @@ export function resolveProvider(
       const profile = PROVIDER_PROFILES.deepseek;
       const apiKey = requireApiKey(runtime, profile);
       const selected = selectedModelFromProfile(runtime, selection, profile);
-      const contextCompaction = realContextCompactionOptions(runtime);
+      const metadata = modelMetadata("deepseek", selected.model);
+      const contextCompaction = contextCompactionOptions(runtime, metadata);
       return {
         providerId: "deepseek",
         provider: createDeepseekProvider({
@@ -722,9 +749,10 @@ export function resolveProvider(
           model: selected.model,
         }),
         model: selected.model,
-        costModel: profile.costModel(selected.model),
+        costModel: modelCostModel("deepseek", selected.model),
         modelSource: selected.source,
-        contextCompaction,
+        modelMetadata: metadata,
+        ...(contextCompaction !== undefined ? { contextCompaction } : {}),
       };
     }
 
@@ -732,7 +760,8 @@ export function resolveProvider(
       const profile = PROVIDER_PROFILES.kimi;
       const apiKey = requireApiKey(runtime, profile);
       const selected = selectedModelFromProfile(runtime, selection, profile);
-      const contextCompaction = realContextCompactionOptions(runtime);
+      const metadata = modelMetadata("kimi", selected.model);
+      const contextCompaction = contextCompactionOptions(runtime, metadata);
       return {
         providerId: "kimi",
         provider: createKimiProvider({
@@ -741,9 +770,10 @@ export function resolveProvider(
           model: selected.model,
         }),
         model: selected.model,
-        costModel: profile.costModel(selected.model),
+        costModel: modelCostModel("kimi", selected.model),
         modelSource: selected.source,
-        contextCompaction,
+        modelMetadata: metadata,
+        ...(contextCompaction !== undefined ? { contextCompaction } : {}),
       };
     }
 
@@ -751,7 +781,8 @@ export function resolveProvider(
       const profile = PROVIDER_PROFILES.qwen;
       const apiKey = requireApiKey(runtime, profile);
       const selected = selectedModelFromProfile(runtime, selection, profile);
-      const contextCompaction = realContextCompactionOptions(runtime);
+      const metadata = modelMetadata("qwen", selected.model);
+      const contextCompaction = contextCompactionOptions(runtime, metadata);
       return {
         providerId: "qwen",
         provider: createQwenProvider({
@@ -760,9 +791,10 @@ export function resolveProvider(
           model: selected.model,
         }),
         model: selected.model,
-        costModel: profile.costModel(selected.model),
+        costModel: modelCostModel("qwen", selected.model),
         modelSource: selected.source,
-        contextCompaction,
+        modelMetadata: metadata,
+        ...(contextCompaction !== undefined ? { contextCompaction } : {}),
       };
     }
   }
@@ -776,11 +808,13 @@ export function resolveInteractiveProvider(
   const providerId = selectedProviderId(runtime, selection);
   if (providerId === "fake") {
     const contextCompaction = fakeContextCompactionOptions(runtime);
+    const metadata = modelMetadata("fake", "fake");
     return {
       providerId: "fake",
       provider: createInteractiveFakeProvider(),
       model: "fake",
       costModel: ZERO_COST_MODEL,
+      modelMetadata: metadata,
       ...(contextCompaction !== undefined ? { contextCompaction } : {}),
     };
   }

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { CostModel } from "../../core/cost.ts";
 import { KeelError } from "../../core/error.ts";
 import type { Usage } from "../types.ts";
 import {
@@ -7,19 +6,6 @@ import {
   type OpenAICompatibleStreamState,
   type ProviderRetryConfig,
 } from "./openai-compatible.ts";
-
-// DeepSeek V4 Flash prices are per 1M tokens.
-const DEEPSEEK_V4_FLASH_COST_MODEL: CostModel = {
-  type: "fixed",
-  uncachedInputPerMillionTokens: 0.14,
-  cachedInputPerMillionTokens: 0.0028,
-  outputPerMillionTokens: 0.28,
-};
-
-export function deepseekCostModel(model: string): CostModel | null {
-  if (model === "deepseek-v4-flash") return DEEPSEEK_V4_FLASH_COST_MODEL;
-  return null;
-}
 
 const deepseekToolCallSchema = z
   .object({

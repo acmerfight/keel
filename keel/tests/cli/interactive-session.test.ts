@@ -32,6 +32,7 @@ import {
 } from "../../src/cli/session-store.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import { recordLastEditCheckpoint } from "../../src/core/git.ts";
+import type { ModelMetadata } from "../../src/core/model-metadata.ts";
 import type { ProviderId } from "../../src/core/provider-id.ts";
 import {
   createFakeProvider,
@@ -57,6 +58,19 @@ const ZERO_COST_MODEL: CostModel = {
   uncachedInputPerMillionTokens: 0,
   cachedInputPerMillionTokens: 0,
   outputPerMillionTokens: 0,
+};
+
+const TEST_MODEL_METADATA: ModelMetadata = {
+  status: "known",
+  source: "registry",
+  contextWindowTokens: null,
+  maxOutputTokens: null,
+  capabilities: {
+    textInput: true,
+    toolCalls: true,
+    reasoning: false,
+  },
+  costModel: ZERO_COST_MODEL,
 };
 
 const EXPENSIVE_USAGE: Usage = {
@@ -121,6 +135,7 @@ function resolvedProvider(
   provider: LLMProvider,
   costModel: CostModel | null = ZERO_COST_MODEL,
   contextCompaction?: ContextCompactionOptions,
+  modelMetadata: InteractiveResolvedProvider["modelMetadata"] = TEST_MODEL_METADATA,
 ): InteractiveResolvedProvider {
   switch (providerId) {
     case "fake":
@@ -129,6 +144,7 @@ function resolvedProvider(
         providerId: "fake",
         model: "fake",
         costModel: ZERO_COST_MODEL,
+        modelMetadata,
         ...(contextCompaction !== undefined ? { contextCompaction } : {}),
       };
     case "deepseek":
@@ -137,6 +153,7 @@ function resolvedProvider(
         providerId: "deepseek",
         model,
         costModel,
+        modelMetadata,
         ...(contextCompaction !== undefined ? { contextCompaction } : {}),
       };
     case "kimi":
@@ -145,6 +162,7 @@ function resolvedProvider(
         providerId: "kimi",
         model,
         costModel,
+        modelMetadata,
         ...(contextCompaction !== undefined ? { contextCompaction } : {}),
       };
     case "qwen":
@@ -153,6 +171,7 @@ function resolvedProvider(
         providerId: "qwen",
         model,
         costModel,
+        modelMetadata,
         ...(contextCompaction !== undefined ? { contextCompaction } : {}),
       };
   }
@@ -627,6 +646,173 @@ describe("Interactive Session", () => {
     expect(stdout).toContain("qwen:qwen3.7-max");
     expect(observedProviderVisibleContent).toHaveLength(2);
     expect(observedProviderVisibleContent[1]).not.toContain("/model");
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given an interactive session already has history,
+    When user selects an uncatalogued real model without a context override,
+    Then Keel rejects the switch and keeps the previous model active`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let oldProviderTurns = 0;
+    let targetProviderTurns = 0;
+    const oldProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        oldProviderTurns++;
+        yield { type: "text", text: `old provider ${oldProviderTurns}` };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const targetProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        targetProviderTurns++;
+        yield { type: "text", text: "unexpected unknown target" };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) => {
+        if (selection?.providerId === "qwen") {
+          return {
+            provider: targetProvider,
+            providerId: "qwen",
+            model: selection.model ?? "qwen-future",
+            costModel: null,
+          };
+        }
+        return resolvedProvider("fake", "fake", oldProvider);
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("first prompt\n/model qwen/qwen-future\nsecond prompt\n");
+
+    // Then
+    await session;
+    expect(stderr).toContain(
+      "Error: cannot switch to qwen/qwen-future because model metadata is unavailable; set KEEL_CONTEXT_WINDOW_TOKENS to configure the target context window.",
+    );
+    expect(stdout).toContain("old provider 1");
+    expect(stdout).toContain("old provider 2");
+    expect(stdout).not.toContain("unexpected unknown target");
+    expect(oldProviderTurns).toBe(2);
+    expect(targetProviderTurns).toBe(0);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given an interactive session already has history,
+    When user selects an uncatalogued real model with a context override,
+    Then Keel accepts the switch and uses the target model`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    let targetProviderTurns = 0;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) => {
+        if (selection?.providerId === "qwen") {
+          return resolvedProvider(
+            "qwen",
+            selection.model ?? "qwen-future",
+            {
+              id: "fake",
+              async *stream() {
+                targetProviderTurns++;
+                yield { type: "text", text: "target accepted" };
+                yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+              },
+            },
+            ZERO_COST_MODEL,
+            { contextWindowTokens: 100_000 },
+            { status: "unknown" },
+          );
+        }
+        return resolvedProvider("fake", "fake", textProvider("old provider"));
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("first prompt\n/model qwen/qwen-future\nsecond prompt\n");
+
+    // Then
+    await session;
+    expect(stderr).toBe("");
+    expect(stdout).toContain("old provider");
+    expect(stdout).toContain("Model switched to qwen/qwen-future");
+    expect(stdout).toContain("target accepted");
+    expect(targetProviderTurns).toBe(1);
     expect(sigintHandlers.size).toBe(0);
   });
 

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { CostModel } from "../../core/cost.ts";
 import { KeelError } from "../../core/error.ts";
 import type { Usage } from "../types.ts";
 import {
@@ -7,51 +6,6 @@ import {
   type OpenAICompatibleStreamState,
   type ProviderRetryConfig,
 } from "./openai-compatible.ts";
-
-// Qwen prices are per 1M tokens. Tiered models choose one tier from the
-// request's input-token count; cached input uses the implicit cache discount.
-const QWEN_3_7_MAX_COST_MODEL: CostModel = {
-  type: "fixed",
-  uncachedInputPerMillionTokens: 2.5,
-  cachedInputPerMillionTokens: 0.25,
-  outputPerMillionTokens: 7.5,
-};
-
-const QWEN_3_7_PLUS_COST_MODEL: CostModel = {
-  type: "input-token-tiers",
-  tiers: [
-    {
-      startsAboveInputTokens: 0,
-      uncachedInputPerMillionTokens: 0.4,
-      cachedInputPerMillionTokens: 0.08,
-      outputPerMillionTokens: 1.6,
-    },
-    {
-      startsAboveInputTokens: 256_000,
-      uncachedInputPerMillionTokens: 1.2,
-      cachedInputPerMillionTokens: 0.24,
-      outputPerMillionTokens: 4.8,
-    },
-  ],
-};
-
-const QWEN_3_6_FLASH_COST_MODEL: CostModel = {
-  type: "input-token-tiers",
-  tiers: [
-    {
-      startsAboveInputTokens: 0,
-      uncachedInputPerMillionTokens: 0.25,
-      cachedInputPerMillionTokens: 0.05,
-      outputPerMillionTokens: 1.5,
-    },
-    {
-      startsAboveInputTokens: 256_000,
-      uncachedInputPerMillionTokens: 1,
-      cachedInputPerMillionTokens: 0.2,
-      outputPerMillionTokens: 4,
-    },
-  ],
-};
 
 const qwenUsageSchema = z
   .object({
@@ -159,16 +113,6 @@ function captureQwenUsage(
     return;
   }
   state.usage = usageFromQwenUsage(usage);
-}
-
-export function qwenCostModel(model: string): CostModel | null {
-  if (model === "qwen3.7-max") return QWEN_3_7_MAX_COST_MODEL;
-  if (model === "qwen3.7-plus") return QWEN_3_7_PLUS_COST_MODEL;
-  if (model === "qwen3.6-flash") return QWEN_3_6_FLASH_COST_MODEL;
-  if (model === "qwen3.6-flash-2026-04-16") {
-    return QWEN_3_6_FLASH_COST_MODEL;
-  }
-  return null;
 }
 
 export function createQwenProvider(config: QwenConfig) {
