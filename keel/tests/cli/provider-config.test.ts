@@ -149,12 +149,92 @@ describe("Provider Config", () => {
     });
   });
 
+  test(`Given the fake provider receives the move demo prompt,
+    When it streams through the read and move-patch turns,
+    Then it requests apply_patch with a Move to operation`, async () => {
+    // Given
+    const resolved = resolveProvider(
+      "move old.txt to new.txt",
+      runtime({ KEEL_PROVIDER: "fake" }),
+    );
+
+    // When
+    const readEvents = await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [],
+        signal: new AbortController().signal,
+      }),
+    );
+    const patchEvents = await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [
+          {
+            role: "tool",
+            toolCallId: "fake_read_before_patch",
+            content: "old\n",
+          },
+        ],
+        signal: new AbortController().signal,
+      }),
+    );
+
+    // Then
+    expect(readEvents).toContainEqual({
+      type: "tool_call",
+      id: "fake_read_before_patch",
+      tool: "read",
+      path: "old.txt",
+    });
+    expect(patchEvents).toContainEqual({
+      type: "tool_call",
+      id: "fake_apply_patch",
+      tool: "apply_patch",
+      patch: [
+        "*** Begin Patch",
+        "*** Update File: old.txt",
+        "*** Move to: new.txt",
+        "*** End Patch",
+      ].join("\n"),
+    });
+  });
+
   test(`Given the fake provider receives a remove demo without a path,
     When it streams the response,
     Then it falls back to the plain fake reply`, async () => {
     // Given
     const resolved = resolveProvider(
       "remove ",
+      runtime({ KEEL_PROVIDER: "fake" }),
+    );
+
+    // When
+    const events = await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [],
+        signal: new AbortController().signal,
+      }),
+    );
+
+    // Then
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Hello from fake provider.",
+    });
+  });
+
+  test.each([
+    "move old.txt",
+    "move  to new.txt",
+    "move old.txt to ",
+  ])(`Given the fake provider receives an invalid move demo prompt,
+    When it streams the response for "%s",
+    Then it falls back to the plain fake reply`, async (message) => {
+    // Given
+    const resolved = resolveProvider(
+      message,
       runtime({ KEEL_PROVIDER: "fake" }),
     );
 

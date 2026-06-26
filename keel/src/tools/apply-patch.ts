@@ -62,6 +62,7 @@ type ParsedPatchOperation =
   | {
       readonly kind: "update";
       readonly path: string;
+      readonly movePath: string | null;
       readonly hunks: readonly ParsedPatchHunk[];
     }
   | {
@@ -94,6 +95,20 @@ type PreparedPatchOperation =
       readonly mode: number;
     }
   | {
+      readonly kind: "move";
+      readonly path: string;
+      readonly movePath: string;
+      readonly workspacePath: string;
+      readonly targetPath: string;
+      readonly beforeContent: string;
+      readonly afterContent: string;
+      readonly mode: number;
+      readonly targetIdentity: FileIdentity;
+      readonly destinationTargetPath: string;
+      readonly destinationResolvedTargetPath: string;
+      readonly destinationParentPath: string;
+    }
+  | {
       readonly kind: "delete";
       readonly path: string;
       readonly workspacePath: string;
@@ -103,9 +118,18 @@ type PreparedPatchOperation =
       readonly targetIdentity: FileIdentity;
     };
 
-type AppliedPatchOperation = PreparedPatchOperation & {
-  readonly appliedIdentity: FileIdentity;
-};
+type NonMovePreparedPatchOperation = Exclude<
+  PreparedPatchOperation,
+  { readonly kind: "move" }
+>;
+
+type AppliedPatchOperation =
+  | (NonMovePreparedPatchOperation & {
+      readonly appliedIdentity: FileIdentity;
+    })
+  | (Extract<PreparedPatchOperation, { readonly kind: "move" }> & {
+      readonly destinationIdentity: FileIdentity;
+    });
 
 type NormalizedText =
   | {
@@ -260,14 +284,6 @@ function requiredPathFromHeader(line: string, marker: string): string {
   return path;
 }
 
-function unsupportedOperation(message: string): KeelError {
-  return patchError(
-    "tool_unsupported_patch_operation",
-    message,
-    "This apply_patch slice supports Add File, Update File, and Delete File. Use separate tools for renames.",
-  );
-}
-
 function parserLine(lines: readonly string[], index: number): string {
   const line = lines[index];
   /* v8 ignore next 3: parser callers check bounds before reading a line. */
@@ -375,13 +391,13 @@ function parseUpdateOperation(
   );
   const hunks: ParsedPatchHunk[] = [];
   let index = start + 1;
+  let movePath: string | null = null;
   if (
     index < lines.length &&
     parserLine(lines, index).startsWith(MOVE_TO_MARKER)
   ) {
-    throw unsupportedOperation(
-      `apply_patch failed: Move to is not supported for ${path}`,
-    );
+    movePath = requiredPathFromHeader(parserLine(lines, index), MOVE_TO_MARKER);
+    index++;
   }
   while (
     index < lines.length &&
@@ -399,14 +415,14 @@ function parseUpdateOperation(
     hunks.push(parsed.hunk);
     index = parsed.next;
   }
-  if (hunks.length === 0) {
+  if (hunks.length === 0 && movePath === null) {
     throw patchError(
       "tool_invalid_patch",
       `apply_patch failed: update file ${path} has no hunks`,
       "Add at least one @@ hunk to update this file.",
     );
   }
-  return { operation: { kind: "update", path, hunks }, next: index };
+  return { operation: { kind: "update", path, movePath, hunks }, next: index };
 }
 
 function parsePatch(patch: string): readonly ParsedPatchOperation[] {
@@ -566,6 +582,8 @@ function prepareUpdateOperation(
 
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
   let openedMode = validatedTarget.mode;
+  let targetIdentity: FileIdentity | null = null;
+  const needsTargetIdentity = operation.movePath !== null;
   const file = readEditableTextFileWithMetadata(
     validatedTarget.targetPath,
     operation.path,
@@ -599,7 +617,11 @@ function prepareUpdateOperation(
             `Use read(path: "${operation.path}") to view the current file content, then retry apply_patch with hunks copied from the read output.`,
           );
         }
-        openedMode = fstatSync(fd).mode & 0o7777;
+        const openedStat = fstatSync(fd);
+        openedMode = openedStat.mode & 0o7777;
+        if (needsTargetIdentity) {
+          targetIdentity = fileIdentityFromStats(openedStat);
+        }
         return openedTargetPath;
       },
     },
@@ -609,6 +631,27 @@ function prepareUpdateOperation(
     file.content,
     operation.hunks,
   );
+  if (operation.movePath !== null) {
+    const destination = resolveWorkspaceCreateTarget(
+      workspace,
+      operation.movePath,
+      "apply_patch",
+    );
+    return {
+      kind: "move",
+      path: operation.path,
+      movePath: operation.movePath,
+      workspacePath,
+      targetPath: file.targetPath,
+      beforeContent: withUtf8Bom(file.content, file.hasUtf8Bom),
+      afterContent: withUtf8Bom(updated, file.hasUtf8Bom),
+      mode: openedMode,
+      targetIdentity: openedFileIdentity(targetIdentity),
+      destinationTargetPath: destination.targetPath,
+      destinationResolvedTargetPath: destination.resolvedTargetPath,
+      destinationParentPath: destination.parentPath,
+    };
+  }
   return {
     kind: "update",
     path: operation.path,
@@ -733,6 +776,13 @@ function preparedMutationTargetPaths(
   if (operation.kind === "add") {
     return [operation.targetPath, operation.resolvedTargetPath];
   }
+  if (operation.kind === "move") {
+    return [
+      operation.targetPath,
+      operation.destinationTargetPath,
+      operation.destinationResolvedTargetPath,
+    ];
+  }
   return [operation.targetPath];
 }
 
@@ -750,23 +800,15 @@ function preparePatchOperations(
         : operation.kind === "update"
           ? prepareUpdateOperation(workspace, operation, options)
           : prepareDeleteOperation(workspace, operation, options);
-    if (targetPaths.has(next.targetPath)) {
-      throw patchError(
-        "tool_invalid_patch",
-        `apply_patch failed: multiple operations target ${operation.path}`,
-        "Combine changes for the same file into one patch operation.",
-      );
-    }
-    targetPaths.add(next.targetPath);
-    if (next.kind === "add" && next.resolvedTargetPath !== next.targetPath) {
-      if (targetPaths.has(next.resolvedTargetPath)) {
+    for (const targetPath of uniquePaths(preparedMutationTargetPaths(next))) {
+      if (targetPaths.has(targetPath)) {
         throw patchError(
           "tool_invalid_patch",
           `apply_patch failed: multiple operations target ${operation.path}`,
           "Combine changes for the same file into one patch operation.",
         );
       }
-      targetPaths.add(next.resolvedTargetPath);
+      targetPaths.add(targetPath);
     }
     prepared.push(next);
   }
@@ -783,7 +825,10 @@ function readFileIfPossible(filePath: string): string | null {
 }
 
 function restoreDeletedTextFileBestEffort(
-  operation: Extract<AppliedPatchOperation, { readonly kind: "delete" }>,
+  operation: Extract<
+    AppliedPatchOperation,
+    { readonly kind: "delete" | "move" }
+  >,
 ): void {
   try {
     writeFileSync(operation.targetPath, operation.beforeContent, {
@@ -811,7 +856,10 @@ function uniquePaths(paths: readonly string[]): readonly string[] {
 }
 
 function rollbackTargetPaths(
-  operation: AppliedPatchOperation,
+  operation: Extract<
+    AppliedPatchOperation,
+    { readonly kind: "add" | "update" }
+  >,
 ): readonly string[] {
   const identity = operation.appliedIdentity;
   try {
@@ -859,6 +907,21 @@ function rollbackAppliedOperations(
   applied: readonly AppliedPatchOperation[],
 ): void {
   for (const operation of applied.toReversed()) {
+    if (operation.kind === "move") {
+      if (
+        pathHasIdentity(
+          operation.destinationTargetPath,
+          operation.destinationIdentity,
+        ) &&
+        readFileIfPossible(operation.destinationTargetPath) ===
+          operation.afterContent
+      ) {
+        rmSync(operation.destinationTargetPath, { force: true });
+      }
+      restoreDeletedTextFileBestEffort(operation);
+      continue;
+    }
+
     if (operation.kind === "delete") {
       restoreDeletedTextFileBestEffort(operation);
       continue;
@@ -899,8 +962,15 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
 
-function validateAddTargetAfterMkdir(
-  operation: Extract<PreparedPatchOperation, { readonly kind: "add" }>,
+function validateCreateTargetAfterMkdir(
+  operation:
+    | Extract<PreparedPatchOperation, { readonly kind: "add" }>
+    | {
+        readonly workspacePath: string;
+        readonly parentPath: string;
+        readonly targetPath: string;
+        readonly path: string;
+      },
   projectInstructions: ProjectInstructionVisibilityState | undefined,
 ): string {
   const realTargetPath = resolveWorkspaceCreateTargetAtAccess({
@@ -935,12 +1005,12 @@ function applyPreparedOperation(
       toolName: "apply_patch",
       requestedPath: operation.path,
     });
-    const realTargetPath = validateAddTargetAfterMkdir(
+    const realTargetPath = validateCreateTargetAfterMkdir(
       operation,
       options.projectInstructions,
     );
     const validateTargetAtAccess = (): void => {
-      validateAddTargetAfterMkdir(operation, options.projectInstructions);
+      validateCreateTargetAfterMkdir(operation, options.projectInstructions);
     };
     const validateOpenedTempAtAccess = (tempPath: string, fd: number): void => {
       assertWorkspaceOpenTargetAtAccess({
@@ -1012,6 +1082,124 @@ function applyPreparedOperation(
   const projectIgnorePolicy = createProjectIgnorePolicy(
     operation.workspacePath,
   );
+  if (operation.kind === "move") {
+    createWorkspaceParentDirectories({
+      workspacePath: operation.workspacePath,
+      parentPath: operation.destinationParentPath,
+      toolName: "apply_patch",
+      requestedPath: operation.movePath,
+    });
+    const destinationCreateTarget = {
+      workspacePath: operation.workspacePath,
+      parentPath: operation.destinationParentPath,
+      targetPath: operation.destinationTargetPath,
+      path: operation.movePath,
+    };
+    const realDestinationPath = validateCreateTargetAfterMkdir(
+      destinationCreateTarget,
+      options.projectInstructions,
+    );
+    const validateDestinationAtAccess = (): void => {
+      validateCreateTargetAfterMkdir(
+        destinationCreateTarget,
+        options.projectInstructions,
+      );
+    };
+    const validateOpenedTempAtAccess = (tempPath: string, fd: number): void => {
+      assertWorkspaceOpenTargetAtAccess({
+        fd,
+        workspacePath: operation.workspacePath,
+        targetPath: tempPath,
+        toolName: "apply_patch",
+        requestedPath: operation.movePath,
+      });
+    };
+    let publishedDestinationPath = realDestinationPath;
+    const validatePublishedDestinationAtAccess = (
+      publishedPath: string,
+      identity: FileIdentity,
+    ): void => {
+      const accessTargetPath = assertWorkspaceFileIdentityAtAccess({
+        identity,
+        workspacePath: operation.workspacePath,
+        targetPath: publishedPath,
+        toolName: "apply_patch",
+        requestedPath: operation.movePath,
+      });
+      if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+        throw new KeelError(
+          "tool_path_ignored",
+          `apply_patch failed: ignored path: ${operation.movePath}`,
+          "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+        );
+      }
+      options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
+      publishedDestinationPath = accessTargetPath;
+    };
+    let result: AtomicWriteResult;
+    try {
+      result = createTextFileAtomically(
+        realDestinationPath,
+        operation.afterContent,
+        {
+          mode: operation.mode,
+          beforeAccess: validateDestinationAtAccess,
+          beforeWrite: validateOpenedTempAtAccess,
+          beforePublish: validateDestinationAtAccess,
+          afterPublish: validatePublishedDestinationAtAccess,
+          cleanupPathsByIdentity: (identity) =>
+            findWorkspacePathsByIdentity(operation.workspacePath, identity),
+        },
+      );
+    } catch (error) {
+      /* v8 ignore next 7: EEXIST requires a concurrent create after prevalidation. */
+      if (isErrnoException(error) && error.code === "EEXIST") {
+        throw new KeelError(
+          "tool_file_exists",
+          `apply_patch failed: file already exists: ${operation.movePath}`,
+          "Read the existing file and use an Update File hunk instead of moving over it.",
+        );
+      }
+      /* v8 ignore next 1: unknown atomic create errors are rethrown unchanged. */
+      throw error;
+    }
+
+    try {
+      const accessTargetPath = assertWorkspaceTargetAtAccess({
+        workspacePath: operation.workspacePath,
+        targetPath: operation.targetPath,
+        toolName: "apply_patch",
+        requestedPath: operation.path,
+      });
+      if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+        throw new KeelError(
+          "tool_path_ignored",
+          `apply_patch failed: ignored path: ${operation.path}`,
+          "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+        );
+      }
+      options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
+      if (!pathHasIdentity(accessTargetPath, operation.targetIdentity)) {
+        throw changedTargetError(operation);
+      }
+      rmSync(accessTargetPath);
+      return {
+        ...operation,
+        targetPath: accessTargetPath,
+        destinationTargetPath: publishedDestinationPath,
+        destinationIdentity: result.identity,
+      };
+    } catch (error) {
+      if (
+        pathHasIdentity(publishedDestinationPath, result.identity) &&
+        readFileIfPossible(publishedDestinationPath) === operation.afterContent
+      ) {
+        rmSync(publishedDestinationPath, { force: true });
+      }
+      throw error;
+    }
+  }
+
   if (operation.kind === "delete") {
     const accessTargetPath = assertWorkspaceTargetAtAccess({
       workspacePath: operation.workspacePath,
@@ -1121,6 +1309,23 @@ function changedTargetError(operation: PreparedPatchOperation): KeelError {
 function verifyAppliedOperation(
   operation: AppliedPatchOperation,
 ): AppliedPatchOperation {
+  if (operation.kind === "move") {
+    /* v8 ignore next 3: rmSync removes the captured identity unless a post-delete filesystem race recreates it before verification. */
+    if (pathHasIdentity(operation.targetPath, operation.targetIdentity)) {
+      throw changedTargetError(operation);
+    }
+    const finalDestinationPath = assertWorkspaceTargetAtAccess({
+      workspacePath: operation.workspacePath,
+      targetPath: operation.destinationTargetPath,
+      toolName: "apply_patch",
+      requestedPath: operation.movePath,
+    });
+    if (!pathHasIdentity(finalDestinationPath, operation.destinationIdentity)) {
+      throw changedTargetError(operation);
+    }
+    return { ...operation, destinationTargetPath: finalDestinationPath };
+  }
+
   if (operation.kind === "delete") {
     /* v8 ignore next 3: rmSync removes the captured identity unless a post-delete filesystem race recreates it before verification. */
     if (pathHasIdentity(operation.targetPath, operation.appliedIdentity)) {
@@ -1141,20 +1346,38 @@ function verifyAppliedOperation(
   return { ...operation, targetPath: finalTargetPath };
 }
 
-function checkpointOperationFor(
+function checkpointOperationsFor(
   operation: AppliedPatchOperation,
-): RecordLastBatchCheckpointOperation {
+): readonly RecordLastBatchCheckpointOperation[] {
+  if (operation.kind === "move") {
+    return [
+      {
+        operation: "delete",
+        filePath: operation.targetPath,
+        beforeContent: operation.beforeContent,
+        mode: operation.mode,
+      },
+      {
+        operation: "create",
+        filePath: operation.destinationTargetPath,
+        afterContent: operation.afterContent,
+      },
+    ];
+  }
+
   if (operation.kind === "delete") {
     /* v8 ignore next 3: verifyAppliedOperation rejects this first except for a race between verification and checkpointing. */
     if (pathHasIdentity(operation.targetPath, operation.appliedIdentity)) {
       throw changedTargetError(operation);
     }
-    return {
-      operation: "delete",
-      filePath: operation.targetPath,
-      beforeContent: operation.beforeContent,
-      mode: operation.mode,
-    };
+    return [
+      {
+        operation: "delete",
+        filePath: operation.targetPath,
+        beforeContent: operation.beforeContent,
+        mode: operation.mode,
+      },
+    ];
   }
 
   const targetPath = assertWorkspaceTargetAtAccess({
@@ -1167,24 +1390,40 @@ function checkpointOperationFor(
     throw changedTargetError(operation);
   }
   if (operation.kind === "add") {
-    return {
-      operation: "create",
-      filePath: targetPath,
-      afterContent: operation.afterContent,
-    };
+    return [
+      {
+        operation: "create",
+        filePath: targetPath,
+        afterContent: operation.afterContent,
+      },
+    ];
   }
-  return {
-    operation: "edit",
-    filePath: targetPath,
-    beforeContent: operation.beforeContent,
-    afterContent: operation.afterContent,
-  };
+  return [
+    {
+      operation: "edit",
+      filePath: targetPath,
+      beforeContent: operation.beforeContent,
+      afterContent: operation.afterContent,
+    },
+  ];
 }
 
 function summaryLine(operation: PreparedPatchOperation): string {
+  if (operation.kind === "move") {
+    return `R ${operation.path} -> ${operation.movePath}`;
+  }
   const marker =
     operation.kind === "add" ? "A" : operation.kind === "update" ? "M" : "D";
   return `${marker} ${operation.path}`;
+}
+
+function appliedTargetPaths(
+  operation: AppliedPatchOperation,
+): readonly string[] {
+  if (operation.kind === "move") {
+    return [operation.targetPath, operation.destinationTargetPath];
+  }
+  return [operation.targetPath];
 }
 
 export function executeApplyPatch(
@@ -1205,7 +1444,7 @@ export function executeApplyPatch(
       applied.push(appliedOperation);
       applied[applied.length - 1] = verifyAppliedOperation(appliedOperation);
     }
-    checkpointOperations = applied.map(checkpointOperationFor);
+    checkpointOperations = applied.flatMap(checkpointOperationsFor);
     recordLastBatchCheckpoint({
       workspace,
       operations: checkpointOperations,
@@ -1217,7 +1456,7 @@ export function executeApplyPatch(
 
   return {
     content: ["Applied patch:", ...prepared.map(summaryLine)].join("\n"),
-    targetPaths: applied.map((operation) => operation.targetPath),
+    targetPaths: applied.flatMap(appliedTargetPaths),
     checkpointOperations,
   };
 }

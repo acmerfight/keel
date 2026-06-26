@@ -483,10 +483,10 @@ const writeTool = defineTool({
 const applyPatchTool = defineTool({
   name: "apply_patch",
   description: [
-    "Apply one patch containing workspace file additions, updates, and deletions.",
-    "Patch format: *** Begin Patch, then one or more *** Add File: <path>, *** Update File: <path>, or *** Delete File: <path> sections, then *** End Patch.",
-    "Use when: making coordinated changes across multiple files after reading every file that will be updated or deleted.",
-    "Do not use when: renaming, changing file modes, or editing binary files.",
+    "Apply one patch containing workspace file additions, updates, deletions, and Move to renames.",
+    "Patch format: *** Begin Patch, then one or more *** Add File: <path>, *** Update File: <path> with optional *** Move to: <path>, or *** Delete File: <path> sections, then *** End Patch.",
+    "Use when: making coordinated changes across multiple files after reading every file that will be updated, moved, or deleted.",
+    "Do not use when: changing file modes or editing binary files.",
     "On failure: read the current target files and regenerate the patch with exact context.",
   ].join("\n"),
   args: toolArgs(applyPatchToolArgumentsSchema),

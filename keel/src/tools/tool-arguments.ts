@@ -115,7 +115,7 @@ export const applyPatchToolArgumentsSchema = z
     patch: z
       .string()
       .describe(
-        "Full apply_patch text. Supports Add File, Update File, and Delete File sections.",
+        "Full apply_patch text. Supports Add File, Update File, Delete File, and Update File with Move to sections.",
       ),
   })
   .strict();
