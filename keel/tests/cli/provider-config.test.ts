@@ -292,6 +292,7 @@ describe("Provider Config", () => {
       status: "known",
       source: "registry",
       maxOutputTokens: 65_536,
+      lastVerified: "2026-06-26",
       capabilities: {
         textInput: true,
         toolCalls: true,

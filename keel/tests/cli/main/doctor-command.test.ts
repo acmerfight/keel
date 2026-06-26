@@ -56,6 +56,7 @@ describe("CLI Main - Doctor Command", () => {
       "context window: 1000000 tokens (source: registry)",
     );
     expect(fixture.stdout()).toContain("model metadata: registry");
+    expect(fixture.stdout()).toContain("model metadata verified: 2026-06-26");
     expect(fixture.stdout()).toContain("max output: 65536 tokens");
     expect(fixture.stdout()).toContain(
       "model capabilities: text-input, tool-calls, reasoning",

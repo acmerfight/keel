@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { ZERO_COST_MODEL } from "../../src/core/cost.ts";
 import {
+  knownModelMetadataEntries,
   modelCostModel,
   modelMetadata,
 } from "../../src/core/model-metadata.ts";
@@ -13,7 +14,7 @@ describe("Model Metadata", () => {
     expect(modelCostModel("qwen", "qwen3.7-max")).toMatchObject({
       type: "fixed",
       uncachedInputPerMillionTokens: 2.5,
-      cachedInputPerMillionTokens: 0.25,
+      cachedInputPerMillionTokens: 0.5,
       outputPerMillionTokens: 7.5,
     });
     expect(modelCostModel("qwen", "qwen3.7-plus")).toEqual({
@@ -67,5 +68,21 @@ describe("Model Metadata", () => {
       status: "known",
       costModel: ZERO_COST_MODEL,
     });
+  });
+
+  test(`Given the model metadata registry is inspected,
+    When known entries are enumerated,
+    Then every known model has a last verified date`, () => {
+    // Given / When
+    const entries = knownModelMetadataEntries();
+
+    // Then
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) {
+      expect(
+        entry.metadata.lastVerified,
+        `${entry.providerId}/${entry.model}`,
+      ).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
   });
 });

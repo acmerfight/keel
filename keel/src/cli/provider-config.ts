@@ -107,6 +107,7 @@ export type ModelMetadataDiagnostic =
       readonly source: "registry";
       readonly maxOutputTokens: number | null;
       readonly capabilities: ModelCapabilities;
+      readonly lastVerified: string;
     }
   | { readonly status: "unknown" };
 
@@ -502,6 +503,7 @@ function inspectModelMetadata(
     source: metadata.source,
     maxOutputTokens: metadata.maxOutputTokens,
     capabilities: metadata.capabilities,
+    lastVerified: metadata.lastVerified,
   };
 }
 
