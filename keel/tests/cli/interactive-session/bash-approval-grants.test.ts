@@ -174,10 +174,301 @@ describe("Interactive Session - Bash Approval Grants", () => {
         "command family approval did not finish",
       );
       expect(stdout).toBe("Checked status twice.\n");
+      expect(stderr).toContain("risk: workspace-read");
       expect(stderr).toContain(
         "[p] allow command family for session: git status",
       );
       expect(approvalPrompts).toBe(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive approval prompt for project verification,
+    When the assistant requests a typecheck command,
+    Then the prompt shows verification risk and offers that command family`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command = "pnpm typecheck";
+    const provider = createFakeProvider([
+      fakeToolResponse("bash", { command }),
+      fakeResponse("Skipped typecheck."),
+    ]);
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let approvalAnswered = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+        if (text.includes("Approve bash command") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.write("n\n");
+          input.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("run typecheck\n");
+
+      // Then
+      await withTimeout(session, 5000, "typecheck approval did not finish");
+      expect(stdout).toBe("Skipped typecheck.\n");
+      expect(stderr).toContain("risk: project-verification");
+      expect(stderr).toContain(
+        "[p] allow this command for session: pnpm typecheck",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive approval prompt for a workspace-writing command,
+    When the assistant requests lint fix,
+    Then the prompt shows write risk without offering a command family`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command = "pnpm lint:fix";
+    const provider = createFakeProvider([
+      fakeToolResponse("bash", { command }),
+      fakeResponse("Skipped lint fix."),
+    ]);
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let approvalAnswered = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+        if (text.includes("Approve bash command") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.write("n\n");
+          input.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("run lint fix\n");
+
+      // Then
+      await withTimeout(session, 5000, "lint fix approval did not finish");
+      expect(stdout).toBe("Skipped lint fix.\n");
+      expect(stderr).toContain("risk: workspace-write");
+      expect(stderr).not.toContain("[p] allow command family for session:");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive approval prompt for an unrecognized simple command,
+    When the assistant requests bash approval,
+    Then the prompt shows unknown risk and the allowlist summary`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command = "echo hello";
+    const provider = createFakeProvider([
+      fakeToolResponse("bash", { command }),
+      fakeResponse("Skipped echo."),
+    ]);
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let approvalAnswered = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+        if (text.includes("Approve bash command") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.write("n\n");
+          input.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("try echo\n");
+
+      // Then
+      await withTimeout(session, 5000, "echo approval did not finish");
+      expect(stdout).toBe("Skipped echo.\n");
+      expect(stderr).toContain("risk: unknown-or-dangerous");
+      expect(stderr).toContain(
+        "not in Keel's conservative bash family allowlist",
+      );
+      expect(stderr).not.toContain("[p] allow command family for session:");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive approval prompt for shell syntax Keel cannot parse,
+    When the assistant requests bash approval,
+    Then the prompt shows unknown risk and the shell-syntax summary`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command = "git status && rm x";
+    const provider = createFakeProvider([
+      fakeToolResponse("bash", { command }),
+      fakeResponse("Skipped shell syntax."),
+    ]);
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let approvalAnswered = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+        if (text.includes("Approve bash command") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.write("n\n");
+          input.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("try shell syntax\n");
+
+      // Then
+      await withTimeout(session, 5000, "shell syntax approval did not finish");
+      expect(stdout).toBe("Skipped shell syntax.\n");
+      expect(stderr).toContain("risk: unknown-or-dangerous");
+      expect(stderr).toContain("uses shell syntax Keel cannot safely classify");
+      expect(stderr).not.toContain("[p] allow command family for session:");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

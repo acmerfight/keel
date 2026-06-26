@@ -4,6 +4,12 @@ export type BashPolicy = "ask" | "deny" | "trusted";
 // used to derive tool exposure and approval behavior.
 export type BashMode = "disabled" | "ask" | "trusted";
 
+type BashCommandRisk =
+  | "workspace-read"
+  | "project-verification"
+  | "workspace-write"
+  | "unknown-or-dangerous";
+
 export type BashApprovalGrant =
   | {
       readonly type: "exact";
@@ -24,16 +30,30 @@ export function bashModeExposesTool(mode: BashMode): boolean {
   return mode !== "disabled";
 }
 
+interface BashPermissionReviewRequest {
+  readonly command: string;
+  readonly cwd: string;
+  readonly signal: AbortSignal;
+}
+
+interface BashCommandAssessment {
+  readonly argv: readonly string[] | null;
+  readonly risk: BashCommandRisk;
+  readonly summary: string;
+}
+
 export interface BashPermissionRequest {
   readonly command: string;
   readonly cwd: string;
   readonly signal: AbortSignal;
+  readonly assessment: BashCommandAssessment;
   readonly prefixApproval?: BashPermissionPrefixApproval;
 }
 
 interface BashPermissionPrefixApproval {
   readonly argvPrefix: readonly string[];
   readonly display: string;
+  readonly promptLabel: "command family" | "this command";
 }
 
 export type BashPermissionDecision =
@@ -48,11 +68,11 @@ export type BashPermissionDecision =
 
 export interface BashPermissionPolicy {
   readonly review: (
-    request: BashPermissionRequest,
+    request: BashPermissionReviewRequest,
   ) => BashPermissionDecision | Promise<BashPermissionDecision>;
 }
 
-function sessionKey(request: BashPermissionRequest): string {
+function sessionKey(request: BashPermissionReviewRequest): string {
   return JSON.stringify([request.cwd, request.command]);
 }
 
@@ -61,17 +81,84 @@ interface PrefixApprovalRule {
   readonly argvPrefix: readonly string[];
 }
 
+interface PrefixApprovalCandidate {
+  readonly argvPrefix: readonly string[];
+  readonly risk: BashCommandRisk;
+  readonly trailing: "any" | "exact";
+}
+
 const SIMPLE_COMMAND_TOKEN_PATTERN = /^[A-Za-z0-9_./:@%+=,-]+$/u;
 
-const PREFIX_APPROVAL_CANDIDATES: readonly (readonly string[])[] = [
-  ["pnpm", "vitest", "run"],
-  ["pnpm", "test"],
-  ["npm", "test"],
-  ["git", "status"],
+const PREFIX_APPROVAL_CANDIDATES: readonly PrefixApprovalCandidate[] = [
+  {
+    argvPrefix: ["pnpm", "vitest", "run"],
+    risk: "project-verification",
+    trailing: "exact",
+  },
+  {
+    argvPrefix: ["pnpm", "test"],
+    risk: "project-verification",
+    trailing: "exact",
+  },
+  {
+    argvPrefix: ["pnpm", "test:coverage"],
+    risk: "project-verification",
+    trailing: "exact",
+  },
+  {
+    argvPrefix: ["pnpm", "typecheck"],
+    risk: "project-verification",
+    trailing: "exact",
+  },
+  {
+    argvPrefix: ["pnpm", "lint"],
+    risk: "project-verification",
+    trailing: "exact",
+  },
+  {
+    argvPrefix: ["pnpm", "build"],
+    risk: "project-verification",
+    trailing: "exact",
+  },
+  {
+    argvPrefix: ["npm", "test"],
+    risk: "project-verification",
+    trailing: "exact",
+  },
+  { argvPrefix: ["git", "status"], risk: "workspace-read", trailing: "any" },
   // Do not add git diff without family-specific trailing argv validation:
   // --no-index, absolute paths, escaped paths, and external diff hooks can
   // reach outside the cwd-bound approval.
 ];
+
+const WORKSPACE_WRITE_PREFIXES: readonly (readonly string[])[] = [
+  ["pnpm", "lint:fix"],
+  ["git", "add"],
+  ["git", "commit"],
+  ["git", "checkout"],
+  ["git", "switch"],
+  ["git", "reset"],
+  ["git", "clean"],
+  ["rm"],
+  ["rmdir"],
+  ["mv"],
+  ["cp"],
+  ["mkdir"],
+  ["touch"],
+];
+
+const MUTATING_VERIFICATION_ARGUMENTS = [
+  "--write",
+  "--fix",
+  "--apply",
+  "--unsafe",
+  "--update",
+  "-u",
+] as const;
+
+const MUTATING_VERIFICATION_ARGUMENT_SET: ReadonlySet<string> = new Set(
+  MUTATING_VERIFICATION_ARGUMENTS,
+);
 
 function parseSimpleCommandArgv(command: string): readonly string[] | null {
   const trimmed = command.trim();
@@ -99,24 +186,131 @@ function argvStartsWith(
   );
 }
 
-function commandPrefixApproval(
-  command: string,
-): BashPermissionPrefixApproval | undefined {
-  const argv = parseSimpleCommandArgv(command);
+function argvMatchesPrefixCandidate(
+  argv: readonly string[],
+  candidate: PrefixApprovalCandidate,
+): boolean {
+  if (!argvStartsWith(argv, candidate.argvPrefix)) {
+    return false;
+  }
+  return (
+    candidate.trailing === "any" || argv.length === candidate.argvPrefix.length
+  );
+}
+
+function matchingPrefixApprovalCandidate(
+  assessment: BashCommandAssessment,
+): PrefixApprovalCandidate | undefined {
+  const argv = assessment.argv;
   if (argv === null) {
     return undefined;
   }
 
-  const argvPrefix = PREFIX_APPROVAL_CANDIDATES.find((candidate) =>
-    argvStartsWith(argv, candidate),
+  return PREFIX_APPROVAL_CANDIDATES.find(
+    (candidate) =>
+      candidate.risk === assessment.risk &&
+      argvMatchesPrefixCandidate(argv, candidate),
   );
-  if (argvPrefix === undefined) {
+}
+
+function commandPrefixApproval(
+  candidate: PrefixApprovalCandidate | undefined,
+): BashPermissionPrefixApproval | undefined {
+  if (candidate === undefined) {
     return undefined;
   }
   return {
-    argvPrefix,
-    display: argvPrefix.join(" "),
+    argvPrefix: candidate.argvPrefix,
+    display: candidate.argvPrefix.join(" "),
+    promptLabel:
+      candidate.trailing === "any" ? "command family" : "this command",
   };
+}
+
+function isMutatingVerificationArgument(argument: string): boolean {
+  if (MUTATING_VERIFICATION_ARGUMENT_SET.has(argument)) {
+    return true;
+  }
+
+  if (
+    MUTATING_VERIFICATION_ARGUMENTS.some((candidate) =>
+      argument.startsWith(`${candidate}=`),
+    )
+  ) {
+    return true;
+  }
+
+  return /^-[A-Za-z]+$/u.test(argument) && argument.slice(1).includes("u");
+}
+
+function hasMutatingVerificationArgument(argv: readonly string[]): boolean {
+  return argv.some((argument) => isMutatingVerificationArgument(argument));
+}
+
+function assessParsedCommand(argv: readonly string[]): BashCommandAssessment {
+  const prefixCandidate = PREFIX_APPROVAL_CANDIDATES.find((candidate) =>
+    argvStartsWith(argv, candidate.argvPrefix),
+  );
+  if (
+    prefixCandidate?.risk === "project-verification" &&
+    hasMutatingVerificationArgument(argv)
+  ) {
+    return {
+      argv,
+      risk: "workspace-write",
+      summary:
+        "adds a mutating flag to a project verification command; approval is not a sandbox",
+    };
+  }
+
+  const workspaceWritePrefix = WORKSPACE_WRITE_PREFIXES.find((prefix) =>
+    argvStartsWith(argv, prefix),
+  );
+  if (workspaceWritePrefix !== undefined) {
+    return {
+      argv,
+      risk: "workspace-write",
+      summary:
+        "may modify workspace files or repository state; approval is not a sandbox",
+    };
+  }
+
+  if (prefixCandidate !== undefined) {
+    if (prefixCandidate.risk === "workspace-read") {
+      return {
+        argv,
+        risk: "workspace-read",
+        summary:
+          "expected to inspect workspace state without writing; approval is not a sandbox",
+      };
+    }
+    return {
+      argv,
+      risk: "project-verification",
+      summary:
+        "runs project code or tooling and may write caches, coverage, or build output",
+    };
+  }
+
+  return {
+    argv,
+    risk: "unknown-or-dangerous",
+    summary:
+      "not in Keel's conservative bash family allowlist; approve only if you trust this exact command",
+  };
+}
+
+function assessBashCommand(command: string): BashCommandAssessment {
+  const argv = parseSimpleCommandArgv(command);
+  if (argv === null) {
+    return {
+      argv: null,
+      risk: "unknown-or-dangerous",
+      summary:
+        "uses shell syntax Keel cannot safely classify; approve only if you trust this exact command",
+    };
+  }
+  return assessParsedCommand(argv);
 }
 
 function prefixKey(rule: PrefixApprovalRule): string {
@@ -152,24 +346,25 @@ export function createSessionBashPermissionPolicy(options: {
         return { type: "allow", scope: "session" };
       }
 
-      const prefixApproval = commandPrefixApproval(request.command);
-      const requestArgv = parseSimpleCommandArgv(request.command);
-      if (requestArgv !== null) {
-        const matchingPrefix = PREFIX_APPROVAL_CANDIDATES.find((candidate) =>
-          argvStartsWith(requestArgv, candidate),
-        );
-        if (
-          matchingPrefix !== undefined &&
-          approvedPrefixes.has(
-            prefixKey({ cwd: request.cwd, argvPrefix: matchingPrefix }),
-          )
-        ) {
-          return { type: "allow", scope: "session-prefix" };
-        }
+      const assessment = assessBashCommand(request.command);
+      const matchingPrefix = matchingPrefixApprovalCandidate(assessment);
+      const prefixApproval = commandPrefixApproval(matchingPrefix);
+      if (
+        matchingPrefix !== undefined &&
+        approvedPrefixes.has(
+          prefixKey({
+            cwd: request.cwd,
+            argvPrefix: matchingPrefix.argvPrefix,
+          }),
+        )
+      ) {
+        return { type: "allow", scope: "session-prefix" };
       }
 
       const promptRequest =
-        prefixApproval === undefined ? request : { ...request, prefixApproval };
+        prefixApproval === undefined
+          ? { ...request, assessment }
+          : { ...request, assessment, prefixApproval };
       const decision = await options.prompt(promptRequest);
       if (decision.type === "allow" && decision.scope === "session") {
         options.onGrant?.({

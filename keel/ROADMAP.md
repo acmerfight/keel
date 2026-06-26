@@ -94,9 +94,13 @@ What a user can do today:
 - `keel --bash-policy ask` — expose bash while requiring per-command
   approval in interactive sessions, with exact command + cwd approval and
   conservative command-family + cwd approval remembered for the
-  process-local session. One-shot runs fail closed because there is no
-  approval UI; forced non-TTY interactive runs also reject `ask` so
-  approvals cannot be read from piped input.
+  process-local session. Approval prompts include deterministic risk labels
+  for workspace-read, project-verification, workspace-write, and
+  unknown/dangerous commands, and verification-family approvals cover common
+  project checks such as `pnpm test`, `pnpm typecheck`, `pnpm lint`, and
+  `pnpm build`. One-shot runs fail closed because there is no approval UI;
+  forced non-TTY interactive runs also reject `ask` so approvals cannot be read
+  from piped input.
 - `keel --max-cost <usd>` — one-shot or interactive session cost tracking
   with budget stop.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
@@ -266,9 +270,12 @@ Codex/Claude Code — or directly moves the eval numbers.
 - **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
   prompts in interactive sessions, fails closed without an approval UI, records
   exact command + cwd approvals, and supports conservative process-local
-  command-family approvals. Remaining work is richer command parsing/risk
-  classification, broader approval families where safe, and persistent approval
-  rules. OS sandboxing remains P2.
+  command-family approvals. Prompts now show deterministic risk labels so users
+  can distinguish workspace-read commands, project verification commands,
+  workspace-writing commands, and unknown/dangerous shell syntax before
+  approving. Remaining work is deeper shell parsing, family-specific validators
+  for additional commands where safe, and persistent approval rules. OS
+  sandboxing remains P2.
 - **Whole-task undo** — ✅ Partial (2026-06): `/undo` restores the last edit,
   created file, apply_patch batch, or multi-file task checkpoint. Remaining
   work is broader command grouping and user-facing controls for choosing older
