@@ -1,4 +1,5 @@
 import {
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
@@ -15,6 +16,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   recordLastBatchCheckpoint,
   recordLastCreateCheckpoint,
+  recordLastDeleteCheckpoint,
   recordLastEditCheckpoint,
   recordLastTaskCheckpoint,
   restoreLastEditCheckpoint,
@@ -189,6 +191,289 @@ describe("Git Checkpoints", () => {
     }
   });
 
+  test(`Given a batch checkpoint records a deleted file,
+    When the checkpoint is restored,
+    Then the deleted file is recreated from its pre-delete content`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-batch-delete-");
+    const deletedPath = join(workspace, "obsolete.txt");
+    await writeFile(deletedPath, "obsolete\n", "utf8");
+    await chmod(deletedPath, 0o640);
+    const deletedRealPath = await realpath(deletedPath);
+    await rm(deletedPath);
+
+    try {
+      // When
+      const record = recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "delete",
+            filePath: deletedRealPath,
+            beforeContent: "obsolete\n",
+            mode: 0o640,
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "1 files",
+      });
+      expect(await readFile(deletedPath, "utf8")).toBe("obsolete\n");
+      expect((await stat(deletedPath)).mode & 0o777).toBe(0o640);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete checkpoint is recorded outside a git repository,
+    When the checkpoint is written,
+    Then Keel ignores it`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-git-delete-nongit-"));
+    const filePath = join(workspace, "obsolete.txt");
+
+    try {
+      // When
+      const result = recordLastDeleteCheckpoint({
+        workspace,
+        filePath,
+        beforeContent: "obsolete\n",
+        mode: 0o644,
+      });
+
+      // Then
+      expect(result).toEqual({ written: false });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete checkpoint is recorded for a path outside the git root,
+    When the checkpoint is written,
+    Then Keel ignores it`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-delete-outside-");
+    const outsideDirectory = await mkdtemp(join(tmpdir(), "keel-git-outside-"));
+    const outsideFile = join(outsideDirectory, "obsolete.txt");
+
+    try {
+      // When
+      const result = recordLastDeleteCheckpoint({
+        workspace,
+        filePath: outsideFile,
+        beforeContent: "obsolete\n",
+        mode: 0o644,
+      });
+
+      // Then
+      expect(result).toEqual({ written: false });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outsideDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete checkpoint target parent cannot be resolved,
+    When the checkpoint is written,
+    Then Keel ignores it`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-delete-missing-");
+
+    try {
+      // When
+      const result = recordLastDeleteCheckpoint({
+        workspace,
+        filePath: join(workspace, "missing", "obsolete.txt"),
+        beforeContent: "obsolete\n",
+        mode: 0o644,
+      });
+
+      // Then
+      expect(result).toEqual({ written: false });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete checkpoint is recorded for the git root itself,
+    When the checkpoint is written,
+    Then Keel ignores it`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-delete-root-");
+
+    try {
+      // When
+      const result = recordLastDeleteCheckpoint({
+        workspace,
+        filePath: workspace,
+        beforeContent: "obsolete\n",
+        mode: 0o644,
+      });
+
+      // Then
+      expect(result).toEqual({ written: false });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a batch checkpoint deleted target was recreated after recording,
+    When the checkpoint is restored,
+    Then undo is blocked before overwriting the user's file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-batch-delete-blocked-",
+    );
+    const deletedPath = join(workspace, "obsolete.txt");
+    await writeFile(deletedPath, "obsolete\n", "utf8");
+    const deletedRealPath = await realpath(deletedPath);
+    await rm(deletedPath);
+
+    try {
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "delete",
+            filePath: deletedRealPath,
+            beforeContent: "obsolete\n",
+            mode: 0o644,
+          },
+        ],
+      });
+      await writeFile(deletedPath, "user recreated\n", "utf8");
+
+      // When
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "obsolete.txt",
+        message:
+          "Cannot undo obsolete.txt: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(deletedPath, "utf8")).toBe("user recreated\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a batch delete checkpoint target parent was removed after recording,
+    When the checkpoint is restored,
+    Then undo is blocked before recreating the parent path`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-batch-delete-parent-");
+    const parentPath = join(workspace, "removed");
+    const deletedPath = join(parentPath, "obsolete.txt");
+    await mkdir(parentPath);
+    await writeFile(deletedPath, "obsolete\n", "utf8");
+    const deletedRealPath = await realpath(deletedPath);
+    await rm(deletedPath);
+
+    try {
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "delete",
+            filePath: deletedRealPath,
+            beforeContent: "obsolete\n",
+            mode: 0o644,
+          },
+        ],
+      });
+      await rm(parentPath, { recursive: true });
+
+      // When
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "removed/obsolete.txt",
+        message:
+          "Cannot undo removed/obsolete.txt: Refusing to overwrite user changes.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standalone delete checkpoint target was recreated after recording,
+    When the checkpoint is restored,
+    Then undo is blocked before overwriting the user's file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-delete-restore-blocked-",
+    );
+    const deletedPath = join(workspace, "obsolete.txt");
+
+    try {
+      recordLastDeleteCheckpoint({
+        workspace,
+        filePath: deletedPath,
+        beforeContent: "obsolete\n",
+        mode: 0o644,
+      });
+      await writeFile(deletedPath, "user recreated\n", "utf8");
+
+      // When
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "obsolete.txt",
+        message:
+          "Cannot undo obsolete.txt: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(deletedPath, "utf8")).toBe("user recreated\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standalone delete checkpoint target parent was removed after recording,
+    When the checkpoint is restored,
+    Then undo is blocked before recreating the parent path`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-delete-restore-parent-",
+    );
+    const parentPath = join(workspace, "removed");
+    const deletedPath = join(parentPath, "obsolete.txt");
+    await mkdir(parentPath);
+
+    try {
+      recordLastDeleteCheckpoint({
+        workspace,
+        filePath: deletedPath,
+        beforeContent: "obsolete\n",
+        mode: 0o644,
+      });
+      await rm(parentPath, { recursive: true });
+
+      // When
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "removed/obsolete.txt",
+        message:
+          "Cannot undo removed/obsolete.txt: Refusing to overwrite user changes.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given one task edits the same file twice,
     When the task checkpoint is restored,
     Then the file returns to its original content`, async () => {
@@ -213,6 +498,165 @@ describe("Git Checkpoints", () => {
             filePath,
             beforeContent: "middle\n",
             afterContent: "final\n",
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "note.txt",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one task edits and then deletes the same file,
+    When the task checkpoint is restored,
+    Then the file returns to its original pre-task content`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-task-edit-delete-");
+    const filePath = join(workspace, "note.txt");
+
+    try {
+      // When
+      const record = recordLastTaskCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath,
+            beforeContent: "old\n",
+            afterContent: "middle\n",
+          },
+          {
+            operation: "delete",
+            filePath,
+            beforeContent: "middle\n",
+            mode: 0o644,
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "note.txt",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one task deletes the same file twice,
+    When the task checkpoint is restored,
+    Then the file returns to its original pre-task content`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-task-delete-delete-");
+    const filePath = join(workspace, "note.txt");
+
+    try {
+      // When
+      const record = recordLastTaskCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "delete",
+            filePath,
+            beforeContent: "old\n",
+            mode: 0o644,
+          },
+          {
+            operation: "delete",
+            filePath,
+            beforeContent: "old\n",
+            mode: 0o644,
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "note.txt",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one task creates and then deletes the same file,
+    When the task checkpoint is recorded,
+    Then no undo checkpoint is written`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-task-create-delete-");
+    const filePath = join(workspace, "created.txt");
+
+    try {
+      // When
+      const record = recordLastTaskCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "create",
+            filePath,
+            afterContent: "created\n",
+          },
+          {
+            operation: "delete",
+            filePath,
+            beforeContent: "created\n",
+            mode: 0o644,
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: false });
+      expect(restore).toEqual({
+        status: "none",
+        message:
+          "No earlier checkpoints. Ask me to undo more, or use git to reset.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one task deletes and then recreates the same file,
+    When the task checkpoint is restored,
+    Then the recreated file returns to its original content`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-task-delete-create-");
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "replacement\n", "utf8");
+
+    try {
+      // When
+      const record = recordLastTaskCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "delete",
+            filePath,
+            beforeContent: "old\n",
+            mode: 0o644,
+          },
+          {
+            operation: "create",
+            filePath,
+            afterContent: "replacement\n",
           },
         ],
       });

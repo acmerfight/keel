@@ -1,4 +1,11 @@
-import { fstatSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  fstatSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { KeelError } from "../core/error.ts";
 import {
   type RecordLastBatchCheckpointOperation,
@@ -21,6 +28,7 @@ import {
   assertWorkspaceTargetAtAccess,
   createWorkspaceParentDirectories,
   type FileIdentity,
+  fileIdentityFromStats,
   findWorkspacePathsByIdentity,
   resolveWorkspaceCreateTarget,
   resolveWorkspaceCreateTargetAtAccess,
@@ -55,6 +63,10 @@ type ParsedPatchOperation =
       readonly kind: "update";
       readonly path: string;
       readonly hunks: readonly ParsedPatchHunk[];
+    }
+  | {
+      readonly kind: "delete";
+      readonly path: string;
     };
 
 interface ParsedPatchHunk {
@@ -80,6 +92,15 @@ type PreparedPatchOperation =
       readonly beforeContent: string;
       readonly afterContent: string;
       readonly mode: number;
+    }
+  | {
+      readonly kind: "delete";
+      readonly path: string;
+      readonly workspacePath: string;
+      readonly targetPath: string;
+      readonly beforeContent: string;
+      readonly mode: number;
+      readonly targetIdentity: FileIdentity;
     };
 
 type AppliedPatchOperation = PreparedPatchOperation & {
@@ -243,7 +264,7 @@ function unsupportedOperation(message: string): KeelError {
   return patchError(
     "tool_unsupported_patch_operation",
     message,
-    "This apply_patch slice supports only Add File and Update File. Use edit/write for deletes or renames.",
+    "This apply_patch slice supports Add File, Update File, and Delete File. Use separate tools for renames.",
   );
 }
 
@@ -289,6 +310,17 @@ function parseAddOperation(
     );
   }
   return { operation: { kind: "add", path, lines: contentLines }, next: index };
+}
+
+function parseDeleteOperation(
+  lines: readonly string[],
+  start: number,
+): { readonly operation: ParsedPatchOperation; readonly next: number } {
+  const path = requiredPathFromHeader(
+    parserLine(lines, start),
+    DELETE_FILE_MARKER,
+  );
+  return { operation: { kind: "delete", path }, next: start + 1 };
 }
 
 function parseUpdateHunk(
@@ -405,14 +437,14 @@ function parsePatch(patch: string): readonly ParsedPatchOperation[] {
       operations.push(parsed.operation);
       index = parsed.next;
     } else if (line.startsWith(DELETE_FILE_MARKER)) {
-      throw unsupportedOperation(
-        "apply_patch failed: Delete File is not supported",
-      );
+      const parsed = parseDeleteOperation(body, index);
+      operations.push(parsed.operation);
+      index = parsed.next;
     } else {
       throw patchError(
         "tool_invalid_patch",
         `apply_patch failed: invalid patch header: ${line}`,
-        "Use *** Add File: <path> or *** Update File: <path> inside the patch.",
+        "Use *** Add File: <path>, *** Update File: <path>, or *** Delete File: <path> inside the patch.",
       );
     }
   }
@@ -421,7 +453,7 @@ function parsePatch(patch: string): readonly ParsedPatchOperation[] {
     throw patchError(
       "tool_invalid_patch",
       "apply_patch failed: patch contains no file operations",
-      "Add at least one Add File or Update File operation.",
+      "Add at least one Add File, Update File, or Delete File operation.",
     );
   }
   return operations;
@@ -588,6 +620,96 @@ function prepareUpdateOperation(
   };
 }
 
+function openedFileIdentity(identity: FileIdentity | null): FileIdentity {
+  /* v8 ignore next 3: readEditableTextFileWithMetadata validates the opened fd before returning. */
+  if (identity === null) {
+    throw new Error("apply_patch opened file identity invariant violated");
+  }
+  return identity;
+}
+
+function prepareDeleteOperation(
+  workspace: string,
+  operation: Extract<ParsedPatchOperation, { readonly kind: "delete" }>,
+  options: ExecuteApplyPatchOptions,
+): PreparedPatchOperation {
+  const { workspacePath, requestedPath, targetPath } = resolveWorkspaceTarget(
+    workspace,
+    operation.path,
+    "apply_patch",
+  );
+  const validatedTarget = validateUpdateTarget(
+    workspacePath,
+    requestedPath,
+    targetPath,
+    operation.path,
+  );
+  if (
+    options.readBeforeEdit !== undefined &&
+    !options.readBeforeEdit.hasRead(validatedTarget.targetPath)
+  ) {
+    throw new KeelError(
+      "tool_file_not_read",
+      `apply_patch failed: file has not been read: ${operation.path}`,
+      `Use read(path: "${operation.path}") to view the current file content, then retry apply_patch after confirming the file should be deleted.`,
+    );
+  }
+
+  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  let openedMode = validatedTarget.mode;
+  let targetIdentity: FileIdentity | null = null;
+  const file = readEditableTextFileWithMetadata(
+    validatedTarget.targetPath,
+    operation.path,
+    {
+      command: "apply_patch",
+      maxBytes: MAX_PATCH_EDIT_FILE_BYTES,
+      tooLargeError: (observedBytes) =>
+        fileTooLargeError(operation.path, observedBytes),
+      validateOpenedFile: (fd) => {
+        const openedTargetPath = assertWorkspaceOpenTargetAtAccess({
+          fd,
+          workspacePath,
+          targetPath: validatedTarget.targetPath,
+          toolName: "apply_patch",
+          requestedPath: operation.path,
+        });
+        if (projectIgnorePolicy.isIgnored(openedTargetPath, false)) {
+          throw new KeelError(
+            "tool_path_ignored",
+            `apply_patch failed: ignored path: ${operation.path}`,
+            "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+          );
+        }
+        if (
+          options.readBeforeEdit !== undefined &&
+          !options.readBeforeEdit.hasRead(openedTargetPath)
+        ) {
+          throw new KeelError(
+            "tool_file_not_read",
+            `apply_patch failed: file has not been read: ${operation.path}`,
+            `Use read(path: "${operation.path}") to view the current file content, then retry apply_patch after confirming the file should be deleted.`,
+          );
+        }
+        const openedStat = fstatSync(fd);
+        openedMode = openedStat.mode & 0o7777;
+        targetIdentity = fileIdentityFromStats(openedStat);
+        return openedTargetPath;
+      },
+    },
+  );
+
+  return {
+    kind: "delete",
+    path: operation.path,
+    workspacePath,
+    targetPath: file.targetPath,
+    beforeContent: withUtf8Bom(file.content, file.hasUtf8Bom),
+    mode: openedMode,
+    targetIdentity: openedFileIdentity(targetIdentity),
+  };
+}
+
 function prepareAddOperation(
   workspace: string,
   operation: Extract<ParsedPatchOperation, { readonly kind: "add" }>,
@@ -625,7 +747,9 @@ function preparePatchOperations(
     const next =
       operation.kind === "add"
         ? prepareAddOperation(workspace, operation)
-        : prepareUpdateOperation(workspace, operation, options);
+        : operation.kind === "update"
+          ? prepareUpdateOperation(workspace, operation, options)
+          : prepareDeleteOperation(workspace, operation, options);
     if (targetPaths.has(next.targetPath)) {
       throw patchError(
         "tool_invalid_patch",
@@ -655,6 +779,21 @@ function readFileIfPossible(filePath: string): string | null {
   } catch {
     /* v8 ignore next 1: rollback tolerates concurrent file removal. */
     return null;
+  }
+}
+
+function restoreDeletedTextFileBestEffort(
+  operation: Extract<AppliedPatchOperation, { readonly kind: "delete" }>,
+): void {
+  try {
+    writeFileSync(operation.targetPath, operation.beforeContent, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: operation.mode,
+    });
+    chmodSync(operation.targetPath, operation.mode);
+  } catch {
+    /* v8 ignore next 1: rollback is best-effort and must not overwrite user-created files. */
   }
 }
 
@@ -720,6 +859,11 @@ function rollbackAppliedOperations(
   applied: readonly AppliedPatchOperation[],
 ): void {
   for (const operation of applied.toReversed()) {
+    if (operation.kind === "delete") {
+      restoreDeletedTextFileBestEffort(operation);
+      continue;
+    }
+
     const targetPaths = rollbackTargetPaths(operation);
     if (targetPaths.length === 0) continue;
 
@@ -863,81 +1007,107 @@ function applyPreparedOperation(
       targetPath: publishedTargetPath,
       appliedIdentity: result.identity,
     };
-  } else {
-    const projectIgnorePolicy = createProjectIgnorePolicy(
-      operation.workspacePath,
-    );
-    const validateTargetAtAccess = (): string => {
-      const accessTargetPath = assertWorkspaceTargetAtAccess({
-        workspacePath: operation.workspacePath,
-        targetPath: operation.targetPath,
-        toolName: "apply_patch",
-        requestedPath: operation.path,
-      });
-      if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
-        throw new KeelError(
-          "tool_path_ignored",
-          `apply_patch failed: ignored path: ${operation.path}`,
-          "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
-        );
-      }
-      return accessTargetPath;
-    };
-    const validateOpenedTempAtAccess = (tempPath: string, fd: number): void => {
-      assertWorkspaceOpenTargetAtAccess({
-        fd,
-        workspacePath: operation.workspacePath,
-        targetPath: tempPath,
-        toolName: "apply_patch",
-        requestedPath: operation.path,
-      });
-    };
-    let publishedTargetPath = operation.targetPath;
-    const validatePublishedTargetAtAccess = (
-      publishedPath: string,
-      identity: FileIdentity,
-    ): void => {
-      const accessTargetPath = assertWorkspaceFileIdentityAtAccess({
-        identity,
-        workspacePath: operation.workspacePath,
-        targetPath: publishedPath,
-        toolName: "apply_patch",
-        requestedPath: operation.path,
-      });
-      if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
-        throw new KeelError(
-          "tool_path_ignored",
-          `apply_patch failed: ignored path: ${operation.path}`,
-          "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
-        );
-      }
-      publishedTargetPath = accessTargetPath;
-    };
-    const result = writeTextFileAtomically(
-      operation.targetPath,
-      operation.afterContent,
-      {
-        mode: operation.mode,
-        beforeAccess: validateTargetAtAccess,
-        beforeWrite: validateOpenedTempAtAccess,
-        beforePublish: validateTargetAtAccess,
-        afterPublish: validatePublishedTargetAtAccess,
-        validateReplacement: validateOpenedTempAtAccess,
-        rollbackOnPublishFailure: {
-          beforeContent: operation.beforeContent,
-          afterContent: operation.afterContent,
-        },
-        /* v8 ignore next 2: update temp cleanup by identity is covered through edit/write; this is the same atomic path. */
-        cleanupPathsByIdentity: (identity) =>
-          findWorkspacePathsByIdentity(operation.workspacePath, identity),
-      },
-    );
+  }
+
+  const projectIgnorePolicy = createProjectIgnorePolicy(
+    operation.workspacePath,
+  );
+  if (operation.kind === "delete") {
+    const accessTargetPath = assertWorkspaceTargetAtAccess({
+      workspacePath: operation.workspacePath,
+      targetPath: operation.targetPath,
+      toolName: "apply_patch",
+      requestedPath: operation.path,
+    });
+    if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+      throw new KeelError(
+        "tool_path_ignored",
+        `apply_patch failed: ignored path: ${operation.path}`,
+        "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+      );
+    }
+    options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
+    if (!pathHasIdentity(accessTargetPath, operation.targetIdentity)) {
+      throw changedTargetError(operation);
+    }
+    rmSync(accessTargetPath);
     return {
       ...operation,
-      targetPath: publishedTargetPath,
-      appliedIdentity: result.identity,
+      targetPath: accessTargetPath,
+      appliedIdentity: operation.targetIdentity,
     };
   }
+
+  const validateTargetAtAccess = (): string => {
+    const accessTargetPath = assertWorkspaceTargetAtAccess({
+      workspacePath: operation.workspacePath,
+      targetPath: operation.targetPath,
+      toolName: "apply_patch",
+      requestedPath: operation.path,
+    });
+    if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+      throw new KeelError(
+        "tool_path_ignored",
+        `apply_patch failed: ignored path: ${operation.path}`,
+        "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+      );
+    }
+    return accessTargetPath;
+  };
+  const validateOpenedTempAtAccess = (tempPath: string, fd: number): void => {
+    assertWorkspaceOpenTargetAtAccess({
+      fd,
+      workspacePath: operation.workspacePath,
+      targetPath: tempPath,
+      toolName: "apply_patch",
+      requestedPath: operation.path,
+    });
+  };
+  let publishedTargetPath = operation.targetPath;
+  const validatePublishedTargetAtAccess = (
+    publishedPath: string,
+    identity: FileIdentity,
+  ): void => {
+    const accessTargetPath = assertWorkspaceFileIdentityAtAccess({
+      identity,
+      workspacePath: operation.workspacePath,
+      targetPath: publishedPath,
+      toolName: "apply_patch",
+      requestedPath: operation.path,
+    });
+    if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+      throw new KeelError(
+        "tool_path_ignored",
+        `apply_patch failed: ignored path: ${operation.path}`,
+        "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+      );
+    }
+    publishedTargetPath = accessTargetPath;
+  };
+  const result = writeTextFileAtomically(
+    operation.targetPath,
+    operation.afterContent,
+    {
+      mode: operation.mode,
+      beforeAccess: validateTargetAtAccess,
+      beforeWrite: validateOpenedTempAtAccess,
+      beforePublish: validateTargetAtAccess,
+      afterPublish: validatePublishedTargetAtAccess,
+      validateReplacement: validateOpenedTempAtAccess,
+      rollbackOnPublishFailure: {
+        beforeContent: operation.beforeContent,
+        afterContent: operation.afterContent,
+      },
+      /* v8 ignore next 2: update temp cleanup by identity is covered through edit/write; this is the same atomic path. */
+      cleanupPathsByIdentity: (identity) =>
+        findWorkspacePathsByIdentity(operation.workspacePath, identity),
+    },
+  );
+  return {
+    ...operation,
+    targetPath: publishedTargetPath,
+    appliedIdentity: result.identity,
+  };
 }
 
 function changedTargetError(operation: PreparedPatchOperation): KeelError {
@@ -951,6 +1121,14 @@ function changedTargetError(operation: PreparedPatchOperation): KeelError {
 function verifyAppliedOperation(
   operation: AppliedPatchOperation,
 ): AppliedPatchOperation {
+  if (operation.kind === "delete") {
+    /* v8 ignore next 3: rmSync removes the captured identity unless a post-delete filesystem race recreates it before verification. */
+    if (pathHasIdentity(operation.targetPath, operation.appliedIdentity)) {
+      throw changedTargetError(operation);
+    }
+    return operation;
+  }
+
   const finalTargetPath = assertWorkspaceTargetAtAccess({
     workspacePath: operation.workspacePath,
     targetPath: operation.targetPath,
@@ -966,6 +1144,19 @@ function verifyAppliedOperation(
 function checkpointOperationFor(
   operation: AppliedPatchOperation,
 ): RecordLastBatchCheckpointOperation {
+  if (operation.kind === "delete") {
+    /* v8 ignore next 3: verifyAppliedOperation rejects this first except for a race between verification and checkpointing. */
+    if (pathHasIdentity(operation.targetPath, operation.appliedIdentity)) {
+      throw changedTargetError(operation);
+    }
+    return {
+      operation: "delete",
+      filePath: operation.targetPath,
+      beforeContent: operation.beforeContent,
+      mode: operation.mode,
+    };
+  }
+
   const targetPath = assertWorkspaceTargetAtAccess({
     workspacePath: operation.workspacePath,
     targetPath: operation.targetPath,
@@ -991,7 +1182,9 @@ function checkpointOperationFor(
 }
 
 function summaryLine(operation: PreparedPatchOperation): string {
-  return `${operation.kind === "add" ? "A" : "M"} ${operation.path}`;
+  const marker =
+    operation.kind === "add" ? "A" : operation.kind === "update" ? "M" : "D";
+  return `${marker} ${operation.path}`;
 }
 
 export function executeApplyPatch(

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import type { Stats } from "node:fs";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -9,7 +10,14 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { z } from "zod";
 import { KeelError } from "./error.ts";
 import { debugLog } from "./logger.ts";
@@ -27,6 +35,13 @@ export interface RecordLastCreateCheckpointOptions {
   readonly afterContent: string;
 }
 
+export interface RecordLastDeleteCheckpointOptions {
+  readonly workspace: string;
+  readonly filePath: string;
+  readonly beforeContent: string;
+  readonly mode: number;
+}
+
 export type RecordLastBatchCheckpointOperation =
   | {
       readonly operation: "edit";
@@ -38,6 +53,12 @@ export type RecordLastBatchCheckpointOperation =
       readonly operation: "create";
       readonly filePath: string;
       readonly afterContent: string;
+    }
+  | {
+      readonly operation: "delete";
+      readonly filePath: string;
+      readonly beforeContent: string;
+      readonly mode: number;
     };
 
 export interface RecordLastBatchCheckpointOptions {
@@ -104,6 +125,18 @@ const createCheckpointSchema = z
   })
   .strict();
 
+const deleteCheckpointSchema = z
+  .object({
+    version: z.literal(4),
+    operation: z.literal("delete"),
+    gitRoot: z.string().min(1),
+    relativePath: z.string().min(1),
+    beforeContent: z.string(),
+    mode: z.number().int().min(0).max(0o7777),
+    createdAt: z.string().min(1),
+  })
+  .strict();
+
 const batchCheckpointOperationSchema = z.union([
   z
     .object({
@@ -118,6 +151,14 @@ const batchCheckpointOperationSchema = z.union([
       operation: z.literal("create"),
       relativePath: z.string().min(1),
       afterContent: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal("delete"),
+      relativePath: z.string().min(1),
+      beforeContent: z.string(),
+      mode: z.number().int().min(0).max(0o7777),
     })
     .strict(),
 ]);
@@ -135,6 +176,7 @@ const batchCheckpointSchema = z
 const checkpointSchema = z.union([
   editCheckpointSchema,
   createCheckpointSchema,
+  deleteCheckpointSchema,
   batchCheckpointSchema,
 ]);
 
@@ -168,6 +210,19 @@ function isInside(parent: string, child: string): boolean {
 function normalizeRelativePath(root: string, filePath: string): string | null {
   const absolutePath = realpathIfPossible(filePath);
   if (absolutePath === null) return null;
+  if (!isInside(root, absolutePath)) return null;
+  const relativePath = relative(root, absolutePath);
+  if (relativePath === "") return null;
+  return relativePath.split(sep).join("/");
+}
+
+function normalizeDeletedRelativePath(
+  root: string,
+  filePath: string,
+): string | null {
+  const parentPath = realpathIfPossible(dirname(filePath));
+  if (parentPath === null) return null;
+  const absolutePath = resolve(parentPath, basename(filePath));
   if (!isInside(root, absolutePath)) return null;
   const relativePath = relative(root, absolutePath);
   if (relativePath === "") return null;
@@ -337,6 +392,42 @@ export function recordLastCreateCheckpoint(
   }
 }
 
+export function recordLastDeleteCheckpoint(
+  options: RecordLastDeleteCheckpointOptions,
+): RecordLastEditCheckpointResult {
+  try {
+    const gitWorkspace = findGitWorkspace(options.workspace);
+    if (gitWorkspace === null) {
+      return skippedCheckpointRecord(options, "git workspace unavailable");
+    }
+
+    const relativePath = normalizeDeletedRelativePath(
+      gitWorkspace.root,
+      options.filePath,
+    );
+    if (relativePath === null) {
+      return skippedCheckpointRecord(
+        options,
+        "file path unavailable or outside git root",
+      );
+    }
+
+    writeCheckpoint(gitWorkspace.checkpointPath, {
+      version: 4,
+      operation: "delete",
+      gitRoot: gitWorkspace.root,
+      relativePath,
+      beforeContent: options.beforeContent,
+      mode: options.mode,
+      createdAt: new Date().toISOString(),
+    });
+
+    return { written: true };
+  } catch (error) {
+    return skippedCheckpointRecord(options, String(error));
+  }
+}
+
 export function recordLastBatchCheckpoint(
   options: RecordLastBatchCheckpointOptions,
 ): RecordLastEditCheckpointResult {
@@ -348,10 +439,10 @@ export function recordLastBatchCheckpoint(
 
     const operations: PersistedBatchCheckpointOperation[] = [];
     for (const operation of options.operations) {
-      const relativePath = normalizeRelativePath(
-        gitWorkspace.root,
-        operation.filePath,
-      );
+      const relativePath =
+        operation.operation === "delete"
+          ? normalizeDeletedRelativePath(gitWorkspace.root, operation.filePath)
+          : normalizeRelativePath(gitWorkspace.root, operation.filePath);
       if (relativePath === null) {
         return skippedBatchCheckpointRecord(
           options,
@@ -365,6 +456,13 @@ export function recordLastBatchCheckpoint(
           relativePath,
           beforeContent: operation.beforeContent,
           afterContent: operation.afterContent,
+        });
+      } else if (operation.operation === "delete") {
+        operations.push({
+          operation: "delete",
+          relativePath,
+          beforeContent: operation.beforeContent,
+          mode: operation.mode,
         });
       } else {
         operations.push({
@@ -397,12 +495,32 @@ export function recordLastBatchCheckpoint(
 function mergeTaskCheckpointOperations(
   existing: RecordLastBatchCheckpointOperation,
   next: RecordLastBatchCheckpointOperation,
-): RecordLastBatchCheckpointOperation {
+): RecordLastBatchCheckpointOperation | null {
   if (existing.operation === "create") {
+    if (next.operation === "delete") return null;
     return {
       operation: "create",
       filePath: existing.filePath,
       afterContent: next.afterContent,
+    };
+  }
+
+  if (existing.operation === "delete") {
+    if (next.operation === "delete") return existing;
+    return {
+      operation: "edit",
+      filePath: existing.filePath,
+      beforeContent: existing.beforeContent,
+      afterContent: next.afterContent,
+    };
+  }
+
+  if (next.operation === "delete") {
+    return {
+      operation: "delete",
+      filePath: existing.filePath,
+      beforeContent: existing.beforeContent,
+      mode: next.mode,
     };
   }
 
@@ -426,10 +544,12 @@ function coalesceTaskCheckpointOperations(
       continue;
     }
 
-    operationByPath.set(
-      operation.filePath,
-      mergeTaskCheckpointOperations(existing, operation),
-    );
+    const merged = mergeTaskCheckpointOperations(existing, operation);
+    if (merged === null) {
+      operationByPath.delete(operation.filePath);
+    } else {
+      operationByPath.set(operation.filePath, merged);
+    }
   }
 
   return [...operationByPath.values()];
@@ -450,6 +570,14 @@ export function recordLastTaskCheckpoint(
           workspace: options.workspace,
           filePath: operation.filePath,
           afterContent: operation.afterContent,
+        });
+      }
+      if (operation.operation === "delete") {
+        return recordLastDeleteCheckpoint({
+          workspace: options.workspace,
+          filePath: operation.filePath,
+          beforeContent: operation.beforeContent,
+          mode: operation.mode,
         });
       }
       return recordLastEditCheckpoint({
@@ -492,6 +620,13 @@ type ResolvedBatchRestoreOperation =
       readonly operation: "create";
       readonly filePath: string;
       readonly exists: boolean;
+    }
+  | {
+      readonly operation: "delete";
+      readonly filePath: string;
+      readonly relativePath: string;
+      readonly beforeContent: string;
+      readonly mode: number;
     };
 
 function checkpointTargetPath(gitRoot: string, relativePath: string): string {
@@ -510,6 +645,23 @@ function validateBatchRestoreOperation(
   operation: BatchCheckpoint["operations"][number],
 ): ResolvedBatchRestoreOperation | RestoreLastEditCheckpointResult {
   const filePath = checkpointTargetPath(gitRoot, operation.relativePath);
+  if (operation.operation === "delete") {
+    if (lstatIfPossible(filePath) !== null) {
+      return blockedRestore(operation);
+    }
+    const parentPath = realpathIfPossible(dirname(filePath));
+    if (parentPath === null || !isInside(gitRoot, parentPath)) {
+      return blockedRestore(operation);
+    }
+    return {
+      operation: "delete",
+      filePath,
+      relativePath: operation.relativePath,
+      beforeContent: operation.beforeContent,
+      mode: operation.mode,
+    };
+  }
+
   if (operation.operation === "create") {
     const targetStat = lstatIfPossible(filePath);
     if (targetStat === null) {
@@ -551,6 +703,24 @@ function isRestoreResult(
   return "status" in value;
 }
 
+function restoreDeletedFile(
+  filePath: string,
+  beforeContent: string,
+  mode: number,
+): boolean {
+  try {
+    writeFileSync(filePath, beforeContent, {
+      encoding: "utf8",
+      flag: "wx",
+      mode,
+    });
+    chmodSync(filePath, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function restoreBatchCheckpoint(
   checkpoint: BatchCheckpoint,
   gitWorkspace: GitWorkspace,
@@ -568,6 +738,16 @@ function restoreBatchCheckpoint(
   for (const operation of operations.toReversed()) {
     if (operation.operation === "create") {
       if (operation.exists) rmSync(operation.filePath);
+    } else if (operation.operation === "delete") {
+      if (
+        !restoreDeletedFile(
+          operation.filePath,
+          operation.beforeContent,
+          operation.mode,
+        )
+      ) {
+        return blockedRestore(operation);
+      }
     } else {
       writeFileSync(operation.restorePath, operation.beforeContent, "utf8");
     }
@@ -626,6 +806,27 @@ export function restoreLastEditCheckpoint(
     }
 
     rmSync(filePath);
+    rmSync(gitWorkspace.checkpointPath, { force: true });
+    return {
+      status: "restored",
+      restoredLabel: checkpoint.relativePath,
+    };
+  }
+
+  if (checkpoint.operation === "delete") {
+    if (lstatIfPossible(filePath) !== null) {
+      return blockedRestore(checkpoint);
+    }
+    const parentPath = realpathIfPossible(dirname(filePath));
+    if (parentPath === null || !isInside(gitWorkspace.root, parentPath)) {
+      return blockedRestore(checkpoint);
+    }
+
+    if (
+      !restoreDeletedFile(filePath, checkpoint.beforeContent, checkpoint.mode)
+    ) {
+      return blockedRestore(checkpoint);
+    }
     rmSync(gitWorkspace.checkpointPath, { force: true });
     return {
       status: "restored",

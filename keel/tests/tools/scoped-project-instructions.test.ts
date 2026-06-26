@@ -775,6 +775,63 @@ describe("Scoped Project Instructions", () => {
     }
   });
 
+  test(`Given scoped AGENTS.md applies to an apply_patch delete target,
+    When the instructions are not visible,
+    Then the delete is blocked before the file is removed`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "packages", "api", "src"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(workspace, "packages", "api", "AGENTS.md"),
+      "API rule: deletions need scoped review.\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "packages", "api", "src", "obsolete.ts"),
+      "export const obsolete = true;\n",
+      "utf8",
+    );
+    const projectInstructions =
+      createProjectInstructionVisibilityState(workspace);
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        toolCall: {
+          id: "patch_delete_api_file",
+          tool: "apply_patch",
+          patch: [
+            "*** Begin Patch",
+            "*** Delete File: packages/api/src/obsolete.ts",
+            "*** End Patch",
+          ].join("\n"),
+        },
+        signal: freshSignal(),
+        allowBash: false,
+        projectInstructions,
+      });
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain(
+        "Project instructions from packages/api/AGENTS.md",
+      );
+      expect(result.content).toContain(
+        "API rule: deletions need scoped review.",
+      );
+      expect(
+        await fileExists(
+          join(workspace, "packages", "api", "src", "obsolete.ts"),
+        ),
+      ).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given scoped instructions are visible and AGENTS.md is mutated,
     When a later mutation targets that scope,
     Then the visibility state requires the new instructions to be reviewed again`, async () => {
