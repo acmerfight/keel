@@ -1,5 +1,5 @@
 import { type CostModel, ZERO_COST_MODEL } from "./cost.ts";
-import type { ProviderId } from "./provider-id.ts";
+import { type ProviderId, providerIds } from "./provider-id.ts";
 
 export interface ModelCapabilities {
   readonly textInput: boolean;
@@ -15,15 +15,33 @@ export type ModelMetadata =
       readonly maxOutputTokens: number | null;
       readonly capabilities: ModelCapabilities;
       readonly costModel: CostModel | null;
+      readonly lastVerified: string;
     }
   | { readonly status: "unknown" };
 
-type KnownModelMetadata = Extract<ModelMetadata, { readonly status: "known" }>;
+export type KnownModelMetadata = Extract<
+  ModelMetadata,
+  { readonly status: "known" }
+>;
+
+export interface KnownModelMetadataEntry {
+  readonly providerId: ProviderId;
+  readonly model: string;
+  readonly metadata: KnownModelMetadata;
+}
 
 type ModelMetadataRegistry = Record<
   ProviderId,
   Readonly<Record<string, KnownModelMetadata>>
 >;
+
+const MODEL_METADATA_LAST_VERIFIED = "2026-06-26";
+
+function verifiedMetadata(
+  metadata: Omit<KnownModelMetadata, "lastVerified">,
+): KnownModelMetadata {
+  return { ...metadata, lastVerified: MODEL_METADATA_LAST_VERIFIED };
+}
 
 const DEEPSEEK_V4_FLASH_COST_MODEL: CostModel = {
   type: "fixed",
@@ -49,7 +67,7 @@ const KIMI_K2_6_COST_MODEL: CostModel = {
 const QWEN_3_7_MAX_COST_MODEL: CostModel = {
   type: "fixed",
   uncachedInputPerMillionTokens: 2.5,
-  cachedInputPerMillionTokens: 0.25,
+  cachedInputPerMillionTokens: 0.5,
   outputPerMillionTokens: 7.5,
 };
 
@@ -101,75 +119,86 @@ const TEXT_TOOL_CAPABILITIES: ModelCapabilities = {
   reasoning: false,
 };
 
-const QWEN_3_6_FLASH_METADATA: KnownModelMetadata = {
+const QWEN_3_6_FLASH_METADATA: KnownModelMetadata = verifiedMetadata({
   status: "known",
   source: "registry",
   contextWindowTokens: 1_000_000,
   maxOutputTokens: 65_536,
   capabilities: TEXT_TOOL_REASONING_CAPABILITIES,
   costModel: QWEN_3_6_FLASH_COST_MODEL,
-};
+});
 
 const MODEL_METADATA_REGISTRY: ModelMetadataRegistry = {
   fake: {
-    fake: {
+    fake: verifiedMetadata({
       status: "known",
       source: "registry",
       contextWindowTokens: null,
       maxOutputTokens: null,
       capabilities: TEXT_TOOL_CAPABILITIES,
       costModel: ZERO_COST_MODEL,
-    },
+    }),
   },
   deepseek: {
-    "deepseek-v4-flash": {
+    "deepseek-v4-flash": verifiedMetadata({
       status: "known",
       source: "registry",
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 384_000,
       capabilities: TEXT_TOOL_REASONING_CAPABILITIES,
       costModel: DEEPSEEK_V4_FLASH_COST_MODEL,
-    },
-    "deepseek-v4-pro": {
+    }),
+    "deepseek-v4-pro": verifiedMetadata({
       status: "known",
       source: "registry",
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 384_000,
       capabilities: TEXT_TOOL_REASONING_CAPABILITIES,
       costModel: DEEPSEEK_V4_PRO_COST_MODEL,
-    },
+    }),
   },
   kimi: {
-    "kimi-k2.6": {
+    "kimi-k2.6": verifiedMetadata({
       status: "known",
       source: "registry",
-      contextWindowTokens: 256_000,
+      contextWindowTokens: 262_144,
       maxOutputTokens: 32_768,
       capabilities: TEXT_TOOL_REASONING_CAPABILITIES,
       costModel: KIMI_K2_6_COST_MODEL,
-    },
+    }),
   },
   qwen: {
-    "qwen3.7-max": {
+    "qwen3.7-max": verifiedMetadata({
       status: "known",
       source: "registry",
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 65_536,
       capabilities: TEXT_TOOL_REASONING_CAPABILITIES,
       costModel: QWEN_3_7_MAX_COST_MODEL,
-    },
-    "qwen3.7-plus": {
+    }),
+    "qwen3.7-plus": verifiedMetadata({
       status: "known",
       source: "registry",
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 65_536,
       capabilities: TEXT_TOOL_REASONING_CAPABILITIES,
       costModel: QWEN_3_7_PLUS_COST_MODEL,
-    },
+    }),
     "qwen3.6-flash": QWEN_3_6_FLASH_METADATA,
     "qwen3.6-flash-2026-04-16": QWEN_3_6_FLASH_METADATA,
   },
 };
+
+export function knownModelMetadataEntries(): readonly KnownModelMetadataEntry[] {
+  const entries: KnownModelMetadataEntry[] = [];
+  for (const providerId of providerIds) {
+    const models = MODEL_METADATA_REGISTRY[providerId];
+    for (const [model, metadata] of Object.entries(models)) {
+      entries.push({ providerId, model, metadata });
+    }
+  }
+  return entries;
+}
 
 export function modelMetadata(
   providerId: ProviderId,

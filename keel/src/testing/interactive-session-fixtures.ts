@@ -37,6 +37,7 @@ const TEST_MODEL_METADATA: ModelMetadata = {
     reasoning: false,
   },
   costModel: ZERO_COST_MODEL,
+  lastVerified: "2026-06-26",
 };
 
 export const EXPENSIVE_USAGE: Usage = {

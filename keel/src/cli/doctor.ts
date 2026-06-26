@@ -274,6 +274,7 @@ function modelMetadataLines(
       : `max output: ${metadata.maxOutputTokens} tokens`;
   return [
     `model metadata: ${metadata.source}`,
+    `model metadata verified: ${metadata.lastVerified}`,
     maxOutput,
     `model capabilities: ${capabilityNames(metadata.capabilities)}`,
   ];
