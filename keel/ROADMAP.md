@@ -66,7 +66,9 @@ What a user can do today:
 - `keel` — interactive in-process session: sequential follow-up messages
   reuse prior user / assistant / tool context from the same terminal run;
   input typed while a tool turn is running is injected after tool results at
-  the next model request. Local commands include `/help`, `/undo`, `/model`,
+  the next model request. Real TTY sessions render a stable terminal display
+  with a session intro, `keel>` prompts, `status:` progress lines, and an
+  `assistant:` header. Local commands include `/help`, `/undo`, `/model`,
   `/skill`, `/compact`, `/fork`, and `/fork-points`.
 - `keel --session <id>` / `keel --resume <id>` / `keel sessions` /
   `keel sessions fork <source-id> <target-id> [--before-message <id>]` —
@@ -124,13 +126,13 @@ What a user can do today:
 
 Known limits that shape the priorities below:
 
-- Interactive sessions still have no full-screen TUI. Persisted sessions
-  restore transcript context, pending queued input, active model switches, and
-  workflow skill identity, and can fork a completed restored history or a
-  restored user-message point into an independent named session. `/fork --pick`
-  provides an interactive fork-point picker, but richer branch browsing and
-  future sub-agent state are still absent. Forks do not copy bash approval
-  grants.
+- Interactive sessions have a minimal stable terminal display, but no
+  full-screen TUI or richer session browser. Persisted sessions restore
+  transcript context, pending queued input, active model switches, and workflow
+  skill identity, and can fork a completed restored history or a restored
+  user-message point into an independent named session. `/fork --pick` provides
+  an interactive fork-point picker, but richer branch browsing and future
+  sub-agent state are still absent. Forks do not copy bash approval grants.
 - Provider selection supports DeepSeek, Kimi, and Qwen through one-shot and
   interactive `--provider` / `--model` overrides plus environment
   configuration (`KEEL_PROVIDER`, provider-specific API keys, base URLs, and
@@ -179,9 +181,10 @@ Known limits that shape the priorities below:
    sessions persist transcripts, compaction replacement records, unconsumed
    queued input, active model switches, and workflow skill identity;
    interactive `--report` records session-level turns, usage, provider/model,
-   models used, and cost. Remaining work is mainly clearer interactive UX/TUI,
-   richer branch browsing, and future sub-agent state. Real coding is
-   conversational: follow-ups, corrections, "now also fix the tests" —
+   models used, and cost. Real TTY sessions now have stable prompt/status
+   chrome; remaining work is full-screen or richer session UI, richer branch
+   browsing, and future sub-agent state. Real coding is conversational:
+   follow-ups, corrections, "now also fix the tests" —
    including while a run is in progress. Daily use also generates the real-task
    corpus the eval suite needs.
 2. **General provider/model configuration.**
