@@ -112,6 +112,9 @@ export async function runInteractiveSession(
     ...(options.projectInstructions !== undefined
       ? { projectInstructions: options.projectInstructions }
       : {}),
+    ...(options.workflowSkill !== undefined
+      ? { workflowSkill: options.workflowSkill }
+      : {}),
   });
   const messages: Message[] = [...(options.initialMessages ?? [])];
   let resolved: InteractiveResolvedProvider | null = null;

@@ -26,17 +26,20 @@ import {
   type SessionState,
   type SessionStoreRuntime,
   type StoredMessage,
+  type WorkflowSkill,
 } from "./model.ts";
 import { sessionFilePath } from "./paths.ts";
 import {
   bashApprovalGrantHasRedactionMarker,
   copyBashApprovalGrant,
   copyStoredMessage,
+  copyWorkflowSkill,
   messagesFromStoredMessages,
   parseProviderVisibleMessages,
   redactBashApprovalGrantForPersistence,
   redactSessionQueuedInputForPersistence,
   redactStoredMessageForPersistence,
+  redactWorkflowSkillForPersistence,
   validateCompletedTranscript,
 } from "./records.ts";
 import { isoTimestamp } from "./runtime.ts";
@@ -60,6 +63,7 @@ export function createSessionStore(options: {
   readonly sessionId: string;
   readonly workspace: string;
   readonly runtime: SessionStoreRuntime;
+  readonly workflowSkill?: WorkflowSkill;
 }): SessionState {
   return createEmptySessionStore(options);
 }
@@ -69,6 +73,7 @@ function createEmptySessionStore(options: {
   readonly workspace: string;
   readonly runtime: SessionStoreRuntime;
   readonly graph?: SessionGraphRecord;
+  readonly workflowSkill?: WorkflowSkill;
 }): SessionState {
   const workspace = realpathSync(options.workspace);
   const filePath = sessionFilePath(options.runtime, options.sessionId);
@@ -80,6 +85,13 @@ function createEmptySessionStore(options: {
     createdAt: isoTimestamp(options.runtime),
     workspace,
     graph,
+    ...(options.workflowSkill !== undefined
+      ? {
+          workflowSkill: redactWorkflowSkillForPersistence(
+            options.workflowSkill,
+          ),
+        }
+      : {}),
   });
   return sessionStateFromReplay({
     id: options.sessionId,
@@ -89,6 +101,9 @@ function createEmptySessionStore(options: {
     storedMessages: [],
     pendingInputsById: new Map(),
     bashApprovalGrants: [],
+    ...(options.workflowSkill !== undefined
+      ? { workflowSkill: copyWorkflowSkill(options.workflowSkill) }
+      : {}),
   });
 }
 
@@ -172,6 +187,9 @@ export function forkSessionStore(options: {
     workspace: options.source.workspace,
     runtime: options.runtime,
     graph,
+    ...(options.source.workflowSkill !== undefined
+      ? { workflowSkill: copyWorkflowSkill(options.source.workflowSkill) }
+      : {}),
   });
   const forkedSession = sessionStateFromReplay({
     id: options.targetSessionId,
@@ -185,6 +203,9 @@ export function forkSessionStore(options: {
       ? { activeModel: copySessionModelSelection(activeModel) }
       : {}),
     modelSwitches,
+    ...(options.source.workflowSkill !== undefined
+      ? { workflowSkill: copyWorkflowSkill(options.source.workflowSkill) }
+      : {}),
   });
   if (activeModel !== undefined) {
     appendJsonLine(session.filePath, {
@@ -363,6 +384,9 @@ export function resumeSessionStore(options: {
       ? { activeModel: copySessionModelSelection(activeModel) }
       : {}),
     modelSwitches,
+    ...(header.workflowSkill !== undefined
+      ? { workflowSkill: copyWorkflowSkill(header.workflowSkill) }
+      : {}),
   });
 }
 

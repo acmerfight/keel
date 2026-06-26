@@ -49,15 +49,30 @@ function appendJsonLine(filePath: string, record: SessionMutationRecord): void {
   }
 }
 
+function serializeSessionHeaderLine(
+  filePath: string,
+  header: SessionHeaderRecord,
+): string {
+  const line = `${JSON.stringify(header)}\n`;
+  const byteLength = Buffer.byteLength(line, "utf8");
+  if (byteLength > SESSION_LEDGER_HEADER_READ_MAX_BYTES) {
+    sessionStoreError(
+      `Error: cannot create session ledger ${filePath}: session header is too large (${formatByteCount(byteLength)}; limit ${formatByteCount(SESSION_LEDGER_HEADER_READ_MAX_BYTES)}).`,
+    );
+  }
+  return line;
+}
+
 function writeInitialHeader(
   filePath: string,
   header: SessionHeaderRecord,
 ): void {
+  const headerLine = serializeSessionHeaderLine(filePath, header);
   let fd: number | undefined;
   try {
     mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
     fd = openSync(filePath, "wx", 0o600);
-    writeFileSync(fd, `${JSON.stringify(header)}\n`, "utf8");
+    writeFileSync(fd, headerLine, "utf8");
     fsyncSync(fd);
   } catch (error) {
     if (hasNodeErrorCode(error, "EEXIST")) {
