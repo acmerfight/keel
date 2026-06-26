@@ -525,6 +525,102 @@ describe("Apply Patch Tool Race Handling", () => {
     }
   });
 
+  test(`Given a delete target opens through an ignored workspace symlink,
+    When apply_patch rechecks the opened descriptor path,
+    Then it rejects before recording or removing ignored content`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-delete-open-ignore-"),
+    );
+    const targetPath = join(workspace, "note.txt");
+    const ignoredPath = join(workspace, "private");
+    const ignoredTargetPath = join(ignoredPath, "note.txt");
+    await mkdir(ignoredPath);
+    await writeFile(join(workspace, ".gitignore"), "private/\n", "utf8");
+    await writeFile(targetPath, "old\n", "utf8");
+    await writeFile(ignoredTargetPath, "ignored\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: note.txt",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let swapped = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      openSync: (path, flags, mode) => {
+        if (!swapped && String(path).endsWith("note.txt")) {
+          swapped = true;
+          actualFs.rmSync(targetPath, { force: true });
+          actualFs.symlinkSync(ignoredTargetPath, targetPath);
+        }
+        return actualFs.openSync(path, flags, mode);
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: () => true },
+          }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+      expect(await readFile(ignoredTargetPath, "utf8")).toBe("ignored\n");
+      expect(swapped).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete target opens as a different workspace file after initial read validation,
+    When apply_patch rechecks read-before-edit on the opened descriptor path,
+    Then it rejects without deleting the unread file`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-delete-open-unread-"),
+    );
+    const targetPath = join(workspace, "note.txt");
+    const alternatePath = join(workspace, "alternate.txt");
+    await writeFile(targetPath, "old\n", "utf8");
+    await writeFile(alternatePath, "alternate\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: note.txt",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const readTargetPath = actualFs.realpathSync(targetPath);
+    let swapped = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      openSync: (path, flags, mode) => {
+        if (!swapped && String(path) === readTargetPath) {
+          swapped = true;
+          actualFs.rmSync(targetPath, { force: true });
+          actualFs.symlinkSync(alternatePath, targetPath);
+        }
+        return actualFs.openSync(path, flags, mode);
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: (path) => path === readTargetPath },
+          }),
+        "tool_file_not_read",
+        "file has not been read",
+      );
+      expect(await readFile(alternatePath, "utf8")).toBe("alternate\n");
+      expect(swapped).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an update target opens as a different workspace file after initial read validation,
     When apply_patch rechecks read-before-edit on the opened descriptor path,
     Then it rejects without patching the unread file`, async () => {
@@ -567,6 +663,114 @@ describe("Apply Patch Tool Race Handling", () => {
         "file has not been read",
       );
       expect(await readFile(alternatePath, "utf8")).toBe("old\n");
+      expect(swapped).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a validated delete target resolves to an ignored workspace path before removal,
+    When apply_patch performs the delete access check,
+    Then it rejects without deleting ignored content`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-delete-apply-ignore-"),
+    );
+    const parentPath = join(workspace, "race");
+    const backupParentPath = join(workspace, "race-backup");
+    const ignoredPath = join(workspace, "private");
+    const targetPath = join(parentPath, "note.txt");
+    const ignoredTargetPath = join(ignoredPath, "note.txt");
+    await writeFile(join(workspace, ".gitignore"), "private/\n", "utf8");
+    await mkdir(parentPath);
+    await mkdir(ignoredPath);
+    await writeFile(targetPath, "old\n", "utf8");
+    await writeFile(ignoredTargetPath, "ignored\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: race/note.txt",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const readTargetPath = actualFs.realpathSync(targetPath);
+    let targetRealpathCalls = 0;
+    let swapped = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      realpathSync: (path) => {
+        if (String(path) === readTargetPath) {
+          targetRealpathCalls += 1;
+          if (!swapped && targetRealpathCalls === 4) {
+            swapped = true;
+            actualFs.renameSync(parentPath, backupParentPath);
+            actualFs.symlinkSync(ignoredPath, parentPath, "dir");
+          }
+        }
+        return actualFs.realpathSync(path);
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: (path) => path === readTargetPath },
+          }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+      expect(await readFile(ignoredTargetPath, "utf8")).toBe("ignored\n");
+      expect(swapped).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a validated delete target is swapped to another workspace file before removal,
+    When apply_patch checks the target identity at access time,
+    Then it rejects without deleting the alternate file`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-delete-swap-"));
+    const targetPath = join(workspace, "note.txt");
+    const backupTargetPath = join(workspace, "note-original.txt");
+    const alternatePath = join(workspace, "alternate.txt");
+    await writeFile(targetPath, "old\n", "utf8");
+    await writeFile(alternatePath, "alternate\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: note.txt",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const readTargetPath = actualFs.realpathSync(targetPath);
+    let targetStatCalls = 0;
+    let swapped = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      statSync: (path) => {
+        if (String(path) === readTargetPath) {
+          targetStatCalls += 1;
+          if (!swapped && targetStatCalls === 4) {
+            swapped = true;
+            actualFs.renameSync(targetPath, backupTargetPath);
+            actualFs.symlinkSync(alternatePath, targetPath);
+          }
+        }
+        return actualFs.statSync(path);
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: (path) => path === readTargetPath },
+          }),
+        "tool_path_outside_workspace",
+        "path changed outside the verified workspace target",
+      );
+      expect(await readFile(alternatePath, "utf8")).toBe("alternate\n");
+      expect(await readFile(backupTargetPath, "utf8")).toBe("old\n");
       expect(swapped).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });

@@ -99,6 +99,81 @@ describe("Provider Config", () => {
     });
   });
 
+  test(`Given the fake provider receives the remove demo prompt,
+    When it streams through the read and delete-patch turns,
+    Then it requests apply_patch with a Delete File operation`, async () => {
+    // Given
+    const resolved = resolveProvider(
+      "remove obsolete.txt",
+      runtime({ KEEL_PROVIDER: "fake" }),
+    );
+
+    // When
+    const readEvents = await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [],
+        signal: new AbortController().signal,
+      }),
+    );
+    const patchEvents = await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [
+          {
+            role: "tool",
+            toolCallId: "fake_read_before_patch",
+            content: "obsolete\n",
+          },
+        ],
+        signal: new AbortController().signal,
+      }),
+    );
+
+    // Then
+    expect(readEvents).toContainEqual({
+      type: "tool_call",
+      id: "fake_read_before_patch",
+      tool: "read",
+      path: "obsolete.txt",
+    });
+    expect(patchEvents).toContainEqual({
+      type: "tool_call",
+      id: "fake_apply_patch",
+      tool: "apply_patch",
+      patch: [
+        "*** Begin Patch",
+        "*** Delete File: obsolete.txt",
+        "*** End Patch",
+      ].join("\n"),
+    });
+  });
+
+  test(`Given the fake provider receives a remove demo without a path,
+    When it streams the response,
+    Then it falls back to the plain fake reply`, async () => {
+    // Given
+    const resolved = resolveProvider(
+      "remove ",
+      runtime({ KEEL_PROVIDER: "fake" }),
+    );
+
+    // When
+    const events = await collect(
+      resolved.provider.stream({
+        systemPrompt: "",
+        messages: [],
+        signal: new AbortController().signal,
+      }),
+    );
+
+    // Then
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Hello from fake provider.",
+    });
+  });
+
   test(`Given the fake provider cannot read the apply patch demo target,
     When it receives the failed read result,
     Then it returns the tool failure instead of requesting apply_patch`, async () => {

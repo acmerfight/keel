@@ -403,6 +403,39 @@ describe("CLI Undo", () => {
     }
   });
 
+  test(`Given Keel deletes a file through apply_patch in a git workspace,
+    When user runs the undo command,
+    Then the deleted file is restored`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    await commitFile(workspace, "obsolete.txt", "obsolete\n");
+
+    try {
+      const patch = await runCli(["remove obsolete.txt"], {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "fake" },
+      });
+      expect(patch.exitCode).toBe(0);
+      await expect(
+        readFile(join(workspace, "obsolete.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+
+      // When
+      const undo = await runCli(["/undo"], { cwd: workspace });
+
+      // Then
+      expect(undo.exitCode).toBe(0);
+      expect(undo.stdout).toBe("Restored 1 files\n");
+      expect(await readFile(join(workspace, "obsolete.txt"), "utf8")).toBe(
+        "obsolete\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the user's git index has staged changes,
     When Keel edits and undoes a different file,
     Then the staged changes are preserved`, async () => {

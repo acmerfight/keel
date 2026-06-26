@@ -95,6 +95,47 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a patch deletes one read text file,
+    When apply_patch validates and applies the patch,
+    Then it removes the file and records a delete checkpoint`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-delete-");
+    const workspacePath = await realpath(workspace);
+    const targetPath = join(workspacePath, "obsolete.txt");
+    await writeFile(targetPath, "obsolete\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: obsolete.txt",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (path) => path === targetPath,
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nD obsolete.txt");
+      expect(result.targetPaths).toEqual([targetPath]);
+      expect(result.checkpointOperations).toEqual([
+        {
+          operation: "delete",
+          filePath: targetPath,
+          beforeContent: "obsolete\n",
+          mode: expect.any(Number),
+        },
+      ]);
+      await expect(readFile(targetPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a patch updates a UTF-8 BOM file and adds content ending with a blank line,
     When apply_patch writes both targets,
     Then it preserves the BOM and does not append an extra newline`, async () => {
@@ -369,6 +410,39 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a patch delete target has not been read,
+    When apply_patch validates the patch,
+    Then it rejects the delete before removing the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "obsolete.txt"), "obsolete\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: obsolete.txt",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: () => false,
+            },
+          }),
+        "tool_file_not_read",
+        "file has not been read: obsolete.txt",
+        'Use read(path: "obsolete.txt")',
+      );
+      expect(await readFile(join(workspace, "obsolete.txt"), "utf8")).toBe(
+        "obsolete\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a patch update target is binary,
     When apply_patch reads the target as editable text,
     Then it reports an apply_patch binary-file failure`, async () => {
@@ -398,6 +472,38 @@ describe("Apply Patch Tool", () => {
         "tool_binary_file",
         "apply_patch failed: binary file is not supported: image.png",
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch delete target is binary,
+    When apply_patch reads the target for an undo checkpoint,
+    Then it rejects the delete without removing the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    const targetPath = join(workspace, "image.png");
+    await writeFile(targetPath, Buffer.from([0x89, 0x50]));
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: image.png",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (path) => path === join(workspacePath, "image.png"),
+            },
+          }),
+        "tool_binary_file",
+        "apply_patch failed: binary file is not supported: image.png",
+      );
+      expect(await pathExists(targetPath)).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -437,6 +543,38 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a patch delete target is too large,
+    When apply_patch reads the target for an undo checkpoint,
+    Then it rejects the delete without removing the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    const targetPath = join(workspace, "large.txt");
+    await writeFile(targetPath, "x".repeat(10_485_761));
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: large.txt",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (path) => path === join(workspacePath, "large.txt"),
+            },
+          }),
+        "tool_file_too_large",
+        "file is too large: large.txt",
+      );
+      expect(await pathExists(targetPath)).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given malformed patch syntax,
     When apply_patch parses the patch,
     Then it reports a recoverable patch error for the invalid operation`, async () => {
@@ -464,9 +602,9 @@ describe("Apply Patch Tool", () => {
         message: "has no content lines",
       },
       {
-        patch: "*** Begin Patch\n*** Delete File: old.txt\n*** End Patch",
-        code: "tool_unsupported_patch_operation",
-        message: "Delete File is not supported",
+        patch: "*** Begin Patch\n*** Delete File: \n*** End Patch",
+        code: "tool_invalid_patch",
+        message: "patch file header is missing a path",
       },
       {
         patch:
@@ -557,6 +695,38 @@ describe("Apply Patch Tool", () => {
         "tool_not_file",
         "not a file: src",
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch delete target is a directory,
+    When apply_patch validates the delete target,
+    Then it rejects the target as not a file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await mkdir(join(workspace, "src"));
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: src",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "src"),
+            },
+          }),
+        "tool_not_file",
+        "not a file: src",
+      );
+      expect(await pathExists(join(workspace, "src"))).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -653,6 +823,42 @@ describe("Apply Patch Tool", () => {
       "@@",
       "-old",
       "+newer",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "note.txt"),
+            },
+          }),
+        "tool_invalid_patch",
+        "multiple operations target note.txt",
+      );
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe("old\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch updates and deletes the same file,
+    When apply_patch validates the prepared operations,
+    Then it rejects the duplicate target before writing the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "note.txt"), "old\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: note.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** Delete File: note.txt",
       "*** End Patch",
     ].join("\n");
 
@@ -818,6 +1024,50 @@ describe("Apply Patch Tool", () => {
         "ignored path: link/secret.txt",
       );
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe("old\n");
+      await expect(
+        readFile(join(workspace, "private", "secret.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch add target resolves through a symlink to a gitignored directory after an earlier delete,
+    When apply_patch rejects the later add during execution,
+    Then it rolls back the earlier delete`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, ".gitignore"), "private/\n", "utf8");
+    await writeFile(join(workspace, "obsolete.txt"), "obsolete\n", "utf8");
+    await mkdir(join(workspace, "private"));
+    await symlink("private", join(workspace, "link"));
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: obsolete.txt",
+      "*** Add File: link/secret.txt",
+      "+secret",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "obsolete.txt"),
+            },
+          }),
+        "tool_path_ignored",
+        "ignored path: link/secret.txt",
+      );
+      expect(await readFile(join(workspace, "obsolete.txt"), "utf8")).toBe(
+        "obsolete\n",
+      );
       await expect(
         readFile(join(workspace, "private", "secret.txt"), "utf8"),
       ).rejects.toMatchObject({

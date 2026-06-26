@@ -302,6 +302,23 @@ function parseCliPatchDemo(message: string): CliPatchRequest | null {
   };
 }
 
+function parseCliRemoveDemo(message: string): CliPatchRequest | null {
+  const prefix = "remove ";
+  if (!message.startsWith(prefix)) return null;
+
+  const path = message.slice(prefix.length);
+  if (path === "") return null;
+
+  return {
+    readPath: path,
+    patch: [
+      "*** Begin Patch",
+      `*** Delete File: ${path}`,
+      "*** End Patch",
+    ].join("\n"),
+  };
+}
+
 const ZERO_USAGE = {
   inputTokens: 0,
   cachedInputTokens: 0,
@@ -570,7 +587,8 @@ export function inspectProviderConfig(
 }
 
 function createCliFakeProvider(userMessage: string): LLMProvider {
-  const patch = parseCliPatchDemo(userMessage);
+  const patch =
+    parseCliPatchDemo(userMessage) ?? parseCliRemoveDemo(userMessage);
   if (patch !== null) {
     let turn = 0;
     return {
