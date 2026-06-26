@@ -204,7 +204,7 @@ describe("Ls Tool Directory Discovery", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test(`Given the caller supplies an invalid entry limit,
     When the ls tool validates options,

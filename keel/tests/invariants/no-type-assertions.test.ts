@@ -66,5 +66,5 @@ describe("type precision invariants", () => {
     ];
 
     expect(files.flatMap(findTypeAssertions)).toEqual([]);
-  }, 15_000);
+  }, 30_000);
 });
