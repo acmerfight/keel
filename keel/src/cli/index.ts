@@ -60,6 +60,13 @@ import {
   sessionStoredMessages,
 } from "./session-store.ts";
 import { writeRunTranscript } from "./transcript.ts";
+import {
+  formatWorkflowSkillList,
+  formatWorkflowSkillListWarnings,
+  listWorkflowSkills,
+  loadWorkflowSkill,
+  WorkflowSkillError,
+} from "./workflow-skills.ts";
 
 interface CliInput extends NodeJS.ReadableStream {
   readonly isTTY?: boolean;
@@ -338,6 +345,25 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
     }
   }
 
+  if (cliArgs.command === "skills") {
+    try {
+      const result = listWorkflowSkills(runtime.cwd());
+      runtime.writeStdout(formatWorkflowSkillList(result.skills));
+      const warningText = formatWorkflowSkillListWarnings(result.warnings);
+      if (warningText !== "") {
+        runtime.writeStderr(warningText);
+      }
+      return 0;
+    } catch (error) {
+      /* v8 ignore next 3: unexpected workflow skill listing failures are allowed to escape. */
+      if (!(error instanceof WorkflowSkillError)) {
+        throw error;
+      }
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+  }
+
   if (cliArgs.command === "sessions") {
     if (cliArgs.mode === "fork") {
       let sourceSessionLock: SessionLock | undefined;
@@ -444,6 +470,12 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
   if (!userMessage && cliArgs.transcriptFile !== undefined) {
     runtime.writeStderr(
       "Error: --transcript is only supported for one-shot runs.\n",
+    );
+    return 1;
+  }
+  if (!userMessage && cliArgs.skillName !== undefined) {
+    runtime.writeStderr(
+      "Error: --skill is only supported for one-shot runs.\n",
     );
     return 1;
   }
@@ -798,6 +830,12 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
     abortController.abort();
   };
   try {
+    const workspace = runtime.cwd();
+    const projectInstructions = loadProjectInstructions(workspace);
+    const workflowSkill =
+      cliArgs.skillName === undefined
+        ? undefined
+        : loadWorkflowSkill(workspace, cliArgs.skillName);
     const resolved = resolveProvider(userMessage, runtime, {
       ...(cliArgs.providerId !== undefined
         ? { providerId: cliArgs.providerId }
@@ -806,14 +844,13 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
     });
     runtime.onSigint(abort);
 
-    const workspace = runtime.cwd();
-    const projectInstructions = loadProjectInstructions(workspace);
     const startedAt = runtime.now();
     const bashPermission = oneShotBashPermissionPolicy(cliArgs.bashMode);
     const systemPrompt = buildAgentSystemPrompt({
       workspace,
       platform: runtime.platform,
       ...(projectInstructions !== undefined ? { projectInstructions } : {}),
+      ...(workflowSkill !== undefined ? { workflowSkill } : {}),
     });
     let transcriptMessages: readonly Message[] | undefined;
     const stream = runAgent({
@@ -885,6 +922,10 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
       return 1;
     }
     if (error instanceof ProjectInstructionsError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof WorkflowSkillError) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
