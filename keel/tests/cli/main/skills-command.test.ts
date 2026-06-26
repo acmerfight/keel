@@ -267,6 +267,201 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given a selected workflow skill has local resource files,
+    When the CLI starts a one-shot run,
+    Then the provider-visible system prompt includes bounded resource paths without loading their contents`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-resources-"),
+    );
+    const transcriptPath = join(workspace, "run.jsonl");
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a PR using the project checklist.",
+      "Read references/checklist.md before deciding what to test.",
+    );
+    await mkdir(join(workspace, ".agents", "skills", "review", "references"), {
+      recursive: true,
+    });
+    await mkdir(
+      join(workspace, ".agents", "skills", "review", "references", "deep"),
+      {
+        recursive: true,
+      },
+    );
+    await mkdir(join(workspace, ".agents", "skills", "review", "scripts"), {
+      recursive: true,
+    });
+    await mkdir(join(workspace, ".agents", "skills", "review", "assets"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(
+        workspace,
+        ".agents",
+        "skills",
+        "review",
+        "references",
+        "checklist.md",
+      ),
+      "Hidden checklist body.",
+    );
+    await writeFile(
+      join(
+        workspace,
+        ".agents",
+        "skills",
+        "review",
+        "references",
+        "deep",
+        "guide.md",
+      ),
+      "Hidden nested guide body.",
+    );
+    await writeFile(
+      join(
+        workspace,
+        ".agents",
+        "skills",
+        "review",
+        "references",
+        "bad\\name.md",
+      ),
+      "Hidden invalid resource path body.",
+    );
+    await writeFile(
+      join(workspace, ".agents", "skills", "review", "scripts", "verify.ts"),
+      "console.log('hidden script body');",
+    );
+    await writeFile(
+      join(workspace, ".agents", "skills", "review", "assets", "template.txt"),
+      "Hidden asset body.",
+    );
+    await writeFile(
+      join(workspace, ".agents", "skills", "review", "notes.md"),
+      "Do not list top-level scratch files.",
+    );
+    await writeFile(join(workspace, "outside.md"), "outside");
+    await symlink(
+      join(workspace, "outside.md"),
+      join(
+        workspace,
+        ".agents",
+        "skills",
+        "review",
+        "references",
+        "outside.md",
+      ),
+    );
+    const fixture = createRuntime(
+      ["--transcript", transcriptPath, "--skill", "review", "review PR 123"],
+      {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "fake" },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const [header] = (await readFile(transcriptPath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(header.systemPrompt).toContain(
+        "Skill base directory: .agents/skills/review",
+      );
+      expect(header.systemPrompt).toContain(
+        "Relative paths in this workflow skill resolve from that directory.",
+      );
+      expect(header.systemPrompt).toContain("- references/checklist.md");
+      expect(header.systemPrompt).toContain("- references/deep/guide.md");
+      expect(header.systemPrompt).toContain("- scripts/verify.ts");
+      expect(header.systemPrompt).toContain("- assets/template.txt");
+      expect(
+        header.systemPrompt.indexOf("- references/checklist.md"),
+      ).toBeLessThan(header.systemPrompt.indexOf("- scripts/verify.ts"));
+      expect(header.systemPrompt.indexOf("- scripts/verify.ts")).toBeLessThan(
+        header.systemPrompt.indexOf("- assets/template.txt"),
+      );
+      expect(header.systemPrompt).not.toContain("Hidden checklist body.");
+      expect(header.systemPrompt).not.toContain("Hidden nested guide body.");
+      expect(header.systemPrompt).not.toContain("bad\\name.md");
+      expect(header.systemPrompt).not.toContain(
+        "Hidden invalid resource path body.",
+      );
+      expect(header.systemPrompt).not.toContain("hidden script body");
+      expect(header.systemPrompt).not.toContain("Hidden asset body.");
+      expect(header.systemPrompt).not.toContain("notes.md");
+      expect(header.systemPrompt).not.toContain("outside.md");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a selected workflow skill has more resource files than the prompt cap,
+    When the CLI starts a one-shot run,
+    Then the provider-visible system prompt advertises no more than the bounded resource path limit`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-resource-cap-"),
+    );
+    const transcriptPath = join(workspace, "run.jsonl");
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a PR using the project checklist.",
+      "Use relevant files under references/.",
+    );
+    const referencesDir = join(
+      workspace,
+      ".agents",
+      "skills",
+      "review",
+      "references",
+    );
+    await mkdir(referencesDir, { recursive: true });
+    for (let index = 0; index < 55; index++) {
+      await writeFile(
+        join(referencesDir, `resource-${String(index).padStart(2, "0")}.md`),
+        `Resource ${index}`,
+      );
+    }
+    const fixture = createRuntime(
+      ["--transcript", transcriptPath, "--skill", "review", "review PR 123"],
+      {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "fake" },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const [header] = (await readFile(transcriptPath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const resourcePathLines = header.systemPrompt
+        .split("\n")
+        .filter((line: string) => line.startsWith("- references/resource-"));
+      expect(resourcePathLines).toHaveLength(50);
+      expect(new Set(resourcePathLines).size).toBe(50);
+      expect(resourcePathLines).toEqual(resourcePathLines.toSorted());
+      expect(header.systemPrompt).not.toContain("Resource 0");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a local workflow skill is selected with equals syntax,
     When the CLI starts the agent,
     Then the provider-visible system prompt includes that skill body`, async () => {
@@ -299,6 +494,110 @@ describe("CLI Main - Skills", () => {
         .map((line) => JSON.parse(line));
       expect(header.systemPrompt).toContain(
         "Workflow skill review from .agents/skills/review/SKILL.md",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a workflow skill is selected for an interactive run,
+    When the user asks for the active skill,
+    Then the CLI prints the selected skill without resolving a provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-status-"));
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a PR using the project checklist.",
+      "Read PR comments first.",
+    );
+    const input = new PassThrough();
+    input.end("/skill\n");
+    const fixture = createRuntime(["--skill", "review"], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_PROVIDER: "deepseek",
+        DEEPSEEK_API_KEY: "",
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe(
+        "Workflow skill: review (.agents/skills/review/SKILL.md)\n",
+      );
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given no workflow skill is selected for an interactive run,
+    When the user asks for the active skill,
+    Then the CLI reports that no workflow skill is bound without resolving a provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-no-skill-status-"),
+    );
+    const input = new PassThrough();
+    input.end("/skill\n");
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_PROVIDER: "deepseek",
+        DEEPSEEK_API_KEY: "",
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("No workflow skill selected.\n");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user passes arguments to the interactive skill status command,
+    When the command is read,
+    Then the CLI rejects the arguments without resolving a provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-status-args-"),
+    );
+    const input = new PassThrough();
+    input.end("/skill review\n");
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_PROVIDER: "deepseek",
+        DEEPSEEK_API_KEY: "",
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Error: /skill does not accept arguments.\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

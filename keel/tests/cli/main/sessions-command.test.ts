@@ -517,6 +517,77 @@ describe("CLI Main - Sessions Command", () => {
     }
   });
 
+  test(`Given persisted sessions have workflow skills,
+    When the user lists sessions,
+    Then the CLI shows each bound skill name and path without printing the skill body`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const workflowSkill = {
+      name: "review",
+      relativePath: ".agents/skills/review/SKILL.md",
+      resourcePaths: ["references/checklist.md"],
+      content: "Secret review workflow body.",
+    };
+    await writeSessionLedger({
+      home,
+      id: "skilled",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      workflowSkill,
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:01.000Z", [
+          { role: "user", content: "review PR" },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "skilled-fork",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      workflowSkill,
+      graph: endForkGraph({
+        sessionId: "skilled-fork",
+        parentSessionId: "skilled",
+        sourceLastMessageId: "msg_append-2026-01-01T00_00_01_000Z_1",
+        sourceOrdinal: 1,
+      }),
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:03.000Z", [
+          { role: "user", content: "continue review" },
+        ]),
+      ],
+    });
+    const fixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain(
+        "   workflow skill: review (.agents/skills/review/SKILL.md)\n",
+      );
+      expect(stdout).toContain(
+        "     workflow skill: review (.agents/skills/review/SKILL.md)\n",
+      );
+      expect(stdout).not.toContain("Secret review workflow body.");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given one session ledger is damaged,
     When the user lists sessions,
     Then the CLI warns and still shows the valid sessions`, async () => {

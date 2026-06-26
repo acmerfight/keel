@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { WorkflowSkill } from "../agent/prompt.ts";
 import type { Message } from "../llm/types.ts";
 
 export function appendSessionRecordLine(
@@ -199,6 +200,7 @@ export async function writeSessionLedger(options: {
   readonly headerId?: string;
   readonly workspace: string;
   readonly createdAt: string;
+  readonly workflowSkill?: WorkflowSkill;
   readonly parentSessionId?: string;
   readonly graph?:
     | ReturnType<typeof rootGraph>
@@ -223,6 +225,9 @@ export async function writeSessionLedger(options: {
           (options.parentSessionId === undefined
             ? rootGraph(headerId)
             : forkGraph(headerId, options.parentSessionId)),
+        ...(options.workflowSkill !== undefined
+          ? { workflowSkill: options.workflowSkill }
+          : {}),
       }),
       ...(options.records ?? []),
     ].join("\n")}\n`,

@@ -6,6 +6,7 @@ export interface ProjectInstructions {
 export interface WorkflowSkill {
   readonly relativePath: string;
   readonly name: string;
+  readonly resourcePaths: readonly string[];
   readonly content: string;
 }
 
@@ -23,6 +24,21 @@ function quotedInstructionLines(content: string): string {
     .split("\n")
     .map((line) => `> ${line}`)
     .join("\n");
+}
+
+function posixDirectoryName(path: string): string {
+  const slashIndex = path.lastIndexOf("/");
+  return slashIndex < 0 ? "." : path.slice(0, slashIndex);
+}
+
+function workflowSkillResourceLines(skill: WorkflowSkill): string {
+  if (skill.resourcePaths.length === 0) {
+    return "Available skill resource paths: none discovered under references/, scripts/, or assets/.";
+  }
+  return [
+    "Available skill resource paths (bounded and not preloaded; read relevant files only when needed):",
+    ...skill.resourcePaths.map((path) => `- ${path}`),
+  ].join("\n");
 }
 
 export function buildAgentSystemPrompt(
@@ -46,6 +62,10 @@ ${quotedInstructionLines(projectInstructions.content)}`;
       : `
 Workflow skill ${workflowSkill.name} from ${workflowSkill.relativePath}:
 The user directly selected this workflow skill for this run. Follow it unless it conflicts with direct system, developer, or current user request instructions, or with explicit safety boundaries.
+Skill base directory: ${posixDirectoryName(workflowSkill.relativePath)}
+Relative paths in this workflow skill resolve from that directory.
+When using tools, join skill resource paths to the skill base directory.
+${workflowSkillResourceLines(workflowSkill)}
 Each workflow skill instruction line is quoted below.
 
 ${quotedInstructionLines(workflowSkill.content)}`;

@@ -69,6 +69,15 @@ function formatActiveModel(resolved: InteractiveResolvedProvider): string {
   return `${resolved.providerId}/${resolved.model}`;
 }
 
+function formatActiveWorkflowSkill(
+  workflowSkill: InteractiveSessionOptions["workflowSkill"],
+): string {
+  if (workflowSkill === undefined) {
+    return "No workflow skill selected.\n";
+  }
+  return `Workflow skill: ${workflowSkill.name} (${workflowSkill.relativePath})\n`;
+}
+
 function modelSwitchUnknownContextMessage(
   target: InteractiveResolvedProvider,
 ): string | null {
@@ -456,6 +465,11 @@ export async function runInteractiveSession(
         } catch (error) {
           options.writeStderr(formatInteractiveCommandFailure(error));
         }
+        consumeQueuedInputLines([rawInput]);
+        continue;
+      }
+      if (interactiveCommand?.kind === "skill") {
+        options.writeStdout(formatActiveWorkflowSkill(options.workflowSkill));
         consumeQueuedInputLines([rawInput]);
         continue;
       }

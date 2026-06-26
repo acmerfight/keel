@@ -213,6 +213,7 @@ describe("Session Store", () => {
     const workflowSkill = {
       name: "review",
       relativePath: ".agents/skills/review/SKILL.md",
+      resourcePaths: ["references/checklist.md"],
       content: "Read PR comments first.",
     };
 
@@ -260,6 +261,10 @@ describe("Session Store", () => {
     const workflowSkill = {
       name: "review",
       relativePath: ".agents/skills/review/SKILL.md",
+      resourcePaths: [
+        "references/sk-secret-213.md",
+        "scripts/sk-secret-214.ts",
+      ],
       content:
         "Use API_KEY=sk-secret-213 and Bearer live-secret-213-token during review.",
     };
@@ -286,6 +291,12 @@ describe("Session Store", () => {
       expect(ledger).not.toContain("live-secret-213-token");
       expect(ledger).toContain("[REDACTED_SECRET]");
       expect(resumed.workflowSkill?.content).toContain("[REDACTED_SECRET]");
+      expect(resumed.workflowSkill?.resourcePaths).toContain(
+        "references/[REDACTED_SECRET].md",
+      );
+      expect(resumed.workflowSkill?.resourcePaths).toContain(
+        "scripts/[REDACTED_SECRET].ts",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -301,6 +312,7 @@ describe("Session Store", () => {
     const workflowSkill = {
       name: "review",
       relativePath: ".agents/skills/review/SKILL.md",
+      resourcePaths: [],
       content: '"'.repeat(70 * 1024),
     };
 
@@ -322,6 +334,59 @@ describe("Session Store", () => {
           workflowSkill,
         }),
       ).toThrow("session header is too large");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a persisted workflow skill resource path escapes the skill resource directories,
+    When the session is resumed,
+    Then the session store rejects the invalid header before restoring context`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+
+    try {
+      const session = createSessionStore({
+        sessionId: "invalid-skill-resource-path",
+        workspace,
+        runtime: runtime(home),
+      });
+      await writeFile(
+        session.filePath,
+        `${JSON.stringify({
+          schemaVersion: 2,
+          type: "session",
+          id: session.id,
+          createdAt: "1970-01-01T00:00:00.000Z",
+          workspace: session.workspace,
+          graph: rootGraph(session.id),
+          workflowSkill: {
+            name: "review",
+            relativePath: ".agents/skills/review/SKILL.md",
+            resourcePaths: ["../secret.md"],
+            content: "Review workflow body.",
+          },
+        })}\n`,
+        "utf8",
+      );
+
+      // When / Then
+      expect(() =>
+        resumeSessionStore({
+          sessionId: "invalid-skill-resource-path",
+          workspace,
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow(SessionStoreError);
+      expect(() =>
+        resumeSessionStore({
+          sessionId: "invalid-skill-resource-path",
+          workspace,
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow("line 1 is not a valid session header");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
