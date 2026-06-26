@@ -71,6 +71,37 @@ describe("Agent System Prompt", () => {
     );
   });
 
+  test(`Given a user-selected workflow skill is available,
+    When the agent's system prompt is built,
+    Then it includes the skill as explicit workflow guidance for this run`, () => {
+    // Given
+    const workflowSkill = {
+      relativePath: ".agents/skills/review/SKILL.md",
+      name: "review",
+      content:
+        "Read the PR comments first.\nFollow the project testing rules before reporting.",
+    };
+
+    // When
+    const prompt = buildAgentSystemPrompt({
+      workspace: "/tmp/project-with-skill",
+      platform: "linux",
+      workflowSkill,
+    });
+
+    // Then
+    expect(prompt).toContain(
+      "Workflow skill review from .agents/skills/review/SKILL.md",
+    );
+    expect(prompt).toContain("> Read the PR comments first.");
+    expect(prompt).toContain(
+      "> Follow the project testing rules before reporting.",
+    );
+    expect(prompt).toMatch(
+      /Workflow skill[\s\S]*directly selected[\s\S]*current user request/i,
+    );
+  });
+
   test(`Given project instructions contain delimiter-like text,
     When the agent's system prompt is built,
     Then every project instruction line remains quoted as lower-priority guidance`, () => {

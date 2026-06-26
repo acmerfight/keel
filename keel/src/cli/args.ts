@@ -54,6 +54,7 @@ type SessionsCliArgs = SessionsListCliArgs | SessionsForkCliArgs;
 export type CliArgs =
   | DoctorCliArgs
   | { readonly command: "undo" }
+  | { readonly command: "skills" }
   | SessionsCliArgs
   | EvalCliArgs
   | {
@@ -70,6 +71,7 @@ export type CliArgs =
       readonly forkPoints?: boolean;
       readonly providerId?: ProviderId;
       readonly model?: string;
+      readonly skillName?: string;
     };
 
 type ParseResult<T> =
@@ -85,11 +87,12 @@ function parseError(message: string): ParseResult<never> {
 }
 
 export const USAGE = [
-  "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] <message>",
+  "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] [--skill <name>] <message>",
   "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--session <id> | --resume <id> [--fork-points | --fork <new-id> [--fork-before-message <id>]]]",
   "       keel --doctor [--offline] [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
   "       keel sessions",
   "       keel sessions fork <source-id> <target-id> [--before-message <id>]",
+  "       keel skills",
   "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
   "       keel eval compare --base <old.jsonl> --head <new.jsonl>",
   "       keel /undo",
@@ -98,6 +101,7 @@ export const USAGE = [
   "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Approved or trusted command output may be sent to the provider unredacted. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
   "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
   "--transcript writes a best-effort redacted provider-visible one-shot transcript as schema-versioned JSONL. Live provider requests are not redacted.",
+  "--skill loads .agents/skills/<name>/SKILL.md as explicit workflow guidance for the current one-shot run.",
   "--session/--resume persist interactive provider context with best-effort at-rest redaction. Live provider requests may still include raw user and tool content.",
   "--fork-points lists restored user message ids for sessions fork --before-message; it requires --resume.",
   "--fork-before-message cuts a fork before the restored message id; it requires --resume and --fork.",
@@ -153,6 +157,10 @@ function parseProviderId(raw: string | undefined): ParseResult<ProviderId> {
 
 function parseModel(raw: string | undefined): ParseResult<string> {
   return requireOptionValue("--model", raw);
+}
+
+function parseSkillName(raw: string | undefined): ParseResult<string> {
+  return requireOptionValue("--skill", raw);
 }
 
 function parseTrials(raw: string | undefined): ParseResult<number> {
@@ -494,6 +502,13 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
     return parseSessionsArgs(args.slice(1));
   }
 
+  if (args[0] === "skills") {
+    if (args.length > 1) {
+      return parseError(`Error: unknown skills option "${args[1]}"`);
+    }
+    return parseOk({ command: "skills" });
+  }
+
   if (args[0] === "eval") {
     return parseEvalArgs(args.slice(1));
   }
@@ -511,6 +526,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   let forkPoints = false;
   let providerId: ProviderId | undefined;
   let model: string | undefined;
+  let skillName: string | undefined;
   let userMessage: string | undefined;
   const maxCostPrefix = "--max-cost=";
   const reportPrefix = "--report=";
@@ -522,6 +538,7 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
   const forkBeforeMessagePrefix = "--fork-before-message=";
   const providerPrefix = "--provider=";
   const modelPrefix = "--model=";
+  const skillPrefix = "--skill=";
 
   let skipNext = false;
   for (const [index, arg] of args.entries()) {
@@ -595,6 +612,21 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
       const parsed = parseModel(arg.slice(modelPrefix.length));
       if (!parsed.ok) return parsed;
       model = parsed.value;
+      continue;
+    }
+
+    if (arg === "--skill") {
+      const parsed = parseSkillName(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      skillName = parsed.value;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(skillPrefix)) {
+      const parsed = parseSkillName(arg.slice(skillPrefix.length));
+      if (!parsed.ok) return parsed;
+      skillName = parsed.value;
       continue;
     }
 
@@ -773,5 +805,6 @@ export function parseCliArgs(args: readonly string[]): ParseResult<CliArgs> {
     ...(forkPoints ? { forkPoints } : {}),
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(skillName !== undefined ? { skillName } : {}),
   });
 }

@@ -3,13 +3,20 @@ export interface ProjectInstructions {
   readonly content: string;
 }
 
+export interface WorkflowSkill {
+  readonly relativePath: string;
+  readonly name: string;
+  readonly content: string;
+}
+
 interface BuildAgentSystemPromptOptions {
   readonly workspace: string;
   readonly platform: string;
   readonly projectInstructions?: ProjectInstructions;
+  readonly workflowSkill?: WorkflowSkill;
 }
 
-function quotedProjectInstructions(content: string): string {
+function quotedInstructionLines(content: string): string {
   return content
     .replaceAll("\r\n", "\n")
     .replaceAll("\r", "\n")
@@ -23,6 +30,7 @@ export function buildAgentSystemPrompt(
 ): string {
   const { workspace, platform } = options;
   const projectInstructions = options.projectInstructions;
+  const workflowSkill = options.workflowSkill;
   const projectInstructionsSection =
     projectInstructions === undefined
       ? ""
@@ -31,7 +39,16 @@ Project instructions from ${projectInstructions.relativePath}:
 These instructions are lower priority than direct system, developer, and user messages, including the current user request, but describe workspace conventions you should follow for this project.
 Each project instruction line is quoted below.
 
-${quotedProjectInstructions(projectInstructions.content)}`;
+${quotedInstructionLines(projectInstructions.content)}`;
+  const workflowSkillSection =
+    workflowSkill === undefined
+      ? ""
+      : `
+Workflow skill ${workflowSkill.name} from ${workflowSkill.relativePath}:
+The user directly selected this workflow skill for this run. Follow it unless it conflicts with direct system, developer, or current user request instructions, or with explicit safety boundaries.
+Each workflow skill instruction line is quoted below.
+
+${quotedInstructionLines(workflowSkill.content)}`;
 
   return `You are keel, a coding agent. You complete software engineering tasks by using tools to read, search, and edit files in the user's workspace, then stop once the task is done.
 
@@ -40,6 +57,7 @@ Environment:
 - Platform: ${JSON.stringify(platform)}
 File paths you pass to tools are relative to the workspace root.
 ${projectInstructionsSection}
+${workflowSkillSection}
 
 Tool strategy:
 - Discover before assuming: use grep to locate code, glob to find files by name, ls to inspect directories. Never invent file paths.
