@@ -1,17 +1,26 @@
 import { pathToFileURL } from "node:url";
 import {
-  diffModelMetadataAgainstModelsDev,
-  formatModelMetadataDriftReport,
-  formatUntrackedModelsDevModelsReport,
+  type ClassifyModelMetadataAgainstModelsDevOptions,
+  classifyModelMetadataAgainstModelsDev,
+  formatModelMetadataCheckReport,
+  hasActionableModelMetadataFindings,
+  type ModelMetadataDriftCheckResult,
+  type ModelsDevCatalog,
   parseModelsDevCatalog,
-  unmonitoredKnownModelMetadataEntries,
-  untrackedModelsDevModels,
 } from "../src/core/model-metadata-drift.ts";
 
 const MODELS_DEV_API_URL = "https://models.dev/api.json";
 
-async function fetchModelsDevCatalog(): Promise<unknown> {
-  const response = await fetch(MODELS_DEV_API_URL);
+interface CheckModelMetadataOptions
+  extends ClassifyModelMetadataAgainstModelsDevOptions {
+  readonly apiUrl?: string;
+  readonly fetchCatalog?: () => Promise<unknown>;
+  readonly writeStdout?: (text: string) => void;
+  readonly writeStderr?: (text: string) => void;
+}
+
+async function fetchModelsDevCatalog(apiUrl: string): Promise<unknown> {
+  const response = await fetch(apiUrl);
   if (!response.ok) {
     throw new Error(
       `models.dev request failed: ${response.status} ${response.statusText}`,
@@ -20,23 +29,46 @@ async function fetchModelsDevCatalog(): Promise<unknown> {
   return response.json();
 }
 
-async function runCheckModelMetadata(): Promise<number> {
-  const catalog = parseModelsDevCatalog(await fetchModelsDevCatalog());
-  const drift = diffModelMetadataAgainstModelsDev(catalog);
-  const unmonitored = unmonitoredKnownModelMetadataEntries();
-  const untracked = untrackedModelsDevModels(catalog);
-  console.log(formatModelMetadataDriftReport(drift));
-  if (unmonitored.length > 0) {
-    console.log(`Unmonitored registry entries: ${unmonitored.join(", ")}`);
+function configuredModelsDevApiUrl(apiUrl: string | undefined): string {
+  /* v8 ignore else: the live default URL path is covered by pnpm check:model-metadata, outside Vitest coverage. */
+  if (apiUrl !== undefined) {
+    return apiUrl;
   }
-  if (untracked.length > 0) {
-    console.log(formatUntrackedModelsDevModelsReport(untracked));
+  /* v8 ignore next 1: the live default URL path is covered by pnpm check:model-metadata, outside Vitest coverage. */
+  return MODELS_DEV_API_URL;
+}
+
+export async function runCheckModelMetadata(
+  options: CheckModelMetadataOptions = {},
+): Promise<number> {
+  const writeStdout =
+    options.writeStdout ??
+    ((text: string) => {
+      process.stdout.write(text);
+    });
+  const writeStderr =
+    options.writeStderr ??
+    ((text: string) => {
+      process.stderr.write(text);
+    });
+  const fetchCatalog =
+    options.fetchCatalog ??
+    (() => fetchModelsDevCatalog(configuredModelsDevApiUrl(options.apiUrl)));
+
+  let result: ModelMetadataDriftCheckResult;
+  try {
+    const catalog: ModelsDevCatalog = parseModelsDevCatalog(
+      await fetchCatalog(),
+    );
+    result = classifyModelMetadataAgainstModelsDev(catalog, options);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    writeStderr(`check:model-metadata source failure: ${message}\n`);
+    return 2;
   }
-  return drift.length === 0 &&
-    unmonitored.length === 0 &&
-    untracked.length === 0
-    ? 0
-    : 1;
+
+  writeStdout(`${formatModelMetadataCheckReport(result)}\n`);
+  return hasActionableModelMetadataFindings(result) ? 1 : 0;
 }
 
 function isMainModule(): boolean {
@@ -47,14 +79,9 @@ function isMainModule(): boolean {
   );
 }
 
+/* v8 ignore next 4: direct script execution is covered by CLI smoke tests outside the in-process coverage runtime. */
 if (isMainModule()) {
-  runCheckModelMetadata()
-    .then((exitCode) => {
-      process.exitCode = exitCode;
-    })
-    .catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`check:model-metadata failed: ${message}`);
-      process.exitCode = 1;
-    });
+  runCheckModelMetadata().then((exitCode) => {
+    process.exitCode = exitCode;
+  });
 }
