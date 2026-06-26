@@ -15,6 +15,10 @@ import {
   createGitWorkspace,
   runGit as git,
 } from "../../src/testing/cli-harness.ts";
+import {
+  createProjectInstructionVisibilityState,
+  type ProjectInstructionVisibilityState,
+} from "../../src/tools/scoped-project-instructions.ts";
 
 type PathLike = Parameters<typeof import("node:fs").realpathSync>[0];
 type FsModule = typeof import("node:fs");
@@ -25,6 +29,7 @@ interface FsOverrides {
   readonly openSync?: FsModule["openSync"];
   readonly realpathSync?: (path: PathLike) => string;
   readonly renameSync?: FsModule["renameSync"];
+  readonly rmSync?: FsModule["rmSync"];
   readonly statSync?: (
     path: PathLike,
   ) => ReturnType<typeof import("node:fs").statSync>;
@@ -891,6 +896,309 @@ describe("Apply Patch Tool Race Handling", () => {
       );
       expect(await readFile(ignoredTargetPath, "utf8")).toBe("old\n");
       expect(swapped).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    `Given a move destination parent is swapped to an ignored directory during publish,
+    When apply_patch verifies the published destination,
+    Then it removes the ignored destination before reporting the ignored path`,
+    async () => {
+      // Given
+      const workspace = await mkdtemp(
+        join(tmpdir(), "keel-patch-move-publish-ignore-"),
+      );
+      const parentPath = join(workspace, "race");
+      const backupParentPath = join(workspace, "race-backup");
+      const ignoredPath = join(workspace, "private");
+      const sourcePath = join(workspace, "old.txt");
+      const ignoredTargetPath = join(ignoredPath, "new.txt");
+      await writeFile(join(workspace, ".gitignore"), "private/\n", "utf8");
+      await mkdir(parentPath);
+      await mkdir(ignoredPath);
+      await writeFile(sourcePath, "old\n", "utf8");
+      const patch = [
+        "*** Begin Patch",
+        "*** Update File: old.txt",
+        "*** Move to: race/new.txt",
+        "*** End Patch",
+      ].join("\n");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      let swapped = false;
+      const { executeApplyPatch } = await importApplyPatchWithFs({
+        linkSync: (oldPath, newPath) => {
+          if (
+            !swapped &&
+            String(oldPath).includes(".keel-write-") &&
+            String(newPath).endsWith(join("race", "new.txt"))
+          ) {
+            swapped = true;
+            actualFs.renameSync(parentPath, backupParentPath);
+            actualFs.symlinkSync(ignoredPath, parentPath, "dir");
+            return actualFs.linkSync(
+              join(backupParentPath, basename(String(oldPath))),
+              newPath,
+            );
+          }
+          return actualFs.linkSync(oldPath, newPath);
+        },
+      });
+
+      try {
+        // When / Then
+        expectApplyPatchError(
+          () =>
+            executeApplyPatch(workspace, patch, {
+              readBeforeEdit: { hasRead: () => true },
+            }),
+          "tool_path_ignored",
+          "ignored path",
+        );
+        expect(await readFile(sourcePath, "utf8")).toBe("old\n");
+        expect(await pathExists(ignoredTargetPath)).toBe(false);
+        expect(swapped).toBe(true);
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    `Given a move source parent is swapped to an ignored directory after destination publish,
+    When apply_patch rechecks the source before deleting it,
+    Then it removes the new destination before reporting the ignored source`,
+    async () => {
+      // Given
+      const workspace = await mkdtemp(
+        join(tmpdir(), "keel-patch-move-source-ignore-"),
+      );
+      const sourceParentPath = join(workspace, "src");
+      const backupSourceParentPath = join(workspace, "src-backup");
+      const ignoredPath = join(workspace, "private");
+      const sourcePath = join(sourceParentPath, "old.txt");
+      const ignoredSourcePath = join(ignoredPath, "old.txt");
+      const destinationPath = join(workspace, "new.txt");
+      await writeFile(join(workspace, ".gitignore"), "private/\n", "utf8");
+      await mkdir(sourceParentPath);
+      await mkdir(ignoredPath);
+      await writeFile(sourcePath, "old\n", "utf8");
+      await writeFile(ignoredSourcePath, "ignored\n", "utf8");
+      const patch = [
+        "*** Begin Patch",
+        "*** Update File: src/old.txt",
+        "*** Move to: new.txt",
+        "*** End Patch",
+      ].join("\n");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      let swapped = false;
+      const { executeApplyPatch } = await importApplyPatchWithFs({
+        linkSync: (oldPath, newPath) => {
+          const result = actualFs.linkSync(oldPath, newPath);
+          if (
+            !swapped &&
+            String(oldPath).includes(".keel-write-") &&
+            String(newPath).endsWith("new.txt")
+          ) {
+            swapped = true;
+            actualFs.renameSync(sourceParentPath, backupSourceParentPath);
+            actualFs.symlinkSync(ignoredPath, sourceParentPath, "dir");
+          }
+          return result;
+        },
+      });
+
+      try {
+        // When / Then
+        expectApplyPatchError(
+          () =>
+            executeApplyPatch(workspace, patch, {
+              readBeforeEdit: { hasRead: () => true },
+            }),
+          "tool_path_ignored",
+          "ignored path: src/old.txt",
+        );
+        expect(
+          await readFile(join(backupSourceParentPath, "old.txt"), "utf8"),
+        ).toBe("old\n");
+        expect(await readFile(ignoredSourcePath, "utf8")).toBe("ignored\n");
+        expect(await pathExists(destinationPath)).toBe(false);
+        expect(swapped).toBe(true);
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test(`Given a move source file is replaced after destination publish,
+    When apply_patch rechecks the source identity before deleting it,
+    Then it removes the new destination before reporting the changed source`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-move-source-replaced-"),
+    );
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const workspacePath = actualFs.realpathSync(workspace);
+    const sourcePath = join(workspacePath, "old.txt");
+    const destinationPath = join(workspacePath, "new.txt");
+    const replacementSourcePath = join(workspacePath, "replacement-old.txt");
+    await writeFile(sourcePath, "old\n", "utf8");
+    await writeFile(replacementSourcePath, "changed\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: old.txt",
+      "*** Move to: new.txt",
+      "*** End Patch",
+    ].join("\n");
+    let replaced = false;
+    const projectInstructions: ProjectInstructionVisibilityState = {
+      ...createProjectInstructionVisibilityState(workspace),
+      assertMutationAllowed: (targetPaths: readonly string[]) => {
+        if (
+          !replaced &&
+          targetPaths.length === 1 &&
+          targetPaths[0] === sourcePath
+        ) {
+          replaced = true;
+          actualFs.renameSync(replacementSourcePath, sourcePath);
+        }
+      },
+    };
+    const { executeApplyPatch } = await import(
+      "../../src/tools/apply-patch.ts"
+    );
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: () => true },
+            projectInstructions,
+          }),
+        "tool_path_outside_workspace",
+        "path changed outside the verified workspace target",
+      );
+      expect(await readFile(sourcePath, "utf8")).toBe("changed\n");
+      expect(await pathExists(destinationPath)).toBe(false);
+      expect(replaced).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a move source and destination are both replaced after destination publish,
+    When apply_patch rechecks the source identity before deleting it,
+    Then it preserves the user-replaced destination while reporting the changed source`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-move-source-and-destination-replaced-"),
+    );
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const workspacePath = actualFs.realpathSync(workspace);
+    const sourcePath = join(workspacePath, "old.txt");
+    const destinationPath = join(workspacePath, "new.txt");
+    const replacementSourcePath = join(workspacePath, "replacement-old.txt");
+    const replacementDestinationPath = join(
+      workspacePath,
+      "replacement-new.txt",
+    );
+    await writeFile(sourcePath, "old\n", "utf8");
+    await writeFile(replacementSourcePath, "changed\n", "utf8");
+    await writeFile(replacementDestinationPath, "user\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: old.txt",
+      "*** Move to: new.txt",
+      "*** End Patch",
+    ].join("\n");
+    let replaced = false;
+    const projectInstructions: ProjectInstructionVisibilityState = {
+      ...createProjectInstructionVisibilityState(workspace),
+      assertMutationAllowed: (targetPaths: readonly string[]) => {
+        if (
+          !replaced &&
+          targetPaths.length === 1 &&
+          targetPaths[0] === sourcePath
+        ) {
+          replaced = true;
+          actualFs.rmSync(destinationPath, { force: true });
+          actualFs.renameSync(replacementDestinationPath, destinationPath);
+          actualFs.renameSync(replacementSourcePath, sourcePath);
+        }
+      },
+    };
+    const { executeApplyPatch } = await import(
+      "../../src/tools/apply-patch.ts"
+    );
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: () => true },
+            projectInstructions,
+          }),
+        "tool_path_outside_workspace",
+        "path changed outside the verified workspace target",
+      );
+      expect(await readFile(sourcePath, "utf8")).toBe("changed\n");
+      expect(await readFile(destinationPath, "utf8")).toBe("user\n");
+      expect(replaced).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a move destination is replaced after the source is removed,
+    When apply_patch verifies the moved destination identity,
+    Then rollback restores the source without deleting the user-replaced destination`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-move-verify-destination-replaced-"),
+    );
+    const sourcePath = join(workspace, "old.txt");
+    const destinationPath = join(workspace, "new.txt");
+    const replacementDestinationPath = join(workspace, "replacement-new.txt");
+    await writeFile(sourcePath, "old\n", "utf8");
+    await writeFile(replacementDestinationPath, "user\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: old.txt",
+      "*** Move to: new.txt",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let replaced = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      rmSync: (path, options) => {
+        const result = actualFs.rmSync(path, options);
+        if (!replaced && basename(String(path)) === "old.txt") {
+          replaced = true;
+          actualFs.rmSync(destinationPath, { force: true });
+          actualFs.renameSync(replacementDestinationPath, destinationPath);
+        }
+        return result;
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: () => true },
+          }),
+        "tool_path_outside_workspace",
+        "path changed outside the verified workspace target",
+      );
+      expect(await readFile(sourcePath, "utf8")).toBe("old\n");
+      expect(await readFile(destinationPath, "utf8")).toBe("user\n");
+      expect(replaced).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
