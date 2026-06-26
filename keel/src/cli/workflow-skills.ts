@@ -3,6 +3,7 @@ import {
   existsSync,
   fstatSync,
   lstatSync,
+  opendirSync,
   openSync,
   readdirSync,
   readSync,
@@ -17,6 +18,12 @@ import {
   hasBinaryControlBytes,
   isBinarySample,
 } from "../tools/text-file.ts";
+import {
+  isWorkflowSkillResourcePath,
+  MAX_WORKFLOW_SKILL_RESOURCE_ENTRY_VISITS,
+  MAX_WORKFLOW_SKILL_RESOURCE_PATHS,
+  WORKFLOW_SKILL_RESOURCE_DIRECTORIES,
+} from "./workflow-skill-contract.ts";
 
 const LOCAL_SKILL_ROOT = join(".agents", "skills");
 const SKILL_FILE = "SKILL.md";
@@ -143,11 +150,104 @@ function relativeSkillPath(root: LocalSkillRoot, skillName: string): string {
   );
 }
 
+function skillResourcePath(parts: readonly string[]): string {
+  return parts.join("/");
+}
+
+function compareSkillResourcePaths(left: string, right: string): number {
+  const leftDirectory = left.slice(0, left.indexOf("/"));
+  const rightDirectory = right.slice(0, right.indexOf("/"));
+  const leftDirectoryIndex =
+    WORKFLOW_SKILL_RESOURCE_DIRECTORIES.indexOf(leftDirectory);
+  const rightDirectoryIndex =
+    WORKFLOW_SKILL_RESOURCE_DIRECTORIES.indexOf(rightDirectory);
+  const directoryDelta = leftDirectoryIndex - rightDirectoryIndex;
+  if (directoryDelta !== 0) {
+    return directoryDelta;
+  }
+  return left.localeCompare(right);
+}
+
 function validateSkillName(name: string): void {
   const result = skillNameSchema.safeParse(name);
   if (!result.success) {
     throw new WorkflowSkillError(`Error: ${result.error.issues[0]?.message}.`);
   }
+}
+
+function listSkillResourceDirectory(options: {
+  readonly currentPath: string;
+  readonly relativeParts: readonly string[];
+  readonly state: {
+    readonly resourcePaths: string[];
+    entryVisits: number;
+  };
+}): void {
+  const directory = opendirSync(options.currentPath);
+  try {
+    for (;;) {
+      if (
+        options.state.resourcePaths.length >=
+          MAX_WORKFLOW_SKILL_RESOURCE_PATHS ||
+        options.state.entryVisits >= MAX_WORKFLOW_SKILL_RESOURCE_ENTRY_VISITS
+      ) {
+        return;
+      }
+      const entry = directory.readSync();
+      if (entry === null) {
+        return;
+      }
+      options.state.entryVisits += 1;
+      const entryPath = join(options.currentPath, entry.name);
+      const entryRelativeParts = [...options.relativeParts, entry.name];
+      if (entry.isDirectory()) {
+        listSkillResourceDirectory({
+          currentPath: entryPath,
+          relativeParts: entryRelativeParts,
+          state: options.state,
+        });
+        continue;
+      }
+      if (entry.isFile()) {
+        const resourcePath = skillResourcePath(entryRelativeParts);
+        if (isWorkflowSkillResourcePath(resourcePath)) {
+          options.state.resourcePaths.push(resourcePath);
+        }
+      }
+    }
+  } finally {
+    directory.closeSync();
+  }
+}
+
+function listSkillResourcePaths(
+  root: LocalSkillRoot,
+  skillName: string,
+): readonly string[] {
+  const skillDirectory = join(root.rootPath, skillName);
+  const state: { resourcePaths: string[]; entryVisits: number } = {
+    resourcePaths: [],
+    entryVisits: 0,
+  };
+  for (const directory of WORKFLOW_SKILL_RESOURCE_DIRECTORIES) {
+    if (
+      state.resourcePaths.length >= MAX_WORKFLOW_SKILL_RESOURCE_PATHS ||
+      state.entryVisits >= MAX_WORKFLOW_SKILL_RESOURCE_ENTRY_VISITS
+    ) {
+      return state.resourcePaths.toSorted(compareSkillResourcePaths);
+    }
+    const directoryPath = join(skillDirectory, directory);
+    const stat = lstatSync(directoryPath, { throwIfNoEntry: false });
+    if (stat === undefined || !stat.isDirectory()) {
+      continue;
+    }
+    listSkillResourceDirectory({
+      currentPath: directoryPath,
+      relativeParts: [directory],
+      state,
+    });
+  }
+  return state.resourcePaths.toSorted(compareSkillResourcePaths);
 }
 
 function ensureRealPathInsideRoot(
@@ -256,6 +356,7 @@ function parseFrontmatterBlock(skillFilePath: string, text: string) {
 function readWorkflowSkillFile(
   root: LocalSkillRoot,
   skillName: string,
+  options: { readonly includeResourcePaths: boolean },
 ): WorkflowSkill & { readonly description: string } {
   validateSkillName(skillName);
   const skillFilePath = join(root.rootPath, skillName, SKILL_FILE);
@@ -285,6 +386,9 @@ function readWorkflowSkillFile(
     name: parsed.name,
     description: parsed.description,
     relativePath: relativeSkillPath(root, skillName),
+    resourcePaths: options.includeResourcePaths
+      ? listSkillResourcePaths(root, skillName)
+      : [],
     content: parsed.content,
   };
 }
@@ -300,7 +404,7 @@ export function loadWorkflowSkill(
       `Error: workflow skill "${skillName}" was not found in ${LOCAL_SKILL_ROOT}.`,
     );
   }
-  return readWorkflowSkillFile(root, skillName);
+  return readWorkflowSkillFile(root, skillName, { includeResourcePaths: true });
 }
 
 export function listWorkflowSkills(workspace: string): WorkflowSkillListResult {
@@ -319,7 +423,9 @@ export function listWorkflowSkills(workspace: string): WorkflowSkillListResult {
       continue;
     }
     try {
-      const skill = readWorkflowSkillFile(root, entry.name);
+      const skill = readWorkflowSkillFile(root, entry.name, {
+        includeResourcePaths: false,
+      });
       skills.push({
         name: skill.name,
         description: skill.description,

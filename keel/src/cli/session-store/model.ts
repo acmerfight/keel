@@ -200,7 +200,13 @@ export interface SessionCatalogEntry {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly graph: SessionGraphRecord;
+  readonly workflowSkill?: SessionCatalogWorkflowSkill;
   readonly preview: string;
+}
+
+export interface SessionCatalogWorkflowSkill {
+  readonly name: string;
+  readonly relativePath: string;
 }
 
 export interface SessionCatalogWarning {

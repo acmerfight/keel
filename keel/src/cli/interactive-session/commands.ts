@@ -21,6 +21,10 @@ interface ModelCommand {
   readonly selection?: ProviderSelection;
 }
 
+interface SkillCommand {
+  readonly kind: "skill";
+}
+
 interface ForkCommand {
   readonly kind: "fork";
   readonly targetSessionId: string;
@@ -41,6 +45,7 @@ export type InteractiveCommand =
   | HelpCommand
   | UndoCommand
   | ModelCommand
+  | SkillCommand
   | ManualCompactCommand
   | ForkPointsCommand
   | ForkCommand
@@ -58,6 +63,7 @@ export function formatInteractiveHelp(): string {
     "  /model             Show the active provider/model.",
     "  /model <provider>/<model>",
     "                     Switch the active provider/model for later prompts.",
+    "  /skill             Show the active workflow skill.",
     "  /compact [focus]   Summarize older conversation context with optional focus.",
     "  /fork <target-id> [--before-message <id>]",
     "                     Fork this named or resumed session without switching to it.",
@@ -227,6 +233,18 @@ export function parseInteractiveCommand(
   const modelMatch = /^\/model(?:\s+(.*))?$/u.exec(trimmed);
   if (modelMatch !== null) {
     return parseModelCommandArgs(modelMatch[1]);
+  }
+
+  const skillMatch = /^\/skill(?:\s+(.*))?$/u.exec(trimmed);
+  if (skillMatch !== null) {
+    const extraArgs = skillMatch[1]?.trim();
+    if (extraArgs !== undefined && extraArgs !== "") {
+      return {
+        kind: "invalid",
+        message: "Error: /skill does not accept arguments.",
+      };
+    }
+    return { kind: "skill" };
   }
 
   const forkPointsMatch = /^\/fork-points(?:\s+(.*))?$/u.exec(trimmed);
