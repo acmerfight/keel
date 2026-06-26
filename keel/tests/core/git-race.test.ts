@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { withGitWorkspace as withHarnessGitWorkspace } from "../../src/testing/cli-harness.ts";
@@ -131,6 +131,140 @@ describe("Git Checkpoint Race Handling", () => {
 
       // Then
       expect(result).toEqual({ written: false });
+    });
+  });
+
+  test(`Given delete checkpoint metadata cannot be written,
+    When recording the checkpoint,
+    Then Keel skips the checkpoint without failing`, async () => {
+    await withGitWorkspace(async (workspace) => {
+      // Given
+      const filePath = join(workspace, "obsolete.txt");
+      await writeFile(filePath, "obsolete\n", "utf8");
+      const deletedRealPath = await realpath(filePath);
+      await rm(filePath);
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const { recordLastDeleteCheckpoint } = await importGitWithFs({
+        writeFileSync: (path, data, options) => {
+          if (String(path).endsWith("last-edit-checkpoint.json")) {
+            throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+          }
+          return actualFs.writeFileSync(path, data, options);
+        },
+      });
+
+      // When
+      const result = recordLastDeleteCheckpoint({
+        workspace,
+        filePath: deletedRealPath,
+        beforeContent: "obsolete\n",
+        mode: 0o644,
+      });
+
+      // Then
+      expect(result).toEqual({ written: false });
+    });
+  });
+
+  test(`Given a deleted file is recreated while restore writes it,
+    When restoring the delete checkpoint,
+    Then restore blocks without consuming the checkpoint`, async () => {
+    await withGitWorkspace(async (workspace) => {
+      // Given
+      const filePath = join(workspace, "obsolete.txt");
+      await writeFile(filePath, "obsolete\n", "utf8");
+      const deletedRealPath = await realpath(filePath);
+      await rm(filePath);
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      let racedRestore = false;
+      const { recordLastDeleteCheckpoint, restoreLastEditCheckpoint } =
+        await importGitWithFs({
+          writeFileSync: (path, data, options) => {
+            if (!racedRestore && String(path) === deletedRealPath) {
+              racedRestore = true;
+              actualFs.writeFileSync(path, "user recreated\n", "utf8");
+              throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+            }
+            return actualFs.writeFileSync(path, data, options);
+          },
+        });
+      recordLastDeleteCheckpoint({
+        workspace,
+        filePath: deletedRealPath,
+        beforeContent: "obsolete\n",
+        mode: 0o644,
+      });
+
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+      const secondResult = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "blocked",
+        filePath: "obsolete.txt",
+      });
+      expect(secondResult).toMatchObject({
+        status: "blocked",
+        filePath: "obsolete.txt",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("user recreated\n");
+      expect(racedRestore).toBe(true);
+    });
+  });
+
+  test(`Given a batch-deleted file is recreated while restore writes it,
+    When restoring the batch delete checkpoint,
+    Then restore blocks without consuming the checkpoint`, async () => {
+    await withGitWorkspace(async (workspace) => {
+      // Given
+      const filePath = join(workspace, "obsolete.txt");
+      await writeFile(filePath, "obsolete\n", "utf8");
+      const deletedRealPath = await realpath(filePath);
+      await rm(filePath);
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      let racedRestore = false;
+      const { recordLastBatchCheckpoint, restoreLastEditCheckpoint } =
+        await importGitWithFs({
+          writeFileSync: (path, data, options) => {
+            if (!racedRestore && String(path) === deletedRealPath) {
+              racedRestore = true;
+              actualFs.writeFileSync(path, "user recreated\n", "utf8");
+              throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+            }
+            return actualFs.writeFileSync(path, data, options);
+          },
+        });
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "delete",
+            filePath: deletedRealPath,
+            beforeContent: "obsolete\n",
+            mode: 0o644,
+          },
+        ],
+      });
+
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+      const secondResult = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "blocked",
+        filePath: "obsolete.txt",
+      });
+      expect(secondResult).toMatchObject({
+        status: "blocked",
+        filePath: "obsolete.txt",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("user recreated\n");
+      expect(racedRestore).toBe(true);
     });
   });
 });
