@@ -138,7 +138,7 @@ describe("CLI Text Reply", () => {
         "--transcript-dir writes one best-effort redacted provider-visible transcript JSONL file per eval trial.",
         "--provider and --model override provider env for the current run.",
         "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, DEEPSEEK_MODEL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
-        "Context compaction uses an estimated 256000-token default window for real providers; set KEEL_CONTEXT_WINDOW_TOKENS for a model-specific window.",
+        "Context compaction uses model registry context windows; set KEEL_CONTEXT_WINDOW_TOKENS to override the selected model window.",
         "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
         "",
       ].join("\n"),

@@ -7,6 +7,7 @@ import {
   type BaseUrlDiagnostic,
   type ContextWindowDiagnostic,
   inspectProviderConfig,
+  type ModelMetadataDiagnostic,
   type ProviderConfigDiagnostic,
   type ProviderConfigRuntime,
   type ProviderSelection,
@@ -239,11 +240,43 @@ function contextWindowLine(contextWindow: ContextWindowDiagnostic): string {
   switch (contextWindow.status) {
     case "disabled":
       return "context window: disabled";
+    case "unknown":
+      return "context window: unknown";
     case "enabled":
       return `context window: ${contextWindow.tokens} tokens (source: ${contextWindow.source})`;
     case "invalid":
       return `context window: invalid (source: ${contextWindow.source})`;
   }
+}
+
+export function capabilityNames(
+  capabilities: Extract<
+    ModelMetadataDiagnostic,
+    { readonly status: "known" }
+  >["capabilities"],
+): string {
+  const names: string[] = [];
+  if (capabilities.textInput) names.push("text-input");
+  if (capabilities.toolCalls) names.push("tool-calls");
+  if (capabilities.reasoning) names.push("reasoning");
+  return names.length === 0 ? "none" : names.join(", ");
+}
+
+function modelMetadataLines(
+  metadata: ModelMetadataDiagnostic,
+): readonly string[] {
+  if (metadata.status === "unknown") {
+    return ["model metadata: unknown"];
+  }
+  const maxOutput =
+    metadata.maxOutputTokens === null
+      ? "max output: unknown"
+      : `max output: ${metadata.maxOutputTokens} tokens`;
+  return [
+    `model metadata: ${metadata.source}`,
+    maxOutput,
+    `model capabilities: ${capabilityNames(metadata.capabilities)}`,
+  ];
 }
 
 function providerDiagnosticHasError(
@@ -261,6 +294,7 @@ function providerDiagnosticLines(
     apiKeyLine(diagnostic.apiKey),
     baseUrlLine(diagnostic.baseUrl),
     contextWindowLine(diagnostic.contextWindow),
+    ...modelMetadataLines(diagnostic.modelMetadata),
     `cost model: ${diagnostic.costModel}`,
     ...diagnostic.issues.map((issue) => `${issue.severity}: ${issue.message}`),
   ];

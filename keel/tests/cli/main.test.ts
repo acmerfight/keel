@@ -1685,7 +1685,7 @@ describe("CLI Main", () => {
 
   test(`Given Qwen fallback API key env is selected for diagnostics with CLI flags,
     When the CLI main dispatches the doctor command,
-    Then it reports the fallback key env and default endpoint`, async () => {
+    Then it reports the fallback key env, default endpoint, and model metadata`, async () => {
     // Given
     const apiKeySecret = "main-doctor-qwen-fallback-secret";
     const fixture = createRuntime(
@@ -1717,7 +1717,12 @@ describe("CLI Main", () => {
       "base url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1 (source: default)",
     );
     expect(fixture.stdout()).toContain(
-      "context window: 256000 tokens (source: default)",
+      "context window: 1000000 tokens (source: registry)",
+    );
+    expect(fixture.stdout()).toContain("model metadata: registry");
+    expect(fixture.stdout()).toContain("max output: 65536 tokens");
+    expect(fixture.stdout()).toContain(
+      "model capabilities: text-input, tool-calls, reasoning",
     );
     expect(fixture.stdout()).toContain("provider auth: skipped (--offline)");
     expect(fixture.stdout()).not.toContain(apiKeySecret);
