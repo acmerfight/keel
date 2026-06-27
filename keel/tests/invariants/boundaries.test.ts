@@ -463,6 +463,7 @@ describe("module boundaries", () => {
 
   test(`source re-export facades stay explicit and allowlisted`, () => {
     const allowedReExportFiles = [
+      "src/cli/args.ts",
       "src/cli/interactive-session.ts",
       "src/cli/interactive-session/types.ts",
       "src/cli/provider-config.ts",
@@ -552,6 +553,100 @@ describe("module boundaries", () => {
       for (const specifier of importSpecifiers(file, source)) {
         const resolved = resolvedRelativeSpecifier(file, specifier);
         if (resolved?.startsWith("src/tools/apply-patch/") === true) {
+          violations.push(`${file} imports ${specifier}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  test(`CLI args parsing keeps command parsers behind the args facade`, () => {
+    const facadeSource = readFileSync("src/cli/args.ts", "utf8");
+
+    expect(namedReExportSpecifiers("src/cli/args.ts", facadeSource)).toEqual([
+      "./args/types.ts",
+      "./args/usage.ts",
+    ]);
+    expect(facadeSource).not.toMatch(/export\s+\*/u);
+
+    const facadeSpecifiers = importSpecifiers("src/cli/args.ts", facadeSource);
+    expect(facadeSpecifiers).not.toContain("zod");
+    expect(facadeSpecifiers).not.toContain("node:path");
+    expect(facadeSpecifiers).not.toContain("../core/provider-id.ts");
+    expect(facadeSpecifiers).not.toContain("../permissions/bash.ts");
+
+    expect(
+      importSpecifiers(
+        "src/cli/args/shared.ts",
+        readFileSync("src/cli/args/shared.ts", "utf8"),
+      ),
+    ).toEqual([
+      "zod",
+      "../../core/provider-id.ts",
+      "../../permissions/bash.ts",
+    ]);
+    expect(
+      importSpecifiers(
+        "src/cli/args/eval.ts",
+        readFileSync("src/cli/args/eval.ts", "utf8"),
+      ),
+    ).toEqual(["node:path", "./shared.ts", "./types.ts"]);
+    expect(
+      importSpecifiers(
+        "src/cli/args/run.ts",
+        readFileSync("src/cli/args/run.ts", "utf8"),
+      ),
+    ).toEqual(["../../permissions/bash.ts", "./shared.ts", "./types.ts"]);
+    expect(
+      importSpecifiers(
+        "src/cli/args/sessions.ts",
+        readFileSync("src/cli/args/sessions.ts", "utf8"),
+      ),
+    ).toEqual(["./shared.ts", "./types.ts"]);
+    expect(
+      importSpecifiers(
+        "src/cli/args/doctor.ts",
+        readFileSync("src/cli/args/doctor.ts", "utf8"),
+      ),
+    ).toEqual(["./shared.ts", "./types.ts"]);
+    expect(
+      importSpecifiers(
+        "src/cli/args/usage.ts",
+        readFileSync("src/cli/args/usage.ts", "utf8"),
+      ),
+    ).toEqual([]);
+  });
+
+  test(`external modules import CLI args through the facade`, () => {
+    const internalFiles = new Set([
+      "src/cli/args.ts",
+      "src/cli/args/doctor.ts",
+      "src/cli/args/eval.ts",
+      "src/cli/args/run.ts",
+      "src/cli/args/sessions.ts",
+      "src/cli/args/shared.ts",
+      "src/cli/args/types.ts",
+      "src/cli/args/usage.ts",
+    ]);
+    const internalTargets = new Set(
+      [...internalFiles].filter((file) => file !== "src/cli/args.ts"),
+    );
+    const violations: string[] = [];
+
+    for (const file of sourceAndTestFiles()) {
+      if (internalFiles.has(file)) {
+        continue;
+      }
+
+      const source = readFileSync(file, "utf8");
+      if (!source.includes("args/")) {
+        continue;
+      }
+
+      for (const specifier of importSpecifiers(file, source)) {
+        const resolved = resolvedRelativeSpecifier(file, specifier);
+        if (resolved !== null && internalTargets.has(resolved)) {
           violations.push(`${file} imports ${specifier}`);
         }
       }
