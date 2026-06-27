@@ -6,6 +6,7 @@ import { runCliMain } from "../../../src/cli/index.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   appendSessionRecordLine,
+  beforeMessageForkGraph,
   conversationCheckpoint,
   endForkGraph,
   inputAdmittedRecordLine,
@@ -365,11 +366,21 @@ describe("CLI Main - Sessions Command", () => {
     const unsafeStoredMessageId = "msg-sk-messageidsecret\u001b[1m";
     const unsafeToolCallId = "call-sk-toolidsecret\u001b[2m";
     const unsafeModel = "qwen-sk-modelsecret\u001b[3m";
+    const unsafeForkMessageId = "msg-sk-forkpointsecret\u001b[4m";
+    const unsafeEndMessageId = "msg-sk-endpointsecret\u001b[5m";
+    const unsafeForkPreview = "fork preview sk-previewsecret\u001b[6m";
     await writeSessionLedger({
       home,
       id: "unsafe-detail",
       workspace: ledgerWorkspace,
       createdAt: "2026-02-05T00:00:00.000Z",
+      graph: beforeMessageForkGraph({
+        sessionId: "unsafe-detail",
+        parentSessionId: "source",
+        sourceMessageId: unsafeForkMessageId,
+        sourceOrdinal: 3,
+        preview: unsafeForkPreview,
+      }),
       records: [
         JSON.stringify({
           schemaVersion: 2,
@@ -418,6 +429,18 @@ describe("CLI Main - Sessions Command", () => {
         }),
       ],
     });
+    await writeSessionLedger({
+      home,
+      id: "unsafe-end-detail",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-02-05T00:00:03.000Z",
+      graph: endForkGraph({
+        sessionId: "unsafe-end-detail",
+        parentSessionId: "source",
+        sourceLastMessageId: unsafeEndMessageId,
+        sourceOrdinal: 4,
+      }),
+    });
     const fixture = createRuntime(
       ["sessions", "show", "unsafe-detail", "--all"],
       {
@@ -427,14 +450,34 @@ describe("CLI Main - Sessions Command", () => {
         },
       },
     );
+    const endFixture = createRuntime(
+      ["sessions", "show", "unsafe-end-detail"],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+      },
+    );
+    const listFixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
 
     try {
       // When
       const exitCode = await runCliMain(fixture.runtime);
+      const endExitCode = await runCliMain(endFixture.runtime);
+      const listExitCode = await runCliMain(listFixture.runtime);
 
       // Then
       expect(exitCode).toBe(0);
       const stdout = fixture.stdout();
+      expect(stdout).toContain(
+        "fork point: before message msg-[REDACTED_SECRET]\\x1b[4m (message 3): fork preview [REDACTED_SECRET]\\x1b[6m\n",
+      );
       expect(stdout).toContain(
         "active model: qwen/qwen-[REDACTED_SECRET]\\x1b[3m\n",
       );
@@ -447,8 +490,31 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).not.toContain("sk-messageidsecret");
       expect(stdout).not.toContain("sk-toolidsecret");
       expect(stdout).not.toContain("sk-modelsecret");
+      expect(stdout).not.toContain("sk-forkpointsecret");
+      expect(stdout).not.toContain("sk-previewsecret");
       expect(stdout).not.toContain("\u001b");
       expect(fixture.stderr()).toBe("");
+
+      expect(endExitCode).toBe(0);
+      expect(endFixture.stdout()).toContain(
+        "fork point: full restored history from source through message msg-[REDACTED_SECRET]\\x1b[5m (message 4)\n",
+      );
+      expect(endFixture.stdout()).not.toContain("sk-endpointsecret");
+      expect(endFixture.stdout()).not.toContain("\u001b");
+      expect(endFixture.stderr()).toBe("");
+
+      expect(listExitCode).toBe(0);
+      expect(listFixture.stdout()).toContain(
+        "fork point: before message msg-[REDACTED_SECRET]\\x1b[4m (message 3): fork preview [REDACTED_SECRET]\\x1b[6m\n",
+      );
+      expect(listFixture.stdout()).toContain(
+        "fork point: full restored history from source through message msg-[REDACTED_SECRET]\\x1b[5m (message 4)\n",
+      );
+      expect(listFixture.stdout()).not.toContain("sk-forkpointsecret");
+      expect(listFixture.stdout()).not.toContain("sk-previewsecret");
+      expect(listFixture.stdout()).not.toContain("sk-endpointsecret");
+      expect(listFixture.stdout()).not.toContain("\u001b");
+      expect(listFixture.stderr()).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

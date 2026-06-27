@@ -47,13 +47,14 @@ function sessionCatalogEntryLines(
 }
 
 function formatSessionForkPoint(forkPoint: SessionForkPointRecord): string {
+  const sourceSessionId = formatSessionDetailText(forkPoint.sourceSessionId);
   switch (forkPoint.kind) {
     case "before_message":
-      return `before message ${forkPoint.sourceMessageId} (message ${forkPoint.sourceOrdinal}): ${forkPoint.preview}`;
+      return `before message ${formatSessionDetailText(forkPoint.sourceMessageId)} (message ${forkPoint.sourceOrdinal}): ${formatSessionDetailText(forkPoint.preview)}`;
     case "end":
       return forkPoint.sourceLastMessageId === null
-        ? `full restored history from ${forkPoint.sourceSessionId} (0 messages)`
-        : `full restored history from ${forkPoint.sourceSessionId} through message ${forkPoint.sourceLastMessageId} (message ${forkPoint.sourceOrdinal})`;
+        ? `full restored history from ${sourceSessionId} (0 messages)`
+        : `full restored history from ${sourceSessionId} through message ${formatSessionDetailText(forkPoint.sourceLastMessageId)} (message ${forkPoint.sourceOrdinal})`;
   }
 }
 
