@@ -1,9 +1,6 @@
 import { describe, expect, test } from "vitest";
-import {
-  type AgentEvent,
-  runAgent,
-  runAgentTurn,
-} from "../../src/agent/loop.ts";
+import type { AgentEvent } from "../../src/agent/events.ts";
+import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import { KeelError } from "../../src/core/error.ts";

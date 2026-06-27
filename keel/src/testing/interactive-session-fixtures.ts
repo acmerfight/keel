@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { expect } from "vitest";
 import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
-import type { AgentEvent } from "../agent/loop.ts";
+import type { AgentEvent } from "../agent/events.ts";
 import type { InteractiveResolvedProvider } from "../cli/interactive-session/types.ts";
 import { runInteractiveSession } from "../cli/interactive-session.ts";
 import type { CostModel } from "../core/cost.ts";

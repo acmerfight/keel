@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { AgentEvent } from "../../src/agent/loop.ts";
+import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";

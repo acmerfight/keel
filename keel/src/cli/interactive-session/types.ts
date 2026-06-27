@@ -1,5 +1,5 @@
 import type { ContextCompactionOptions } from "../../agent/context-compaction.ts";
-import type { AgentEvent, CostReport } from "../../agent/loop.ts";
+import type { AgentEvent, CostReport } from "../../agent/events.ts";
 import type { ProjectInstructions, WorkflowSkill } from "../../agent/prompt.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";

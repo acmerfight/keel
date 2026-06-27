@@ -1,5 +1,5 @@
 import type { ToolCall } from "../llm/types.ts";
-import type { CostReport } from "./loop.ts";
+import type { CostReport } from "./events.ts";
 
 const DEFAULT_MAX_AGENT_TURNS = 64;
 const DEFAULT_REPEATED_TOOL_CALL_STOP_THRESHOLD = 3;

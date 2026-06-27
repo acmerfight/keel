@@ -1,7 +1,8 @@
 import { readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { type AgentEvent, runAgentTurn } from "../../../src/agent/loop.ts";
+import type { AgentEvent } from "../../../src/agent/events.ts";
+import { runAgentTurn } from "../../../src/agent/loop.ts";
 import { restorePostCompactionReads } from "../../../src/agent/post-compaction-restore.ts";
 import { createReadVisibilityState } from "../../../src/agent/read-visibility.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";

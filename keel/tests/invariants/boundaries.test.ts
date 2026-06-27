@@ -141,6 +141,36 @@ function importSpecifiers(file: string, source: string): readonly string[] {
   return specifiers;
 }
 
+function importedNamesFromResolvedSpecifier(
+  file: string,
+  source: string,
+  target: string,
+): readonly string[] {
+  const sourceFile = parseSource(file, source);
+  const names: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isImportDeclaration(node)) {
+      const specifier = stringLiteralText(node.moduleSpecifier);
+      const resolved =
+        specifier === null ? null : resolvedRelativeSpecifier(file, specifier);
+      if (resolved === target) {
+        const namedBindings = node.importClause?.namedBindings;
+        if (namedBindings !== undefined && ts.isNamedImports(namedBindings)) {
+          for (const element of namedBindings.elements) {
+            names.push(element.propertyName?.text ?? element.name.text);
+          }
+        }
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return names;
+}
+
 function wildcardReExportSpecifiers(
   file: string,
   source: string,
@@ -277,6 +307,60 @@ describe("module boundaries", () => {
         "u",
       ),
     );
+  });
+
+  test(`agent event contracts are imported from the dedicated event module`, () => {
+    const violations: string[] = [];
+    const contractNames = ["AgentEvent", "CostReport"];
+
+    for (const file of sourceAndTestFiles()) {
+      if (file === "src/agent/loop.ts") {
+        continue;
+      }
+
+      const source = readFileSync(file, "utf8");
+      if (!source.includes("loop.ts")) {
+        continue;
+      }
+      const importedContracts = importedNamesFromResolvedSpecifier(
+        file,
+        source,
+        "src/agent/loop.ts",
+      ).filter((name) => contractNames.includes(name));
+
+      for (const name of importedContracts) {
+        violations.push(`${file} imports ${name} from src/agent/loop.ts`);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  }, 15_000);
+
+  test(`src/agent/loop.ts does not export agent event contracts`, () => {
+    const source = readFileSync("src/agent/loop.ts", "utf8");
+
+    expect(source).not.toMatch(/\bexport\s+interface\s+CostReport\b/u);
+    expect(source).not.toMatch(/\bexport\s+type\s+AgentEvent\b/u);
+  });
+
+  test(`agent provider turn boundary does not depend on ledger compaction or tools`, () => {
+    const source = readFileSync("src/agent/provider-turn.ts", "utf8");
+    const specifiers = importSpecifiers("src/agent/provider-turn.ts", source);
+
+    expect(specifiers).not.toContain("./session-ledger.ts");
+    expect(specifiers).not.toContain("./context-compaction.ts");
+    expect(specifiers).not.toContain("../tools/registry.ts");
+    expect(specifiers).not.toContain("../tools/execution.ts");
+    expect(specifiers).not.toContain("./tool-scheduler.ts");
+  });
+
+  test(`agent compaction retry boundary does not depend on tool execution`, () => {
+    const source = readFileSync("src/agent/turn-compaction.ts", "utf8");
+    const specifiers = importSpecifiers("src/agent/turn-compaction.ts", source);
+
+    expect(specifiers).not.toContain("../tools/execution.ts");
+    expect(specifiers).not.toContain("./tool-scheduler.ts");
+    expect(specifiers).not.toContain("../permissions/bash.ts");
   });
 
   test(`source modules do not use wildcard re-exports`, () => {

@@ -200,6 +200,60 @@ describe("Context Compaction Overflow Edge Cases", () => {
     ]);
   });
 
+  test(`Given proactive compaction has no safe split,
+    When a long current request starts,
+    Then the agent sends the original request without adding an empty checkpoint`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Only current request. ".repeat(200) },
+    ];
+    let summaryRequests = 0;
+    let mainRequestMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "proactive-without-safe-split-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          throw new Error("Compaction should not summarize an empty prefix");
+        }
+        mainRequestMessages = options.messages;
+        yield { type: "text", text: "Answered without empty checkpoint." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          contextWindowTokens: 50,
+          reserveTokens: 0,
+          keepRecentTokens: 1,
+        },
+      }),
+    );
+
+    // Then
+    expect(summaryRequests).toBe(0);
+    expect(mainRequestMessages).toEqual([
+      { role: "user", content: "Only current request. ".repeat(200) },
+    ]);
+    expect(events.some((event) => event.type === "context_compacted")).toBe(
+      false,
+    );
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Answered without empty checkpoint.",
+    });
+  });
+
   test(`Given overflow recovery already retried once,
     When the compacted request still overflows,
     Then the agent fails instead of compacting in a loop`, async () => {
@@ -355,6 +409,77 @@ describe("Context Compaction Overflow Edge Cases", () => {
       code: "provider_context_overflow",
     });
     expect(requestCount).toBe(1);
+  });
+
+  test(`Given provider context overflow happens before output without explicit compaction options,
+    When default overflow recovery can summarize older history,
+    Then the agent compacts and retries once`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Earlier context ".repeat(6000) },
+      {
+        role: "assistant",
+        content: "Earlier answer ".repeat(6000),
+        toolCalls: [],
+      },
+      { role: "user", content: "Finish now." },
+    ];
+    let mainRequests = 0;
+    let summaryRequests = 0;
+    const provider: LLMProvider = {
+      id: "default-overflow-recovery-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          yield { type: "text", text: "Default context summary." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Provider reports prompt too long",
+          );
+        }
+
+        yield { type: "text", text: "Recovered with defaults." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(summaryRequests).toBe(1);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "context_compacted",
+        reason: "overflow_recovery",
+        beforeMessageCount: 3,
+        afterMessageCount: 2,
+        beforeEstimatedTokens: expect.any(Number),
+        afterEstimatedTokens: expect.any(Number),
+        toolOutputsCompacted: 0,
+      }),
+    );
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Recovered with defaults.",
+    });
   });
 
   test(`Given separate model requests overflow in the same agent run,

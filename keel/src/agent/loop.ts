@@ -1,38 +1,25 @@
-import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
-import { KeelError } from "../core/error.ts";
 import {
   type RecordLastBatchCheckpointOperation,
   recordLastTaskCheckpoint,
 } from "../core/git.ts";
-import type {
-  LLMProvider,
-  LLMStopReason,
-  Message,
-  ToolCall,
-  Usage,
-} from "../llm/types.ts";
+import type { LLMProvider, Message, ToolCall } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
-import {
-  normalizeProviderToolCall,
-  toolCallConcurrency,
-} from "../tools/registry.ts";
+import { toolCallConcurrency } from "../tools/registry.ts";
 import {
   createProjectInstructionVisibilityState,
   type ProjectInstructionVisibilityState,
 } from "../tools/scoped-project-instructions.ts";
 import {
-  type CompactMessagesResult,
-  type ContextCompactionAccountingSnapshot,
-  type ContextCompactionOptions,
-  type ContextCompactionRequestMetadata,
-  type ContextCompactionStats,
-  captureContextCompactionAccountingSnapshot,
-  compactMessages,
-  contextCompactionStatsForCurrentMessages,
-  shouldCompactBeforeRequest,
-} from "./context-compaction.ts";
+  addRequestAccounting,
+  buildCostReport,
+  type CostTrackingOptions,
+  emptyRunAccounting,
+} from "./accounting.ts";
+import type { ContextCompactionOptions } from "./context-compaction.ts";
+import type { AgentEvent } from "./events.ts";
 import { restorePostCompactionReads } from "./post-compaction-restore.ts";
+import type { AgentTurn } from "./provider-turn.ts";
 import {
   createReadVisibilityState,
   type ReadVisibilityState,
@@ -51,50 +38,12 @@ import {
   planToolCallExecutionSegments,
   type ScheduledToolCall,
 } from "./tool-scheduler.ts";
-
-export interface CostReport {
-  readonly spentUsd: number;
-  readonly maxUsd?: number;
-  readonly budgetExceeded: boolean;
-}
-
-interface CostTrackingOptions {
-  readonly model: CostModel;
-  readonly maxCostUsd?: number;
-}
-
-// stopReason is "completed" when the assistant finished with a plain answer;
-// otherwise it is the stop policy's reason label (e.g. "cost_budget",
-// "repeated_tool_call", "turn_limit").
-type ContextCompactionReason = "proactive" | "overflow_recovery";
-
-export type AgentEvent =
-  | { readonly type: "text"; readonly text: string }
-  | ({
-      readonly type: "context_compacted";
-      readonly reason: ContextCompactionReason;
-    } & ContextCompactionStats)
-  | {
-      readonly type: "provider_retry";
-      readonly provider: string;
-      readonly reason: string;
-      readonly attempt: number;
-      readonly maxRetries: number;
-      readonly delayMs: number;
-    }
-  | { readonly type: "tool_start"; readonly toolCall: ToolCall }
-  | {
-      readonly type: "tool_end";
-      readonly toolCall: ToolCall;
-      readonly ok: boolean;
-    }
-  | {
-      readonly type: "end";
-      readonly usage: Usage;
-      readonly turns: number;
-      readonly stopReason: string;
-      readonly cost?: CostReport;
-    };
+import {
+  type CompactionConfig,
+  type CompactionState,
+  type LedgerTurnOptions,
+  streamTurnWithOverflowRecovery,
+} from "./turn-compaction.ts";
 
 export interface RunAgentOptions {
   readonly workspace: string;
@@ -135,34 +84,6 @@ export interface RunAgentTurnOptions {
     | Promise<readonly InjectedUserMessage[]>;
 }
 
-class ContextOverflowBeforeAssistantError extends Error {
-  readonly error: unknown;
-
-  constructor(error: unknown) {
-    super("Provider context overflowed before assistant output started");
-    this.name = "ContextOverflowBeforeAssistantError";
-    this.error = error;
-  }
-}
-
-function isProviderContextOverflow(error: unknown): boolean {
-  return (
-    error instanceof KeelError && error.code === "provider_context_overflow"
-  );
-}
-
-interface AgentTurn {
-  readonly text: string;
-  readonly toolCalls: readonly ToolCall[];
-  readonly usage: Usage;
-  readonly stopReason: LLMStopReason;
-}
-
-interface AgentTurnStop {
-  readonly usage: Usage;
-  readonly reason: LLMStopReason;
-}
-
 function mutatedTargetPathsFromExecution(
   execution: ToolExecution,
 ): readonly string[] {
@@ -189,15 +110,6 @@ function publishVisibleProjectInstructions(
     }
     state.markInstructionPathsVisible(execution.visibleProjectInstructionPaths);
   }
-}
-
-function addUsage(left: Usage, right: Usage): Usage {
-  return {
-    inputTokens: left.inputTokens + right.inputTokens,
-    cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
-    uncachedInputTokens: left.uncachedInputTokens + right.uncachedInputTokens,
-    outputTokens: left.outputTokens + right.outputTokens,
-  };
 }
 
 function priorToolCallsFromMessages(messages: readonly Message[]): ToolCall[] {
@@ -234,87 +146,8 @@ function finalReplyMessage(text: string): Message | null {
     : { role: "assistant", content: text, toolCalls: [] };
 }
 
-function finishAgentTurn(
-  assistantText: readonly string[],
-  pendingToolCalls: readonly ToolCall[],
-  stop: AgentTurnStop | null,
-): AgentTurn {
-  if (stop === null) {
-    throw new KeelError(
-      "agent_missing_stop",
-      "LLM stream ended without stop event",
-    );
-  }
-  if (stop.reason === "length" && pendingToolCalls.length > 0) {
-    throw new KeelError(
-      "provider_protocol_error",
-      "LLM stream stopped with length after tool calls",
-    );
-  }
-
-  return {
-    text: assistantText.join(""),
-    toolCalls: pendingToolCalls,
-    usage: stop.usage,
-    stopReason: stop.reason,
-  };
-}
-
-function agentStopReasonFromProvider(reason: LLMStopReason): string {
+function agentStopReasonFromProvider(reason: AgentTurn["stopReason"]): string {
   return reason === "length" ? "provider_length" : "completed";
-}
-
-function buildCostReport(
-  spentUsd: number,
-  costTracking: CostTrackingOptions | undefined,
-): CostReport | undefined {
-  if (costTracking === undefined) {
-    return undefined;
-  }
-  const budgetExceeded =
-    costTracking.maxCostUsd !== undefined && spentUsd > costTracking.maxCostUsd;
-  return {
-    spentUsd,
-    ...(costTracking.maxCostUsd !== undefined
-      ? { maxUsd: costTracking.maxCostUsd }
-      : {}),
-    budgetExceeded,
-  };
-}
-
-interface RunAccounting {
-  readonly totalUsage: Usage;
-  readonly totalCostUsd: number;
-}
-
-function emptyRunAccounting(): RunAccounting {
-  return {
-    totalUsage: {
-      inputTokens: 0,
-      cachedInputTokens: 0,
-      uncachedInputTokens: 0,
-      outputTokens: 0,
-    },
-    totalCostUsd: 0,
-  };
-}
-
-function addRequestAccounting(
-  accounting: RunAccounting,
-  requestUsage: Usage,
-  costTracking: CostTrackingOptions | undefined,
-): RunAccounting {
-  return {
-    totalUsage: addUsage(accounting.totalUsage, requestUsage),
-    totalCostUsd:
-      costTracking === undefined
-        ? accounting.totalCostUsd
-        : accounting.totalCostUsd +
-          calculateRequestCostBatchUsd(
-            { requests: [{ usage: requestUsage }] },
-            costTracking.model,
-          ),
-  };
 }
 
 const WRAP_UP_INSTRUCTION =
@@ -322,254 +155,6 @@ const WRAP_UP_INSTRUCTION =
 
 const MISSING_SUMMARY_NOTICE =
   "\nReached the tool round limit before the task finished; the model did not provide a summary of the remaining work.";
-
-interface StreamTurnOptions {
-  readonly provider: LLMProvider;
-  readonly systemPrompt: string;
-  readonly signal: AbortSignal;
-  readonly allowBash: boolean;
-  readonly toolChoice?: "none";
-  readonly textPrefix?: string;
-}
-
-interface LedgerTurnOptions extends StreamTurnOptions {
-  readonly getLedger: () => SessionLedger;
-  readonly setLedger: (ledger: SessionLedger) => void;
-}
-
-interface ProviderTurnOptions extends StreamTurnOptions {
-  readonly messages: readonly Message[];
-}
-
-function requestMetadataForStream(
-  options: StreamTurnOptions,
-): ContextCompactionRequestMetadata {
-  return {
-    allowBash: options.allowBash,
-    ...(options.toolChoice !== undefined
-      ? { toolChoice: options.toolChoice }
-      : {}),
-  };
-}
-
-async function* streamAgentTurn(
-  options: ProviderTurnOptions,
-): AsyncGenerator<AgentEvent, AgentTurn> {
-  const { provider, systemPrompt, messages, signal, allowBash } = options;
-  let textPrefix = options.textPrefix ?? "";
-  const stream = provider.stream({
-    systemPrompt,
-    messages,
-    signal,
-    ...(allowBash ? { allowBash: true } : {}),
-    ...(options.toolChoice !== undefined
-      ? { toolChoice: options.toolChoice }
-      : {}),
-  });
-
-  let stop: AgentTurnStop | null = null;
-  const assistantText: string[] = [];
-  const pendingToolCalls: ToolCall[] = [];
-  let assistantStarted = false;
-
-  try {
-    for await (const event of stream) {
-      switch (event.type) {
-        case "text":
-          if (event.text !== "") {
-            assistantStarted = true;
-          }
-          if (event.text !== "" && textPrefix !== "") {
-            if (!event.text.startsWith("\n")) {
-              assistantText.push(textPrefix);
-              yield { type: "text", text: textPrefix };
-            }
-            textPrefix = "";
-          }
-          assistantText.push(event.text);
-          yield { type: "text", text: event.text };
-          break;
-        case "tool_call": {
-          assistantStarted = true;
-          const { type: _llmEventType, ...toolCall } = event;
-          if (toolCall.tool === "edit") {
-            pendingToolCalls.push(normalizeProviderToolCall(toolCall));
-          } else {
-            pendingToolCalls.push(toolCall);
-          }
-          break;
-        }
-        case "provider_retry":
-          yield event;
-          break;
-        case "stop":
-          stop = { usage: event.usage, reason: event.reason };
-          break;
-      }
-    }
-  } catch (error) {
-    if (isProviderContextOverflow(error) && !assistantStarted) {
-      throw new ContextOverflowBeforeAssistantError(error);
-    }
-    throw error;
-  }
-
-  return finishAgentTurn(assistantText, pendingToolCalls, stop);
-}
-
-interface CompactionConfig {
-  readonly provider: LLMProvider;
-  readonly systemPrompt: string;
-  readonly signal: AbortSignal;
-  readonly contextCompaction: ContextCompactionOptions | undefined;
-  readonly costTracking: CostTrackingOptions | undefined;
-  readonly onContextCompacted?: (messages: Message[]) => Promise<void>;
-}
-
-type CompactionState = {
-  contextAccounting: ContextCompactionAccountingSnapshot | undefined;
-  accounting: RunAccounting;
-};
-
-async function attemptContextCompaction(
-  config: CompactionConfig,
-  state: CompactionState,
-  streamOptions: LedgerTurnOptions,
-): Promise<CompactMessagesResult> {
-  const targetMessages = [
-    ...projectSessionLedgerToProviderMessages(streamOptions.getLedger()),
-  ];
-  const requestMetadata = requestMetadataForStream(streamOptions);
-  const result = await compactMessages({
-    provider: config.provider,
-    systemPrompt: config.systemPrompt,
-    messages: targetMessages,
-    signal: config.signal,
-    ...(config.contextCompaction !== undefined
-      ? { contextCompaction: config.contextCompaction }
-      : {}),
-    ...(state.contextAccounting !== undefined
-      ? { contextAccounting: state.contextAccounting }
-      : {}),
-    requestMetadata,
-  });
-  let finalResult = result;
-  if (result.compacted) {
-    state.contextAccounting = undefined;
-    streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
-    try {
-      await config.onContextCompacted?.(targetMessages);
-    } finally {
-      streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
-    }
-    finalResult = {
-      ...result,
-      stats: contextCompactionStatsForCurrentMessages({
-        stats: result.stats,
-        systemPrompt: config.systemPrompt,
-        messages: targetMessages,
-        requestMetadata,
-      }),
-    };
-  }
-  state.accounting = addRequestAccounting(
-    state.accounting,
-    result.usage,
-    config.costTracking,
-  );
-  return finalResult;
-}
-
-async function* streamTurnWithOverflowRecovery(
-  config: CompactionConfig,
-  state: CompactionState,
-  streamOptions: LedgerTurnOptions,
-): AsyncGenerator<AgentEvent, AgentTurn> {
-  let overflowRecoveryAttempted = false;
-  let compactedBeforeRequest = false;
-
-  for (;;) {
-    const requestMessages = projectSessionLedgerToProviderMessages(
-      streamOptions.getLedger(),
-    );
-    if (
-      !compactedBeforeRequest &&
-      shouldCompactBeforeRequest(
-        config.systemPrompt,
-        requestMessages,
-        config.contextCompaction,
-        state.contextAccounting,
-        requestMetadataForStream(streamOptions),
-      )
-    ) {
-      compactedBeforeRequest = true;
-      const compaction = await attemptContextCompaction(
-        config,
-        state,
-        streamOptions,
-      );
-      if (compaction.stats !== undefined) {
-        yield {
-          type: "context_compacted",
-          reason: "proactive",
-          ...compaction.stats,
-        };
-      }
-    }
-    try {
-      const currentRequestMessages = projectSessionLedgerToProviderMessages(
-        streamOptions.getLedger(),
-      );
-      const turn = yield* streamAgentTurn({
-        provider: streamOptions.provider,
-        systemPrompt: streamOptions.systemPrompt,
-        messages: currentRequestMessages,
-        signal: streamOptions.signal,
-        allowBash: streamOptions.allowBash,
-        ...(streamOptions.toolChoice !== undefined
-          ? { toolChoice: streamOptions.toolChoice }
-          : {}),
-        ...(streamOptions.textPrefix !== undefined
-          ? { textPrefix: streamOptions.textPrefix }
-          : {}),
-      });
-      state.contextAccounting =
-        config.contextCompaction === undefined
-          ? undefined
-          : captureContextCompactionAccountingSnapshot({
-              systemPrompt: config.systemPrompt,
-              messages: currentRequestMessages,
-              usage: turn.usage,
-              requestMetadata: requestMetadataForStream(streamOptions),
-            });
-      return turn;
-    } catch (error) {
-      if (error instanceof ContextOverflowBeforeAssistantError) {
-        if (!overflowRecoveryAttempted) {
-          overflowRecoveryAttempted = true;
-          const compaction = await attemptContextCompaction(
-            config,
-            state,
-            streamOptions,
-          );
-          if (compaction.compacted) {
-            if (compaction.stats !== undefined) {
-              yield {
-                type: "context_compacted",
-                reason: "overflow_recovery",
-                ...compaction.stats,
-              };
-            }
-            compactedBeforeRequest = true;
-            continue;
-          }
-        }
-        throw error.error;
-      }
-      throw error;
-    }
-  }
-}
 
 interface WrapUpSummarizeOptions {
   readonly config: CompactionConfig;
