@@ -465,6 +465,7 @@ describe("module boundaries", () => {
     const allowedReExportFiles = [
       "src/cli/interactive-session.ts",
       "src/cli/interactive-session/types.ts",
+      "src/cli/provider-config.ts",
       "src/cli/session-store.ts",
       "src/llm/providers/openai-compatible.ts",
       "src/llm/types.ts",
@@ -551,6 +552,114 @@ describe("module boundaries", () => {
       for (const specifier of importSpecifiers(file, source)) {
         const resolved = resolvedRelativeSpecifier(file, specifier);
         if (resolved?.startsWith("src/tools/apply-patch/") === true) {
+          violations.push(`${file} imports ${specifier}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  test(`provider configuration internals keep profile, diagnostics, fake demo, and resolver boundaries separate`, () => {
+    const providerConfigSource = readFileSync(
+      "src/cli/provider-config.ts",
+      "utf8",
+    );
+    expect(
+      namedReExportSpecifiers(
+        "src/cli/provider-config.ts",
+        providerConfigSource,
+      ),
+    ).toEqual([
+      "./provider-diagnostics.ts",
+      "./provider-resolver.ts",
+      "./provider-selection.ts",
+    ]);
+
+    expect(providerConfigSource).not.toMatch(/export\s+\*/u);
+
+    const profileSource = readFileSync("src/cli/provider-profiles.ts", "utf8");
+    expect(profileSource).not.toMatch(
+      /\bexport\s+const\s+PROVIDER_PROFILES\b/u,
+    );
+    const profileSpecifiers = importSpecifiers(
+      "src/cli/provider-profiles.ts",
+      profileSource,
+    );
+    expect(profileSpecifiers).toEqual(["../core/provider-id.ts"]);
+
+    const selectionSpecifiers = importSpecifiers(
+      "src/cli/provider-selection.ts",
+      readFileSync("src/cli/provider-selection.ts", "utf8"),
+    );
+    expect(selectionSpecifiers).toEqual([
+      "../core/provider-id.ts",
+      "./provider-profiles.ts",
+    ]);
+
+    const diagnosticsSpecifiers = importSpecifiers(
+      "src/cli/provider-diagnostics.ts",
+      readFileSync("src/cli/provider-diagnostics.ts", "utf8"),
+    );
+    expect(diagnosticsSpecifiers).not.toContain("./provider-resolver.ts");
+    expect(diagnosticsSpecifiers).not.toContain("./fake-provider-demo.ts");
+    expect(
+      diagnosticsSpecifiers.filter((specifier) =>
+        specifier.includes("/llm/providers/"),
+      ),
+    ).toEqual([]);
+
+    const fakeDemoSpecifiers = importSpecifiers(
+      "src/cli/fake-provider-demo.ts",
+      readFileSync("src/cli/fake-provider-demo.ts", "utf8"),
+    );
+    expect(fakeDemoSpecifiers).not.toContain("./provider-diagnostics.ts");
+    expect(fakeDemoSpecifiers).not.toContain("./provider-resolver.ts");
+    expect(
+      fakeDemoSpecifiers.filter((specifier) =>
+        /\/llm\/providers\/(?:deepseek|kimi|qwen)\.ts$/u.test(specifier),
+      ),
+    ).toEqual([]);
+
+    const resolverSpecifiers = importSpecifiers(
+      "src/cli/provider-resolver.ts",
+      readFileSync("src/cli/provider-resolver.ts", "utf8"),
+    );
+    expect(resolverSpecifiers).toContain("./fake-provider-demo.ts");
+    expect(resolverSpecifiers).toContain("../llm/providers/deepseek.ts");
+    expect(resolverSpecifiers).toContain("../llm/providers/kimi.ts");
+    expect(resolverSpecifiers).toContain("../llm/providers/qwen.ts");
+  });
+
+  test(`external modules import provider configuration through the facade`, () => {
+    const internalFiles = new Set([
+      "src/cli/fake-provider-demo.ts",
+      "src/cli/provider-config.ts",
+      "src/cli/provider-diagnostics.ts",
+      "src/cli/provider-profiles.ts",
+      "src/cli/provider-resolver.ts",
+      "src/cli/provider-selection.ts",
+    ]);
+    const internalTargets = new Set(
+      [...internalFiles].filter(
+        (file) => file !== "src/cli/provider-config.ts",
+      ),
+    );
+    const violations: string[] = [];
+
+    for (const file of sourceAndTestFiles()) {
+      if (internalFiles.has(file)) {
+        continue;
+      }
+
+      const source = readFileSync(file, "utf8");
+      if (!source.includes("provider-")) {
+        continue;
+      }
+
+      for (const specifier of importSpecifiers(file, source)) {
+        const resolved = resolvedRelativeSpecifier(file, specifier);
+        if (resolved !== null && internalTargets.has(resolved)) {
           violations.push(`${file} imports ${specifier}`);
         }
       }
