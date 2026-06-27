@@ -1,0 +1,644 @@
+import { describe, expect, test } from "vitest";
+import { runAgentTurn } from "../../../src/agent/loop.ts";
+import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
+import { KeelError } from "../../../src/core/error.ts";
+import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import {
+  collect,
+  freshSignal,
+  workspace,
+  ZERO_USAGE,
+} from "../../../src/testing/context-compaction-fixtures.ts";
+
+describe("Context Compaction Current Tool Suffix", () => {
+  test(`Given retained recent context contains an unconsumed large tool output before a steering user,
+    When overflow recovery compacts the conversation,
+    Then the retry keeps the current tool output intact`, async () => {
+    // Given
+    const currentToolOutput = [
+      "CURRENT_LOG_START",
+      "current log line ".repeat(500),
+      "CURRENT_LOG_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+      { role: "user", content: "Read the current log." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_current_log",
+            tool: "read",
+            path: "current.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_current_log",
+        content: currentToolOutput,
+      },
+      {
+        role: "user",
+        content: "Steering update: answer only after using the current log.",
+      },
+    ];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "current-tool-output-overflow-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Earlier setup summary." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        const retainedToolOutput =
+          retriedMessages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.toolCallId === "read_current_log",
+          )?.content ?? "";
+        if (!retainedToolOutput.includes("CURRENT_LOG_END")) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Retry lost the unconsumed current tool output",
+          );
+        }
+
+        yield {
+          type: "text",
+          text: "Continued with the current tool output intact.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 20_000,
+          toolOutputMaxChars: 128,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Steering update: answer only after using the current log.",
+    });
+    const retainedTool = retriedMessages.find(
+      (message) =>
+        message.role === "tool" && message.toolCallId === "read_current_log",
+    );
+    expect(retainedTool).toEqual({
+      role: "tool",
+      toolCallId: "read_current_log",
+      content: currentToolOutput,
+    });
+    expect(retainedTool?.content).not.toContain(
+      "[stale tool output compacted:",
+    );
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued with the current tool output intact.",
+    });
+  });
+
+  test(`Given split-turn compaction cannot safely shrink an unconsumed tool result,
+    When the provider still rejects the retry for context overflow,
+    Then the unconsumed tool result stays intact and the overflow is surfaced`, async () => {
+    // Given
+    const currentToolOutput = [
+      "UNCONSUMED_LOG_START",
+      "unconsumed current log line ".repeat(700),
+      "UNCONSUMED_LOG_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the baseline." },
+      { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
+      { role: "user", content: "Review the older recent note." },
+      {
+        role: "assistant",
+        content: "Older recent note can be summarized.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Read the current log." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_unconsumed_log",
+            tool: "read",
+            path: "current.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_unconsumed_log",
+        content: currentToolOutput,
+      },
+      {
+        role: "user",
+        content: "Latest instruction: answer only after using that log.",
+      },
+    ];
+    let mainRequests = 0;
+    let summaryPrompt = "";
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "split-turn-unconsumed-tool-overflow-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryPrompt = options.messages[0]?.content ?? "";
+          yield {
+            type: "text",
+            text: "Summary before unconsumed tool output.",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before split-turn compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        throw new KeelError(
+          "provider_context_overflow",
+          "Unconsumed tool output remains too large",
+        );
+      },
+    };
+
+    // When / Then
+    await expect(
+      collect(
+        runAgentTurn({
+          workspace: workspace(),
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          contextCompaction: {
+            keepRecentTokens: 20,
+            toolOutputMaxChars: 128,
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_context_overflow",
+    });
+    expect(mainRequests).toBe(2);
+    expect(summaryPrompt).toContain("Older recent note can be summarized.");
+    expect(summaryPrompt).not.toContain("Read the current log.");
+    expect(summaryPrompt).not.toContain("UNCONSUMED_LOG_END");
+    const toolCallIndex = retriedMessages.findIndex(
+      (message) =>
+        message.role === "assistant" &&
+        message.toolCalls.some(
+          (toolCall) => toolCall.id === "read_unconsumed_log",
+        ),
+    );
+    const toolResultIndex = retriedMessages.findIndex(
+      (message) =>
+        message.role === "tool" && message.toolCallId === "read_unconsumed_log",
+    );
+    expect(toolCallIndex).toBeGreaterThan(-1);
+    expect(toolResultIndex).toBe(toolCallIndex + 1);
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Read the current log.",
+    });
+    expect(retriedMessages[toolResultIndex]).toEqual({
+      role: "tool",
+      toolCallId: "read_unconsumed_log",
+      content: currentToolOutput,
+    });
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Latest instruction: answer only after using that log.",
+    });
+  });
+
+  test(`Given an unconsumed tool result is followed by multiple steering users,
+    When split-turn compaction retries after context overflow,
+    Then no steering boundary can drop the current tool result`, async () => {
+    // Given
+    const currentToolOutput = [
+      "QUEUED_STEERING_LOG_START",
+      "queued steering log line ".repeat(700),
+      "QUEUED_STEERING_LOG_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the baseline." },
+      { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
+      { role: "user", content: "Read the queued steering log." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_queued_steering_log",
+            tool: "read",
+            path: "queued-steering.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_queued_steering_log",
+        content: currentToolOutput,
+      },
+      {
+        role: "user",
+        content: "Steering update A: preserve the current tool result.",
+      },
+      {
+        role: "user",
+        content: "Steering update B: answer from that result.",
+      },
+    ];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "split-turn-multiple-steering-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield {
+            type: "text",
+            text: "Summary before the queued steering tool result.",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before split-turn compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        const toolResult = retriedMessages.find(
+          (message) =>
+            message.role === "tool" &&
+            message.toolCallId === "read_queued_steering_log",
+        );
+        if (toolResult?.content !== currentToolOutput) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Retry dropped the current tool result behind steering users",
+          );
+        }
+
+        yield {
+          type: "text",
+          text: "Continued with queued steering and current tool output.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 20,
+          toolOutputMaxChars: 128,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Read the queued steering log.",
+    });
+    expect(retriedMessages).toContainEqual({
+      role: "tool",
+      toolCallId: "read_queued_steering_log",
+      content: currentToolOutput,
+    });
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Steering update A: preserve the current tool result.",
+    });
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Steering update B: answer from that result.",
+    });
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued with queued steering and current tool output.",
+    });
+  });
+
+  test(`Given split-turn compaction retains an unconsumed multi-tool round,
+    When overflow recovery retries,
+    Then the retry keeps the assistant tool calls and all sibling tool results together`, async () => {
+    // Given
+    const firstToolOutput = [
+      "FIRST_CURRENT_LOG_START",
+      "first current log line ".repeat(500),
+      "FIRST_CURRENT_LOG_END",
+    ].join("\n");
+    const secondToolOutput = [
+      "SECOND_CURRENT_LOG_START",
+      "second current log line ".repeat(500),
+      "SECOND_CURRENT_LOG_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the baseline." },
+      { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
+      { role: "user", content: "Read both current logs." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_first_current_log",
+            tool: "read",
+            path: "first-current.log",
+          },
+          {
+            id: "read_second_current_log",
+            tool: "read",
+            path: "second-current.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_first_current_log",
+        content: firstToolOutput,
+      },
+      {
+        role: "tool",
+        toolCallId: "read_second_current_log",
+        content: secondToolOutput,
+      },
+      {
+        role: "user",
+        content: "Latest instruction: answer after using both logs.",
+      },
+    ];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "split-turn-multi-tool-round-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield {
+            type: "text",
+            text: "Summary before the current multi-tool round.",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before split-turn compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        const toolRequestIndex = retriedMessages.findIndex(
+          (message) =>
+            message.role === "assistant" && message.toolCalls.length === 2,
+        );
+        const firstToolIndex = retriedMessages.findIndex(
+          (message) =>
+            message.role === "tool" &&
+            message.toolCallId === "read_first_current_log",
+        );
+        const secondToolIndex = retriedMessages.findIndex(
+          (message) =>
+            message.role === "tool" &&
+            message.toolCallId === "read_second_current_log",
+        );
+        if (
+          toolRequestIndex < 0 ||
+          firstToolIndex !== toolRequestIndex + 1 ||
+          secondToolIndex !== toolRequestIndex + 2
+        ) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Retry broke the current multi-tool round",
+          );
+        }
+
+        yield {
+          type: "text",
+          text: "Continued with both current tool results intact.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 20,
+          toolOutputMaxChars: 128,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(retriedMessages).toContainEqual({
+      role: "tool",
+      toolCallId: "read_first_current_log",
+      content: firstToolOutput,
+    });
+    expect(retriedMessages).toContainEqual({
+      role: "tool",
+      toolCallId: "read_second_current_log",
+      content: secondToolOutput,
+    });
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Latest instruction: answer after using both logs.",
+    });
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued with both current tool results intact.",
+    });
+  });
+
+  test(`Given an unconsumed current tool result follows earlier tool progress in the same user turn,
+    When split-turn compaction retries after context overflow,
+    Then the retry keeps the original user instruction and final unconsumed tool result`, async () => {
+    // Given
+    const firstToolOutput = [
+      "SEQUENTIAL_FIRST_LOG_START",
+      "first sequential log line ".repeat(200),
+      "SEQUENTIAL_FIRST_LOG_END",
+    ].join("\n");
+    const secondToolOutput = [
+      "SEQUENTIAL_SECOND_LOG_START",
+      "second sequential log line ".repeat(700),
+      "SEQUENTIAL_SECOND_LOG_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the baseline." },
+      { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
+      { role: "user", content: "Inspect both logs before answering." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_sequential_first_log",
+            tool: "read",
+            path: "sequential-first.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_sequential_first_log",
+        content: firstToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_sequential_second_log",
+            tool: "read",
+            path: "sequential-second.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_sequential_second_log",
+        content: secondToolOutput,
+      },
+    ];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "split-turn-sequential-tool-round-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield {
+            type: "text",
+            text: "Summary before the sequential current tool suffix.",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before split-turn compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        yield {
+          type: "text",
+          text: "Continued with the full sequential tool suffix.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 20,
+          toolOutputMaxChars: 128,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Inspect both logs before answering.",
+    });
+    const firstToolResult = retriedMessages.find(
+      (message) =>
+        message.role === "tool" &&
+        message.toolCallId === "read_sequential_first_log",
+    );
+    expect(firstToolResult?.content).toContain("SEQUENTIAL_FIRST_LOG_START");
+    expect(firstToolResult?.content).toContain("[stale tool output compacted:");
+    expect(retriedMessages).toContainEqual({
+      role: "tool",
+      toolCallId: "read_sequential_second_log",
+      content: secondToolOutput,
+    });
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued with the full sequential tool suffix.",
+    });
+  });
+});
