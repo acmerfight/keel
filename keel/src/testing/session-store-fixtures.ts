@@ -1,0 +1,137 @@
+import { expect } from "vitest";
+import type { SessionQueuedInput } from "../cli/session-store.ts";
+import type { Message } from "../llm/types.ts";
+
+export function runtime(home: string, now = 0) {
+  return {
+    env: (key: string) => (key === "KEEL_HOME" ? home : undefined),
+    now: () => now,
+  };
+}
+
+export function rootGraph(sessionId: string) {
+  return {
+    graphId: sessionId,
+    rootSessionId: sessionId,
+    parentSessionId: null,
+    branchTitle: "main",
+    forkPoint: null,
+    forkPolicy: {
+      transcript: "copy_prefix",
+      pendingInputs: "drop",
+      queuedInputs: "drop",
+      bashApprovalGrants: "drop",
+    },
+  };
+}
+
+export function storedMessages(
+  messages: readonly Message[],
+  prefix = "stored-message",
+) {
+  return messages.map((message, index) => ({
+    id: `${prefix}-${index + 1}`,
+    message,
+  }));
+}
+
+export function expectedStoredMessages(messages: readonly Message[]) {
+  return messages.map((message) => ({
+    id: expect.any(String),
+    message,
+  }));
+}
+
+export function restoredUserMessageId(
+  session: {
+    readonly storedMessages: readonly {
+      readonly id: string;
+      readonly message: Message;
+    }[];
+  },
+  content: string,
+): string {
+  const storedMessage = session.storedMessages.find(
+    (candidate) =>
+      candidate.message.role === "user" &&
+      candidate.message.content === content,
+  );
+  if (storedMessage === undefined) {
+    throw new Error(`expected restored user message id for ${content}`);
+  }
+  return storedMessage.id;
+}
+
+export function headerLine(sessionId: string, workspace: string): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    type: "session",
+    id: sessionId,
+    createdAt: "1970-01-01T00:00:00.000Z",
+    workspace,
+    graph: rootGraph(sessionId),
+  });
+}
+
+export function appendLine(messages: readonly Message[]): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    type: "append",
+    timestamp: "1970-01-01T00:00:00.000Z",
+    reason: "turn",
+    messages: storedMessages(messages),
+  });
+}
+
+export function snapshotLine(
+  messages: readonly Message[],
+  pendingInputs: readonly SessionQueuedInput[],
+  modelState?: {
+    readonly activeModel?: {
+      readonly providerId: "fake" | "deepseek" | "kimi" | "qwen";
+      readonly model: string;
+    };
+    readonly modelSwitches?: readonly {
+      readonly timestamp: string;
+      readonly from: {
+        readonly providerId: "fake" | "deepseek" | "kimi" | "qwen";
+        readonly model: string;
+      } | null;
+      readonly to: {
+        readonly providerId: "fake" | "deepseek" | "kimi" | "qwen";
+        readonly model: string;
+      };
+      readonly messageOrdinal: number;
+    }[];
+  },
+): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    type: "snapshot",
+    timestamp: "1970-01-01T00:00:00.000Z",
+    reason: "size_threshold",
+    messages: storedMessages(messages),
+    pendingInputs,
+    ...(modelState !== undefined ? modelState : {}),
+  });
+}
+
+export function inputAdmittedLine(input: SessionQueuedInput): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    type: "input_admitted",
+    timestamp: input.timestamp,
+    id: input.id,
+    sequence: input.sequence,
+    line: input.line,
+  });
+}
+
+export function inputConsumedLine(inputIds: readonly string[]): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    type: "input_consumed",
+    timestamp: "1970-01-01T00:00:00.005Z",
+    inputIds,
+  });
+}

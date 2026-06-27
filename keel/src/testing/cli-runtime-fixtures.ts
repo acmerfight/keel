@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import type { CliRuntime } from "../cli/index.ts";
+import type { CliRuntime } from "../cli/runtime.ts";
 
 export interface RuntimeFixture {
   readonly runtime: CliRuntime;

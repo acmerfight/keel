@@ -1,0 +1,433 @@
+import type { Message } from "../llm/types.ts";
+import type { BashApprovalGrant } from "../permissions/bash.ts";
+import type { CliArgs } from "./args.ts";
+import { USAGE } from "./args.ts";
+import { sessionForkPointsFromStoredMessages } from "./fork-points.ts";
+import { createStableInteractiveDisplay } from "./interactive-session/display.ts";
+import {
+  type InteractiveForkSessionRequest,
+  runInteractiveSession,
+  type SessionPersistenceReason,
+} from "./interactive-session.ts";
+import {
+  formatCostReport,
+  printAgentEvents,
+  printStableInteractiveAgentEvents,
+} from "./output.ts";
+import {
+  loadProjectInstructions,
+  ProjectInstructionsError,
+} from "./project-instructions.ts";
+import {
+  ProviderConfigError,
+  requireKnownCostModel,
+  resolveInteractiveProvider,
+} from "./provider-config.ts";
+import { writeRunReport } from "./report.ts";
+import { resolveResumedWorkflowSkill } from "./resumed-workflow-skill.ts";
+import type { CliRuntime } from "./runtime.ts";
+import { formatSessionForkCreated } from "./session-catalog-format.ts";
+import {
+  acquireSessionLock,
+  consumeSessionQueuedInputs,
+  createSessionStore,
+  ensureSessionCanBeCreated,
+  forkSessionStore,
+  persistSessionBashApprovalGrant,
+  persistSessionMessages,
+  persistSessionModelSwitch,
+  persistSessionQueuedInput,
+  resumeSessionStore,
+  type SessionLock,
+  type SessionModelSelection,
+  type SessionQueuedInput,
+  type SessionState,
+  SessionStoreError,
+  sessionStoredMessages,
+} from "./session-store.ts";
+import { loadWorkflowSkill, WorkflowSkillError } from "./workflow-skills.ts";
+
+type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
+
+export async function runInteractiveCli(
+  cliArgs: RunCliArgs,
+  runtime: CliRuntime,
+): Promise<number> {
+  let exitCode = 0;
+
+  if (
+    runtime.input.isTTY !== true &&
+    runtime.env("KEEL_FORCE_INTERACTIVE") !== "1"
+  ) {
+    runtime.writeStderr(`${USAGE}\n`);
+    return 1;
+  }
+  if (cliArgs.bashMode === "ask" && runtime.input.isTTY !== true) {
+    runtime.writeStderr(
+      "Error: --bash-policy ask requires a real TTY so approvals cannot be read from piped input. Use --bash-policy deny or --bash-policy trusted for non-TTY runs.\n",
+    );
+    return 1;
+  }
+  let sessionLock: SessionLock | undefined;
+  let sourceSessionLock: SessionLock | undefined;
+  try {
+    const workspace = runtime.cwd();
+    try {
+      if (
+        cliArgs.forkSessionId !== undefined &&
+        cliArgs.resumeSessionId !== undefined
+      ) {
+        sourceSessionLock = acquireSessionLock({
+          sessionId: cliArgs.resumeSessionId,
+          runtime,
+        });
+      }
+      const sessionIdForLock =
+        cliArgs.sessionId ?? cliArgs.forkSessionId ?? cliArgs.resumeSessionId;
+      if (sessionIdForLock !== undefined) {
+        sessionLock = acquireSessionLock({
+          sessionId: sessionIdForLock,
+          runtime,
+        });
+      }
+      let session: SessionState | undefined;
+      let activeSessionId: string | undefined;
+      let persistedMessages: readonly Message[] = [];
+      let initialModelSelection: SessionModelSelection | undefined;
+      let workflowSkill =
+        cliArgs.resumeSessionId === undefined && cliArgs.skillName !== undefined
+          ? loadWorkflowSkill(workspace, cliArgs.skillName)
+          : undefined;
+      if (cliArgs.sessionId !== undefined) {
+        activeSessionId = cliArgs.sessionId;
+        ensureSessionCanBeCreated({
+          sessionId: cliArgs.sessionId,
+          runtime,
+        });
+      } else if (cliArgs.resumeSessionId !== undefined) {
+        const resumedSession = resumeSessionStore({
+          sessionId: cliArgs.resumeSessionId,
+          workspace,
+          runtime,
+        });
+        const resumedWorkflowSkill = resolveResumedWorkflowSkill({
+          session: resumedSession,
+          ...(cliArgs.skillName !== undefined
+            ? { requestedSkillName: cliArgs.skillName }
+            : {}),
+        });
+        if (cliArgs.forkSessionId !== undefined) {
+          ensureSessionCanBeCreated({
+            sessionId: cliArgs.forkSessionId,
+            runtime,
+          });
+          session = forkSessionStore({
+            source: resumedSession,
+            targetSessionId: cliArgs.forkSessionId,
+            ...(cliArgs.forkBeforeMessage !== undefined
+              ? {
+                  forkPoint: {
+                    beforeMessageId: cliArgs.forkBeforeMessage,
+                    optionName: "--fork-before-message",
+                  },
+                }
+              : {}),
+            runtime,
+          });
+          sourceSessionLock?.release();
+          sourceSessionLock = undefined;
+        } else {
+          session = resumedSession;
+        }
+        workflowSkill = resumedWorkflowSkill;
+        activeSessionId = session.id;
+        persistedMessages = session.messages;
+        initialModelSelection = session.activeModel;
+        if (cliArgs.providerId !== undefined || cliArgs.model !== undefined) {
+          const overrideProviderId =
+            cliArgs.providerId ?? session.activeModel?.providerId;
+          const override = resolveInteractiveProvider("", runtime, {
+            ...(overrideProviderId !== undefined
+              ? { providerId: overrideProviderId }
+              : {}),
+            ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
+          });
+          const overrideSelection = {
+            providerId: override.providerId,
+            model: override.model,
+          };
+          const previousSelection = session.activeModel ?? null;
+          if (
+            previousSelection === null ||
+            overrideSelection.providerId !== previousSelection.providerId ||
+            overrideSelection.model !== previousSelection.model
+          ) {
+            persistSessionModelSwitch({
+              session,
+              from: previousSelection,
+              to: overrideSelection,
+              runtime,
+            });
+            runtime.writeStdout(
+              `Model overridden to ${overrideSelection.providerId}/${overrideSelection.model} for resumed session.\n`,
+            );
+          }
+          initialModelSelection = overrideSelection;
+        }
+      }
+      let sessionPersistence:
+        | {
+            readonly initialMessages: readonly Message[];
+            readonly initialModelSelection?: SessionModelSelection;
+            readonly initialQueuedInputs: readonly SessionQueuedInput[];
+            readonly persistQueuedInput: (input: {
+              readonly sequence: number;
+              readonly line: string;
+            }) => SessionQueuedInput;
+            readonly consumeQueuedInputs: (inputIds: readonly string[]) => void;
+            readonly persistSessionMessages: (
+              messages: readonly Message[],
+              reason: SessionPersistenceReason,
+              consumedInputIds: readonly string[],
+            ) => void;
+            readonly persistModelSwitch: (switchRecord: {
+              readonly from: SessionModelSelection | null;
+              readonly to: SessionModelSelection;
+              readonly consumedInputIds: readonly string[];
+            }) => void;
+            readonly forkSession: (
+              request: InteractiveForkSessionRequest,
+            ) => string;
+            readonly listForkPoints: () => ReturnType<
+              typeof sessionForkPointsFromStoredMessages
+            >;
+            readonly initialBashApprovalGrants: readonly BashApprovalGrant[];
+            readonly persistBashApprovalGrant: (
+              grant: BashApprovalGrant,
+            ) => void;
+          }
+        | undefined;
+      if (activeSessionId !== undefined) {
+        const sessionId = activeSessionId;
+        const ensureActiveSession = (): SessionState => {
+          let activeSession = session;
+          if (activeSession === undefined) {
+            activeSession = createSessionStore({
+              sessionId,
+              workspace,
+              runtime,
+              ...(workflowSkill !== undefined ? { workflowSkill } : {}),
+            });
+            session = activeSession;
+            persistedMessages = activeSession.messages;
+          }
+          return activeSession;
+        };
+        const forkActiveSession = (
+          request: InteractiveForkSessionRequest,
+        ): string => {
+          const sourceSessionId = ensureActiveSession().id;
+          let targetSessionLock: SessionLock | undefined;
+          try {
+            targetSessionLock = acquireSessionLock({
+              sessionId: request.targetSessionId,
+              runtime,
+            });
+            ensureSessionCanBeCreated({
+              sessionId: request.targetSessionId,
+              runtime,
+            });
+            const source = resumeSessionStore({
+              sessionId: sourceSessionId,
+              workspace,
+              runtime,
+            });
+            forkSessionStore({
+              source,
+              targetSessionId: request.targetSessionId,
+              ...(request.beforeMessageId !== undefined
+                ? {
+                    forkPoint: {
+                      beforeMessageId: request.beforeMessageId,
+                      optionName: "--before-message",
+                    },
+                  }
+                : {}),
+              runtime,
+            });
+            return formatSessionForkCreated({
+              sourceSessionId,
+              targetSessionId: request.targetSessionId,
+              ...(request.beforeMessageId !== undefined
+                ? { forkBeforeMessage: request.beforeMessageId }
+                : {}),
+            });
+          } finally {
+            targetSessionLock?.release();
+          }
+        };
+        const listActiveForkPoints = () =>
+          sessionForkPointsFromStoredMessages({
+            sessionId,
+            storedMessages: sessionStoredMessages(ensureActiveSession()),
+          });
+        const initialSession = session;
+        sessionPersistence = {
+          initialMessages: initialSession?.messages ?? [],
+          ...(initialModelSelection !== undefined
+            ? { initialModelSelection }
+            : {}),
+          initialQueuedInputs: initialSession?.pendingInputs ?? [],
+          initialBashApprovalGrants: initialSession?.bashApprovalGrants ?? [],
+          persistQueuedInput: (input: {
+            readonly sequence: number;
+            readonly line: string;
+          }) =>
+            persistSessionQueuedInput({
+              session: ensureActiveSession(),
+              sequence: input.sequence,
+              line: input.line,
+              runtime,
+            }),
+          consumeQueuedInputs: (inputIds: readonly string[]) => {
+            consumeSessionQueuedInputs({
+              session: ensureActiveSession(),
+              inputIds,
+              runtime,
+            });
+          },
+          persistSessionMessages: (
+            messages: readonly Message[],
+            reason: SessionPersistenceReason,
+            consumedInputIds: readonly string[],
+          ) => {
+            const activeSession = ensureActiveSession();
+            persistedMessages = persistSessionMessages({
+              session: activeSession,
+              previousMessages: persistedMessages,
+              currentMessages: messages,
+              runtime,
+              reason,
+              consumedInputIds,
+            });
+          },
+          persistModelSwitch: (switchRecord: {
+            readonly from: SessionModelSelection | null;
+            readonly to: SessionModelSelection;
+            readonly consumedInputIds: readonly string[];
+          }) => {
+            persistSessionModelSwitch({
+              session: ensureActiveSession(),
+              from: switchRecord.from,
+              to: switchRecord.to,
+              runtime,
+              consumedInputIds: switchRecord.consumedInputIds,
+            });
+          },
+          forkSession: forkActiveSession,
+          listForkPoints: listActiveForkPoints,
+          persistBashApprovalGrant: (grant: BashApprovalGrant) => {
+            persistSessionBashApprovalGrant({
+              session: ensureActiveSession(),
+              grant,
+              runtime,
+            });
+          },
+        };
+      }
+      const projectInstructions = loadProjectInstructions(workspace);
+      const startedAt = runtime.now();
+      const interactiveDisplay =
+        runtime.input.isTTY === true
+          ? createStableInteractiveDisplay(runtime, {
+              inputEchoesToDisplay: runtime.stderrIsTTY === true,
+            })
+          : undefined;
+      interactiveDisplay?.writeIntro();
+      const interactiveResult = await runInteractiveSession({
+        cliArgs,
+        workspace,
+        platform: runtime.platform,
+        ...(projectInstructions !== undefined ? { projectInstructions } : {}),
+        ...(workflowSkill !== undefined ? { workflowSkill } : {}),
+        ...(sessionPersistence !== undefined ? sessionPersistence : {}),
+        input: runtime.input,
+        writeStdout: (text) => {
+          (interactiveDisplay ?? runtime).writeStdout(text);
+        },
+        writeStderr: (text) => {
+          (interactiveDisplay ?? runtime).writeStderr(text);
+        },
+        ...(interactiveDisplay !== undefined
+          ? { renderPrompt: interactiveDisplay.renderPrompt }
+          : {}),
+        ...(interactiveDisplay !== undefined
+          ? { acceptInput: interactiveDisplay.acceptInput }
+          : {}),
+        ...(interactiveDisplay !== undefined
+          ? { closePrompt: interactiveDisplay.closePrompt }
+          : {}),
+        onSigint: (handler) => {
+          runtime.onSigint(handler);
+        },
+        offSigint: (handler) => {
+          runtime.offSigint(handler);
+        },
+        setExitCode: (code) => {
+          exitCode = code;
+        },
+        forceExit: runtime.forceExit,
+        resolveProvider: (message, selection) =>
+          resolveInteractiveProvider(
+            message,
+            runtime,
+            selection ?? {
+              ...(cliArgs.providerId !== undefined
+                ? { providerId: cliArgs.providerId }
+                : {}),
+              ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
+            },
+          ),
+        requireKnownCostModel,
+        printAgentEvents: (stream) =>
+          interactiveDisplay === undefined
+            ? printAgentEvents(stream, runtime)
+            : printStableInteractiveAgentEvents(stream, interactiveDisplay),
+        formatCostReport,
+      });
+      if (
+        cliArgs.reportFile !== undefined &&
+        interactiveResult.report !== undefined
+      ) {
+        writeRunReport(cliArgs.reportFile, {
+          usageByModel: interactiveResult.report.usageByModel,
+          end: interactiveResult.report.end,
+          durationMs: runtime.now() - startedAt,
+        });
+      }
+    } finally {
+      sourceSessionLock?.release();
+      sessionLock?.release();
+    }
+  } catch (error) {
+    if (error instanceof ProviderConfigError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof ProjectInstructionsError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof WorkflowSkillError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    /* v8 ignore next 3: unexpected interactive runtime failures are allowed to escape. */
+    if (!(error instanceof SessionStoreError)) {
+      throw error;
+    }
+    runtime.writeStderr(`${error.message}\n`);
+    return 1;
+  }
+  return exitCode;
+}
