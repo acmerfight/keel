@@ -43,7 +43,17 @@ export interface SessionsForkCliArgs {
   readonly forkBeforeMessage?: string;
 }
 
-export type SessionsCliArgs = SessionsListCliArgs | SessionsForkCliArgs;
+export interface SessionsShowCliArgs {
+  readonly command: "sessions";
+  readonly mode: "show";
+  readonly sessionId: string;
+  readonly timelineLimit: number | null;
+}
+
+export type SessionsCliArgs =
+  | SessionsListCliArgs
+  | SessionsForkCliArgs
+  | SessionsShowCliArgs;
 
 export interface RunCliArgs {
   readonly command: "run";

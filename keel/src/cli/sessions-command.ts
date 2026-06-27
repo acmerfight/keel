@@ -3,6 +3,7 @@ import type { CliRuntime } from "./runtime.ts";
 import {
   formatSessionCatalog,
   formatSessionCatalogWarnings,
+  formatSessionDetail,
   formatSessionForkCreated,
 } from "./session-catalog-format.ts";
 import {
@@ -10,6 +11,7 @@ import {
   ensureSessionCanBeCreated,
   forkSessionStore,
   listSessionCatalog,
+  readSessionCatalogEntry,
   resumeSessionStore,
   type SessionLock,
   SessionStoreError,
@@ -21,6 +23,36 @@ export function runSessionsCommand(
   cliArgs: SessionsCliArgs,
   runtime: CliRuntime,
 ): number {
+  if (cliArgs.mode === "show") {
+    try {
+      const entry = readSessionCatalogEntry({
+        sessionId: cliArgs.sessionId,
+        workspace: runtime.cwd(),
+        runtime,
+      });
+      const session = resumeSessionStore({
+        sessionId: cliArgs.sessionId,
+        workspace: runtime.cwd(),
+        runtime,
+      });
+      runtime.writeStdout(
+        formatSessionDetail({
+          entry,
+          session,
+          timelineLimit: cliArgs.timelineLimit,
+        }),
+      );
+      return 0;
+    } catch (error) {
+      /* v8 ignore next 3: sessions show converts supported failures to SessionStoreError. */
+      if (!(error instanceof SessionStoreError)) {
+        throw error;
+      }
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+  }
+
   if (cliArgs.mode === "fork") {
     let sourceSessionLock: SessionLock | undefined;
     let targetSessionLock: SessionLock | undefined;
