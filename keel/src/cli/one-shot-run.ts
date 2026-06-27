@@ -1,0 +1,162 @@
+import { runAgent } from "../agent/loop.ts";
+import { buildAgentSystemPrompt } from "../agent/prompt.ts";
+import { defaultStopPolicy } from "../agent/stop-policy.ts";
+import type { Message } from "../llm/types.ts";
+import {
+  type BashMode,
+  type BashPermissionPolicy,
+  bashModeExposesTool,
+} from "../permissions/bash.ts";
+import type { CliArgs } from "./args.ts";
+import { formatCostReport, printAgentEvents } from "./output.ts";
+import {
+  loadProjectInstructions,
+  ProjectInstructionsError,
+} from "./project-instructions.ts";
+import {
+  ProviderConfigError,
+  requireKnownCostModel,
+  resolveProvider,
+} from "./provider-config.ts";
+import { assertEndEventHasCost, writeRunReport } from "./report.ts";
+import type { CliRuntime } from "./runtime.ts";
+import { writeRunTranscript } from "./transcript.ts";
+import { loadWorkflowSkill, WorkflowSkillError } from "./workflow-skills.ts";
+
+type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
+
+function oneShotBashPermissionPolicy(
+  bashMode: BashMode,
+): BashPermissionPolicy | undefined {
+  if (bashMode === "ask") {
+    return {
+      review: () => ({
+        type: "deny",
+        message:
+          "Shell command requires interactive approval; one-shot runs cannot approve bash commands.",
+      }),
+    };
+  }
+  return undefined;
+}
+
+export async function runOneShotCli(
+  cliArgs: RunCliArgs,
+  runtime: CliRuntime,
+  userMessage: string,
+): Promise<number> {
+  const abortController = new AbortController();
+  const abort = () => {
+    abortController.abort();
+  };
+  try {
+    const workspace = runtime.cwd();
+    const projectInstructions = loadProjectInstructions(workspace);
+    const workflowSkill =
+      cliArgs.skillName === undefined
+        ? undefined
+        : loadWorkflowSkill(workspace, cliArgs.skillName);
+    const resolved = resolveProvider(userMessage, runtime, {
+      ...(cliArgs.providerId !== undefined
+        ? { providerId: cliArgs.providerId }
+        : {}),
+      ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
+    });
+    runtime.onSigint(abort);
+
+    const startedAt = runtime.now();
+    const bashPermission = oneShotBashPermissionPolicy(cliArgs.bashMode);
+    const systemPrompt = buildAgentSystemPrompt({
+      workspace,
+      platform: runtime.platform,
+      ...(projectInstructions !== undefined ? { projectInstructions } : {}),
+      ...(workflowSkill !== undefined ? { workflowSkill } : {}),
+    });
+    let transcriptMessages: readonly Message[] | undefined;
+    const stream = runAgent({
+      workspace,
+      provider: resolved.provider,
+      userMessage,
+      systemPrompt,
+      signal: abortController.signal,
+      allowBash: bashModeExposesTool(cliArgs.bashMode),
+      stopPolicy: defaultStopPolicy(),
+      ...(bashPermission !== undefined ? { bashPermission } : {}),
+      ...(cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
+        ? {
+            costTracking: {
+              model: requireKnownCostModel(resolved),
+              ...(cliArgs.maxCostUsd !== undefined
+                ? { maxCostUsd: cliArgs.maxCostUsd }
+                : {}),
+            },
+          }
+        : {}),
+      ...(resolved.contextCompaction !== undefined
+        ? { contextCompaction: resolved.contextCompaction }
+        : {}),
+      ...(cliArgs.transcriptFile !== undefined
+        ? {
+            onTranscriptReady: (messages) => {
+              transcriptMessages = messages;
+            },
+          }
+        : {}),
+    });
+
+    const finalEnd = await printAgentEvents(stream, runtime);
+    runtime.writeStdout("\n");
+    if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
+      runtime.writeStderr(formatCostReport(finalEnd.cost, cliArgs.maxCostUsd));
+    }
+    if (cliArgs.reportFile !== undefined && finalEnd !== undefined) {
+      assertEndEventHasCost(finalEnd);
+      writeRunReport(cliArgs.reportFile, {
+        usageByModel: [
+          {
+            provider: resolved.provider.id,
+            model: resolved.model,
+            turns: finalEnd.turns,
+            usage: finalEnd.usage,
+            costUsd: finalEnd.cost.spentUsd,
+          },
+        ],
+        end: finalEnd,
+        durationMs: runtime.now() - startedAt,
+      });
+    }
+    if (
+      cliArgs.transcriptFile !== undefined &&
+      transcriptMessages !== undefined
+    ) {
+      writeRunTranscript(cliArgs.transcriptFile, {
+        provider: resolved.provider.id,
+        model: resolved.model,
+        systemPrompt,
+        messages: transcriptMessages,
+      });
+    }
+  } catch (error) {
+    if (error instanceof ProviderConfigError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof ProjectInstructionsError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof WorkflowSkillError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    /* v8 ignore next 4: unexpected runtime failures are allowed to escape. */
+    if (!abortController.signal.aborted) {
+      throw error;
+    }
+    runtime.writeStdout("\n");
+    return 130;
+  } finally {
+    runtime.offSigint(abort);
+  }
+  return 0;
+}

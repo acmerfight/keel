@@ -224,6 +224,23 @@ describe("module boundaries", () => {
     expect(forbidden).toEqual([]);
   });
 
+  test(`src/cli/index.ts stays a thin command router`, () => {
+    const source = readFileSync("src/cli/index.ts", "utf8");
+    const specifiers = importSpecifiers("src/cli/index.ts", source);
+
+    expect(specifiers).toEqual([
+      "node:fs",
+      "node:url",
+      "./args.ts",
+      "./fork-points-command.ts",
+      "./interactive-run.ts",
+      "./one-shot-run.ts",
+      "./runtime.ts",
+      "./sessions-command.ts",
+      "./top-level-commands.ts",
+    ]);
+  });
+
   test(`interactive compaction helpers depend on dedicated post-compaction restore`, () => {
     const files = [
       "src/cli/interactive-session/manual-compact.ts",
@@ -380,6 +397,33 @@ describe("module boundaries", () => {
       for (const specifier of importSpecifiers(file, source)) {
         const resolved = resolvedRelativeSpecifier(file, specifier);
         if (resolved?.startsWith("src/agent/context-compaction/") === true) {
+          violations.push(`${file} imports ${specifier}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  test(`external modules import apply-patch through the facade`, () => {
+    const violations: string[] = [];
+
+    for (const file of sourceAndTestFiles()) {
+      if (
+        file === "src/tools/apply-patch.ts" ||
+        file.startsWith("src/tools/apply-patch/")
+      ) {
+        continue;
+      }
+
+      const source = readFileSync(file, "utf8");
+      if (!source.includes("apply-patch/")) {
+        continue;
+      }
+
+      for (const specifier of importSpecifiers(file, source)) {
+        const resolved = resolvedRelativeSpecifier(file, specifier);
+        if (resolved?.startsWith("src/tools/apply-patch/") === true) {
           violations.push(`${file} imports ${specifier}`);
         }
       }
