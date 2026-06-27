@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-import { builtinTools } from "../../src/tools/builtin.ts";
+import { executeToolCall } from "../../src/tools/execution.ts";
 import type {
   OpenAICompatibleToolDefinition,
   OpenAICompatibleToolParameter,
@@ -17,6 +17,7 @@ import {
   toolCallCanonicalArguments,
   toolCallFromParsedArguments,
 } from "../../src/tools/registry.ts";
+import { builtinTools } from "../../src/tools/tool-definitions.ts";
 
 type RegisteredBuiltinTool = (typeof builtinTools)[number];
 
@@ -219,14 +220,12 @@ describe("tool registry", () => {
 
     try {
       // When
-      const result = await applyPatchTool.executeCall(
-        {
-          workspace,
-          signal: new AbortController().signal,
-          allowBash: false,
-        },
-        call,
-      );
+      const result = await executeToolCall({
+        workspace,
+        signal: new AbortController().signal,
+        allowBash: false,
+        toolCall: call,
+      });
 
       // Then
       expect(result).toEqual({
@@ -332,7 +331,6 @@ describe("tool registry", () => {
       risk: tool.risk,
       concurrency: tool.concurrency,
       hasFormatLabel: typeof tool.display.formatLabel === "function",
-      hasExecute: typeof tool.execute === "function",
     }));
 
     expect(contracts).toEqual([
@@ -343,7 +341,6 @@ describe("tool registry", () => {
         risk: { kind: "workspace-read" },
         concurrency: { kind: "parallel-safe" },
         hasFormatLabel: true,
-        hasExecute: true,
       },
       {
         name: "ls",
@@ -352,7 +349,6 @@ describe("tool registry", () => {
         risk: { kind: "workspace-read" },
         concurrency: { kind: "parallel-safe" },
         hasFormatLabel: true,
-        hasExecute: true,
       },
       {
         name: "glob",
@@ -361,7 +357,6 @@ describe("tool registry", () => {
         risk: { kind: "workspace-read" },
         concurrency: { kind: "parallel-safe" },
         hasFormatLabel: true,
-        hasExecute: true,
       },
       {
         name: "grep",
@@ -370,7 +365,6 @@ describe("tool registry", () => {
         risk: { kind: "workspace-read" },
         concurrency: { kind: "parallel-safe" },
         hasFormatLabel: true,
-        hasExecute: true,
       },
       {
         name: "edit",
@@ -382,7 +376,6 @@ describe("tool registry", () => {
           reason: "May mutate workspace files.",
         },
         hasFormatLabel: true,
-        hasExecute: true,
       },
       {
         name: "write",
@@ -394,7 +387,6 @@ describe("tool registry", () => {
           reason: "Creates workspace files.",
         },
         hasFormatLabel: true,
-        hasExecute: true,
       },
       {
         name: "apply_patch",
@@ -406,7 +398,6 @@ describe("tool registry", () => {
           reason: "May mutate multiple workspace files.",
         },
         hasFormatLabel: true,
-        hasExecute: true,
       },
       {
         name: "bash",
@@ -418,98 +409,66 @@ describe("tool registry", () => {
           reason: "May mutate workspace or depend on process state.",
         },
         hasFormatLabel: true,
-        hasExecute: true,
       },
     ]);
   });
 
-  test(`Given builtin tool execution receives a matching call without required arguments,
-    When the registry-owned execution guard validates the call,
-    Then it rejects the malformed internal call before reaching the tool executor`, () => {
-    const readTool = builtinToolByName("read");
-    expect(readTool.name).toBe("read");
-
+  test(`Given a provider tool call is missing required arguments,
+    When the tool-call contract normalizes the call,
+    Then it rejects the malformed call before execution`, () => {
     expect(() =>
-      readTool.executeCall(
-        {
-          workspace: ".",
-          signal: new AbortController().signal,
-          allowBash: false,
-        },
-        { id: "call_read", tool: "read" },
-      ),
-    ).toThrow("Invalid builtin tool call for read");
+      normalizeProviderToolCall({ id: "call_read", tool: "read" }),
+    ).toThrow("Invalid provider tool call for read");
   });
 
-  test(`Given builtin tool execution receives a matching call with an invalid argument type,
-    When the registry-owned execution guard validates the call,
-    Then it rejects the malformed internal call before tool-specific validation runs`, () => {
-    const readTool = builtinToolByName("read");
+  test(`Given a provider tool call has an invalid argument type,
+    When the tool-call contract normalizes the call,
+    Then it rejects the malformed call before execution`, () => {
     const malformedCall = {
       id: "call_read",
       tool: "read",
       path: "note.txt",
       offset: "1",
-    };
-    expect(readTool.name).toBe("read");
+    } as const;
 
-    expect(() =>
-      readTool.executeCall(
-        {
-          workspace: ".",
-          signal: new AbortController().signal,
-          allowBash: false,
-        },
-        malformedCall,
-      ),
-    ).toThrow("Invalid builtin tool call for read");
+    expect(() => normalizeProviderToolCall(malformedCall)).toThrow(
+      "Invalid provider tool call for read",
+    );
   });
 
-  test(`Given builtin tool execution receives an integer argument with a fractional value,
-    When the registry-owned execution guard validates the call,
-    Then it rejects the malformed internal call before tool-specific validation runs`, () => {
-    const bashTool = builtinToolByName("bash");
+  test(`Given a provider tool call has a fractional integer argument,
+    When the tool-call contract normalizes the call,
+    Then it rejects the malformed call before execution`, () => {
     const malformedCall = {
       id: "call_bash",
       tool: "bash",
       command: "printf ok",
       timeoutMs: 1.5,
-    };
-    expect(bashTool.name).toBe("bash");
+    } as const;
 
-    expect(() =>
-      bashTool.executeCall(
-        {
-          workspace: ".",
-          signal: new AbortController().signal,
-          allowBash: false,
-        },
-        malformedCall,
-      ),
-    ).toThrow("Invalid builtin tool call for bash");
+    expect(() => normalizeProviderToolCall(malformedCall)).toThrow(
+      "Invalid provider tool call for bash",
+    );
   });
 
   test(`Given builtin tool execution receives a matching call with an explicit undefined optional argument,
-    When the registry-owned execution guard validates the call,
+    When the tool-call contract normalizes the call before execution,
     Then it treats the optional argument as absent`, async () => {
-    const bashTool = builtinToolByName("bash");
-    const callWithAbsentOptional = {
+    const providerCall = {
       id: "call_bash",
       tool: "bash",
       command: "printf ok",
       timeoutMs: undefined,
-    };
-    expect(bashTool.name).toBe("bash");
+    } as const;
+    const callWithAbsentOptional = normalizeProviderToolCall(providerCall);
 
     await expect(
-      bashTool.executeCall(
-        {
-          workspace: ".",
-          signal: new AbortController().signal,
-          allowBash: false,
-        },
-        callWithAbsentOptional,
-      ),
+      executeToolCall({
+        workspace: ".",
+        signal: new AbortController().signal,
+        allowBash: false,
+        toolCall: callWithAbsentOptional,
+      }),
     ).resolves.toEqual({
       ok: false,
       content:
@@ -518,26 +477,23 @@ describe("tool registry", () => {
   });
 
   test(`Given builtin tool execution receives a matching call with an explicit null optional argument,
-    When the registry-owned execution guard validates the internal call,
+    When the tool-call contract normalizes the call before execution,
     Then it treats the optional argument as absent`, async () => {
-    const bashTool = builtinToolByName("bash");
-    const callWithNullOptional = {
+    const providerCall = {
       id: "call_bash",
       tool: "bash",
       command: "printf ok",
       timeoutMs: null,
-    };
-    expect(bashTool.name).toBe("bash");
+    } as const;
+    const callWithNullOptional = normalizeProviderToolCall(providerCall);
 
     await expect(
-      bashTool.executeCall(
-        {
-          workspace: ".",
-          signal: new AbortController().signal,
-          allowBash: false,
-        },
-        callWithNullOptional,
-      ),
+      executeToolCall({
+        workspace: ".",
+        signal: new AbortController().signal,
+        allowBash: false,
+        toolCall: callWithNullOptional,
+      }),
     ).resolves.toEqual({
       ok: false,
       content:
@@ -574,10 +530,9 @@ describe("tool registry", () => {
     ).toThrow("Invalid builtin tool call for read");
   });
 
-  test(`Given builtin edit execution receives malformed nested arguments,
-    When the registry-owned execution guard validates the call,
-    Then it rejects the malformed edit call before reaching the tool executor`, () => {
-    const editTool = builtinToolByName("edit");
+  test(`Given provider edit calls receive malformed nested arguments,
+    When the tool-call contract validates the call,
+    Then it rejects the malformed edit call before execution`, () => {
     const malformedCalls = [
       {
         id: "call_edit",
@@ -609,20 +564,12 @@ describe("tool registry", () => {
         path: "note.txt",
         edits: [{ oldText: "old", newText: "new", note: "extra" }],
       },
-    ];
-    expect(editTool.name).toBe("edit");
+    ] as const;
 
     for (const malformedCall of malformedCalls) {
-      expect(() =>
-        editTool.executeCall(
-          {
-            workspace: ".",
-            signal: new AbortController().signal,
-            allowBash: false,
-          },
-          malformedCall,
-        ),
-      ).toThrow("Invalid builtin tool call for edit");
+      expect(() => normalizeProviderToolCall(malformedCall)).toThrow(
+        "Invalid provider tool call for edit",
+      );
     }
   });
 

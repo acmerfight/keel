@@ -2,7 +2,7 @@ import { z } from "zod";
 import { providerIds } from "../../core/provider-id.ts";
 import type { Message } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
-import { builtinToolCallSchema } from "../../tools/builtin.ts";
+import { builtinToolCallSchema } from "../../tools/tool-call.ts";
 import {
   hasPersistenceRedactionMarker,
   redactMessageForPersistence,
