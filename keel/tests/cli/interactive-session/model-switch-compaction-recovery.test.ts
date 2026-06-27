@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
-import type { AgentEvent } from "../../../src/agent/loop.ts";
+import type { AgentEvent } from "../../../src/agent/events.ts";
 import { createReadVisibilityState } from "../../../src/agent/read-visibility.ts";
 import { executeModelSwitchCompaction } from "../../../src/cli/interactive-session/model-switch-compact.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";

@@ -3,7 +3,7 @@ import {
   contextCompactionStatsForCurrentMessages,
   shouldCompactBeforeRequest,
 } from "../../agent/context-compaction.ts";
-import type { CostReport } from "../../agent/loop.ts";
+import type { CostReport } from "../../agent/events.ts";
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
 import type { ReadVisibilityState } from "../../agent/read-visibility.ts";
 import type { CostModel } from "../../core/cost.ts";

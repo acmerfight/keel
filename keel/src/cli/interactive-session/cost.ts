@@ -1,4 +1,4 @@
-import type { CostReport } from "../../agent/loop.ts";
+import type { CostReport } from "../../agent/events.ts";
 import type { Usage } from "../../llm/types.ts";
 import type { InteractiveSessionArgs } from "./types.ts";
 

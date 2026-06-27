@@ -1,4 +1,4 @@
-import type { AgentEvent } from "../agent/loop.ts";
+import type { AgentEvent } from "../agent/events.ts";
 import type { Usage } from "../llm/types.ts";
 
 export type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
