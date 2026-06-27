@@ -2,7 +2,7 @@ import { KeelError } from "../../core/error.ts";
 import {
   isToolName,
   toolCallFromParsedArguments,
-} from "../../tools/registry.ts";
+} from "../../tools/tool-call.ts";
 import type { LLMEvent, LLMStopReason, Usage } from "../types.ts";
 import { transportError } from "./openai-compatible-retry.ts";
 

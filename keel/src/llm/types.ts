@@ -1,4 +1,4 @@
-import type { ToolCall } from "../tools/registry.ts";
+import type { ToolCall } from "../tools/tool-call.ts";
 
 export interface Usage {
   readonly inputTokens: number;
@@ -12,7 +12,7 @@ interface UserMessage {
   readonly content: string;
 }
 
-export type { ToolCall } from "../tools/registry.ts";
+export type { ToolCall } from "../tools/tool-call.ts";
 
 interface AssistantMessage {
   readonly role: "assistant";

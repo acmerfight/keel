@@ -1,5 +1,5 @@
 import type { ToolCall } from "../llm/types.ts";
-import type { ToolConcurrency } from "../tools/builtin.ts";
+import type { ToolConcurrency } from "../tools/tool-call.ts";
 
 export const PARALLEL_TOOL_CALL_LIMIT = 10;
 
