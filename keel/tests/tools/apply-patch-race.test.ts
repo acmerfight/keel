@@ -235,6 +235,93 @@ describe("Apply Patch Tool Race Handling", () => {
     }
   });
 
+  test(`Given rollback target verification hits an unexpected filesystem failure,
+    When a later patch operation fails after an earlier add was published,
+    Then apply_patch surfaces the rollback verification failure`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-rollback-unexpected-"),
+    );
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: race/new.txt",
+      "+created",
+      "*** Add File: late.txt",
+      "+late",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const publishError = new Error("late publish failed");
+    const rollbackError = new Error("rollback realpath failed");
+    let rollbackStarted = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: (existingPath, newPath) => {
+        if (String(newPath).endsWith("late.txt")) {
+          rollbackStarted = true;
+          throw publishError;
+        }
+        return actualFs.linkSync(existingPath, newPath);
+      },
+      realpathSync: (path) => {
+        if (rollbackStarted && String(path).endsWith(join("race", "new.txt"))) {
+          throw rollbackError;
+        }
+        return actualFs.realpathSync(path);
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() => executeApplyPatch(workspace, patch)).toThrow(rollbackError);
+      expect(rollbackStarted).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an earlier add target parent is replaced by a file before rollback,
+    When a later patch operation fails during publish,
+    Then rollback tolerates the ENOTDIR target verification race`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-rollback-enotdir-"),
+    );
+    const parentPath = join(workspace, "race");
+    const movedParentPath = join(workspace, "race-moved");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: race/new.txt",
+      "+created",
+      "*** Add File: late.txt",
+      "+late",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const publishError = new Error("late publish failed");
+    let replacedParent = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: (existingPath, newPath) => {
+        if (String(newPath).endsWith("late.txt")) {
+          replacedParent = true;
+          actualFs.renameSync(parentPath, movedParentPath);
+          actualFs.writeFileSync(parentPath, "not a directory\n", "utf8");
+          throw publishError;
+        }
+        return actualFs.linkSync(existingPath, newPath);
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() => executeApplyPatch(workspace, patch)).toThrow(publishError);
+      expect(replacedParent).toBe(true);
+      expect(await readFile(parentPath, "utf8")).toBe("not a directory\n");
+      expect(await pathExists(join(movedParentPath, "new.txt"))).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an add target is swapped outside immediately after publish,
     When apply_patch verifies the published target before checkpointing,
     Then it rejects without returning an outside checkpoint path`, async () => {
