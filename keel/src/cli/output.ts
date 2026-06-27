@@ -1,5 +1,5 @@
 import type { ContextCompactionStats } from "../agent/context-compaction.ts";
-import type { AgentEvent, CostReport } from "../agent/loop.ts";
+import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { toolCallLabel } from "../tools/registry.ts";
 
 interface CliOutputRuntime {

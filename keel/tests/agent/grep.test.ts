@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import type { AgentEvent } from "../../src/agent/loop.ts";
+import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import type { LLMProvider } from "../../src/llm/types.ts";

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import type { AgentEvent } from "../../src/agent/loop.ts";
+import type { AgentEvent } from "../../src/agent/events.ts";
 import type { LLMProvider } from "../../src/llm/types.ts";
 
 const ZERO_USAGE = {

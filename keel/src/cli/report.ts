@@ -1,5 +1,5 @@
 import { writeFileSync } from "node:fs";
-import type { AgentEvent, CostReport } from "../agent/loop.ts";
+import type { AgentEvent, CostReport } from "../agent/events.ts";
 import type { EndEvent } from "./output.ts";
 
 // The report schema is consumed by external tooling (the eval runner and any

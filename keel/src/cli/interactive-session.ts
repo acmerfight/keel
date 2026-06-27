@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import type { CostReport } from "../agent/loop.ts";
+import type { CostReport } from "../agent/events.ts";
 import { runAgentTurn } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import {
