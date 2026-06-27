@@ -293,3 +293,37 @@ export function listSessionCatalog(options: {
     warnings,
   };
 }
+
+export function readSessionCatalogEntry(options: {
+  readonly sessionId: string;
+  readonly workspace: string;
+  readonly runtime: SessionStoreRuntime;
+}): SessionCatalogEntry {
+  const workspace = realpathSync(options.workspace);
+  let records: SessionRecords;
+  try {
+    records = readCatalogRecords({
+      sessionId: options.sessionId,
+      runtime: options.runtime,
+    });
+  } catch (error) {
+    /* v8 ignore next 3: catalog detail readers convert supported load failures to SessionStoreError. */
+    if (!(error instanceof SessionStoreError)) {
+      throw error;
+    }
+    sessionStoreError(
+      `Error: cannot show session "${options.sessionId}": ${formatNestedSessionStoreError(error)}`,
+    );
+  }
+  if (records.header.id !== options.sessionId) {
+    sessionStoreError(
+      `Error: cannot show session "${options.sessionId}": ledger belongs to session "${records.header.id}".`,
+    );
+  }
+  if (records.header.workspace !== workspace) {
+    sessionStoreError(
+      `Error: cannot show session "${options.sessionId}": session workspace is ${records.header.workspace}, not ${workspace}.`,
+    );
+  }
+  return sessionCatalogEntry(records);
+}

@@ -6,6 +6,7 @@ import { runCliMain } from "../../../src/cli/index.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   appendSessionRecordLine,
+  beforeMessageForkGraph,
   conversationCheckpoint,
   endForkGraph,
   inputAdmittedRecordLine,
@@ -14,6 +15,33 @@ import {
   snapshotSessionRecordLine,
   writeSessionLedger,
 } from "../../../src/testing/session-ledger-fixtures.ts";
+
+function modelSwitchRecordLine(timestamp: string): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    type: "model_switch",
+    timestamp,
+    from: null,
+    to: { providerId: "qwen", model: "qwen3.7-max" },
+  });
+}
+
+function bashApprovalGrantedRecordLine(timestamp: string, cwd: string): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    type: "bash_approval_granted",
+    timestamp,
+    grant: {
+      type: "exact",
+      cwd,
+      command: "pnpm test",
+    },
+  });
+}
+
+function detailTimestamp(index: number): string {
+  return `2026-02-02T00:00:${index.toString().padStart(2, "0")}.000Z`;
+}
 
 describe("CLI Main - Sessions Command", () => {
   test(`Given no persisted sessions for the current workspace,
@@ -145,6 +173,588 @@ describe("CLI Main - Sessions Command", () => {
     expect(fixture.stderr()).toBe(
       'Error: unknown sessions fork option "--all"\n',
     );
+  });
+
+  test(`Given sessions show is missing or receives invalid options,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async () => {
+    const cases = [
+      {
+        args: ["sessions", "show"],
+        stderr: "Error: sessions show requires <id>.\n",
+      },
+      {
+        args: ["sessions", "show", ""],
+        stderr: "Error: sessions show requires <id>.\n",
+      },
+      {
+        args: ["sessions", "show", "detail", "--limit"],
+        stderr: "Error: --limit requires a positive integer.\n",
+      },
+      {
+        args: ["sessions", "show", "detail", "--limit="],
+        stderr: "Error: --limit requires a positive integer.\n",
+      },
+      {
+        args: ["sessions", "show", "detail", "--limit", "0"],
+        stderr: "Error: --limit requires a positive integer.\n",
+      },
+      {
+        args: ["sessions", "show", "detail", "--limit", "9007199254740992"],
+        stderr: "Error: --limit requires a positive integer.\n",
+      },
+      {
+        args: ["sessions", "show", "detail", "--all", "--limit", "2"],
+        stderr: "Error: --all cannot be combined with --limit.\n",
+      },
+      {
+        args: ["sessions", "show", "detail", "--bogus"],
+        stderr: 'Error: unknown sessions show option "--bogus"\n',
+      },
+    ];
+
+    for (const testCase of cases) {
+      const fixture = createRuntime(testCase.args);
+
+      const exitCode = await runCliMain(fixture.runtime);
+
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(testCase.stderr);
+    }
+  });
+
+  test(`Given a persisted session has restored state,
+    When the user shows the session detail,
+    Then the CLI prints redacted metadata, state, actions, and the full timeline`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const openAiKey = "sk-sessiondetailsecret";
+    const githubToken = `ghp_${"a".repeat(24)}`;
+    await writeSessionLedger({
+      home,
+      id: "detail",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-02-01T00:00:00.000Z",
+      graph: endForkGraph({
+        sessionId: "detail",
+        parentSessionId: "source",
+        sourceLastMessageId: "source-last-message",
+        sourceOrdinal: 7,
+      }),
+      workflowSkill: {
+        name: "review",
+        relativePath: ".agents/skills/review/SKILL.md",
+        resourcePaths: ["references/checklist.md"],
+        content: "Do not print this workflow body.",
+      },
+      records: [
+        appendSessionRecordLine("2026-02-01T00:00:01.000Z", [
+          {
+            role: "user",
+            content: `Use ${openAiKey} and \u001b[31mred text`,
+          },
+          {
+            role: "assistant",
+            content: "I will inspect package.",
+            toolCalls: [
+              {
+                id: "read_package",
+                tool: "read",
+                path: "package.json",
+              },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "read_package",
+            content: `package has ${githubToken} and \u001b[2Jclear`,
+          },
+          {
+            role: "assistant",
+            content: "Done.\nSecond line",
+            toolCalls: [],
+          },
+        ]),
+        modelSwitchRecordLine("2026-02-01T00:00:02.000Z"),
+        inputAdmittedRecordLine({
+          timestamp: "2026-02-01T00:00:03.000Z",
+          id: "queued-detail-input",
+          line: "continue later",
+        }),
+        bashApprovalGrantedRecordLine(
+          "2026-02-01T00:00:04.000Z",
+          ledgerWorkspace,
+        ),
+      ],
+    });
+    const fixture = createRuntime(["sessions", "show", "detail", "--all"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain('Session "detail":\n');
+      expect(stdout).toContain(`workspace: ${ledgerWorkspace}\n`);
+      expect(stdout).toContain("created: 2026-02-01T00:00:00.000Z\n");
+      expect(stdout).toContain("updated: 2026-02-01T00:00:04.000Z\n");
+      expect(stdout).toContain("branch: detail\n");
+      expect(stdout).toContain("parent: source\n");
+      expect(stdout).toContain(
+        "workflow skill: review (.agents/skills/review/SKILL.md)\n",
+      );
+      expect(stdout).toContain(
+        "fork point: full restored history from source through message source-last-message (message 7)\n",
+      );
+      expect(stdout).toContain(
+        "fork policy: transcript=copy_prefix, pendingInputs=drop, queuedInputs=drop, bashApprovalGrants=drop\n",
+      );
+      expect(stdout).toContain("preview: Use [REDACTED_SECRET]");
+      expect(stdout).toContain("state:\n");
+      expect(stdout).toContain("  messages: 4\n");
+      expect(stdout).toContain("  pending inputs: 1\n");
+      expect(stdout).toContain("  active model: qwen/qwen3.7-max\n");
+      expect(stdout).toContain("  model switches: 1\n");
+      expect(stdout).toContain("  bash approvals: 1\n");
+      expect(stdout).toContain("actions:\n");
+      expect(stdout).toContain("  resume: keel --resume detail\n");
+      expect(stdout).toContain(
+        "  fork-points: keel --resume detail --fork-points\n",
+      );
+      expect(stdout).toContain("  fork: keel sessions fork detail <new-id>\n");
+      expect(stdout).toContain("timeline (all 4 messages):\n");
+      expect(stdout).toContain(
+        "1. user msg_append-2026-02-01T00_00_01_000Z_1: Use [REDACTED_SECRET] and \\x1b[31mred text\n",
+      );
+      expect(stdout).toContain(
+        "2. assistant msg_append-2026-02-01T00_00_01_000Z_2: I will inspect package. | tool calls: read_package read package.json\n",
+      );
+      expect(stdout).toContain(
+        "3. tool msg_append-2026-02-01T00_00_01_000Z_3: read_package: package has [REDACTED_SECRET] and \\x1b[2Jclear\n",
+      );
+      expect(stdout).toContain(
+        "4. assistant msg_append-2026-02-01T00_00_01_000Z_4: Done. Second line\n",
+      );
+      expect(stdout).not.toContain(openAiKey);
+      expect(stdout).not.toContain(githubToken);
+      expect(stdout).not.toContain("\u001b");
+      expect(stdout).not.toContain("Do not print this workflow body.");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a persisted session has unsafe ledger identifiers,
+    When the user shows the session detail,
+    Then the CLI redacts secrets and escapes control bytes from identifiers`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const unsafeStoredMessageId = "msg-sk-messageidsecret\u001b[1m";
+    const unsafeToolCallId = "call-sk-toolidsecret\u001b[2m";
+    const unsafeModel = "qwen-sk-modelsecret\u001b[3m";
+    const unsafeForkMessageId = "msg-sk-forkpointsecret\u001b[4m";
+    const unsafeEndMessageId = "msg-sk-endpointsecret\u001b[5m";
+    const unsafeForkPreview = "fork preview sk-previewsecret\u001b[6m";
+    await writeSessionLedger({
+      home,
+      id: "unsafe-detail",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-02-05T00:00:00.000Z",
+      graph: beforeMessageForkGraph({
+        sessionId: "unsafe-detail",
+        parentSessionId: "source",
+        sourceMessageId: unsafeForkMessageId,
+        sourceOrdinal: 3,
+        preview: unsafeForkPreview,
+      }),
+      records: [
+        JSON.stringify({
+          schemaVersion: 2,
+          type: "append",
+          timestamp: "2026-02-05T00:00:01.000Z",
+          reason: "turn",
+          messages: [
+            {
+              id: unsafeStoredMessageId,
+              message: {
+                role: "assistant",
+                content: "I will inspect package.",
+                toolCalls: [
+                  {
+                    id: unsafeToolCallId,
+                    tool: "read",
+                    path: "package.json",
+                  },
+                ],
+              },
+            },
+            {
+              id: "msg_tool",
+              message: {
+                role: "tool",
+                toolCallId: unsafeToolCallId,
+                content: "package contents",
+              },
+            },
+            {
+              id: "msg_final",
+              message: {
+                role: "assistant",
+                content: "Done.",
+                toolCalls: [],
+              },
+            },
+          ],
+        }),
+        JSON.stringify({
+          schemaVersion: 2,
+          type: "model_switch",
+          timestamp: "2026-02-05T00:00:02.000Z",
+          from: null,
+          to: { providerId: "qwen", model: unsafeModel },
+        }),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "unsafe-end-detail",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-02-05T00:00:03.000Z",
+      graph: endForkGraph({
+        sessionId: "unsafe-end-detail",
+        parentSessionId: "source",
+        sourceLastMessageId: unsafeEndMessageId,
+        sourceOrdinal: 4,
+      }),
+    });
+    const fixture = createRuntime(
+      ["sessions", "show", "unsafe-detail", "--all"],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+      },
+    );
+    const endFixture = createRuntime(
+      ["sessions", "show", "unsafe-end-detail"],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+      },
+    );
+    const listFixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+      const endExitCode = await runCliMain(endFixture.runtime);
+      const listExitCode = await runCliMain(listFixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain(
+        "fork point: before message msg-[REDACTED_SECRET]\\x1b[4m (message 3): fork preview [REDACTED_SECRET]\\x1b[6m\n",
+      );
+      expect(stdout).toContain(
+        "active model: qwen/qwen-[REDACTED_SECRET]\\x1b[3m\n",
+      );
+      expect(stdout).toContain(
+        "1. assistant msg-[REDACTED_SECRET]\\x1b[1m: I will inspect package. | tool calls: call-[REDACTED_SECRET]\\x1b[2m read package.json\n",
+      );
+      expect(stdout).toContain(
+        "2. tool msg_tool: call-[REDACTED_SECRET]\\x1b[2m: package contents\n",
+      );
+      expect(stdout).not.toContain("sk-messageidsecret");
+      expect(stdout).not.toContain("sk-toolidsecret");
+      expect(stdout).not.toContain("sk-modelsecret");
+      expect(stdout).not.toContain("sk-forkpointsecret");
+      expect(stdout).not.toContain("sk-previewsecret");
+      expect(stdout).not.toContain("\u001b");
+      expect(fixture.stderr()).toBe("");
+
+      expect(endExitCode).toBe(0);
+      expect(endFixture.stdout()).toContain(
+        "fork point: full restored history from source through message msg-[REDACTED_SECRET]\\x1b[5m (message 4)\n",
+      );
+      expect(endFixture.stdout()).not.toContain("sk-endpointsecret");
+      expect(endFixture.stdout()).not.toContain("\u001b");
+      expect(endFixture.stderr()).toBe("");
+
+      expect(listExitCode).toBe(0);
+      expect(listFixture.stdout()).toContain(
+        "fork point: before message msg-[REDACTED_SECRET]\\x1b[4m (message 3): fork preview [REDACTED_SECRET]\\x1b[6m\n",
+      );
+      expect(listFixture.stdout()).toContain(
+        "fork point: full restored history from source through message msg-[REDACTED_SECRET]\\x1b[5m (message 4)\n",
+      );
+      expect(listFixture.stdout()).not.toContain("sk-forkpointsecret");
+      expect(listFixture.stdout()).not.toContain("sk-previewsecret");
+      expect(listFixture.stdout()).not.toContain("sk-endpointsecret");
+      expect(listFixture.stdout()).not.toContain("\u001b");
+      expect(listFixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an empty persisted session,
+    When the user shows the session detail,
+    Then the CLI reports that no restored messages exist`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "empty-detail",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-02-03T00:00:00.000Z",
+    });
+    const fixture = createRuntime(["sessions", "show", "empty-detail"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("state:\n  messages: 0\n");
+      expect(fixture.stdout()).toContain(
+        "timeline (0 messages):\n(no restored messages)\n",
+      );
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given sessions are unreadable or outside the current workspace,
+    When the user shows those session details,
+    Then the CLI reports the load failure without printing session contents`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const otherWorkspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const otherLedgerWorkspace = await realpath(otherWorkspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "elsewhere-detail",
+      workspace: otherLedgerWorkspace,
+      createdAt: "2026-02-04T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-02-04T00:00:01.000Z", [
+          { role: "user", content: "do not reveal elsewhere" },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "broken-detail",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-02-04T00:00:00.000Z",
+      records: ["not json"],
+    });
+    await writeSessionLedger({
+      home,
+      id: "mismatched-detail",
+      headerId: "other-detail",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-02-04T00:00:00.000Z",
+    });
+
+    try {
+      const elsewhere = createRuntime(
+        ["sessions", "show", "elsewhere-detail"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_HOME: home,
+          },
+        },
+      );
+      const broken = createRuntime(["sessions", "show", "broken-detail"], {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+      });
+      const mismatched = createRuntime(
+        ["sessions", "show", "mismatched-detail"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_HOME: home,
+          },
+        },
+      );
+
+      // When
+      const elsewhereExitCode = await runCliMain(elsewhere.runtime);
+      const brokenExitCode = await runCliMain(broken.runtime);
+      const mismatchedExitCode = await runCliMain(mismatched.runtime);
+
+      // Then
+      expect(elsewhereExitCode).toBe(1);
+      expect(elsewhere.stdout()).toBe("");
+      expect(elsewhere.stderr()).toBe(
+        `Error: cannot show session "elsewhere-detail": session workspace is ${otherLedgerWorkspace}, not ${ledgerWorkspace}.\n`,
+      );
+      expect(elsewhere.stderr()).not.toContain("do not reveal elsewhere");
+
+      expect(brokenExitCode).toBe(1);
+      expect(broken.stdout()).toBe("");
+      expect(broken.stderr()).toContain(
+        'Error: cannot show session "broken-detail": cannot load session ledger',
+      );
+      expect(broken.stderr()).toContain("line 2 is not valid JSON");
+
+      expect(mismatchedExitCode).toBe(1);
+      expect(mismatched.stdout()).toBe("");
+      expect(mismatched.stderr()).toBe(
+        'Error: cannot show session "mismatched-detail": ledger belongs to session "other-detail".\n',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(otherWorkspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a persisted session has more than twenty restored messages,
+    When the user shows the session without an explicit timeline limit,
+    Then the CLI prints only the recent timeline and honors explicit limits`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "bounded",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-02-02T00:00:00.000Z",
+      records: Array.from({ length: 12 }, (_value, index) =>
+        appendSessionRecordLine(detailTimestamp(index + 1), [
+          {
+            role: "user",
+            content: `prompt ${(index + 1).toString().padStart(2, "0")}`,
+          },
+          {
+            role: "assistant",
+            content: `answer ${(index + 1).toString().padStart(2, "0")}`,
+            toolCalls: [],
+          },
+        ]),
+      ),
+    });
+    const fixture = createRuntime(["sessions", "show", "bounded"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain("timeline (last 20 of 24 messages):\n");
+      expect(stdout).toContain(
+        "4 earlier messages omitted; use --limit <n> or --all to show more.\n",
+      );
+      const timeline = stdout.slice(stdout.indexOf("timeline (last 20"));
+      expect(timeline).not.toContain("prompt 01");
+      expect(timeline).not.toContain("answer 01");
+      expect(timeline).not.toContain("prompt 02");
+      expect(timeline).not.toContain("answer 02");
+      expect(timeline).toContain(
+        "5. user msg_append-2026-02-02T00_00_03_000Z_1: prompt 03\n",
+      );
+      expect(stdout).toContain(
+        "24. assistant msg_append-2026-02-02T00_00_12_000Z_2: answer 12\n",
+      );
+      expect(fixture.stderr()).toBe("");
+
+      const equalsLimitFixture = createRuntime(
+        ["sessions", "show", "bounded", "--limit=2"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_HOME: home,
+          },
+        },
+      );
+      const equalsLimitExitCode = await runCliMain(equalsLimitFixture.runtime);
+      expect(equalsLimitExitCode).toBe(0);
+      expect(equalsLimitFixture.stdout()).toContain(
+        "timeline (last 2 of 24 messages):\n",
+      );
+      expect(equalsLimitFixture.stdout()).toContain(
+        "23. user msg_append-2026-02-02T00_00_12_000Z_1: prompt 12\n",
+      );
+      expect(equalsLimitFixture.stdout()).toContain(
+        "24. assistant msg_append-2026-02-02T00_00_12_000Z_2: answer 12\n",
+      );
+      expect(equalsLimitFixture.stderr()).toBe("");
+
+      const spacedLimitFixture = createRuntime(
+        ["sessions", "show", "bounded", "--limit", "3"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_HOME: home,
+          },
+        },
+      );
+      const spacedLimitExitCode = await runCliMain(spacedLimitFixture.runtime);
+      expect(spacedLimitExitCode).toBe(0);
+      expect(spacedLimitFixture.stdout()).toContain(
+        "timeline (last 3 of 24 messages):\n",
+      );
+      expect(spacedLimitFixture.stdout()).toContain(
+        "22. assistant msg_append-2026-02-02T00_00_11_000Z_2: answer 11\n",
+      );
+      expect(spacedLimitFixture.stdout()).toContain(
+        "24. assistant msg_append-2026-02-02T00_00_12_000Z_2: answer 12\n",
+      );
+      expect(spacedLimitFixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given persisted sessions exist across workspaces,
@@ -406,6 +1016,7 @@ describe("CLI Main - Sessions Command", () => {
           `     fork point: full restored history from older through message ${olderLastMessageId} (message 4)`,
           "     fork policy: transcript=copy_prefix, pendingInputs=drop, queuedInputs=drop, bashApprovalGrants=drop",
           "     preview: remember branch-a",
+          "     show: keel sessions show branch-a",
           "     resume: keel --resume branch-a",
           "     fork-points: keel --resume branch-a --fork-points",
           "     fork: keel sessions fork branch-a <new-id>",
@@ -429,6 +1040,7 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain("tie-a  updated 2026-01-01T15:00:01.000Z\n");
       expect(stdout).toContain("tie-b  updated 2026-01-01T15:00:01.000Z\n");
       expect(stdout).toContain("empty  updated 2026-01-01T12:00:00.000Z\n");
+      expect(stdout).toContain("   show: keel sessions show older\n");
       expect(stdout).toContain("   fork: keel sessions fork older <new-id>\n");
       expect(stdout).not.toContain("elsewhere");
       expect(stdout).not.toContain("do not show this session");

@@ -129,6 +129,29 @@ export function endForkGraph(options: {
   };
 }
 
+export function beforeMessageForkGraph(options: {
+  readonly sessionId: string;
+  readonly parentSessionId: string;
+  readonly sourceMessageId: string;
+  readonly sourceOrdinal: number;
+  readonly preview: string;
+}) {
+  return {
+    graphId: options.parentSessionId,
+    rootSessionId: options.parentSessionId,
+    parentSessionId: options.parentSessionId,
+    branchTitle: options.sessionId,
+    forkPoint: {
+      kind: "before_message",
+      sourceSessionId: options.parentSessionId,
+      sourceMessageId: options.sourceMessageId,
+      sourceOrdinal: options.sourceOrdinal,
+      preview: options.preview,
+    },
+    forkPolicy: sessionForkPolicy(),
+  };
+}
+
 export function storedMessages(messages: readonly Message[], prefix: string) {
   return messages.map((message, index) => ({
     id: `msg_${prefix.replace(/[^A-Za-z0-9_-]/gu, "_")}_${index + 1}`,
@@ -205,7 +228,8 @@ export async function writeSessionLedger(options: {
   readonly graph?:
     | ReturnType<typeof rootGraph>
     | ReturnType<typeof forkGraph>
-    | ReturnType<typeof endForkGraph>;
+    | ReturnType<typeof endForkGraph>
+    | ReturnType<typeof beforeMessageForkGraph>;
   readonly records?: readonly string[];
 }): Promise<void> {
   const headerId = options.headerId ?? options.id;
