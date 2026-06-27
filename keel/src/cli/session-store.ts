@@ -1,4 +1,7 @@
-export { listSessionCatalog } from "./session-store/catalog.ts";
+export {
+  listSessionCatalog,
+  readSessionCatalogEntry,
+} from "./session-store/catalog.ts";
 export { SessionStoreError } from "./session-store/errors.ts";
 export {
   acquireSessionLock,
