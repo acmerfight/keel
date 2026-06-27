@@ -363,6 +363,50 @@ describe("module boundaries", () => {
     expect(specifiers).not.toContain("../permissions/bash.ts");
   });
 
+  test(`llm modules import the stable tool-call contract instead of tool execution surfaces`, () => {
+    const violations: string[] = [];
+
+    for (const file of layerFiles("src/llm")) {
+      const source = readFileSync(file, "utf8");
+      for (const specifier of importSpecifiers(file, source)) {
+        const resolved = resolvedRelativeSpecifier(file, specifier);
+        if (
+          resolved?.startsWith("src/tools/") === true &&
+          resolved !== "src/tools/tool-call.ts"
+        ) {
+          violations.push(`${file} imports ${specifier}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  test(`session records validate tool calls through the stable contract`, () => {
+    const file = "src/cli/session-store/records.ts";
+    const source = readFileSync(file, "utf8");
+    const specifiers = importSpecifiers(file, source);
+
+    expect(specifiers).toContain("../../tools/tool-call.ts");
+    expect(specifiers).not.toContain("../../tools/builtin.ts");
+    expect(specifiers).not.toContain("../../tools/registry.ts");
+  });
+
+  test(`tool definitions keep metadata separate from builtin executors`, () => {
+    const file = "src/tools/tool-definitions.ts";
+    const source = readFileSync(file, "utf8");
+    const specifiers = importSpecifiers(file, source);
+
+    expect(
+      specifiers.filter((specifier) =>
+        /^\.\/(?:apply-patch|bash|edit|glob|grep|ls|read|write)\.ts$/u.test(
+          specifier,
+        ),
+      ),
+    ).toEqual([]);
+    expect(source).not.toMatch(/\bexecute[A-Z]/u);
+  });
+
   test(`source modules do not use wildcard re-exports`, () => {
     const violations = sourceFiles().flatMap((file) =>
       wildcardReExportSpecifiers(file, readFileSync(file, "utf8")).map(
@@ -424,7 +468,6 @@ describe("module boundaries", () => {
       "src/cli/session-store.ts",
       "src/llm/providers/openai-compatible.ts",
       "src/llm/types.ts",
-      "src/tools/execution.ts",
       "src/tools/registry.ts",
     ];
     const reExportingFiles = sourceFiles().filter(

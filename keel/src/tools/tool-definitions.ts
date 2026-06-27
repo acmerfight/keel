@@ -1,14 +1,4 @@
 import { z } from "zod";
-import type { RecordLastBatchCheckpointOperation } from "../core/git.ts";
-import type { BashPermissionPolicy } from "../permissions/bash.ts";
-import { executeApplyPatch } from "./apply-patch.ts";
-import { executeBash } from "./bash.ts";
-import { executeEdit } from "./edit.ts";
-import { executeGlob } from "./glob.ts";
-import { executeGrep } from "./grep.ts";
-import { executeLs } from "./ls.ts";
-import { executeRead } from "./read.ts";
-import type { ProjectInstructionVisibilityState } from "./scoped-project-instructions.ts";
 import {
   applyPatchToolArgumentsSchema,
   bashToolArgumentsSchema,
@@ -25,11 +15,6 @@ import {
   toolArgumentKeys,
   toolRequiredArgumentKeys,
 } from "./tool-schema.ts";
-import {
-  resolveWorkspaceCreateTarget,
-  resolveWorkspaceTarget,
-} from "./workspace-path.ts";
-import { executeWrite } from "./write.ts";
 
 type ToolArgShape = z.ZodRawShape;
 
@@ -65,34 +50,6 @@ export type ToolConcurrency =
   | { readonly kind: "parallel-safe" }
   | { readonly kind: "exclusive"; readonly reason: string };
 
-export interface BuiltinToolExecutionContext {
-  readonly workspace: string;
-  readonly signal: AbortSignal;
-  readonly allowBash: boolean;
-  readonly bashPermission?: BashPermissionPolicy;
-  readonly readBeforeEdit?: {
-    readonly hasRead: (targetPath: string) => boolean;
-  };
-  readonly projectInstructions?: ProjectInstructionVisibilityState;
-}
-
-export interface ToolExecution {
-  readonly content: string;
-  readonly ok: boolean;
-  readonly readTargetPath?: string;
-  readonly readTargetOffset?: number;
-  readonly readTargetLimit?: number;
-  readonly mutatedTargetPath?: string;
-  readonly mutatedTargetPaths?: readonly string[];
-  readonly visibleProjectInstructionPaths?: readonly string[];
-  readonly checkpointOperations?: readonly RecordLastBatchCheckpointOperation[];
-}
-
-type BuiltinToolExecution<Args> = (
-  context: BuiltinToolExecutionContext,
-  args: Args,
-) => ToolExecution | Promise<ToolExecution>;
-
 interface BuiltinToolCallInput {
   readonly id: string;
   readonly tool: string;
@@ -117,7 +74,6 @@ interface BuiltinTool<Name extends string, Shape extends ToolArgShape> {
   readonly display: ToolDisplay<z.infer<ToolArgsSchema<Shape>>>;
   readonly risk: ToolRisk;
   readonly concurrency: ToolConcurrency;
-  readonly execute: BuiltinToolExecution<z.infer<ToolArgsSchema<Shape>>>;
 }
 
 function objectFieldValue(input: object, key: string): ObjectFieldValue {
@@ -236,16 +192,6 @@ function defineTool<
     argumentsFromCall,
     canonicalArgumentsFromCall,
     formatCallLabel,
-    executeCall: (
-      context: BuiltinToolExecutionContext,
-      toolCall: BuiltinToolCallInput,
-    ) => {
-      const parsedArgs = parseArgumentsFromCall(toolCall);
-      if (parsedArgs.success) {
-        return tool.execute(context, parsedArgs.data);
-      }
-      throw invalidBuiltinToolCallError(tool.name, parsedArgs.error);
-    },
   });
 }
 
@@ -253,14 +199,6 @@ function toolArgs<const Shape extends ToolArgShape>(
   schema: ToolArgsSchema<Shape>,
 ): { readonly schema: ToolArgsSchema<Shape> } {
   return { schema };
-}
-
-function disabledBashMessage(): string {
-  return "Tool failed: bash failed: shell commands are disabled. Re-run with --bash-policy ask, --bash-policy trusted, or --allow-bash to enable them.";
-}
-
-function deniedBashMessage(message: string): string {
-  return `Tool failed: bash permission denied: ${message}\nRecovery: Ask the user for permission or choose a non-shell approach.`;
 }
 
 const readTool = defineTool({
@@ -279,26 +217,6 @@ const readTool = defineTool({
   },
   risk: { kind: "workspace-read" },
   concurrency: { kind: "parallel-safe" },
-  execute: ({ workspace, projectInstructions }, args) => {
-    const result = executeRead(workspace, args.path, {
-      offset: args.offset,
-      limit: args.limit,
-    });
-    const scopedOutput = projectInstructions?.formatReadOutput(
-      result.targetPath,
-      result.content,
-    );
-    return {
-      content: scopedOutput?.content ?? result.content,
-      ok: true,
-      readTargetPath: result.targetPath,
-      ...(scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0
-        ? { visibleProjectInstructionPaths: scopedOutput.instructionPaths }
-        : {}),
-      ...(args.offset !== undefined ? { readTargetOffset: args.offset } : {}),
-      ...(args.limit !== undefined ? { readTargetLimit: args.limit } : {}),
-    };
-  },
 });
 
 const lsTool = defineTool({
@@ -318,13 +236,6 @@ const lsTool = defineTool({
   },
   risk: { kind: "workspace-read" },
   concurrency: { kind: "parallel-safe" },
-  execute: ({ workspace }, args) => {
-    const result = executeLs(workspace, {
-      ...(args.path !== undefined ? { path: args.path } : {}),
-      ...(args.limit !== undefined ? { limit: args.limit } : {}),
-    });
-    return { content: result.content, ok: true };
-  },
 });
 
 const globTool = defineTool({
@@ -346,13 +257,6 @@ const globTool = defineTool({
   },
   risk: { kind: "workspace-read" },
   concurrency: { kind: "parallel-safe" },
-  execute: async ({ workspace, signal }, args) => {
-    const result = await executeGlob(workspace, args.pattern, {
-      ...(args.path !== undefined ? { path: args.path } : {}),
-      signal,
-    });
-    return { content: result.content, ok: true };
-  },
 });
 
 const grepTool = defineTool({
@@ -374,23 +278,6 @@ const grepTool = defineTool({
   },
   risk: { kind: "workspace-read" },
   concurrency: { kind: "parallel-safe" },
-  execute: async ({ workspace, signal, projectInstructions }, args) => {
-    const result = await executeGrep(workspace, args.pattern, {
-      ...(args.path !== undefined ? { path: args.path } : {}),
-      signal,
-    });
-    const scopedOutput = projectInstructions?.formatInspectionOutput(
-      result.inspectionTargetPaths,
-      result.content,
-    );
-    return {
-      content: scopedOutput?.content ?? result.content,
-      ok: true,
-      ...(scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0
-        ? { visibleProjectInstructionPaths: scopedOutput.instructionPaths }
-        : {}),
-    };
-  },
 });
 
 const editTool = defineTool({
@@ -415,26 +302,6 @@ const editTool = defineTool({
     kind: "exclusive",
     reason: "May mutate workspace files.",
   },
-  execute: ({ workspace, readBeforeEdit, projectInstructions }, args) => {
-    if (projectInstructions !== undefined) {
-      const target = resolveWorkspaceTarget(workspace, args.path, "edit");
-      projectInstructions.assertMutationAllowed([target.targetPath]);
-    }
-    const edits = args.edits.map((edit) => ({
-      oldText: edit.oldText,
-      newText: edit.newText,
-      ...(edit.replaceAll !== undefined ? { replaceAll: edit.replaceAll } : {}),
-    }));
-    const result = executeEdit(workspace, args.path, edits, {
-      ...(readBeforeEdit !== undefined ? { readBeforeEdit } : {}),
-    });
-    return {
-      content: result.content,
-      ok: true,
-      mutatedTargetPath: result.targetPath,
-      checkpointOperations: [result.checkpointOperation],
-    };
-  },
 });
 
 const writeTool = defineTool({
@@ -455,28 +322,6 @@ const writeTool = defineTool({
   concurrency: {
     kind: "exclusive",
     reason: "Creates workspace files.",
-  },
-  execute: ({ workspace, projectInstructions }, args) => {
-    if (projectInstructions !== undefined) {
-      const target = resolveWorkspaceCreateTarget(
-        workspace,
-        args.path,
-        "write",
-      );
-      projectInstructions.assertMutationAllowed([
-        target.targetPath,
-        target.resolvedTargetPath,
-      ]);
-    }
-    const result = executeWrite(workspace, args.path, args.content, {
-      ...(projectInstructions !== undefined ? { projectInstructions } : {}),
-    });
-    return {
-      content: result.content,
-      ok: true,
-      mutatedTargetPath: result.targetPath,
-      checkpointOperations: [result.checkpointOperation],
-    };
   },
 });
 
@@ -499,18 +344,6 @@ const applyPatchTool = defineTool({
   concurrency: {
     kind: "exclusive",
     reason: "May mutate multiple workspace files.",
-  },
-  execute: ({ workspace, readBeforeEdit, projectInstructions }, args) => {
-    const result = executeApplyPatch(workspace, args.patch, {
-      ...(readBeforeEdit !== undefined ? { readBeforeEdit } : {}),
-      ...(projectInstructions !== undefined ? { projectInstructions } : {}),
-    });
-    return {
-      content: result.content,
-      ok: true,
-      mutatedTargetPaths: result.targetPaths,
-      checkpointOperations: result.checkpointOperations,
-    };
   },
 });
 
@@ -535,31 +368,6 @@ const bashTool = defineTool({
   concurrency: {
     kind: "exclusive",
     reason: "May mutate workspace or depend on process state.",
-  },
-  execute: async ({ workspace, signal, allowBash, bashPermission }, args) => {
-    if (!allowBash) {
-      return { content: disabledBashMessage(), ok: false };
-    }
-
-    if (bashPermission !== undefined) {
-      const decision = await bashPermission.review({
-        command: args.command,
-        cwd: workspace,
-        signal,
-      });
-      if (decision.type === "deny") {
-        return {
-          content: deniedBashMessage(decision.message),
-          ok: false,
-        };
-      }
-    }
-
-    const result = await executeBash(workspace, args.command, {
-      signal,
-      ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
-    });
-    return { content: result.content, ok: true };
   },
 });
 

@@ -8,27 +8,32 @@ interface ParsedSource {
 }
 
 const registryPath = "src/tools/registry.ts";
-const builtinPath = "src/tools/builtin.ts";
+const toolCallPath = "src/tools/tool-call.ts";
+const toolDefinitionsPath = "src/tools/tool-definitions.ts";
 const executionPath = "src/tools/execution.ts";
 const cliOutputPath = "src/cli/output.ts";
 const contextCompactionPath = "src/agent/context-compaction.ts";
 const fakeProviderPath = "src/llm/providers/fake.ts";
 const registrySource = parseSource(registryPath);
-const builtinSource = parseSource(builtinPath);
+const toolCallSource = parseSource(toolCallPath);
+const toolDefinitionsSource = parseSource(toolDefinitionsPath);
 const executionSource = parseSource(executionPath);
 const cliOutputSource = parseSource(cliOutputPath);
 const contextCompactionSource = parseSource(contextCompactionPath);
 const fakeProviderSource = parseSource(fakeProviderPath);
 const builtinToolConstantNames = new Set(
-  arrayIdentifierElements(builtinSource, "builtinTools"),
+  arrayIdentifierElements(toolDefinitionsSource, "builtinTools"),
 );
 const builtinToolNames = new Set(
-  builtinToolLiteralNames(builtinSource, builtinToolConstantNames),
+  builtinToolLiteralNames(toolDefinitionsSource, builtinToolConstantNames),
 );
 const perToolArgumentSchemaNames = new Set(
-  builtinToolArgumentSchemaNames(builtinSource, builtinToolConstantNames),
+  builtinToolArgumentSchemaNames(
+    toolDefinitionsSource,
+    builtinToolConstantNames,
+  ),
 );
-const perToolExecutorNames = new Set(importedExecutorNames(builtinSource));
+const perToolExecutorNames = new Set(importedExecutorNames(executionSource));
 
 function parseSource(path: string): ParsedSource {
   const text = readFileSync(path, "utf8");
@@ -470,7 +475,7 @@ function propertyNames(
 
 describe("builtin tool registry invariants", () => {
   test(`Given Zod schemas own builtin tool arguments,
-    When builtin and registry syntax is inspected,
+    When definition, contract, and registry syntax is inspected,
     Then no parallel ToolArgDefinition field layer remains`, () => {
     const customArgumentIdentifiers = new Set([
       "ToolArgDefinition",
@@ -484,70 +489,75 @@ describe("builtin tool registry invariants", () => {
     ]);
 
     expect(
-      identifierOccurrences(builtinSource, customArgumentIdentifiers),
+      identifierOccurrences(toolDefinitionsSource, customArgumentIdentifiers),
     ).toEqual([]);
-    expect(propertyNames(builtinSource, new Set(["fields"]))).toEqual([]);
+    expect(propertyNames(toolDefinitionsSource, new Set(["fields"]))).toEqual(
+      [],
+    );
+    expect(
+      importedBindings(toolCallSource, new Set(["ToolArgDefinition"])),
+    ).toEqual([]);
     expect(
       importedBindings(registrySource, new Set(["ToolArgDefinition"])),
     ).toEqual([]);
   });
 
-  test(`Given provider exposure is a registry-derived surface,
-    When registry syntax is inspected,
+  test(`Given provider exposure is a tool-call-contract-derived surface,
+    When tool-call contract syntax is inspected,
     Then it does not keep per-tool provider definition objects`, () => {
-    expect(perToolProviderConstants(registrySource)).toEqual([]);
+    expect(perToolProviderConstants(toolCallSource)).toEqual([]);
   });
 
   test(`Given builtin tool names are owned by builtinTools,
-    When registry syntax is inspected,
+    When tool-call contract syntax is inspected,
     Then tool name checks do not duplicate the names as string comparisons`, () => {
-    expect(toolNameStringComparisons(registrySource)).toEqual([]);
+    expect(toolNameStringComparisons(toolCallSource)).toEqual([]);
   });
 
   test(`Given tool call parsing is derived from builtin tool metadata,
-    When registry syntax is inspected,
+    When tool-call contract syntax is inspected,
     Then parsing does not import per-tool argument schemas or switch on tool names`, () => {
     const parser = functionDeclaration(
-      registrySource,
+      toolCallSource,
       "toolCallFromParsedArguments",
     );
 
     expect(
-      importedBindings(registrySource, perToolArgumentSchemaNames),
+      importedBindings(toolCallSource, perToolArgumentSchemaNames),
     ).toEqual([]);
     expect(
-      parser === null ? [] : switchStatements(registrySource, parser),
+      parser === null ? [] : switchStatements(toolCallSource, parser),
     ).toEqual([]);
   });
 
-  test(`Given tool execution is derived from builtin tool metadata,
-    When execution syntax is inspected,
-    Then executeToolCall does not import per-tool executors or switch on tool names`, () => {
-    const executor = functionDeclaration(executionSource, "executeToolCall");
-
-    expect(importedBindings(executionSource, perToolExecutorNames)).toEqual([]);
+  test(`Given tool execution owns builtin executor binding,
+    When definition, contract, and registry syntax is inspected,
+    Then metadata and provider-facing contracts do not import per-tool executors`, () => {
+    expect(perToolExecutorNames.size).toBeGreaterThan(0);
     expect(
-      executor === null ? [] : switchStatements(executionSource, executor),
+      importedBindings(toolDefinitionsSource, perToolExecutorNames),
     ).toEqual([]);
+    expect(importedBindings(toolCallSource, perToolExecutorNames)).toEqual([]);
+    expect(importedBindings(registrySource, perToolExecutorNames)).toEqual([]);
   });
 
   test(`Given canonical tool arguments are derived from builtin metadata,
-    When registry syntax is inspected,
+    When tool-call contract syntax is inspected,
     Then toolCallArguments does not switch on builtin tool names`, () => {
-    const serializer = functionDeclaration(registrySource, "toolCallArguments");
+    const serializer = functionDeclaration(toolCallSource, "toolCallArguments");
 
     expect(
       serializer === null
         ? []
-        : builtinToolSwitchCases(registrySource, serializer),
+        : builtinToolSwitchCases(toolCallSource, serializer),
     ).toEqual([]);
   });
 
   test(`Given CLI tool labels are derived from builtin display metadata,
     When CLI output syntax is inspected,
     Then toolCallLabel does not switch on builtin tool names`, () => {
-    const registryLabeler = functionDeclaration(
-      registrySource,
+    const contractLabeler = functionDeclaration(
+      toolCallSource,
       "toolCallLabel",
     );
     const printer = functionDeclaration(cliOutputSource, "printAgentEvents");
@@ -556,9 +566,9 @@ describe("builtin tool registry invariants", () => {
       importedBindings(cliOutputSource, new Set(["toolCallLabel"])),
     ).toHaveLength(1);
     expect(
-      registryLabeler === null
-        ? ["missing registry toolCallLabel"]
-        : builtinToolSwitchCases(registrySource, registryLabeler),
+      contractLabeler === null
+        ? ["missing toolCallLabel"]
+        : builtinToolSwitchCases(toolCallSource, contractLabeler),
     ).toEqual([]);
     expect(
       printer === null
@@ -601,7 +611,7 @@ describe("builtin tool registry invariants", () => {
     ]).toEqual([]);
   });
 
-  test(`Given fake provider tool calls are scripted through the registry,
+  test(`Given fake provider tool calls are scripted through the tool-call contract,
     When fake provider syntax is inspected,
     Then createFakeProvider does not switch on builtin tool names`, () => {
     const createProvider = functionDeclaration(
@@ -616,7 +626,7 @@ describe("builtin tool registry invariants", () => {
     ).toEqual([]);
   });
 
-  test(`Given fake provider tool scripting is registry-generic,
+  test(`Given fake provider tool scripting is contract-generic,
     When fake provider syntax is inspected,
     Then it does not expose per-tool response helper functions`, () => {
     expect(perToolFakeResponseHelpers(fakeProviderSource)).toEqual([]);

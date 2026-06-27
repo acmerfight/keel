@@ -1,8 +1,8 @@
-import type { ToolName } from "../../tools/registry.ts";
+import type { ToolName } from "../../tools/tool-call.ts";
 import {
   toolCallArguments,
   toolCallFromParsedArguments,
-} from "../../tools/registry.ts";
+} from "../../tools/tool-call.ts";
 import type { LLMProvider, Usage } from "../types.ts";
 
 interface FakeTextResponse {

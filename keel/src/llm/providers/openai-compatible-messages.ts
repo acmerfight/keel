@@ -1,7 +1,7 @@
 import {
   openAICompatibleTools,
   toolCallArguments,
-} from "../../tools/registry.ts";
+} from "../../tools/tool-call.ts";
 import type { Message, StreamOptions } from "../types.ts";
 
 export function createChatCompletionsBody(
