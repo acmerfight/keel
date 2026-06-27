@@ -97,7 +97,7 @@ function normalizeSkillText(text: string): string {
   return text
     .replaceAll("\r\n", "\n")
     .replace(
-      /\$(agent-research|code-review|merge-pr|next-slice|slice)\b/g,
+      /\$(agent-research|code-review|merge-pr|modularization-review|next-slice|slice)\b/g,
       "/$1",
     )
     .replaceAll("current thread", "current conversation")

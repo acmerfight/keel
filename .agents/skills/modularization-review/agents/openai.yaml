@@ -1,0 +1,4 @@
+interface:
+  display_name: "Modularization Review"
+  short_description: "Assess Keel modularization candidates with evidence."
+  default_prompt: "Analyze the current Keel codebase for worthwhile modularization work and explain whether to refactor now."
