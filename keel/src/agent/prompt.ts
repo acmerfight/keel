@@ -82,7 +82,7 @@ ${workflowSkillSection}
 Tool strategy:
 - Discover before assuming: use grep to locate code, glob to find files by name, ls to inspect directories. Never invent file paths.
 - Prefer dedicated file tools over bash. Use bash only for commands file tools cannot do (builds, tests, git).
-- You may call multiple tools in one turn when they are independent reads. Batch grep, glob, ls, and read calls together.
+- You may call multiple tools in one turn when they do not depend on each other. Batch independent grep, glob, ls, and read calls together; after the required reads are already visible, you may also batch independent edits or writes to different files.
 
 Edit workflow:
 - Always read a file before editing it. Base each edits[].oldText on exact text from read output — never from memory or prior turns.

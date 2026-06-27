@@ -46,10 +46,6 @@ type ToolRisk =
   | { readonly kind: "workspace-write"; readonly destructive: boolean }
   | { readonly kind: "trusted-shell" };
 
-export type ToolConcurrency =
-  | { readonly kind: "parallel-safe" }
-  | { readonly kind: "exclusive"; readonly reason: string };
-
 interface BuiltinToolCallInput {
   readonly id: string;
   readonly tool: string;
@@ -73,7 +69,6 @@ interface BuiltinTool<Name extends string, Shape extends ToolArgShape> {
   readonly output: ToolOutput;
   readonly display: ToolDisplay<z.infer<ToolArgsSchema<Shape>>>;
   readonly risk: ToolRisk;
-  readonly concurrency: ToolConcurrency;
 }
 
 function objectFieldValue(input: object, key: string): ObjectFieldValue {
@@ -216,7 +211,6 @@ const readTool = defineTool({
     formatLabel: (args) => `read ${args.path}`,
   },
   risk: { kind: "workspace-read" },
-  concurrency: { kind: "parallel-safe" },
 });
 
 const lsTool = defineTool({
@@ -235,7 +229,6 @@ const lsTool = defineTool({
       args.path === undefined ? "ls ." : `ls ${args.path}`,
   },
   risk: { kind: "workspace-read" },
-  concurrency: { kind: "parallel-safe" },
 });
 
 const globTool = defineTool({
@@ -256,7 +249,6 @@ const globTool = defineTool({
         : `glob ${args.pattern} ${args.path}`,
   },
   risk: { kind: "workspace-read" },
-  concurrency: { kind: "parallel-safe" },
 });
 
 const grepTool = defineTool({
@@ -277,7 +269,6 @@ const grepTool = defineTool({
         : `grep ${args.pattern} ${args.path}`,
   },
   risk: { kind: "workspace-read" },
-  concurrency: { kind: "parallel-safe" },
 });
 
 const editTool = defineTool({
@@ -298,10 +289,6 @@ const editTool = defineTool({
     formatLabel: (args) => `edit ${args.path}`,
   },
   risk: { kind: "workspace-write", destructive: false },
-  concurrency: {
-    kind: "exclusive",
-    reason: "May mutate workspace files.",
-  },
 });
 
 const writeTool = defineTool({
@@ -319,10 +306,6 @@ const writeTool = defineTool({
     formatLabel: (args) => `write ${args.path}`,
   },
   risk: { kind: "workspace-write", destructive: true },
-  concurrency: {
-    kind: "exclusive",
-    reason: "Creates workspace files.",
-  },
 });
 
 const applyPatchTool = defineTool({
@@ -341,10 +324,6 @@ const applyPatchTool = defineTool({
     formatLabel: () => "apply_patch",
   },
   risk: { kind: "workspace-write", destructive: true },
-  concurrency: {
-    kind: "exclusive",
-    reason: "May mutate multiple workspace files.",
-  },
 });
 
 const bashTool = defineTool({
@@ -365,10 +344,6 @@ const bashTool = defineTool({
     formatLabel: (args) => `bash ${args.command}`,
   },
   risk: { kind: "trusted-shell" },
-  concurrency: {
-    kind: "exclusive",
-    reason: "May mutate workspace or depend on process state.",
-  },
 });
 
 export const builtinTools = [

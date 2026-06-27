@@ -470,6 +470,7 @@ describe("module boundaries", () => {
       "src/cli/session-store.ts",
       "src/llm/providers/openai-compatible.ts",
       "src/llm/types.ts",
+      "src/tools/apply-patch.ts",
       "src/tools/registry.ts",
     ];
     const reExportingFiles = sourceFiles().filter(

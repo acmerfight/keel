@@ -8,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, sep } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
 import {
@@ -185,7 +185,8 @@ describe("Write Tool Race Handling", () => {
         const pathText = String(path);
         if (
           !swapped &&
-          (pathText === "race" || pathText.endsWith(join("race", "nested")))
+          (pathText.endsWith(`${sep}race`) ||
+            pathText.endsWith(`${sep}${join("race", "nested")}`))
         ) {
           swapped = true;
           actualFs.symlinkSync(outside, join(workspace, "race"), "dir");
@@ -229,7 +230,8 @@ describe("Write Tool Race Handling", () => {
         const pathText = String(path);
         if (
           !raced &&
-          (pathText === "race" || pathText.endsWith(join("race", "nested")))
+          (pathText.endsWith(`${sep}race`) ||
+            pathText.endsWith(`${sep}${join("race", "nested")}`))
         ) {
           raced = true;
           actualFs.writeFileSync(parentPath, "not a directory\n", "utf8");
@@ -263,7 +265,7 @@ describe("Write Tool Race Handling", () => {
         await vi.importActual<typeof import("node:fs")>("node:fs");
       const { executeWrite } = await importWriteWithFs({
         lstatSync: (path) => {
-          if (String(path) === "race") throw originalError;
+          if (String(path).endsWith(`${sep}race`)) throw originalError;
           return actualFs.lstatSync(path);
         },
       });

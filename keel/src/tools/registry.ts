@@ -9,7 +9,6 @@ export {
   openAICompatibleTools,
   toolCallArguments,
   toolCallCanonicalArguments,
-  toolCallConcurrency,
   toolCallFromParsedArguments,
   toolCallLabel,
 } from "./tool-call.ts";
