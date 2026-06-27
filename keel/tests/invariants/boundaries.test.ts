@@ -360,4 +360,31 @@ describe("module boundaries", () => {
 
     expect(violations).toEqual([]);
   });
+
+  test(`external modules import context compaction through the facade`, () => {
+    const violations: string[] = [];
+
+    for (const file of sourceAndTestFiles()) {
+      if (
+        file === "src/agent/context-compaction.ts" ||
+        file.startsWith("src/agent/context-compaction/")
+      ) {
+        continue;
+      }
+
+      const source = readFileSync(file, "utf8");
+      if (!source.includes("context-compaction/")) {
+        continue;
+      }
+
+      for (const specifier of importSpecifiers(file, source)) {
+        const resolved = resolvedRelativeSpecifier(file, specifier);
+        if (resolved?.startsWith("src/agent/context-compaction/") === true) {
+          violations.push(`${file} imports ${specifier}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
 });
