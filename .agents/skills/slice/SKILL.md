@@ -13,6 +13,7 @@ Use this only after the implementation target is clear.
 
 - Use `$next-slice` first when the next slice is unclear.
 - Before starting `$slice`, use `$agent-research <question>` only when the target is unclear because a specific peer-agent or architecture question must be answered. After `$slice` starts, do not switch to `$agent-research` unless the user explicitly asks to pause implementation for research.
+- Use `$modularization-review <target>` as a pre-slice gate only when the feature's module fit is unclear or the lightweight architecture-fit check finds boundary risk.
 - Use `$slice <issue-or-slice>` to implement the selected slice and prepare a PR.
 - Use `$code-review <target>` for read-only review and `$merge-pr <target>` only after the user explicitly asks to merge.
 
@@ -50,7 +51,11 @@ If the user later asks to merge, use `$merge-pr <target>` for merge and cleanup.
    - `keel/EVALS.md` when changing evals or making quality-measurement claims
    - any other repo-local MD file directly relevant to the slice
 3. Confirm the current branch, worktree status, existing PR state, and target issue/goal.
-4. Protect unrelated user changes. Do not revert files you did not need to touch.
+4. Do a lightweight architecture-fit check for the target area before writing tests:
+   - If the slice can land in one clear owner without weakening a stable boundary, continue directly.
+   - If the slice would scatter across unrelated modules, add feature flags/options to shared code, or force logic into a busy orchestrator, and this was not checked before `$slice` started, pause before BDD/implementation and use `$modularization-review` to decide whether a minimal boundary refactor should happen first or inside this slice.
+   - Do not run `$modularization-review` for routine localized changes.
+5. Protect unrelated user changes. Do not revert files you did not need to touch.
 
 ## BDD First
 
