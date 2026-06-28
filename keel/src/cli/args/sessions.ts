@@ -3,6 +3,7 @@ import {
   parseBeforeMessage,
   parseError,
   parseOk,
+  requireSeparatedOptionValue,
 } from "./shared.ts";
 import type {
   SessionsCliArgs,
@@ -11,6 +12,7 @@ import type {
 } from "./types.ts";
 
 const DEFAULT_SESSIONS_SHOW_TIMELINE_LIMIT = 20;
+const SESSIONS_FORK_OPTIONS = ["--before-message"];
 
 function parsePositiveShowLimit(
   value: string | undefined,
@@ -50,7 +52,11 @@ function parseSessionsForkArgs(
     }
 
     if (arg === "--before-message") {
-      const parsed = parseBeforeMessage(optionArgs[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--before-message",
+        optionArgs[index + 1],
+        SESSIONS_FORK_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       forkBeforeMessage = parsed.value;
       skipNext = true;

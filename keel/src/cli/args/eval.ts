@@ -7,12 +7,25 @@ import {
   parseProviderId,
   parseTrials,
   requireOptionValue,
+  requireSeparatedOptionValue,
 } from "./shared.ts";
 import type {
   EvalCliArgs,
   EvalCompareCliArgs,
   EvalRunCliArgs,
 } from "./types.ts";
+
+const EVAL_COMPARE_OPTIONS = ["--base", "--head"];
+const EVAL_RUN_OPTIONS = [
+  "--suite",
+  "--out",
+  "--transcript-dir",
+  "--trials",
+  "--task",
+  "--provider",
+  "--model",
+  "--check",
+];
 
 function parseEvalCompareArgs(
   args: readonly string[],
@@ -30,7 +43,11 @@ function parseEvalCompareArgs(
     }
 
     if (arg === "--base") {
-      const parsed = requireOptionValue("--base", args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--base",
+        args[index + 1],
+        EVAL_COMPARE_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       baseFile = parsed.value;
       skipNext = true;
@@ -43,7 +60,11 @@ function parseEvalCompareArgs(
       continue;
     }
     if (arg === "--head") {
-      const parsed = requireOptionValue("--head", args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--head",
+        args[index + 1],
+        EVAL_COMPARE_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       headFile = parsed.value;
       skipNext = true;
@@ -101,21 +122,33 @@ export function parseEvalArgs(
     }
 
     if (arg === "--suite") {
-      const parsed = requireOptionValue("--suite", args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--suite",
+        args[index + 1],
+        EVAL_RUN_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       suiteDir = parsed.value;
       skipNext = true;
       continue;
     }
     if (arg === "--out") {
-      const parsed = requireOptionValue("--out", args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--out",
+        args[index + 1],
+        EVAL_RUN_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       outFile = parsed.value;
       skipNext = true;
       continue;
     }
     if (arg === "--transcript-dir") {
-      const parsed = requireOptionValue("--transcript-dir", args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--transcript-dir",
+        args[index + 1],
+        EVAL_RUN_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       transcriptDir = parsed.value;
       skipNext = true;
@@ -138,7 +171,11 @@ export function parseEvalArgs(
       continue;
     }
     if (arg === "--task") {
-      const parsed = requireOptionValue("--task", args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--task",
+        args[index + 1],
+        EVAL_RUN_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       taskId = parsed.value;
       skipNext = true;
@@ -158,7 +195,11 @@ export function parseEvalArgs(
       continue;
     }
     if (arg === "--model") {
-      const parsed = parseModel(args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--model",
+        args[index + 1],
+        EVAL_RUN_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       model = parsed.value;
       skipNext = true;

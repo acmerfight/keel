@@ -84,20 +84,19 @@ async function runGlob(
     ...(signal !== undefined ? { signal } : {}),
     timeoutMs,
     onStdoutLine: (line, stopRipgrep) => {
-      if (matches.length >= MAX_GLOB_MATCHES) return;
-
       const absoluteMatchPath = resolve(workspacePath, line);
       /* v8 ignore next: ripgrep applies project ignores before stdout; this is a symlink/race safety filter. */
       if (projectIgnorePolicy.isIgnored(absoluteMatchPath, false)) return;
       /* v8 ignore next: built-in ignore globs filter these before stdout; this is a symlink/race safety filter. */
       if (hasIgnoredPathSegment(workspacePath, absoluteMatchPath)) return;
 
-      matches.push(normalizeRipgrepPath(workspacePath, line));
-
-      if (matches.length >= MAX_GLOB_MATCHES) {
+      if (matches.length === MAX_GLOB_MATCHES) {
         killedForLimit = true;
         stopRipgrep();
+        return;
       }
+
+      matches.push(normalizeRipgrepPath(workspacePath, line));
     },
   });
 

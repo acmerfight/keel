@@ -29,6 +29,7 @@ export interface GrepOptions {
 
 interface RipgrepMatch {
   readonly path: string;
+  readonly pathEncoding: "text" | "bytes";
   readonly lineNumber: number;
   readonly line: string;
 }
@@ -38,18 +39,29 @@ interface GrepToolResult extends ToolResult {
   readonly inspectionTargetPaths: readonly string[];
 }
 
+const ripgrepTextLineSchema = z.object({
+  text: z.string(),
+});
+
+const ripgrepBytesLineSchema = z.object({
+  bytes: z.string(),
+});
+
+const ripgrepTextOrBytesSchema = z.union([
+  ripgrepTextLineSchema,
+  ripgrepBytesLineSchema,
+]);
+
 const ripgrepMatchSchema = z.object({
   type: z.literal("match"),
   data: z.object({
-    path: z.object({
-      text: z.string(),
-    }),
-    lines: z.object({
-      text: z.string(),
-    }),
+    path: ripgrepTextOrBytesSchema,
+    lines: ripgrepTextOrBytesSchema,
     line_number: z.number().int().positive(),
   }),
 });
+
+type RipgrepTextOrBytes = z.infer<typeof ripgrepTextOrBytesSchema>;
 
 function truncateLineForDisplay(line: string): string {
   if (line.length <= MAX_SNIPPET_CHARS) return line;
@@ -67,10 +79,25 @@ function parseRipgrepMatch(line: string): RipgrepMatch | null {
   const result = ripgrepMatchSchema.safeParse(parsed);
   if (!result.success) return null;
 
+  const path = ripgrepTextOrBytes(result.data.data.path);
   return {
-    path: result.data.data.path.text,
+    path: path.text,
+    pathEncoding: path.encoding,
     lineNumber: result.data.data.line_number,
-    line: result.data.data.lines.text.replace(/\r?\n$/, ""),
+    line: ripgrepTextOrBytes(result.data.data.lines).text.replace(/\r?\n$/, ""),
+  };
+}
+
+function ripgrepTextOrBytes(value: RipgrepTextOrBytes): {
+  readonly text: string;
+  readonly encoding: "text" | "bytes";
+} {
+  if ("text" in value) {
+    return { text: value.text, encoding: "text" };
+  }
+  return {
+    text: Buffer.from(value.bytes, "base64").toString("utf8"),
+    encoding: "bytes",
   };
 }
 
@@ -78,7 +105,7 @@ function formatGrepResult(
   pattern: string,
   matches: readonly {
     readonly output: string;
-    readonly targetPath: string;
+    readonly targetPath?: string;
   }[],
   options: {
     readonly truncated: boolean;
@@ -109,8 +136,12 @@ function formatGrepResult(
 
   return {
     content: output.join("\n"),
-    matchTargetPaths: matches.map((match) => match.targetPath),
-    inspectionTargetPaths: matches.map((match) => match.targetPath),
+    matchTargetPaths: matches.flatMap((match) =>
+      match.targetPath === undefined ? [] : [match.targetPath],
+    ),
+    inspectionTargetPaths: matches.flatMap((match) =>
+      match.targetPath === undefined ? [] : [match.targetPath],
+    ),
   };
 }
 
@@ -162,7 +193,7 @@ async function runRipgrep(
   let killedForLimit = false;
   const matches: {
     readonly output: string;
-    readonly targetPath: string;
+    readonly targetPath?: string;
   }[] = [];
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
 
@@ -173,8 +204,6 @@ async function runRipgrep(
     ...(signal !== undefined ? { signal } : {}),
     timeoutMs,
     onStdoutLine: (line, stopRipgrep) => {
-      if (matches.length >= MAX_GREP_MATCHES) return;
-
       const match = parseRipgrepMatch(line);
       if (match === null) return;
 
@@ -186,18 +215,19 @@ async function runRipgrep(
         workspacePath,
         absoluteMatchPath,
       );
-      if (matchTargetPath === null) return;
+      if (matchTargetPath === null && match.pathEncoding === "text") return;
 
       const matchPath = normalizeRipgrepPath(workspacePath, match.path);
-      matches.push({
-        output: `${matchPath}:${match.lineNumber}:${truncateLineForDisplay(match.line)}`,
-        targetPath: matchTargetPath,
-      });
-
-      if (matches.length >= MAX_GREP_MATCHES) {
+      if (matches.length === MAX_GREP_MATCHES) {
         killedForLimit = true;
         stopRipgrep();
+        return;
       }
+
+      matches.push({
+        output: `${matchPath}:${match.lineNumber}:${truncateLineForDisplay(match.line)}`,
+        ...(matchTargetPath !== null ? { targetPath: matchTargetPath } : {}),
+      });
     },
   });
 

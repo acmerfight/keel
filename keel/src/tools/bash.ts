@@ -37,7 +37,7 @@ class TailBuffer {
   }
 
   append(chunk: Buffer): void {
-    if (chunk.length >= this.#maxBytes) {
+    if (chunk.length > this.#maxBytes) {
       this.#chunks = [chunk.subarray(chunk.length - this.#maxBytes)];
       this.#bytes = this.#maxBytes;
       this.#truncated = true;

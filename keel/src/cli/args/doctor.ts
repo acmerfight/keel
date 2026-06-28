@@ -4,8 +4,11 @@ import {
   parseModel,
   parseOk,
   parseProviderId,
+  requireSeparatedOptionValue,
 } from "./shared.ts";
 import type { DoctorCliArgs } from "./types.ts";
+
+const DOCTOR_OPTIONS = ["--provider", "--model", "--offline"];
 
 export function parseDoctorArgs(
   args: readonly string[],
@@ -39,7 +42,11 @@ export function parseDoctorArgs(
     }
 
     if (arg === "--model") {
-      const parsed = parseModel(args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--model",
+        args[index + 1],
+        DOCTOR_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       model = parsed.value;
       skipNext = true;
