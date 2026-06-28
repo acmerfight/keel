@@ -8,6 +8,7 @@ import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeApplyPatch } from "./apply-patch.ts";
 import { executeBash } from "./bash.ts";
 import { executeEdit } from "./edit.ts";
+import { executeGitDiff } from "./git-diff.ts";
 import { executeGlob } from "./glob.ts";
 import { executeGrep } from "./grep.ts";
 import { executeLs } from "./ls.ts";
@@ -26,6 +27,7 @@ type ReadToolCall = Extract<ToolCall, { readonly tool: "read" }>;
 type LsToolCall = Extract<ToolCall, { readonly tool: "ls" }>;
 type GlobToolCall = Extract<ToolCall, { readonly tool: "glob" }>;
 type GrepToolCall = Extract<ToolCall, { readonly tool: "grep" }>;
+type GitDiffToolCall = Extract<ToolCall, { readonly tool: "git_diff" }>;
 type EditToolCall = Extract<ToolCall, { readonly tool: "edit" }>;
 type WriteToolCall = Extract<ToolCall, { readonly tool: "write" }>;
 type ApplyPatchToolCall = Extract<ToolCall, { readonly tool: "apply_patch" }>;
@@ -156,6 +158,18 @@ async function executeGrepTool(
   };
 }
 
+async function executeGitDiffTool(
+  { workspace, signal }: BuiltinToolExecutionContext,
+  toolCall: GitDiffToolCall,
+): Promise<ToolExecution> {
+  const result = await executeGitDiff(workspace, {
+    ...(toolCall.mode !== undefined ? { mode: toolCall.mode } : {}),
+    ...(toolCall.paths !== undefined ? { paths: toolCall.paths } : {}),
+    signal,
+  });
+  return { content: result.content, ok: true };
+}
+
 function executeEditTool(
   {
     workspace,
@@ -279,6 +293,8 @@ function executeBuiltinToolCall(
       return executeGlobTool(context, parsed.data);
     case "grep":
       return executeGrepTool(context, parsed.data);
+    case "git_diff":
+      return executeGitDiffTool(context, parsed.data);
     case "edit":
       return executeEditTool(context, parsed.data);
     case "write":

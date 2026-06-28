@@ -107,7 +107,7 @@ function validProviderValue(
 ): string | number | boolean | readonly unknown[] | Record<string, unknown> {
   switch (field.type) {
     case "string":
-      return "value";
+      return field.enum?.[0] ?? "value";
     case "integer":
       return field.minimum ?? 1;
     case "boolean":
@@ -147,6 +147,10 @@ function expectProviderParameterMatchesSchema(
 
   switch (providerField.type) {
     case "string":
+      expect(providerField.enum, `${context} enum drift`).toEqual(
+        jsonSchemaField.enum,
+      );
+      return;
     case "boolean":
       return;
     case "integer":
@@ -255,6 +259,7 @@ describe("tool registry", () => {
     const lsTool = builtinToolByName("ls");
     const globTool = builtinToolByName("glob");
     const grepTool = builtinToolByName("grep");
+    const gitDiffTool = builtinToolByName("git_diff");
     const editTool = builtinToolByName("edit");
     const writeTool = builtinToolByName("write");
     const applyPatchTool = builtinToolByName("apply_patch");
@@ -277,6 +282,10 @@ describe("tool registry", () => {
     expect(
       grepTool.display.formatLabel({ pattern: "needle", path: "src" }),
     ).toBe("grep needle src");
+    expect(gitDiffTool.display.formatLabel({})).toBe("git_diff");
+    expect(gitDiffTool.display.formatLabel({ paths: ["src"] })).toBe(
+      "git_diff src",
+    );
     expect(
       editTool.display.formatLabel({
         path: "a.ts",
@@ -313,6 +322,7 @@ describe("tool registry", () => {
       "ls",
       "glob",
       "grep",
+      "git_diff",
       "edit",
       "write",
       "apply_patch",
@@ -356,6 +366,13 @@ describe("tool registry", () => {
       },
       {
         name: "grep",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-read" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "git_diff",
         permission: "none",
         output: "text",
         risk: { kind: "workspace-read" },
@@ -585,6 +602,7 @@ describe("tool registry", () => {
       ls: { fields: ["path", "limit"], required: [] },
       glob: { fields: ["pattern", "path"], required: ["pattern"] },
       grep: { fields: ["pattern", "path"], required: ["pattern"] },
+      git_diff: { fields: ["mode", "paths"], required: [] },
       edit: {
         fields: ["path", "edits"],
         required: ["path", "edits"],
@@ -715,6 +733,7 @@ describe("tool registry", () => {
       "ls",
       "glob",
       "grep",
+      "git_diff",
       "edit",
       "write",
       "apply_patch",
@@ -731,6 +750,7 @@ describe("tool registry", () => {
       "ls",
       "glob",
       "grep",
+      "git_diff",
       "edit",
       "write",
       "apply_patch",

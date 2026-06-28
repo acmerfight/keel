@@ -399,7 +399,7 @@ describe("module boundaries", () => {
 
     expect(
       specifiers.filter((specifier) =>
-        /^\.\/(?:apply-patch|bash|edit|glob|grep|ls|read|write)\.ts$/u.test(
+        /^\.\/(?:apply-patch|bash|edit|git-diff|glob|grep|ls|read|write)\.ts$/u.test(
           specifier,
         ),
       ),

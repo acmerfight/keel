@@ -464,7 +464,16 @@ describe("CLI File Editing", () => {
           (tool: { readonly function?: { readonly name?: string } }) =>
             tool.function?.name,
         ),
-      ).toEqual(["read", "ls", "glob", "grep", "edit", "write", "apply_patch"]);
+      ).toEqual([
+        "read",
+        "ls",
+        "glob",
+        "grep",
+        "git_diff",
+        "edit",
+        "write",
+        "apply_patch",
+      ]);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -539,6 +548,7 @@ describe("CLI File Editing", () => {
         "ls",
         "glob",
         "grep",
+        "git_diff",
         "edit",
         "write",
         "apply_patch",
@@ -696,6 +706,7 @@ describe("CLI File Editing", () => {
         "ls",
         "glob",
         "grep",
+        "git_diff",
         "edit",
         "write",
         "apply_patch",
@@ -879,6 +890,7 @@ describe("CLI File Editing", () => {
         "ls",
         "glob",
         "grep",
+        "git_diff",
         "edit",
         "write",
         "apply_patch",
