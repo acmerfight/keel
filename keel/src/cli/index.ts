@@ -2,7 +2,7 @@
 
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { parseCliArgs } from "./args.ts";
+import { parseCliArgs, USAGE } from "./args.ts";
 import { runForkPointsCommand } from "./fork-points-command.ts";
 import { runInteractiveCli } from "./interactive-run.ts";
 import { runOneShotCli } from "./one-shot-run.ts";
@@ -22,6 +22,11 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
     return 1;
   }
   const cliArgs = parsedCliArgs.value;
+
+  if (cliArgs.command === "help") {
+    runtime.writeStdout(`${USAGE}\n`);
+    return 0;
+  }
 
   if (cliArgs.command === "doctor") {
     return await runDoctorCommand(cliArgs, runtime);

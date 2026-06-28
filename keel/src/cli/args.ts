@@ -7,12 +7,17 @@ import { parseRunArgs } from "./args/run.ts";
 import { parseSessionsArgs } from "./args/sessions.ts";
 import { parseError, parseOk } from "./args/shared.ts";
 import type { CliArgs } from "./args/types.ts";
+import { USAGE } from "./args/usage.ts";
 
 type CliArgsParseResult =
   | { readonly ok: true; readonly value: CliArgs }
   | { readonly ok: false; readonly message: string };
 
 export function parseCliArgs(args: readonly string[]): CliArgsParseResult {
+  if (args[0] === "--help" || args[0] === "-h") {
+    return parseOk({ command: "help" });
+  }
+
   if (args[0] === "--doctor") {
     return parseDoctorArgs(args.slice(1));
   }
@@ -36,5 +41,9 @@ export function parseCliArgs(args: readonly string[]): CliArgsParseResult {
     return parseEvalArgs(args.slice(1));
   }
 
-  return parseRunArgs(args);
+  const parsedRunArgs = parseRunArgs(args);
+  if (!parsedRunArgs.ok && parsedRunArgs.kind === "unknownOption") {
+    return parseError(`${parsedRunArgs.message}\n\n${USAGE}`);
+  }
+  return parsedRunArgs;
 }
