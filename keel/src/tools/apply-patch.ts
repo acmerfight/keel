@@ -21,6 +21,9 @@ import {
 import { rollbackAppliedOperations } from "./apply-patch/rollback.ts";
 import type { ToolResult } from "./types.ts";
 
+export type { ParsedPatchOperation } from "./apply-patch/model.ts";
+export { parsePatch } from "./apply-patch/parser.ts";
+
 interface ApplyPatchToolResult extends ToolResult {
   readonly targetPaths: readonly string[];
   readonly checkpointOperations: readonly RecordLastBatchCheckpointOperation[];

@@ -7,6 +7,7 @@ import {
   type ScheduledToolCall,
 } from "../../src/agent/tool-scheduler.ts";
 import type { ToolCall } from "../../src/llm/types.ts";
+import { ToolAccesses } from "../../src/tools/tool-access.ts";
 
 class Deferred<T> {
   readonly promise: Promise<T>;
@@ -46,6 +47,19 @@ const editCall: ToolCall = {
   edits: [{ oldText: "before", newText: "after" }],
 };
 
+const editOtherCall: ToolCall = {
+  id: "edit_other",
+  tool: "edit",
+  path: "other.txt",
+  edits: [{ oldText: "before", newText: "after" }],
+};
+
+const bashCall: ToolCall = {
+  id: "run_tests",
+  tool: "bash",
+  command: "pnpm test",
+};
+
 function readCall(index: number): ToolCall {
   return {
     id: `read_${index}`,
@@ -55,7 +69,7 @@ function readCall(index: number): ToolCall {
 }
 
 describe("tool scheduler", () => {
-  test(`Given every scheduled tool call is parallel-safe,
+  test(`Given every scheduled tool call has non-conflicting resource access,
     When a later call finishes before an earlier call,
     Then execution starts every call and returns results in source order`, async () => {
     const slow = new Deferred<string>();
@@ -63,8 +77,8 @@ describe("tool scheduler", () => {
     const started: string[] = [];
     const completed: string[] = [];
     const scheduledToolCalls: readonly ScheduledToolCall[] = [
-      { toolCall: slowRead, concurrency: { kind: "parallel-safe" } },
-      { toolCall: fastRead, concurrency: { kind: "parallel-safe" } },
+      { toolCall: slowRead, accesses: ToolAccesses.readFile("/w/slow.txt") },
+      { toolCall: fastRead, accesses: ToolAccesses.readFile("/w/fast.txt") },
     ];
 
     const resultPromise = executeParallelToolCallsInSourceOrder({
@@ -110,14 +124,14 @@ describe("tool scheduler", () => {
     expect(completed).toEqual(["done"]);
   });
 
-  test(`Given more parallel-safe tool calls than the concurrency limit,
+  test(`Given more non-conflicting tool calls than the concurrency limit,
     When the scheduler executes the batch,
     Then it bounds active work while preserving source-order results`, async () => {
     const scheduledToolCalls: readonly ScheduledToolCall[] = Array.from(
       { length: PARALLEL_TOOL_CALL_LIMIT + 2 },
       (_, index) => ({
         toolCall: readCall(index),
-        concurrency: { kind: "parallel-safe" },
+        accesses: ToolAccesses.readFile(`/w/file-${index}.txt`),
       }),
     );
     let active = 0;
@@ -144,17 +158,17 @@ describe("tool scheduler", () => {
     );
   });
 
-  test(`Given a scheduled tool batch contains an exclusive call,
+  test(`Given a scheduled tool batch contains conflicting resource access,
     When the scheduler checks whether it can run in parallel,
     Then it keeps the batch out of the parallel path`, async () => {
     const scheduledToolCalls: readonly ScheduledToolCall[] = [
-      { toolCall: slowRead, concurrency: { kind: "parallel-safe" } },
       {
         toolCall: editCall,
-        concurrency: {
-          kind: "exclusive",
-          reason: "May mutate workspace files.",
-        },
+        accesses: ToolAccesses.readWriteFile("/w/note.txt"),
+      },
+      {
+        toolCall: readCall(1),
+        accesses: ToolAccesses.readFile("/w/note.txt"),
       },
     ];
 
@@ -165,31 +179,36 @@ describe("tool scheduler", () => {
         execute: async () => "should not run",
       }),
     ).rejects.toThrow(
-      "Cannot execute an exclusive tool call batch in parallel",
+      "Cannot execute a conflicting tool call batch in parallel",
     );
   });
 
-  test(`Given read-only calls surround exclusive barriers,
+  test(`Given resource-aware calls include independent and conflicting mutations,
     When the scheduler plans execution segments,
-    Then it batches adjacent reads and keeps lone calls on the direct path`, () => {
+    Then it batches non-conflicting resources and keeps conflicts in later segments`, () => {
     const slowScheduled: ScheduledToolCall = {
       toolCall: slowRead,
-      concurrency: { kind: "parallel-safe" },
+      accesses: ToolAccesses.readFile("/w/slow.txt"),
     };
     const fastScheduled: ScheduledToolCall = {
       toolCall: fastRead,
-      concurrency: { kind: "parallel-safe" },
+      accesses: ToolAccesses.readFile("/w/fast.txt"),
     };
     const editScheduled: ScheduledToolCall = {
       toolCall: editCall,
-      concurrency: {
-        kind: "exclusive",
-        reason: "May mutate workspace files.",
-      },
+      accesses: ToolAccesses.readWriteFile("/w/note.txt"),
+    };
+    const otherEditScheduled: ScheduledToolCall = {
+      toolCall: editOtherCall,
+      accesses: ToolAccesses.readWriteFile("/w/other.txt"),
+    };
+    const bashScheduled: ScheduledToolCall = {
+      toolCall: bashCall,
+      accesses: ToolAccesses.all(),
     };
     const loneReadScheduled: ScheduledToolCall = {
       toolCall: readCall(1),
-      concurrency: { kind: "parallel-safe" },
+      accesses: ToolAccesses.readFile("/w/note.txt"),
     };
 
     expect(
@@ -197,14 +216,22 @@ describe("tool scheduler", () => {
         slowScheduled,
         fastScheduled,
         editScheduled,
+        otherEditScheduled,
         loneReadScheduled,
-        editScheduled,
+        bashScheduled,
       ]),
     ).toEqual([
-      { kind: "parallel", toolCalls: [slowScheduled, fastScheduled] },
-      { kind: "single", toolCall: editScheduled },
+      {
+        kind: "parallel",
+        toolCalls: [
+          slowScheduled,
+          fastScheduled,
+          editScheduled,
+          otherEditScheduled,
+        ],
+      },
       { kind: "single", toolCall: loneReadScheduled },
-      { kind: "single", toolCall: editScheduled },
+      { kind: "single", toolCall: bashScheduled },
     ]);
   });
 });

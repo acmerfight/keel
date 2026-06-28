@@ -151,10 +151,12 @@ Known limits that shape the priorities below:
   `provider_length`. Mid-stream failures after non-empty assistant output or
   tool calls still fail the turn; context overflow before assistant output is
   handled by compaction and one retry, not provider replay.
-- Same-turn parallel-safe read tools (`read`, `ls`, `glob`, `grep`) run
-  concurrently with source-ordered results, including adjacent read batches
-  around exclusive `edit`, `write`, or `bash` barriers. Keel still lacks
-  richer resource-aware scheduling for independent mutations.
+- Same-turn tool calls run through resource-aware scheduling with
+  source-ordered results. Non-conflicting `read`, `ls`, `glob`, `grep`,
+  `edit`, `write`, and `apply_patch` resources can share same-turn batches;
+  asynchronous tools can overlap while synchronous file mutations still execute
+  on the Node event loop. Same-file or tree-overlapping work, `AGENTS.md`
+  mutations, `bash`, and unmodeled effects stay serialized.
 - Edit supports multiple replacements per file tool call, `replaceAll` for
   individual targets, fuzzy matching for common copy/paste drift,
   enforced read-before-edit for updates, and apply_patch Add/Update/Delete/Move
@@ -257,11 +259,12 @@ Codex/Claude Code — or directly moves the eval numbers.
 - **File discovery tools** — ✅ Done (2026-06): `glob` discovers files by
   path pattern before reading, and `ls` lists directory entries with ignore
   policy enforcement.
-- **Parallel tool execution.** ✅ Partial (2026-06): all-parallel-safe
-  same-turn batches now overlap while preserving source-order tool results,
-  and mixed batches are segmented so adjacent reads can run in parallel around
-  exclusive mutation or shell barriers. Remaining work is resource-aware
-  scheduling that can safely overlap independent mutations.
+- **Parallel tool execution.** ✅ Done (2026-06): same-turn batches now use
+  resource-aware scheduling while preserving source-order tool results. Reads,
+  searches, independent file edits, independent file creates, and non-overlapping
+  apply_patch operations can be scheduled together; conflicting file/tree
+  resources, `AGENTS.md` mutations, `bash`, and unmodeled effects remain
+  serialized.
 - **Session persistence / resume.** ✅ Partial (2026-06): named interactive
   sessions persist JSONL ledgers and rebuild transcript context on
   `--resume`, including compaction replacement records, active-session locks,

@@ -323,13 +323,12 @@ describe("tool registry", () => {
 
   test(`Given builtin tools declare their behavior contracts,
     When the registry metadata is inspected,
-    Then each tool makes permission output risk and concurrency explicit`, () => {
+    Then each tool makes permission output and risk explicit`, () => {
     const contracts = builtinTools.map((tool) => ({
       name: tool.name,
       permission: tool.permission.kind,
       output: tool.output.kind,
       risk: tool.risk,
-      concurrency: tool.concurrency,
       hasFormatLabel: typeof tool.display.formatLabel === "function",
     }));
 
@@ -339,7 +338,6 @@ describe("tool registry", () => {
         permission: "none",
         output: "text",
         risk: { kind: "workspace-read" },
-        concurrency: { kind: "parallel-safe" },
         hasFormatLabel: true,
       },
       {
@@ -347,7 +345,6 @@ describe("tool registry", () => {
         permission: "none",
         output: "text",
         risk: { kind: "workspace-read" },
-        concurrency: { kind: "parallel-safe" },
         hasFormatLabel: true,
       },
       {
@@ -355,7 +352,6 @@ describe("tool registry", () => {
         permission: "none",
         output: "text",
         risk: { kind: "workspace-read" },
-        concurrency: { kind: "parallel-safe" },
         hasFormatLabel: true,
       },
       {
@@ -363,7 +359,6 @@ describe("tool registry", () => {
         permission: "none",
         output: "text",
         risk: { kind: "workspace-read" },
-        concurrency: { kind: "parallel-safe" },
         hasFormatLabel: true,
       },
       {
@@ -371,10 +366,6 @@ describe("tool registry", () => {
         permission: "none",
         output: "text",
         risk: { kind: "workspace-write", destructive: false },
-        concurrency: {
-          kind: "exclusive",
-          reason: "May mutate workspace files.",
-        },
         hasFormatLabel: true,
       },
       {
@@ -382,10 +373,6 @@ describe("tool registry", () => {
         permission: "none",
         output: "text",
         risk: { kind: "workspace-write", destructive: true },
-        concurrency: {
-          kind: "exclusive",
-          reason: "Creates workspace files.",
-        },
         hasFormatLabel: true,
       },
       {
@@ -393,10 +380,6 @@ describe("tool registry", () => {
         permission: "none",
         output: "text",
         risk: { kind: "workspace-write", destructive: true },
-        concurrency: {
-          kind: "exclusive",
-          reason: "May mutate multiple workspace files.",
-        },
         hasFormatLabel: true,
       },
       {
@@ -404,10 +387,6 @@ describe("tool registry", () => {
         permission: "approval",
         output: "text",
         risk: { kind: "trusted-shell" },
-        concurrency: {
-          kind: "exclusive",
-          reason: "May mutate workspace or depend on process state.",
-        },
         hasFormatLabel: true,
       },
     ]);

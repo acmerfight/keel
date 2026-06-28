@@ -1,11 +1,14 @@
 import type { ToolCall } from "../llm/types.ts";
-import type { ToolConcurrency } from "../tools/tool-call.ts";
+import {
+  ToolAccesses,
+  type ToolAccesses as ToolAccessSet,
+} from "../tools/tool-access.ts";
 
 export const PARALLEL_TOOL_CALL_LIMIT = 10;
 
 export interface ScheduledToolCall {
   readonly toolCall: ToolCall;
-  readonly concurrency: ToolConcurrency;
+  readonly accesses: ToolAccessSet;
 }
 
 export type ParallelToolCallResult<Result> =
@@ -44,7 +47,12 @@ export function canExecuteToolCallsInParallel(
   toolCalls: readonly ScheduledToolCall[],
 ): boolean {
   return toolCalls.every(
-    ({ concurrency }) => concurrency.kind === "parallel-safe",
+    (toolCall, index) =>
+      !toolCalls
+        .slice(0, index)
+        .some((previous) =>
+          ToolAccesses.conflict(previous.accesses, toolCall.accesses),
+        ),
   );
 }
 
@@ -72,16 +80,18 @@ export function planToolCallExecutionSegments(
   };
 
   for (const toolCall of toolCalls) {
-    if (toolCall.concurrency.kind === "parallel-safe") {
+    if (
+      pendingParallelToolCalls.every(
+        (pending) =>
+          !ToolAccesses.conflict(pending.accesses, toolCall.accesses),
+      )
+    ) {
       pendingParallelToolCalls.push(toolCall);
       continue;
     }
 
     flushPendingParallelToolCalls();
-    segments.push({
-      kind: "single",
-      toolCall,
-    });
+    pendingParallelToolCalls.push(toolCall);
   }
 
   flushPendingParallelToolCalls();
@@ -92,7 +102,7 @@ export async function executeParallelToolCallsInSourceOrder<Result>(
   options: ExecuteParallelToolCallsOptions<Result>,
 ): Promise<readonly ParallelToolCallResult<Result>[]> {
   if (!canExecuteToolCallsInParallel(options.toolCalls)) {
-    throw new Error("Cannot execute an exclusive tool call batch in parallel");
+    throw new Error("Cannot execute a conflicting tool call batch in parallel");
   }
 
   const results: IndexedParallelToolCallResult<Result>[] = [];
