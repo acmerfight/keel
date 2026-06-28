@@ -124,6 +124,98 @@ describe("Interactive Session - Manual Compact Success", () => {
     expect(sigintHandlers.size).toBe(0);
   });
 
+  test(`Given a resumed interactive session has restored history before provider resolution,
+    When user enters /compact,
+    Then manual compaction uses the restored transcript`, async () => {
+    // Given
+    const initialMessages: readonly Message[] = [
+      { role: "user", content: "remember alpha" },
+      { role: "assistant", content: "Alpha is saved.", toolCalls: [] },
+    ];
+    let summaryPrompt = "";
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice !== "none") {
+          throw new Error("manual compaction should not start an agent turn");
+        }
+        summaryPrompt = options.messages[0]?.content ?? "";
+        yield { type: "text", text: "Restored checkpoint summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    const resolvedMessages: string[] = [];
+    const persisted: Array<{
+      readonly reason: string;
+      readonly messages: readonly Message[];
+      readonly consumedInputIds: readonly string[];
+    }> = [];
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialMessages,
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (userMessage) => {
+        resolvedMessages.push(userMessage);
+        return {
+          provider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+          contextCompaction: { keepRecentTokens: 1 },
+        };
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("manual compaction should not print agent events");
+      },
+      formatCostReport: () => "",
+      persistSessionMessages: (messages, reason, consumedInputIds) => {
+        persisted.push({
+          reason,
+          messages: structuredClone([...messages]),
+          consumedInputIds: [...consumedInputIds],
+        });
+      },
+    });
+
+    // When
+    input.end("/compact keep restored facts\n");
+
+    // Then
+    await session;
+    expect(stderr).toContain("Context compacted: manual");
+    expect(stderr).not.toContain("no conversation history");
+    expect(summaryPrompt).toContain("remember alpha");
+    expect(summaryPrompt).toContain("Alpha is saved.");
+    expect(summaryPrompt).toContain("keep restored facts");
+    expect(resolvedMessages).toEqual(["/compact keep restored facts"]);
+    expect(JSON.stringify(persisted[0]?.messages)).toContain(
+      "Restored checkpoint summary.",
+    );
+    expect(persisted[0]?.reason).toBe("compaction");
+    expect(persisted[0]?.consumedInputIds).toEqual([]);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
   test(`Given an interactive session has read a file before manual compaction,
     When user asks for an edit after /compact,
     Then the edit uses a fresh post-compaction read snapshot`, async () => {

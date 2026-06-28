@@ -570,6 +570,98 @@ describe("Interactive Session - Manual Compact Failures", () => {
     );
   });
 
+  test(`Given queued manual compaction is interrupted,
+    When the session exits,
+    Then the queued command is consumed instead of replaying`, async () => {
+    // Given
+    const initialMessages: readonly Message[] = [
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "First done", toolCalls: [] },
+    ];
+    let receiveSummaryRequest: () => void = () => {};
+    const summaryRequested = new Promise<void>((resolve) => {
+      receiveSummaryRequest = resolve;
+    });
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice !== "none") {
+          throw new Error("queued manual compaction should not start a turn");
+        }
+        receiveSummaryRequest();
+        if (!options.signal.aborted) {
+          await new Promise<void>((resolve) => {
+            options.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+        }
+        yield { type: "text", text: "Cancelled queued summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    const consumedInputIds: string[][] = [];
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialMessages,
+      initialQueuedInputs: [
+        {
+          id: "queued-compact",
+          timestamp: "1970-01-01T00:00:00.001Z",
+          sequence: 9,
+          line: "/compact",
+        },
+      ],
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("queued manual compaction should not print events");
+      },
+      formatCostReport: () => "",
+      consumeQueuedInputs: (inputIds) => {
+        consumedInputIds.push([...inputIds]);
+      },
+      persistSessionMessages: () => {
+        throw new Error("interrupted queued compaction should not persist");
+      },
+    });
+
+    // When
+    input.end();
+    await withTimeout(summaryRequested, 5000, "manual summary did not start");
+    for (const handler of [...sigintHandlers]) {
+      handler();
+    }
+
+    // Then
+    await withTimeout(session, 5000, "interrupted session did not end");
+    expect(consumedInputIds).toEqual([["queued-compact"]]);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
   test(`Given manual compaction summary fails after interruption,
     When user sends another prompt,
     Then the session treats the failure as an abort and restores history`, async () => {
