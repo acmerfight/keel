@@ -178,7 +178,7 @@ describe("CLI Main - Validation", () => {
     );
   });
 
-  test.each(["0", "abc"])(`Given invalid max cost value %s,
+  test.each(["0", "abc", "0x10", " 5 "])(`Given invalid max cost value %s,
     When the CLI main parses the request,
     Then it returns a validation error before resolving a provider`, async (maxCost) => {
     // Given

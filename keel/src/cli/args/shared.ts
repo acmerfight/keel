@@ -26,10 +26,18 @@ export function parseError(
   return { ok: false, message };
 }
 
-const maxCostSchema = z.coerce.number().finite().positive();
+const maxCostSchema = z
+  .string()
+  .regex(/^(?:\d+(?:\.\d+)?|\.\d+)$/u)
+  .transform((value) => Number(value))
+  .pipe(z.number().finite().positive());
 const bashPolicySchema = z.enum(["ask", "deny", "trusted"]);
 const providerIdSchema = z.enum(providerIds);
-const trialsSchema = z.coerce.number().int().positive();
+const trialsSchema = z
+  .string()
+  .regex(/^\d+$/u)
+  .transform((value) => Number(value))
+  .pipe(z.number().int().positive());
 
 export function parseMaxCost(raw: string | undefined): ParseResult<number> {
   const result = maxCostSchema.safeParse(raw);
