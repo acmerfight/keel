@@ -27,16 +27,42 @@ const sessionLockOwnerSchema = z
   .strict();
 
 type SessionLockOwner = z.infer<typeof sessionLockOwnerSchema>;
+type SessionLockOwnerRead =
+  | {
+      readonly status: "valid";
+      readonly owner: SessionLockOwner;
+    }
+  | {
+      readonly status: "missing";
+    }
+  | {
+      readonly status: "malformed";
+    }
+  | {
+      readonly status: "read_error";
+      readonly message: string;
+    };
 
-function readSessionLockOwner(lockPath: string): SessionLockOwner | null {
+// Gives an in-progress lock owner write time to finish before reclaiming a crash-left ownerless directory.
+const OWNERLESS_LOCK_RECLAIM_AFTER_MS = 30_000;
+
+function readSessionLockOwner(lockPath: string): SessionLockOwnerRead {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(sessionLockOwnerPath(lockPath), "utf8"));
-  } catch {
-    return null;
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return { status: "missing" };
+    }
+    if (error instanceof SyntaxError) {
+      return { status: "malformed" };
+    }
+    return { status: "read_error", message: errorMessage(error) };
   }
   const parsed = sessionLockOwnerSchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+  return parsed.success
+    ? { status: "valid", owner: parsed.data }
+    : { status: "malformed" };
 }
 
 function processIsAlive(pid: number): boolean {
@@ -48,9 +74,32 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+function ownerlessSessionLockIsStale(lockPath: string): boolean {
+  try {
+    const stats = statSync(lockPath);
+    return Date.now() - stats.mtimeMs >= OWNERLESS_LOCK_RECLAIM_AFTER_MS;
+  } catch (error) {
+    /* v8 ignore next 3: requires a filesystem race or permission change between lock existence detection and stale-owner inspection. */
+    sessionStoreError(
+      `Error: cannot inspect session lock ${lockPath}: ${errorMessage(error)}`,
+    );
+  }
+}
+
 function removeStaleSessionLock(lockPath: string): boolean {
-  const owner = readSessionLockOwner(lockPath);
-  if (owner === null || processIsAlive(owner.pid)) {
+  const ownerRead = readSessionLockOwner(lockPath);
+  if (ownerRead.status === "valid" && processIsAlive(ownerRead.owner.pid)) {
+    return false;
+  }
+  if (ownerRead.status === "read_error") {
+    sessionStoreError(
+      `Error: cannot read session lock owner ${sessionLockOwnerPath(lockPath)}: ${ownerRead.message}`,
+    );
+  }
+  if (
+    (ownerRead.status === "missing" || ownerRead.status === "malformed") &&
+    !ownerlessSessionLockIsStale(lockPath)
+  ) {
     return false;
   }
   try {
@@ -64,8 +113,8 @@ function removeStaleSessionLock(lockPath: string): boolean {
 }
 
 function releaseSessionLock(lockPath: string, token: string): void {
-  const owner = readSessionLockOwner(lockPath);
-  if (owner === null || owner.token !== token) {
+  const ownerRead = readSessionLockOwner(lockPath);
+  if (ownerRead.status !== "valid" || ownerRead.owner.token !== token) {
     return;
   }
   try {

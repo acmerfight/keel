@@ -493,20 +493,21 @@ export async function runInteractiveSession(
         continue;
       }
       if (interactiveCommand?.kind === "compact") {
-        if (messages.length === 0 || resolved === null) {
+        if (messages.length === 0) {
           options.writeStderr(
             "Context compaction skipped: no conversation history to compact.\n",
           );
           consumeQueuedInputLines([rawInput]);
           continue;
         }
+        const compactResolved = resolveActiveProvider(userMessage);
         const compactAbortController = new AbortController();
         activeAbortController = compactAbortController;
         let compactCost: CostReport | undefined;
         try {
           compactCost = await executeManualCompaction({
             command: interactiveCommand,
-            resolved,
+            resolved: compactResolved,
             workspace: options.workspace,
             messages,
             systemPrompt,
@@ -521,7 +522,9 @@ export async function runInteractiveSession(
         } finally {
           activeAbortController = null;
         }
-        if (!compactAbortController.signal.aborted) {
+        if (compactAbortController.signal.aborted) {
+          consumeQueuedInputLines([rawInput]);
+        } else {
           options.persistSessionMessages?.(
             messages,
             "compaction",
@@ -673,6 +676,7 @@ export async function runInteractiveSession(
             ...deferredInputLines,
           ];
           restoreDrainedInput(restoredLines);
+          consumeQueuedInputLines([rawInput]);
           options.writeStdout("\n");
           continue;
         }
@@ -709,6 +713,7 @@ export async function runInteractiveSession(
         );
         const restoredLines = [...drainedInjectedLines, ...deferredInputLines];
         restoreDrainedInput(restoredLines);
+        consumeQueuedInputLines([rawInput]);
         options.writeStdout("\n");
       } finally {
         if (checkpointOperations.length > 1) {

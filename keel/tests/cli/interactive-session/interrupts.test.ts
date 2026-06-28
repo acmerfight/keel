@@ -6,6 +6,12 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
+  consumeSessionQueuedInputs,
+  createSessionStore,
+  persistSessionQueuedInput,
+  resumeSessionStore,
+} from "../../../src/cli/session-store.ts";
+import {
   createFakeProvider,
   fakeResponse,
   fakeToolResponse,
@@ -256,6 +262,136 @@ describe("Interactive Session - Interrupts", () => {
     await session;
     expect(stdout).toBe("Cancel me\nSecond done\n");
     expect(observedUserContexts).toEqual([["first prompt"], ["second prompt"]]);
+  });
+
+  test(`Given a resumed queued prompt is interrupted before persistence,
+    When the user resumes the session again,
+    Then the cancelled queued prompt is not replayed`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-queue-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    let now = 0;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? home : undefined),
+      now: () => now,
+    };
+    const session = createSessionStore({
+      sessionId: "queued-abort",
+      workspace,
+      runtime,
+    });
+    now = 1;
+    const queuedInput = persistSessionQueuedInput({
+      session,
+      sequence: 7,
+      line: "queued work",
+      runtime,
+    });
+    now = 2;
+    const resumed = resumeSessionStore({
+      sessionId: "queued-abort",
+      workspace,
+      runtime,
+    });
+    let receiveText: () => void = () => {};
+    const textReceived = new Promise<void>((resolve) => {
+      receiveText = resolve;
+    });
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        yield { type: "text", text: "Cancel queued" };
+        if (!options.signal.aborted) {
+          await new Promise<void>((resolve) => {
+            options.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    const interactive = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      initialMessages: resumed.messages,
+      initialQueuedInputs: resumed.pendingInputs,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+            receiveText();
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      consumeQueuedInputs: (inputIds) => {
+        now = 3;
+        consumeSessionQueuedInputs({
+          session: resumed,
+          inputIds,
+          runtime,
+        });
+      },
+      persistSessionMessages: () => {
+        throw new Error("interrupted queued turn should not persist messages");
+      },
+    });
+
+    try {
+      // When
+      input.end();
+      await withTimeout(textReceived, 5000, "queued turn did not start");
+      for (const handler of [...sigintHandlers]) {
+        handler();
+      }
+      await withTimeout(interactive, 5000, "interrupted session did not end");
+
+      // Then
+      now = 4;
+      const afterAbort = resumeSessionStore({
+        sessionId: "queued-abort",
+        workspace,
+        runtime,
+      });
+      expect(stdout).toBe("Cancel queued\n");
+      expect(resumed.pendingInputs).toEqual([queuedInput]);
+      expect(afterAbort.pendingInputs).toEqual([]);
+      expect(afterAbort.messages).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given an interrupted interactive turn exposed scoped project instructions,
