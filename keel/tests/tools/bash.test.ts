@@ -89,6 +89,29 @@ describe("Bash Tool", () => {
     }
   });
 
+  test(`Given a workspace command produces exactly the output budget,
+    When the bash tool captures the result,
+    Then it returns the full output without a truncation notice`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+
+    try {
+      // When
+      const result = await executeBash(
+        workspace,
+        `node -e "process.stdout.write('x'.repeat(20000))"`,
+      );
+
+      // Then
+      const prefix = "Exit code: 0\n\nstdout:\n";
+      expect(result.content.startsWith(prefix)).toBe(true);
+      expect(result.content).toHaveLength(prefix.length + 20_001);
+      expect(result.content).not.toContain("[bash stdout truncated");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a workspace command exceeds the output budget across multiple chunks,
     When the bash tool captures the result,
     Then it keeps only the latest output`, async () => {

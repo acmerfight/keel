@@ -117,3 +117,28 @@ export function requireOptionValue(
   }
   return parseOk(raw);
 }
+
+export function requireSeparatedOptionValue(
+  option: string,
+  raw: string | undefined,
+  recognizedOptions: readonly string[],
+): ParseResult<string> {
+  const parsed = requireOptionValue(option, raw);
+  if (!parsed.ok) return parsed;
+  if (isRecognizedOptionToken(parsed.value, recognizedOptions)) {
+    return parseError(
+      `Error: ${option} requires a value, but got option "${parsed.value}".`,
+    );
+  }
+  return parsed;
+}
+
+function isRecognizedOptionToken(
+  token: string,
+  recognizedOptions: readonly string[],
+): boolean {
+  if (!token.startsWith("--")) return false;
+  const equalsIndex = token.indexOf("=");
+  const optionName = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
+  return recognizedOptions.includes(optionName);
+}
