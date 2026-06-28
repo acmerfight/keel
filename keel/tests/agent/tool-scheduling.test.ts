@@ -5,7 +5,9 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
+import { restoreLastEditCheckpoint } from "../../src/core/git.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import { createGitWorkspace } from "../../src/testing/cli-harness.ts";
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -412,8 +414,218 @@ describe("Tool Scheduling", () => {
     }
   });
 
+  test(`Given the assistant updates independent files in one turn,
+    When both mutations target different files that were already read,
+    Then the user sees both edits start in the same batch and one undo checkpoint restores the task`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-tool-scheduling-independent-edits-",
+    );
+    await writeFile(join(workspace, "alpha.txt"), "alpha old\n", "utf8");
+    await writeFile(join(workspace, "beta.txt"), "beta old\n", "utf8");
+    let turn = 0;
+    let followUpMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "independent-edits-provider",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_alpha",
+            tool: "read",
+            path: "alpha.txt",
+          };
+          yield {
+            type: "tool_call",
+            id: "read_beta",
+            tool: "read",
+            path: "beta.txt",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "edit_alpha",
+            tool: "edit",
+            path: "alpha.txt",
+            edits: [{ oldText: "alpha old", newText: "alpha new" }],
+          };
+          yield {
+            type: "tool_call",
+            id: "edit_beta",
+            tool: "edit",
+            path: "beta.txt",
+            edits: [{ oldText: "beta old", newText: "beta new" }],
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        followUpMessages = options.messages;
+        yield { type: "text", text: "Updated both files." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "update alpha.txt and beta.txt",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(toolEventTrace(events)).toEqual([
+        "read_alpha:start",
+        "read_beta:start",
+        "read_alpha:end:true",
+        "read_beta:end:true",
+        "edit_alpha:start",
+        "edit_beta:start",
+        "edit_alpha:end:true",
+        "edit_beta:end:true",
+      ]);
+      expect(await readFile(join(workspace, "alpha.txt"), "utf8")).toBe(
+        "alpha new\n",
+      );
+      expect(await readFile(join(workspace, "beta.txt"), "utf8")).toBe(
+        "beta new\n",
+      );
+
+      const restore = restoreLastEditCheckpoint(workspace);
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 files",
+      });
+      expect(await readFile(join(workspace, "alpha.txt"), "utf8")).toBe(
+        "alpha old\n",
+      );
+      expect(await readFile(join(workspace, "beta.txt"), "utf8")).toBe(
+        "beta old\n",
+      );
+
+      const toolMessages = followUpMessages.filter(isToolMessage);
+      expect(toolMessages.map((message) => message.toolCallId)).toEqual([
+        "read_alpha",
+        "read_beta",
+        "edit_alpha",
+        "edit_beta",
+      ]);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Updated both files.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the assistant creates independent files in one turn,
+    When both writes target different paths,
+    Then the user sees both writes start in the same batch and one undo checkpoint restores the task`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-tool-scheduling-independent-writes-",
+    );
+    let followUpMessages: readonly Message[] = [];
+    let turn = 0;
+    const provider: LLMProvider = {
+      id: "independent-writes-provider",
+      async *stream(options) {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "write_alpha",
+            tool: "write",
+            path: "generated/alpha.txt",
+            content: "alpha\n",
+          };
+          yield {
+            type: "tool_call",
+            id: "write_beta",
+            tool: "write",
+            path: "generated/beta.txt",
+            content: "beta\n",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        followUpMessages = options.messages;
+        yield { type: "text", text: "Created both files." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "create alpha and beta files",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(toolEventTrace(events)).toEqual([
+        "write_alpha:start",
+        "write_beta:start",
+        "write_alpha:end:true",
+        "write_beta:end:true",
+      ]);
+      expect(
+        await readFile(join(workspace, "generated", "alpha.txt"), "utf8"),
+      ).toBe("alpha\n");
+      expect(
+        await readFile(join(workspace, "generated", "beta.txt"), "utf8"),
+      ).toBe("beta\n");
+
+      const restore = restoreLastEditCheckpoint(workspace);
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 files",
+      });
+      await expect(
+        readFile(join(workspace, "generated", "alpha.txt"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        readFile(join(workspace, "generated", "beta.txt"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+
+      const toolMessages = followUpMessages.filter(isToolMessage);
+      expect(toolMessages.map((message) => message.toolCallId)).toEqual([
+        "write_alpha",
+        "write_beta",
+      ]);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Created both files.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a read-only batch has a source-earlier success before cancellation,
-    When a later parallel-safe tool rejects with a terminal error,
+    When a later scheduled tool rejects with a terminal error,
     Then the successful result is still recorded before the run fails`, async () => {
     // Given
     const workspace = await createWorkspace();

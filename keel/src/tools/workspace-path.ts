@@ -196,18 +196,9 @@ function workspaceParentSegments(
   return parentFromWorkspace.split(sep).filter((segment) => segment !== "");
 }
 
-function assertCurrentDirectoryInsideWorkspace(
-  input: WorkspaceParentDirectoriesInput,
-): void {
-  const currentRealPath = realpathSync(".");
-  if (!isInsideWorkspace(input.workspacePath, currentRealPath)) {
-    throw outsideWorkspaceError(input.toolName, input.requestedPath);
-  }
-}
-
-function childEntryExistsForParentCreate(segment: string): boolean {
+function childEntryExistsForParentCreate(path: string): boolean {
   try {
-    lstatSync(segment);
+    lstatSync(path);
     return true;
   } catch (error) {
     if (isErrnoException(error) && error.code === "ENOENT") return false;
@@ -215,53 +206,55 @@ function childEntryExistsForParentCreate(segment: string): boolean {
   }
 }
 
-function createChildDirectorySegment(
-  segment: string,
+function createChildDirectory(
+  path: string,
   input: WorkspaceParentDirectoriesInput,
 ): void {
   try {
-    mkdirSync(segment);
+    mkdirSync(path);
   } catch (error) {
     if (isErrnoException(error) && error.code === "EEXIST") return;
     if (isErrnoException(error) && error.code === "ENOTDIR") {
       throw notDirectoryError(input.toolName, input.requestedPath);
     }
-    /* v8 ignore next 1: unexpected chdir failures are OS-level faults; preserve the original error. */
+    /* v8 ignore next 1: unexpected mkdir failures are OS-level faults; preserve the original error. */
     throw error;
   }
 }
 
-function enterChildDirectorySegment(
-  segment: string,
+function childDirectoryRealPath(
+  path: string,
   input: WorkspaceParentDirectoriesInput,
-): void {
+): string {
   try {
-    process.chdir(segment);
+    const realPath = realpathSync(path);
+    if (!isInsideWorkspace(input.workspacePath, realPath)) {
+      throw outsideWorkspaceError(input.toolName, input.requestedPath);
+    }
+    const stat = statSync(realPath);
+    if (!stat.isDirectory()) {
+      throw notDirectoryError(input.toolName, input.requestedPath);
+    }
+    return realPath;
   } catch (error) {
     if (isErrnoException(error) && error.code === "ENOTDIR") {
       throw notDirectoryError(input.toolName, input.requestedPath);
     }
     throw error;
   }
-  assertCurrentDirectoryInsideWorkspace(input);
 }
 
 export function createWorkspaceParentDirectories(
   input: WorkspaceParentDirectoriesInput,
 ): void {
   const segments = workspaceParentSegments(input);
-  const originalCwd = process.cwd();
-  try {
-    process.chdir(input.workspacePath);
-    assertCurrentDirectoryInsideWorkspace(input);
-    for (const segment of segments) {
-      if (!childEntryExistsForParentCreate(segment)) {
-        createChildDirectorySegment(segment, input);
-      }
-      enterChildDirectorySegment(segment, input);
+  let currentPath = input.workspacePath;
+  for (const segment of segments) {
+    const childPath = join(currentPath, segment);
+    if (!childEntryExistsForParentCreate(childPath)) {
+      createChildDirectory(childPath, input);
     }
-  } finally {
-    process.chdir(originalCwd);
+    currentPath = childDirectoryRealPath(childPath, input);
   }
 }
 

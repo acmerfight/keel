@@ -1,9 +1,5 @@
 import type { z } from "zod";
-import {
-  builtinToolCallSchema,
-  builtinTools,
-  type ToolConcurrency,
-} from "./tool-definitions.ts";
+import { builtinToolCallSchema, builtinTools } from "./tool-definitions.ts";
 import { toolCallValidationError } from "./tool-error.ts";
 import {
   type OpenAICompatibleToolParameters,
@@ -160,11 +156,6 @@ export function normalizeProviderToolCall(toolCall: ToolCallInput): ToolCall {
   );
 }
 
-export function toolCallConcurrency(toolCall: ToolCall): ToolConcurrency {
-  const tool = builtinToolForName(toolCall.tool);
-  return tool.concurrency;
-}
-
 export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
   const tool = builtinToolForName(toolCall.tool);
   return tool.argumentsFromCall(toolCall);
@@ -182,5 +173,4 @@ export function toolCallLabel(toolCall: ToolCall): string {
   return tool.formatCallLabel(toolCall);
 }
 
-export type { ToolConcurrency };
 export { builtinToolCallSchema };

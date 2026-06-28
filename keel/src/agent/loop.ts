@@ -5,11 +5,11 @@ import {
 import type { LLMProvider, Message, ToolCall } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
-import { toolCallConcurrency } from "../tools/registry.ts";
 import {
   createProjectInstructionVisibilityState,
   type ProjectInstructionVisibilityState,
 } from "../tools/scoped-project-instructions.ts";
+import { toolCallAccesses } from "../tools/tool-access.ts";
 import {
   addRequestAccounting,
   buildCostReport,
@@ -132,11 +132,12 @@ function toolRequestMessage(turn: AgentTurn): Message {
 }
 
 function scheduledToolCalls(
+  workspace: string,
   toolCalls: readonly ToolCall[],
 ): readonly ScheduledToolCall[] {
   return toolCalls.map((toolCall) => ({
     toolCall,
-    concurrency: toolCallConcurrency(toolCall),
+    accesses: toolCallAccesses(workspace, toolCall),
   }));
 }
 
@@ -371,7 +372,7 @@ export async function* runAgentTurn(
       );
     };
 
-    const scheduled = scheduledToolCalls(turnResult.toolCalls);
+    const scheduled = scheduledToolCalls(workspace, turnResult.toolCalls);
     const completedToolExecutions: ToolExecution[] = [];
     for (const segment of planToolCallExecutionSegments(scheduled)) {
       if (segment.kind === "parallel") {

@@ -8,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, sep } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
 import {
@@ -109,7 +109,8 @@ describe("Apply Patch Tool Race Handling", () => {
         const pathText = String(path);
         if (
           !swapped &&
-          (pathText === "race" || pathText.endsWith(join("race", "nested")))
+          (pathText.endsWith(`${sep}race`) ||
+            pathText.endsWith(`${sep}${join("race", "nested")}`))
         ) {
           swapped = true;
           actualFs.symlinkSync(outside, join(workspace, "race"), "dir");
