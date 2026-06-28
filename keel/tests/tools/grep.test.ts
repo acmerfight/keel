@@ -1152,12 +1152,39 @@ describe("Grep Tool Output Boundaries", () => {
     }
   });
 
+  test(`Given a matching line contains invalid UTF-8 bytes,
+    When the grep tool searches the workspace,
+    Then it still reports the match with a lossy snippet`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(
+      join(workspace, "invalid.txt"),
+      Buffer.from([
+        ...Buffer.from("prefix needle "),
+        0xff,
+        ...Buffer.from(" suffix\n"),
+      ]),
+    );
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "needle");
+
+      // Then
+      expect(result.content).toContain("invalid.txt:1:prefix needle ");
+      expect(result.content).toContain(" suffix");
+      expect(result.content).not.toBe('No matches found for "needle"');
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given more files match than the output budget allows,
     When the grep tool searches the workspace,
     Then it returns the first capped matches in stable path order`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
-    for (let i = 59; i >= 0; i--) {
+    for (let i = 50; i >= 0; i--) {
       await writeFile(
         join(workspace, `${String(i).padStart(2, "0")}.txt`),
         "needle\n",
@@ -1182,6 +1209,64 @@ describe("Grep Tool Output Boundaries", () => {
       expect(result.content).toContain(
         "[grep output truncated: showing first 50 matches]",
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one file has more matching lines than the output budget allows,
+    When the grep tool searches the workspace,
+    Then it returns the first capped line matches before the truncation notice`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    await writeFile(
+      join(workspace, "app.txt"),
+      Array.from({ length: 51 }, (_, index) => `needle ${index}`).join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "needle");
+
+      // Then
+      const lines = result.content.split("\n");
+      expect(lines).toHaveLength(51);
+      expect(lines[0]).toBe("app.txt:1:needle 0");
+      expect(lines[49]).toBe("app.txt:50:needle 49");
+      expect(lines[50]).toBe(
+        "[grep output truncated: showing first 50 matches]",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.each([49, 50])(`Given %i files match the pattern,
+    When the grep tool searches the workspace,
+    Then it returns every match without claiming the output was truncated`, async (fileCount) => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    for (let index = 0; index < fileCount; index++) {
+      await writeFile(
+        join(workspace, `${String(index).padStart(2, "0")}.txt`),
+        "needle\n",
+        "utf8",
+      );
+    }
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "needle");
+
+      // Then
+      const lines = result.content.split("\n");
+      expect(lines).toHaveLength(fileCount);
+      expect(lines[0]).toBe("00.txt:1:needle");
+      expect(lines[fileCount - 1]).toBe(
+        `${String(fileCount - 1).padStart(2, "0")}.txt:1:needle`,
+      );
+      expect(result.content).not.toContain("[grep output truncated");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

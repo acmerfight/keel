@@ -114,7 +114,7 @@ describe("Glob Tool File Discovery", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-glob-"));
     await mkdir(join(workspace, "cases"), { recursive: true });
-    for (let index = 0; index < 55; index++) {
+    for (let index = 0; index < 51; index++) {
       await writeFile(
         join(workspace, "cases", `case-${String(index).padStart(2, "0")}.ts`),
         "case\n",
@@ -134,6 +134,37 @@ describe("Glob Tool File Discovery", () => {
       expect(lines[50]).toBe(
         "[glob output truncated: showing first 50 files. Narrow the pattern or path to see more.]",
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.each([49, 50])(`Given %i files match the pattern,
+    When the glob tool searches the workspace,
+    Then it returns every file without claiming the output was truncated`, async (fileCount) => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-glob-"));
+    await mkdir(join(workspace, "cases"), { recursive: true });
+    for (let index = 0; index < fileCount; index++) {
+      await writeFile(
+        join(workspace, "cases", `case-${String(index).padStart(2, "0")}.ts`),
+        "case\n",
+        "utf8",
+      );
+    }
+
+    try {
+      // When
+      const result = await executeGlob(workspace, "**/*.ts");
+
+      // Then
+      const lines = result.content.split("\n");
+      expect(lines).toHaveLength(fileCount);
+      expect(lines[0]).toBe("cases/case-00.ts");
+      expect(lines[fileCount - 1]).toBe(
+        `cases/case-${String(fileCount - 1).padStart(2, "0")}.ts`,
+      );
+      expect(result.content).not.toContain("[glob output truncated");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

@@ -11,8 +11,25 @@ import {
   parseReportFile,
   parseSkillName,
   requireOptionValue,
+  requireSeparatedOptionValue,
 } from "./shared.ts";
 import type { RunCliArgs } from "./types.ts";
+
+const RUN_OPTIONS = [
+  "--allow-bash",
+  "--bash-policy",
+  "--provider",
+  "--model",
+  "--skill",
+  "--max-cost",
+  "--report",
+  "--transcript",
+  "--session",
+  "--resume",
+  "--fork",
+  "--fork-before-message",
+  "--fork-points",
+];
 
 export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   let bashMode: BashMode = "disabled";
@@ -103,7 +120,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     }
 
     if (arg === "--model") {
-      const parsed = parseModel(args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--model",
+        args[index + 1],
+        RUN_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       model = parsed.value;
       skipNext = true;
@@ -118,7 +139,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     }
 
     if (arg === "--skill") {
-      const parsed = parseSkillName(args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--skill",
+        args[index + 1],
+        RUN_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       skillName = parsed.value;
       skipNext = true;
@@ -148,7 +173,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     }
 
     if (arg === "--report") {
-      const parsed = parseReportFile(args[index + 1]);
+      const nextArg = args[index + 1];
+      const parsed =
+        nextArg === undefined || nextArg === ""
+          ? parseReportFile(nextArg)
+          : requireSeparatedOptionValue("--report", nextArg, RUN_OPTIONS);
       if (!parsed.ok) return parsed;
       reportFile = parsed.value;
       skipNext = true;
@@ -163,7 +192,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     }
 
     if (arg === "--transcript") {
-      const parsed = requireOptionValue("--transcript", args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--transcript",
+        args[index + 1],
+        RUN_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       transcriptFile = parsed.value;
       skipNext = true;
@@ -181,7 +214,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     }
 
     if (arg === "--session") {
-      const parsed = requireOptionValue("--session", args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--session",
+        args[index + 1],
+        RUN_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       sessionId = parsed.value;
       skipNext = true;
@@ -199,7 +236,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     }
 
     if (arg === "--resume") {
-      const parsed = requireOptionValue("--resume", args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--resume",
+        args[index + 1],
+        RUN_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       resumeSessionId = parsed.value;
       skipNext = true;
@@ -217,7 +258,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     }
 
     if (arg === "--fork") {
-      const parsed = requireOptionValue("--fork", args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--fork",
+        args[index + 1],
+        RUN_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       forkSessionId = parsed.value;
       skipNext = true;
@@ -232,7 +277,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     }
 
     if (arg === "--fork-before-message") {
-      const parsed = parseForkBeforeMessage(args[index + 1]);
+      const parsed = requireSeparatedOptionValue(
+        "--fork-before-message",
+        args[index + 1],
+        RUN_OPTIONS,
+      );
       if (!parsed.ok) return parsed;
       forkBeforeMessage = parsed.value;
       skipNext = true;
