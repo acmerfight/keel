@@ -266,12 +266,23 @@ describe("Bash Commands", () => {
 
   test(`Given an allowed shell command has an invalid timeout,
     When the assistant tries to run it,
-    Then the registry guard reports the malformed timeout field`, async () => {
+    Then the agent reports the malformed timeout field and continues`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    let turn = 0;
+    let toolFeedback = "";
     const provider: LLMProvider = {
       id: "domain-invalid-bash",
-      async *stream() {
+      async *stream(options) {
+        turn++;
+        if (turn > 1) {
+          toolFeedback =
+            options.messages.findLast((message) => message.role === "tool")
+              ?.content ?? "";
+          yield { type: "text", text: "The timeout was invalid." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
         yield {
           type: "tool_call",
           id: "invalid_timeout",
@@ -284,22 +295,37 @@ describe("Bash Commands", () => {
     };
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "run with an invalid timeout",
-            systemPrompt: "You are helpful.",
-            signal: freshSignal(),
-            allowBash: true,
-            stopPolicy: defaultStopPolicy(),
-          }),
-        ),
-      ).rejects.toThrow(
-        /Invalid builtin tool call for bash: timeoutMs: Too small/,
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "run with an invalid timeout",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+          stopPolicy: defaultStopPolicy(),
+        }),
       );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "tool_end",
+        toolCall: {
+          id: "invalid_timeout",
+          tool: "bash",
+          command: 'node -e ""',
+          timeoutMs: 0,
+        },
+        ok: false,
+      });
+      expect(toolFeedback).toContain("Tool failed:");
+      expect(toolFeedback).toContain("timeoutMs");
+      expect(toolFeedback).toContain("Recovery:");
+      expect(events).toContainEqual({
+        type: "text",
+        text: "The timeout was invalid.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

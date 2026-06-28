@@ -196,9 +196,9 @@ describe("Context Compaction Agent Recovery", () => {
     });
   });
 
-  test(`Given post-compaction read restoration throws after summary creation,
+  test(`Given post-compaction read restoration fails after summary creation,
     When proactive compaction runs,
-    Then the compacted ledger is persisted before the error propagates`, async () => {
+    Then the compacted ledger is persisted and the turn continues`, async () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Remember alpha ".repeat(80) },
@@ -228,38 +228,47 @@ describe("Context Compaction Agent Recovery", () => {
         }
         yield {
           type: "text",
-          text: "Should not request after failed restore.",
+          text: "Continued after failed restore.",
         };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
-    // When / Then
-    await expect(
-      collect(
-        runAgentTurn({
-          workspace: workspace(),
-          provider,
-          messages,
-          systemPrompt: "You are helpful.",
-          signal: freshSignal(),
-          allowBash: false,
-          stopPolicy: defaultStopPolicy(),
-          readVisibility,
-          contextCompaction: {
-            contextWindowTokens: 120,
-            keepRecentTokens: 6,
-            reserveTokens: 20,
-          },
-        }),
-      ),
-    ).rejects.toThrow("Invalid builtin tool call for read");
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        readVisibility,
+        contextCompaction: {
+          contextWindowTokens: 120,
+          keepRecentTokens: 6,
+          reserveTokens: 20,
+        },
+      }),
+    );
+
+    // Then
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued after failed restore.",
+    });
     expect(messages).toEqual([
       {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
       },
       { role: "user", content: "Now continue with beta." },
+      {
+        role: "assistant",
+        content: "Continued after failed restore.",
+        toolCalls: [],
+      },
     ]);
   });
 
