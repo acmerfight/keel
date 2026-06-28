@@ -440,6 +440,291 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a patch hunk omits the matched block indentation,
+    When apply_patch uses indentation matching,
+    Then it preserves source indentation for unchanged and changed lines`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(
+      join(workspace, "example.py"),
+      ["class Example:", "    def run(self):", "        return 1", ""].join(
+        "\n",
+      ),
+      "utf8",
+    );
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: example.py",
+      "@@",
+      "-def run(self):",
+      "-    return 1",
+      "+def run(self):",
+      "+    return 2",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "example.py"),
+        },
+      });
+
+      // Then
+      expect(await readFile(join(workspace, "example.py"), "utf8")).toBe(
+        ["class Example:", "    def run(self):", "        return 2", ""].join(
+          "\n",
+        ),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch hunk matches mixed leading whitespace,
+    When apply_patch applies the replacement,
+    Then it preserves each aligned source line indentation`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "note.txt"), "\talpha\n  beta\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: note.txt",
+      "@@",
+      "-alpha",
+      "- beta",
+      "+alpha",
+      "+ beta2",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "note.txt"),
+        },
+      });
+
+      // Then
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "\talpha\n  beta2\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch hunk omits whitespace from an unchanged blank line,
+    When apply_patch uses indentation matching,
+    Then it preserves the source blank-line whitespace`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(
+      join(workspace, "note.ts"),
+      ["if (ready) {", "    callOld();", "    ", "    finish();", "}", ""].join(
+        "\n",
+      ),
+      "utf8",
+    );
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: note.ts",
+      "@@",
+      "-callOld();",
+      "-",
+      "-finish();",
+      "+callNew();",
+      "+",
+      "+finish();",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "note.ts"),
+        },
+      });
+
+      // Then
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        [
+          "if (ready) {",
+          "    callNew();",
+          "    ",
+          "    finish();",
+          "}",
+          "",
+        ].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch hunk inserts a duplicate old line after trailing-whitespace matching,
+    When apply_patch aligns the replacement,
+    Then the duplicate does not steal source whitespace from unchanged lines`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(
+      join(workspace, "note.ts"),
+      ["alpha  ", "bravo  ", "charlie  ", ""].join("\n"),
+      "utf8",
+    );
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: note.ts",
+      "@@",
+      "-alpha",
+      "-bravo",
+      "-charlie",
+      "+alpha",
+      "+charlie",
+      "+bravo",
+      "+charlie",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "note.ts"),
+        },
+      });
+
+      // Then
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        ["alpha  ", "charlie", "bravo  ", "charlie  ", ""].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch hunk changes text around unchanged smart punctuation,
+    When apply_patch aligns multiple unchanged regions,
+    Then it preserves source punctuation in the middle region`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "copy.txt"), "x “a” y “b” z\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: copy.txt",
+      "@@",
+      '-x "a" y "b" z',
+      '+X "a" y "b" Z',
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "copy.txt"),
+        },
+      });
+
+      // Then
+      expect(await readFile(join(workspace, "copy.txt"), "utf8")).toBe(
+        "X “a” y “b” Z\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch hunk changes inside one normalized sequence and keeps other smart punctuation,
+    When apply_patch falls back for only the changed sequence,
+    Then it preserves the other source punctuation`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "copy.txt"), "“a” 1… “b”\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: copy.txt",
+      "@@",
+      '-"a" 1... "b"',
+      '+"a" 1.. "b"',
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "copy.txt"),
+        },
+      });
+
+      // Then
+      expect(await readFile(join(workspace, "copy.txt"), "utf8")).toBe(
+        "“a” 1.. “b”\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a large indentation fuzzy hunk exceeds safe alignment bounds,
+    When apply_patch prepares the replacement,
+    Then it rejects the hunk without rewriting the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    const lines = Array.from({ length: 1001 }, (_, index) => `line-${index}`);
+    const replacementLines = lines.map((line, index) =>
+      index === lines.length - 1 ? "changed" : line,
+    );
+    const sourceText = `${lines.map((line) => `  ${line}`).join("\n")}\n`;
+    await writeFile(join(workspace, "copy.txt"), sourceText, "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: copy.txt",
+      "@@",
+      ...lines.map((line) => `-${line}`),
+      ...replacementLines.map((line) => `+${line}`),
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "copy.txt"),
+            },
+          }),
+        "tool_patch_hunk_not_found",
+        "fuzzy hunk match cannot be applied safely",
+        "copy the current text exactly",
+      );
+      expect(await readFile(join(workspace, "copy.txt"), "utf8")).toBe(
+        sourceText,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a patch uses hunk context lines,
     When apply_patch applies the hunk,
     Then context lines locate the update without changing those lines`, async () => {

@@ -1272,6 +1272,170 @@ describe("Edit Tool", () => {
     }
   });
 
+  test(`Given an edit target omits trailing whitespace from an unchanged line,
+    When the edit tool uses trailing-whitespace matching,
+    Then it preserves the source whitespace on that unchanged line`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.ts"),
+      ["const first = 1;  ", "const second = 2;", ""].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        singleEdit(
+          ["const first = 1;", "const second = 2;"].join("\n"),
+          ["const first = 1;", "const second = 3;"].join("\n"),
+        ),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        ["const first = 1;  ", "const second = 3;", ""].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a trailing-whitespace fuzzy edit inserts a line before unchanged lines,
+    When the edit tool aligns the replacement,
+    Then it preserves source whitespace only on the unchanged lines`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.ts"),
+      ["alpha  ", "bravo  ", "charlie  ", ""].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        singleEdit(
+          ["alpha", "bravo", "charlie"].join("\n"),
+          ["alpha", "inserted", "bravo", "charlie"].join("\n"),
+        ),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        ["alpha  ", "inserted", "bravo  ", "charlie  ", ""].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a trailing-whitespace fuzzy edit appends a new line after unchanged lines,
+    When the edit tool aligns the replacement,
+    Then it keeps source whitespace on the old lines and writes the appended line as requested`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.ts"),
+      ["alpha  ", "bravo  ", ""].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        singleEdit(
+          ["alpha", "bravo"].join("\n"),
+          ["alpha", "bravo", "inserted"].join("\n"),
+        ),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        ["alpha  ", "bravo  ", "inserted", ""].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a trailing-whitespace fuzzy edit inserts a duplicate old line,
+    When the edit tool aligns the replacement,
+    Then the inserted duplicate does not steal source whitespace from unchanged lines`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.ts"),
+      ["alpha  ", "bravo  ", "charlie  ", ""].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        singleEdit(
+          ["alpha", "bravo", "charlie"].join("\n"),
+          ["alpha", "charlie", "bravo", "charlie"].join("\n"),
+        ),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        ["alpha  ", "charlie", "bravo  ", "charlie  ", ""].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a large trailing-whitespace fuzzy edit exceeds safe alignment bounds,
+    When the edit tool prepares the replacement,
+    Then it rejects the edit without rewriting the file`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const lines = Array.from({ length: 1001 }, (_, index) => `line-${index}`);
+    const replacementLines = lines.map((line, index) =>
+      index === lines.length - 1 ? "changed" : line,
+    );
+    const sourceText = `${lines.map((line) => `${line}  `).join("\n")}\n`;
+    await writeFile(join(workspace, "note.ts"), sourceText, "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () =>
+          executeEdit(
+            workspace,
+            "note.ts",
+            singleEdit(
+              `${lines.join("\n")}\n`,
+              `${replacementLines.join("\n")}\n`,
+            ),
+          ),
+        "tool_old_string_not_found",
+        "fuzzy old string match cannot be applied safely",
+        "copy the current text exactly",
+      );
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        sourceText,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an ASCII punctuation span is copied with smart punctuation,
     When the edit tool locates the target,
     Then it replaces the original span without changing unrelated bytes`, async () => {
@@ -1342,7 +1506,7 @@ describe("Edit Tool", () => {
 
   test(`Given a smart punctuation span is copied with ASCII punctuation,
     When the edit tool locates the target,
-    Then it replaces the original span`, async () => {
+    Then it preserves source punctuation style for unchanged text`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
     await writeFile(
@@ -1372,10 +1536,204 @@ describe("Edit Tool", () => {
       expect(await readFile(join(workspace, "copy.ts"), "utf8")).toBe(
         [
           "const before = true;",
-          'const label = "range 1-10 - done";',
+          'const label = "range 1–10 — done";',
           "const after = true;",
           "",
         ].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a punctuation fuzzy edit inserts new punctuation,
+    When the edit tool aligns the replacement,
+    Then it does not copy source punctuation style onto the inserted text`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "copy.ts"),
+      ['const label = "range 1–5 — ready";', ""].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "copy.ts",
+        singleEdit(
+          'const label = "range 1-5 - ready";',
+          'const label = "range pre-1-5 - ready";',
+        ),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited copy.ts");
+      expect(await readFile(join(workspace, "copy.ts"), "utf8")).toBe(
+        ['const label = "range pre-1–5 — ready";', ""].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a punctuation fuzzy edit changes inside a normalized punctuation sequence,
+    When the edit tool cannot map a full source punctuation span,
+    Then it uses the requested replacement punctuation`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, "copy.txt"), "range 1…\n", "utf8");
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "copy.txt",
+        singleEdit("range 1...", "range 1.."),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited copy.txt");
+      expect(await readFile(join(workspace, "copy.txt"), "utf8")).toBe(
+        "range 1..\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a punctuation fuzzy edit changes inside one normalized sequence and keeps other smart punctuation,
+    When the edit tool falls back for only the changed sequence,
+    Then it preserves the other source punctuation`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, "copy.txt"), "“a” 1… “b”\n", "utf8");
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "copy.txt",
+        singleEdit('"a" 1... "b"', '"a" 1.. "b"'),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited copy.txt");
+      expect(await readFile(join(workspace, "copy.txt"), "utf8")).toBe(
+        "“a” 1.. “b”\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a punctuation fuzzy edit inserts part of a typographic sequence,
+    When the requested punctuation cannot be sliced as one source character,
+    Then it uses normalized inserted punctuation and preserves other source punctuation`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, "copy.txt"), "“.” “b”\n", "utf8");
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "copy.txt",
+        singleEdit('"." "b"', '"…" "b"'),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited copy.txt");
+      expect(await readFile(join(workspace, "copy.txt"), "utf8")).toBe(
+        "“...” “b”\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a large punctuation fuzzy edit exceeds safe alignment bounds,
+    When the edit tool prepares the replacement,
+    Then it rejects the edit without rewriting the file`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const text = "a".repeat(1000);
+    const sourceText = `“${text}”\n`;
+    await writeFile(join(workspace, "copy.txt"), sourceText, "utf8");
+
+    try {
+      // When / Then
+      expectEditError(
+        () =>
+          executeEdit(
+            workspace,
+            "copy.txt",
+            singleEdit(`"${text}"`, `"${text}b"`),
+          ),
+        "tool_old_string_not_found",
+        "fuzzy old string match cannot be applied safely",
+        "copy the current text exactly",
+      );
+      expect(await readFile(join(workspace, "copy.txt"), "utf8")).toBe(
+        sourceText,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit target normalizes smart punctuation on an unchanged segment,
+    When the edit tool uses punctuation matching,
+    Then it preserves the source punctuation while applying the changed text`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "copy.ts"),
+      ['const label = "say “hi” now";', ""].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "copy.ts",
+        singleEdit(
+          'const label = "say "hi" now";',
+          'const label = "say "hi" later";',
+        ),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited copy.ts");
+      expect(await readFile(join(workspace, "copy.ts"), "utf8")).toBe(
+        ['const label = "say “hi” later";', ""].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a punctuation fuzzy edit changes text around unchanged smart punctuation,
+    When the edit tool aligns multiple unchanged regions,
+    Then it preserves the source punctuation in the middle region`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, "copy.txt"), "x “a” y “b” z\n", "utf8");
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "copy.txt",
+        singleEdit('x "a" y "b" z', 'X "a" y "b" Z'),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited copy.txt");
+      expect(await readFile(join(workspace, "copy.txt"), "utf8")).toBe(
+        "X “a” y “b” Z\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1546,9 +1904,228 @@ describe("Edit Tool", () => {
     }
   });
 
+  test(`Given an edit target omits the matched block indentation,
+    When the edit tool uses indentation matching,
+    Then it preserves source indentation for unchanged and changed lines`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "example.py"),
+      [
+        "def outer():",
+        "    if cond:",
+        "        do_a()",
+        "        do_b()",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "example.py",
+        singleEdit(
+          ["do_a()", "do_b()"].join("\n"),
+          ["do_a()", "do_c()"].join("\n"),
+        ),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited example.py");
+      expect(await readFile(join(workspace, "example.py"), "utf8")).toBe(
+        [
+          "def outer():",
+          "    if cond:",
+          "        do_a()",
+          "        do_c()",
+          "",
+        ].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an indentation fuzzy edit matches mixed leading whitespace,
+    When the edit tool applies the replacement,
+    Then it preserves each aligned source line indentation`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(join(workspace, "note.txt"), "\talpha\n  beta\n", "utf8");
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "note.txt",
+        singleEdit(
+          ["alpha", " beta"].join("\n"),
+          ["alpha", " beta2"].join("\n"),
+        ),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited note.txt");
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "\talpha\n  beta2\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an indentation fuzzy edit appends a line after the matched source lines,
+    When the edit tool aligns the replacement,
+    Then it indents the appended line inside the same source block`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.txt"),
+      ["  alpha", "  omega", ""].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "note.txt",
+        singleEdit(
+          ["alpha", "omega"].join("\n"),
+          ["alpha", "omega", "beta"].join("\n"),
+        ),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited note.txt");
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        ["  alpha", "  omega", "  beta", ""].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an indentation fuzzy edit deletes a source line,
+    When the edit tool aligns the replacement,
+    Then it preserves indentation on the remaining source lines`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.txt"),
+      ["  alpha", "  beta", "  gamma", ""].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "note.txt",
+        singleEdit(
+          ["alpha", "beta", "gamma"].join("\n"),
+          ["alpha", "gamma"].join("\n"),
+        ),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited note.txt");
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        ["  alpha", "  gamma", ""].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an indentation fuzzy edit has an unchanged whitespace-only line,
+    When the edit tool aligns the replacement,
+    Then it preserves that source blank-line whitespace`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.ts"),
+      ["if (ready) {", "    callOld();", "    ", "    finish();", "}", ""].join(
+        "\n",
+      ),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        singleEdit(
+          ["callOld();", "", "finish();"].join("\n"),
+          ["callNew();", "", "finish();"].join("\n"),
+        ),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        [
+          "if (ready) {",
+          "    callNew();",
+          "    ",
+          "    finish();",
+          "}",
+          "",
+        ].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an indentation fuzzy edit inserts a duplicate blank line,
+    When the edit tool aligns the replacement,
+    Then the inserted blank line does not steal whitespace from the unchanged blank line`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "note.ts"),
+      ["if (ready) {", "    callOld();", "    ", "    finish();", "}", ""].join(
+        "\n",
+      ),
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = executeEdit(
+        workspace,
+        "note.ts",
+        singleEdit(
+          ["callOld();", "", "finish();"].join("\n"),
+          ["callNew();", "", "", "finish();"].join("\n"),
+        ),
+      );
+
+      // Then
+      expect(result.content).toBe("Edited note.ts");
+      expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
+        [
+          "if (ready) {",
+          "    callNew();",
+          "",
+          "    ",
+          "    finish();",
+          "}",
+          "",
+        ].join("\n"),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an indented file has no trailing newline,
     When the edit target differs only by common indentation,
-    Then the edit tool still replaces the final span`, async () => {
+    Then the edit tool preserves the final span indentation`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
     await writeFile(
@@ -1571,7 +2148,7 @@ describe("Edit Tool", () => {
       // Then
       expect(result.content).toBe("Edited note.ts");
       expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
-        ["callNew();", "finish();"].join("\n"),
+        ["  callNew();", "  finish();"].join("\n"),
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1609,7 +2186,7 @@ describe("Edit Tool", () => {
 
   test(`Given a fuzzy edit target includes a trailing newline and the candidate span has one,
     When the edit tool applies the replacement,
-    Then the matched span includes that trailing newline`, async () => {
+    Then the matched span includes that trailing newline and preserves indentation`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
     await writeFile(
@@ -1632,7 +2209,7 @@ describe("Edit Tool", () => {
       // Then
       expect(result.content).toBe("Edited note.ts");
       expect(await readFile(join(workspace, "note.ts"), "utf8")).toBe(
-        ["callNew();", "finish();", "next();", ""].join("\n"),
+        ["  callNew();", "  finish();", "next();", ""].join("\n"),
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
