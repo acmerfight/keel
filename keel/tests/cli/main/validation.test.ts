@@ -2,10 +2,28 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { USAGE } from "../../../src/cli/args.ts";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 
 describe("CLI Main - Validation", () => {
+  test.each([["--help"], ["-h"]])(`Given the %s help flag,
+    When the CLI main is invoked in-process,
+    Then it prints usage to stdout and exits successfully`, async (flag) => {
+    // Given
+    const fixture = createRuntime([flag], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toBe(`${USAGE}\n`);
+    expect(fixture.stderr()).toBe("");
+  });
+
   test(`Given no user message and no interactive terminal,
     When the CLI main is invoked in-process,
     Then it returns usage instructions without starting a subprocess`, async () => {
@@ -19,6 +37,64 @@ describe("CLI Main - Validation", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toContain("Usage: keel");
+  });
+
+  test(`Given an unknown run option,
+    When the CLI main parses the request,
+    Then it returns usage instructions before resolving a provider`, async () => {
+    // Given
+    const fixture = createRuntime(["--bogus"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      `Error: unknown option "--bogus"\n\n${USAGE}\n`,
+    );
+  });
+
+  test(`Given a mistyped model option before a prompt,
+    When the CLI main parses the request,
+    Then it reports the unknown option instead of running the prompt`, async () => {
+    // Given
+    const fixture = createRuntime(["--modle", "deepseek", "hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      `Error: unknown option "--modle"\n\n${USAGE}\n`,
+    );
+  });
+
+  test(`Given an explicit end-of-options marker before a dash-leading prompt,
+    When the CLI main runs in-process,
+    Then it sends the dash-leading prompt to the provider`, async () => {
+    // Given
+    const fixture = createRuntime(
+      ["--provider=fake", "--", "-starts-with-dash message"],
+      {
+        env: { KEEL_PROVIDER: "deepseek" },
+      },
+    );
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toBe("Hello from fake provider.\n");
+    expect(fixture.stderr()).toBe("");
   });
 
   test(`Given a report option without a file path,

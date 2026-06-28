@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
+import { USAGE } from "../../src/cli/args.ts";
 import {
   runCli as runCliCommand,
   runCliProcess as runCliProcessCommand,
@@ -105,6 +106,51 @@ function withTimeout<T>(
 }
 
 describe("CLI Text Reply", () => {
+  test.each([["--help"], ["-h"]])(`Given the %s help flag,
+    When user runs the CLI process,
+    Then the CLI prints usage and exits successfully`, async (flag) => {
+    // Given
+    const args = [flag];
+
+    // When
+    const result = await runCli(args, { KEEL_PROVIDER: "fake" });
+
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(`${USAGE}\n`);
+    expect(result.stderr).toBe("");
+  });
+
+  test(`Given an unknown run option,
+    When user runs the CLI process,
+    Then the CLI rejects it before starting the agent`, async () => {
+    // Given
+    const args = ["--bogus"];
+
+    // When
+    const result = await runCli(args, { KEEL_PROVIDER: "fake" });
+
+    // Then
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(`Error: unknown option "--bogus"\n\n${USAGE}\n`);
+  });
+
+  test(`Given an end-of-options marker before a dash-leading prompt,
+    When user runs the CLI process,
+    Then the CLI sends that prompt to the agent`, async () => {
+    // Given
+    const args = ["--provider=fake", "--", "-starts-with-dash message"];
+
+    // When
+    const result = await runCli(args, { KEEL_PROVIDER: "deepseek" });
+
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("Hello from fake provider.\n");
+    expect(result.stderr).toBe("");
+  });
+
   test(`Given no user message and no interactive terminal,
     When user runs the CLI,
     Then the CLI exits with usage instructions`, async () => {
@@ -116,37 +162,7 @@ describe("CLI Text Reply", () => {
 
     // Then
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toBe(
-      [
-        "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] [--skill <name>] <message>",
-        "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--skill <name>] [--session <id> | --resume <id> [--fork-points | --fork <new-id> [--fork-before-message <id>]]]",
-        "       keel --doctor [--offline] [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
-        "       keel sessions",
-        "       keel sessions show <id> [--limit <n> | --all]",
-        "       keel sessions fork <source-id> <target-id> [--before-message <id>]",
-        "       keel skills",
-        "       keel eval [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--suite <dir>] [--task <id>] [--trials <n>] [--out <file>] [--transcript-dir <dir>] [--check]",
-        "       keel eval compare --base <old.jsonl> --head <new.jsonl>",
-        "       keel /undo",
-        "",
-        "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
-        "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Approved or trusted command output may be sent to the provider unredacted. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
-        "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
-        "--transcript writes a best-effort redacted provider-visible one-shot transcript as schema-versioned JSONL. Live provider requests are not redacted.",
-        "--skill loads .agents/skills/<name>/SKILL.md as explicit workflow guidance for the current run.",
-        "--session/--resume persist interactive provider context with best-effort at-rest redaction. Live provider requests may still include raw user and tool content.",
-        "--limit controls how many recent restored messages sessions show prints; --all prints the full restored timeline.",
-        "--fork-points lists restored user message ids for sessions fork --before-message; it requires --resume.",
-        "--fork-before-message cuts a fork before the restored message id; it requires --resume and --fork.",
-        "--before-message cuts a sessions fork before the restored message id.",
-        "--transcript-dir writes one best-effort redacted provider-visible transcript JSONL file per eval trial.",
-        "--provider and --model override provider env for the current run.",
-        "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, DEEPSEEK_MODEL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",
-        "Context compaction uses model registry context windows; set KEEL_CONTEXT_WINDOW_TOKENS to override the selected model window.",
-        "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
-        "",
-      ].join("\n"),
-    );
+    expect(result.stderr).toBe(`${USAGE}\n`);
   });
 
   test(`Given user starts an interactive session,

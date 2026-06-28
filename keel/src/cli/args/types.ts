@@ -73,6 +73,7 @@ export interface RunCliArgs {
 }
 
 export type CliArgs =
+  | { readonly command: "help" }
   | DoctorCliArgs
   | { readonly command: "undo" }
   | { readonly command: "skills" }
