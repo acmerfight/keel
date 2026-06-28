@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { type ParsedPatchOperation, parsePatch } from "./apply-patch.ts";
 import type { ToolCall } from "./tool-call.ts";
@@ -136,6 +136,9 @@ function resolvedAccessPath(
   while (true) {
     try {
       const realPath = realpathSync(current);
+      if (unresolvedNames.length > 0 && !statSync(realPath).isDirectory()) {
+        return null;
+      }
       const path =
         unresolvedNames.length === 0
           ? realPath
