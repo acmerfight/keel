@@ -571,4 +571,27 @@ describe("Read Tool", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test(`Given the requested offset starts on a line that exceeds the read byte budget,
+    When the read tool reaches that line,
+    Then it reports the oversized line instead of treating the offset as past EOF`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-read-"));
+    await writeFile(
+      join(workspace, "long-line.txt"),
+      `intro\n${"x".repeat(51 * 1024)}`,
+    );
+
+    try {
+      // When
+      const result = executeRead(workspace, "long-line.txt", { offset: 2 });
+
+      // Then
+      expect(result.content).toBe(
+        "[Read output truncated: line 2 exceeds 50KB. Use grep to find a smaller target before reading this file.]",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 });

@@ -78,15 +78,18 @@ export type PreparedPatchOperation =
       readonly targetIdentity: FileIdentity;
     };
 
-type NonMovePreparedPatchOperation = Exclude<
-  PreparedPatchOperation,
-  { readonly kind: "move" }
->;
-
 export type AppliedPatchOperation =
-  | (NonMovePreparedPatchOperation & {
+  | (Extract<PreparedPatchOperation, { readonly kind: "add" }> & {
+      readonly appliedIdentity: FileIdentity;
+      readonly createdParentDirectories: readonly string[];
+    })
+  | (Extract<PreparedPatchOperation, { readonly kind: "update" }> & {
+      readonly appliedIdentity: FileIdentity;
+    })
+  | (Extract<PreparedPatchOperation, { readonly kind: "delete" }> & {
       readonly appliedIdentity: FileIdentity;
     })
   | (Extract<PreparedPatchOperation, { readonly kind: "move" }> & {
       readonly destinationIdentity: FileIdentity;
+      readonly createdDestinationParentDirectories: readonly string[];
     });

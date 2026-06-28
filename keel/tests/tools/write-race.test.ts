@@ -169,6 +169,56 @@ describe("Write Tool Race Handling", () => {
     });
   });
 
+  test(`Given parent directory creation fails after creating an earlier segment,
+    When the write tool aborts the create,
+    Then it removes the fresh empty parent directories before surfacing the original error`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const originalError = errno("EIO");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const { executeWrite } = await importWriteWithFs({
+        mkdirSync: (path, options) => {
+          if (String(path).endsWith(join("fresh", "nested"))) {
+            throw originalError;
+          }
+          return actualFs.mkdirSync(path, options);
+        },
+      });
+
+      // When / Then
+      expect(() =>
+        executeWrite(workspace, "fresh/nested/new.txt", "content\n"),
+      ).toThrow(originalError);
+      expect(await pathExists(join(workspace, "fresh"))).toBe(false);
+    });
+  });
+
+  test(`Given a fresh parent directory cannot be validated immediately after creation,
+    When the write tool aborts parent creation,
+    Then it removes that fresh empty parent directory`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const validationError = new Error("fresh parent validation failed");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const { executeWrite } = await importWriteWithFs({
+        realpathSync: (path) => {
+          if (String(path).endsWith("fresh")) {
+            throw validationError;
+          }
+          return actualFs.realpathSync(path);
+        },
+      });
+
+      // When / Then
+      expect(() =>
+        executeWrite(workspace, "fresh/new.txt", "content\n"),
+      ).toThrow(validationError);
+      expect(await pathExists(join(workspace, "fresh"))).toBe(false);
+    });
+  });
+
   test(`Given a missing write parent segment is swapped to an outside symlink during parent creation,
     When the write tool creates the nested parent,
     Then it rejects without creating outside directories, files, temp files, or checkpoint`, async () => {
@@ -308,7 +358,9 @@ describe("Write Tool Race Handling", () => {
         }
         expect(restricted).toBe(true);
       } finally {
-        actualFs.chmodSync(parentPath, 0o700);
+        if (actualFs.existsSync(parentPath)) {
+          actualFs.chmodSync(parentPath, 0o700);
+        }
       }
     });
   });
@@ -461,6 +513,44 @@ describe("Write Tool Race Handling", () => {
       );
       expect(await pathExists(ignoredTargetPath)).toBe(false);
       expect(swapped).toBe(true);
+    });
+  });
+
+  test(`Given a write parent becomes ignored after initial target validation,
+    When the write tool revalidates before opening the temp file,
+    Then it rejects without creating ignored content`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const parentPath = join(workspace, "race");
+      const backupParentPath = join(workspace, "race-backup");
+      const ignoredPath = join(workspace, "private");
+      const ignoredTargetPath = join(ignoredPath, "new.txt");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      actualFs.writeFileSync(join(workspace, ".gitignore"), "private/\n");
+      actualFs.mkdirSync(ignoredPath);
+      let parentRealpathCalls = 0;
+      const { executeWrite } = await importWriteWithFs({
+        realpathSync: (path) => {
+          if (String(path).endsWith(join("race"))) {
+            parentRealpathCalls++;
+            if (parentRealpathCalls === 3) {
+              actualFs.renameSync(parentPath, backupParentPath);
+              actualFs.symlinkSync(ignoredPath, parentPath, "dir");
+            }
+          }
+          return actualFs.realpathSync(path);
+        },
+      });
+
+      // When / Then
+      expectWriteError(
+        () => executeWrite(workspace, "race/new.txt", "ignored\n"),
+        "tool_path_ignored",
+        "ignored path",
+      );
+      expect(await pathExists(ignoredTargetPath)).toBe(false);
+      expect(parentRealpathCalls).toBeGreaterThanOrEqual(3);
     });
   });
 
@@ -724,6 +814,34 @@ describe("Write Tool Race Handling", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  test(`Given the write tool creates fresh parents before publish fails,
+    When the create aborts after parent creation,
+    Then it removes the fresh empty parent directories`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const originalError = errno("EIO");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const { executeWrite } = await importWriteWithFs({
+        linkSync: () => {
+          throw originalError;
+        },
+      });
+
+      // When / Then
+      expect(() =>
+        executeWrite(workspace, "fresh/nested/new.txt", "content\n"),
+      ).toThrow(originalError);
+      expect(await pathExists(join(workspace, "fresh"))).toBe(false);
+      expect(await readdir(workspace)).toEqual(
+        expect.not.arrayContaining([expect.stringContaining(".keel-write-")]),
+      );
+      expect(actualFs.existsSync(join(workspace, "fresh", "nested"))).toBe(
+        false,
+      );
+    });
   });
 
   test(`Given debug logging is enabled and temp cleanup fails after create publish,
