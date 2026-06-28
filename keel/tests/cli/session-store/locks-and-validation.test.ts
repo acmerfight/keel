@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -198,20 +198,24 @@ describe("Session Store Locks And Validation", () => {
     }
   });
 
-  test(`Given a session lock has an unreadable owner record,
+  test(`Given a fresh session lock has no owner record,
     When the same session lock is acquired again,
-    Then the lock is treated as active instead of being removed`, async () => {
+    Then the store treats the lock as active during owner creation`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(home, "sessions", "bad-owner", "active.lock");
+    const lockPath = join(
+      home,
+      "sessions",
+      "fresh-missing-owner",
+      "active.lock",
+    );
     await mkdir(lockPath, { recursive: true });
-    await writeFile(join(lockPath, "owner.json"), "{not-json", "utf8");
 
     try {
       // When / Then
       expect(() =>
         acquireSessionLock({
-          sessionId: "bad-owner",
+          sessionId: "fresh-missing-owner",
           runtime: runtime(home, 1),
         }),
       ).toThrow(SessionStoreError);
@@ -220,9 +224,96 @@ describe("Session Store Locks And Validation", () => {
     }
   });
 
-  test(`Given a session lock has a structurally invalid owner record,
+  test(`Given a stale session lock has no owner record,
     When the same session lock is acquired again,
-    Then the lock is treated as active instead of being removed`, async () => {
+    Then the store recovers the abandoned lock and acquires a fresh one`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const lockPath = join(home, "sessions", "missing-owner", "active.lock");
+    await mkdir(lockPath, { recursive: true });
+    const staleTime = new Date(0);
+    await utimes(lockPath, staleTime, staleTime);
+
+    try {
+      // When
+      const lock = acquireSessionLock({
+        sessionId: "missing-owner",
+        runtime: runtime(home, 1),
+      });
+
+      // Then
+      expect(lock.lockPath).toBe(lockPath);
+      expect(() =>
+        acquireSessionLock({
+          sessionId: "missing-owner",
+          runtime: runtime(home, 2),
+        }),
+      ).toThrow(SessionStoreError);
+      lock.release();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a stale session lock owner record cannot be read,
+    When the same session lock is acquired again,
+    Then lock acquisition fails closed instead of reclaiming it`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const lockPath = join(home, "sessions", "unreadable-owner", "active.lock");
+    await mkdir(lockPath, { recursive: true });
+    await mkdir(join(lockPath, "owner.json"));
+    const staleTime = new Date(0);
+    await utimes(lockPath, staleTime, staleTime);
+
+    try {
+      // When / Then
+      expect(() =>
+        acquireSessionLock({
+          sessionId: "unreadable-owner",
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow(SessionStoreError);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a stale session lock has a malformed owner record,
+    When the same session lock is acquired again,
+    Then the store recovers the abandoned lock and acquires a fresh one`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const lockPath = join(home, "sessions", "bad-owner", "active.lock");
+    await mkdir(lockPath, { recursive: true });
+    await writeFile(join(lockPath, "owner.json"), "{not-json", "utf8");
+    const staleTime = new Date(0);
+    await utimes(lockPath, staleTime, staleTime);
+
+    try {
+      // When
+      const lock = acquireSessionLock({
+        sessionId: "bad-owner",
+        runtime: runtime(home, 1),
+      });
+
+      // Then
+      expect(lock.lockPath).toBe(lockPath);
+      expect(() =>
+        acquireSessionLock({
+          sessionId: "bad-owner",
+          runtime: runtime(home, 2),
+        }),
+      ).toThrow(SessionStoreError);
+      lock.release();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a stale session lock has a structurally invalid owner record,
+    When the same session lock is acquired again,
+    Then the store recovers the abandoned lock and acquires a fresh one`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const lockPath = join(home, "sessions", "invalid-owner", "active.lock");
@@ -236,15 +327,25 @@ describe("Session Store Locks And Validation", () => {
       })}\n`,
       "utf8",
     );
+    const staleTime = new Date(0);
+    await utimes(lockPath, staleTime, staleTime);
 
     try {
-      // When / Then
+      // When
+      const lock = acquireSessionLock({
+        sessionId: "invalid-owner",
+        runtime: runtime(home, 1),
+      });
+
+      // Then
+      expect(lock.lockPath).toBe(lockPath);
       expect(() =>
         acquireSessionLock({
           sessionId: "invalid-owner",
-          runtime: runtime(home, 1),
+          runtime: runtime(home, 2),
         }),
       ).toThrow(SessionStoreError);
+      lock.release();
     } finally {
       await rm(home, { recursive: true, force: true });
     }
