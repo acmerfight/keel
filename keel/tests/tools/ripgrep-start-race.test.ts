@@ -210,7 +210,7 @@ describe("Ripgrep Start Failure Recovery", () => {
 
   test.sequential(`Given ripgrep start fails with an unclassified operating system error,
     When glob runs through the tool execution layer,
-    Then it preserves the original fatal error instead of widening recovery`, async () => {
+    Then it reports a recoverable tool failure for the next model turn`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-rg-start-"));
     await writeFile(join(workspace, "app.ts"), "export {}\n", "utf8");
@@ -218,22 +218,23 @@ describe("Ripgrep Start Failure Recovery", () => {
     const { executeToolCall } = await import("../../src/tools/execution.ts");
 
     try {
-      // When / Then
-      await expect(
-        executeToolCall({
-          workspace,
-          toolCall: {
-            id: "glob_1",
-            tool: "glob",
-            pattern: "**/*.ts",
-          },
-          signal: new AbortController().signal,
-          allowBash: false,
-        }),
-      ).rejects.toMatchObject({
-        code: "EMFILE",
-        message: "spawn /test/rg EMFILE",
+      // When
+      const result = await executeToolCall({
+        workspace,
+        toolCall: {
+          id: "glob_1",
+          tool: "glob",
+          pattern: "**/*.ts",
+        },
+        signal: new AbortController().signal,
+        allowBash: false,
       });
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("Tool failed: glob failed");
+      expect(result.content).toContain("spawn /test/rg EMFILE");
+      expect(result.content).toContain("Recovery:");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

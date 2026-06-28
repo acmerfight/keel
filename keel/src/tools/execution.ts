@@ -1,4 +1,5 @@
 import {
+  errorMessage,
   isRecoverableToolErrorCode,
   KeelError,
   type RecoverableToolErrorCode,
@@ -79,6 +80,30 @@ function isRecoverableToolError(error: unknown): error is RecoverableToolError {
 
 function toolFailureMessage(error: RecoverableToolError): string {
   return `Tool failed: ${error.message}\nRecovery: ${error.recovery}`;
+}
+
+function unhandledToolFailureMessage(
+  toolName: ToolCall["tool"],
+  error: unknown,
+): string {
+  if (error instanceof KeelError && error.recovery !== undefined) {
+    return `Tool failed: ${error.message}\nRecovery: ${error.recovery}`;
+  }
+
+  const message = errorMessage(error);
+  const toolPrefix = `${toolName} failed:`;
+  const toolMessage = message.startsWith(toolPrefix)
+    ? message
+    : `${toolPrefix} ${message}`;
+  return `Tool failed: ${toolMessage}\nRecovery: Inspect the failed tool request and current workspace state, then retry with corrected arguments or choose another approach.`;
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" ||
+      ("code" in error && error.code === "ABORT_ERR"))
+  );
 }
 
 function scopedProjectInstructionsFailureMessage(
@@ -313,6 +338,9 @@ export async function executeToolCall(
   try {
     return await executeBuiltinToolCall(context, toolCall);
   } catch (error) {
+    if (context.signal.aborted || isAbortError(error)) {
+      throw error;
+    }
     if (error instanceof ScopedProjectInstructionsNotVisibleError) {
       return {
         content: scopedProjectInstructionsFailureMessage(error),
@@ -321,7 +349,10 @@ export async function executeToolCall(
       };
     }
     if (!isRecoverableToolError(error)) {
-      throw error;
+      return {
+        content: unhandledToolFailureMessage(toolCall.tool, error),
+        ok: false,
+      };
     }
     return { content: toolFailureMessage(error), ok: false };
   }
