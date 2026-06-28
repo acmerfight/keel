@@ -73,6 +73,33 @@ export const grepToolArgumentsSchema = z
   })
   .strict();
 
+export const gitDiffToolArgumentsSchema = z
+  .object({
+    mode: optionalToolArgument(
+      z
+        .enum(["all", "unstaged", "staged"])
+        .describe(
+          "Which current git changes to inspect. Defaults to all, which includes unstaged, staged, and untracked changes.",
+        ),
+    ),
+    paths: optionalToolArgument(
+      z
+        .array(
+          z
+            .string()
+            .describe(
+              "Workspace-relative literal path filter. Absolute paths, '..', NUL bytes, and git pathspec magic are rejected.",
+            ),
+        )
+        .min(1)
+        .max(100)
+        .describe(
+          "Optional path filters to narrow the diff to specific workspace-relative files or directories.",
+        ),
+    ),
+  })
+  .strict();
+
 const editReplacementArgumentsSchema = z
   .object({
     oldText: z
