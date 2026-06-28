@@ -2,15 +2,27 @@ import { z } from "zod";
 import { type ProviderId, providerIds } from "../../core/provider-id.ts";
 import type { BashPolicy } from "../../permissions/bash.ts";
 
+export type ParseErrorKind = "unknownOption";
+
 export type ParseResult<T> =
   | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly message: string };
+  | {
+      readonly ok: false;
+      readonly message: string;
+      readonly kind?: ParseErrorKind;
+    };
 
 export function parseOk<T>(value: T): ParseResult<T> {
   return { ok: true, value };
 }
 
-export function parseError(message: string): ParseResult<never> {
+export function parseError(
+  message: string,
+  kind?: ParseErrorKind,
+): ParseResult<never> {
+  if (kind !== undefined) {
+    return { ok: false, message, kind };
+  }
   return { ok: false, message };
 }
 

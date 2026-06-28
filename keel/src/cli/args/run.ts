@@ -253,6 +253,18 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       continue;
     }
 
+    if (arg === "--") {
+      const message = args.slice(index + 1).join(" ");
+      if (message !== "") {
+        userMessage = message;
+      }
+      break;
+    }
+
+    if (arg.startsWith("-")) {
+      return parseError(`Error: unknown option "${arg}"`, "unknownOption");
+    }
+
     userMessage = args.slice(index).join(" ");
     break;
   }
