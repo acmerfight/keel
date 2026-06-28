@@ -20,6 +20,7 @@ import {
 } from "./provider-config.ts";
 import { assertEndEventHasCost, writeRunReport } from "./report.ts";
 import type { CliRuntime } from "./runtime.ts";
+import { formatCliRuntimeError } from "./runtime-error.ts";
 import { writeRunTranscript } from "./transcript.ts";
 import { loadWorkflowSkill, WorkflowSkillError } from "./workflow-skills.ts";
 
@@ -149,12 +150,17 @@ export async function runOneShotCli(
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
-    /* v8 ignore next 4: unexpected runtime failures are allowed to escape. */
-    if (!abortController.signal.aborted) {
+    if (abortController.signal.aborted) {
+      runtime.writeStdout("\n");
+      return 130;
+    }
+    const runtimeError = formatCliRuntimeError(error);
+    /* v8 ignore next 3: unexpected runtime failures are allowed to escape. */
+    if (runtimeError === null) {
       throw error;
     }
-    runtime.writeStdout("\n");
-    return 130;
+    runtime.writeStderr(runtimeError);
+    return 1;
   } finally {
     runtime.offSigint(abort);
   }
