@@ -535,13 +535,30 @@ describe("File Editing Read Boundaries", () => {
 
   test(`Given the assistant requests an invalid read window,
     When the agent validates the read,
-    Then the registry guard rejects the malformed tool call`, async () => {
+    Then it reports the malformed tool call and continues`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
     const provider: LLMProvider = {
       id: "domain-invalid-read",
-      async *stream() {
+      async *stream(options) {
+        const toolFeedback =
+          options.messages.findLast((message) => message.role === "tool")
+            ?.content ?? "";
+        if (toolFeedback !== "") {
+          yield { type: "text", text: "The read window was invalid." };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 1,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 1,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
         yield {
           type: "tool_call",
           id: "invalid_read_window",
@@ -563,22 +580,34 @@ describe("File Editing Read Boundaries", () => {
     };
 
     try {
-      // When / Then
-      await expect(
-        collect(
-          runAgent({
-            workspace,
-            provider,
-            userMessage: "read from line zero",
-            systemPrompt: "You are a helpful assistant.",
-            signal: freshSignal(),
-            allowBash: false,
-            stopPolicy: defaultStopPolicy(),
-          }),
-        ),
-      ).rejects.toThrow(
-        /Invalid builtin tool call for read: offset: Too small/,
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "read from line zero",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
       );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "tool_end",
+        toolCall: {
+          id: "invalid_read_window",
+          tool: "read",
+          path: "note.txt",
+          offset: 0,
+        },
+        ok: false,
+      });
+      expect(events).toContainEqual({
+        type: "text",
+        text: "The read window was invalid.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
