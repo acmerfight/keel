@@ -9,6 +9,7 @@ import {
   type EditMatchSpan,
   locateExactEditSpans,
   locateUniqueEditSpan,
+  sourcePreservingReplacement,
 } from "./edit-match.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import { readEditableTextFileWithMetadata } from "./text-file.ts";
@@ -320,6 +321,27 @@ function sourceSpanReplacement(
   return lineEndingAdjusted(text, lineEnding);
 }
 
+function sourcePreservingEditReplacement(
+  source: string,
+  edit: NormalizedEditReplacement,
+  filePath: string,
+  lineEnding: "\r\n" | "\n",
+): string {
+  const result = sourcePreservingReplacement(
+    source,
+    edit.normalizedOldText,
+    edit.normalizedNewText,
+  );
+  if (result.status === "matched") {
+    return sourceSpanReplacement(result.replacement, lineEnding);
+  }
+  throw new KeelError(
+    "tool_old_string_not_found",
+    `edit failed: fuzzy old string match cannot be applied safely in ${filePath} for edits[${edit.editIndex}]: ${result.reason}`,
+    `Use read(path: "${filePath}") to copy the current text exactly, then retry with a smaller exact edits[${edit.editIndex}].oldText.`,
+  );
+}
+
 function normalizeWithSourceMap(content: string): NormalizedText {
   if (!content.includes("\r\n")) {
     return { kind: "identity", text: content };
@@ -474,12 +496,18 @@ function matchedReplacementsForEdit(
     matchResult.match,
     content.length,
   );
+  const normalizedSource = normalizedContent.text.slice(
+    matchResult.match.index,
+    matchResult.match.index + matchResult.match.length,
+  );
   return [
     {
       editIndex: edit.editIndex,
       span,
-      replacement: sourceSpanReplacement(
-        edit.newText,
+      replacement: sourcePreservingEditReplacement(
+        normalizedSource,
+        edit,
+        filePath,
         sourceLineEnding(content, span),
       ),
     },

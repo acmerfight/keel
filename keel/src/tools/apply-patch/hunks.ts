@@ -1,5 +1,8 @@
-import type { EditMatchSpan } from "../edit-match.ts";
-import { locateUniqueEditSpan } from "../edit-match.ts";
+import {
+  type EditMatchSpan,
+  locateUniqueEditSpan,
+  sourcePreservingReplacement,
+} from "../edit-match.ts";
 import { patchError } from "./errors.ts";
 import type { ParsedPatchHunk } from "./model.ts";
 
@@ -49,6 +52,24 @@ function sourceSpanReplacement(
 ): string {
   if (!text.includes("\r") && !text.includes("\n")) return text;
   return lineEndingAdjusted(text, lineEnding);
+}
+
+function sourcePreservingHunkReplacement(
+  filePath: string,
+  source: string,
+  oldText: string,
+  newText: string,
+  lineEnding: "\r\n" | "\n",
+): string {
+  const result = sourcePreservingReplacement(source, oldText, newText);
+  if (result.status === "matched") {
+    return sourceSpanReplacement(result.replacement, lineEnding);
+  }
+  throw patchError(
+    "tool_patch_hunk_not_found",
+    `apply_patch failed: fuzzy hunk match cannot be applied safely in ${filePath}: ${result.reason}`,
+    `Use read(path: "${filePath}") to copy the current text exactly, then retry with a smaller exact hunk.`,
+  );
 }
 
 function normalizeWithSourceMap(content: string): NormalizedText {
@@ -135,9 +156,19 @@ export function applyUpdateHunks(
       );
     }
     const match = originalSpan(normalized, matchResult.match, updated.length);
+    const normalizedSource = normalized.text.slice(
+      matchResult.match.index,
+      matchResult.match.index + matchResult.match.length,
+    );
     updated =
       updated.slice(0, match.index) +
-      sourceSpanReplacement(newText, sourceLineEnding(updated, match)) +
+      sourcePreservingHunkReplacement(
+        filePath,
+        normalizedSource,
+        oldText,
+        newText,
+        sourceLineEnding(updated, match),
+      ) +
       updated.slice(match.index + match.length);
   }
   return updated;
