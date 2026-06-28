@@ -869,6 +869,19 @@ describe("tool registry", () => {
     });
   });
 
+  test(`Given provider tools are requested,
+    When the edit description is rendered for the model,
+    Then edit explains how to use recovery diagnostics`, () => {
+    const editTool = openAICompatibleTools(true).find(
+      (tool) => tool.function.name === "edit",
+    );
+    const description = editTool?.function.description ?? "";
+
+    expect(description).toContain("Recovery current-file context");
+    expect(description).toContain("target is outside the excerpt");
+    expect(description).toContain("reported matching locations");
+  });
+
   test(`Given a provider returns an ls call,
     When the registry parses and serializes the call,
     Then the path and optional limit are preserved for tool execution`, () => {

@@ -40,6 +40,16 @@ interface EditToolResult extends ToolResult {
 }
 
 const MAX_EDIT_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_EDIT_DIAGNOSTIC_LINES = 40;
+const MAX_EDIT_DIAGNOSTIC_LINE_CHARS = 160;
+const MAX_EDIT_DIAGNOSTIC_MATCHES = 5;
+const EDIT_DIAGNOSTIC_CONTEXT_LINES = 1;
+
+interface DiagnosticLine {
+  readonly lineNumber: number;
+  readonly end: number;
+  readonly text: string;
+}
 
 type NormalizedText =
   | {
@@ -84,13 +94,176 @@ interface MatchedReplacement {
 }
 
 function countLines(content: string): number {
+  if (content === "") return 0;
+
   let lineCount = 1;
-  for (const character of content) {
-    if (character === "\n") {
+  for (let index = 0; index < content.length; index++) {
+    if (content[index] === "\n" && index < content.length - 1) {
       lineCount++;
     }
   }
   return lineCount;
+}
+
+function diagnosticLineText(text: string): string {
+  const visibleText = text.endsWith("\r") ? text.slice(0, -1) : text;
+  if (visibleText.length <= MAX_EDIT_DIAGNOSTIC_LINE_CHARS) return visibleText;
+  return `${visibleText.slice(0, MAX_EDIT_DIAGNOSTIC_LINE_CHARS - 3)}...`;
+}
+
+function splitDiagnosticLines(content: string): readonly DiagnosticLine[] {
+  if (content === "") return [];
+
+  const lines: DiagnosticLine[] = [];
+  let start = 0;
+  let lineNumber = 1;
+  for (let index = 0; index < content.length; index++) {
+    if (content[index] !== "\n") continue;
+    lines.push({
+      lineNumber,
+      end: index + 1,
+      text: content.slice(start, index),
+    });
+    start = index + 1;
+    lineNumber++;
+  }
+
+  if (start < content.length) {
+    lines.push({
+      lineNumber,
+      end: content.length,
+      text: content.slice(start),
+    });
+  }
+  return lines;
+}
+
+function formatDiagnosticLines(
+  lines: readonly DiagnosticLine[],
+  start: number,
+  end: number,
+): string {
+  const visibleLines = lines.slice(start, end);
+  const width = String(start + visibleLines.length).length;
+  return visibleLines
+    .map(
+      (line) =>
+        `${String(line.lineNumber).padStart(width, " ")} | ${diagnosticLineText(
+          line.text,
+        )}`,
+    )
+    .join("\n");
+}
+
+function currentFileContextDiagnostic(
+  filePath: string,
+  content: string,
+): string {
+  const lines = splitDiagnosticLines(content);
+  if (lines.length === 0) {
+    return `Current file context for ${filePath}:\n<empty file>`;
+  }
+
+  const shownLineCount = Math.min(lines.length, MAX_EDIT_DIAGNOSTIC_LINES);
+  const output = [
+    `Current file context for ${filePath}:`,
+    formatDiagnosticLines(lines, 0, shownLineCount),
+  ];
+  const omittedLineCount = lines.length - shownLineCount;
+  if (omittedLineCount > 0) {
+    output.push(`[... ${omittedLineCount} more lines omitted ...]`);
+  }
+  return output.join("\n");
+}
+
+function currentFileContextRecovery(filePath: string, content: string): string {
+  return [
+    "Use the current context below to retry edit with edits[].oldText copied from the current file content.",
+    `If the target is outside this excerpt, use read(path: "${filePath}") with offset/limit or grep to inspect the current target.`,
+    "",
+    currentFileContextDiagnostic(filePath, content),
+  ].join("\n");
+}
+
+function diagnosticLineIndexAtOffset(
+  lines: readonly DiagnosticLine[],
+  offset: number,
+): number {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (line !== undefined && offset < line.end) return index;
+  }
+  /* v8 ignore next: edit match offsets are produced from existing file content. */
+  return Math.max(lines.length - 1, 0);
+}
+
+interface DiagnosticLineRange {
+  readonly start: number;
+  readonly end: number;
+}
+
+function mergeDiagnosticLineRanges(
+  ranges: readonly DiagnosticLineRange[],
+): readonly DiagnosticLineRange[] {
+  const merged: DiagnosticLineRange[] = [];
+  for (const range of ranges) {
+    const previous = merged[merged.length - 1];
+    if (previous !== undefined && range.start <= previous.end) {
+      merged[merged.length - 1] = {
+        start: previous.start,
+        end: Math.max(previous.end, range.end),
+      };
+      continue;
+    }
+    merged.push(range);
+  }
+  return merged;
+}
+
+function matchingLocationsDiagnostic(
+  filePath: string,
+  content: string,
+  spans: readonly EditMatchSpan[],
+  occurrenceCount: number,
+): string {
+  const lines = splitDiagnosticLines(content);
+  /* v8 ignore next 3: non-unique matches require non-empty file content. */
+  if (lines.length === 0) {
+    return `Current matching locations in ${filePath}:\n<empty file>`;
+  }
+
+  const ranges = spans.map((span) => {
+    const lineIndex = diagnosticLineIndexAtOffset(lines, span.index);
+    return {
+      start: Math.max(0, lineIndex - EDIT_DIAGNOSTIC_CONTEXT_LINES),
+      end: Math.min(
+        lines.length,
+        lineIndex + EDIT_DIAGNOSTIC_CONTEXT_LINES + 1,
+      ),
+    };
+  });
+  const windows = mergeDiagnosticLineRanges(ranges)
+    .map((range) => formatDiagnosticLines(lines, range.start, range.end))
+    .join("\n--\n");
+  const output = [`Current matching locations in ${filePath}:`, windows];
+  const omittedMatchCount = occurrenceCount - spans.length;
+  if (omittedMatchCount > 0) {
+    output.push(`[... ${omittedMatchCount} more matches omitted ...]`);
+  }
+  return output.join("\n");
+}
+
+function notUniqueRecovery(
+  filePath: string,
+  content: string,
+  spans: readonly EditMatchSpan[],
+  occurrenceCount: number,
+): string {
+  return [
+    "Include more surrounding context in oldText to make the match unique, or set replaceAll when every occurrence should change.",
+    "",
+    matchingLocationsDiagnostic(filePath, content, spans, occurrenceCount),
+  ].join("\n");
 }
 
 function formatByteCount(bytes: number): string {
@@ -258,7 +431,7 @@ function matchedReplacementsForEdit(
       throw new KeelError(
         "tool_old_string_not_found",
         `edit failed: old string not found in ${filePath} (${lineCount} lines) for edits[${edit.editIndex}]`,
-        `Use read(path: "${filePath}") to view the current file content, then retry edit with the exact text from the file.`,
+        currentFileContextRecovery(filePath, content),
       );
     }
     return matches.map((match) => {
@@ -283,14 +456,17 @@ function matchedReplacementsForEdit(
     throw new KeelError(
       "tool_old_string_not_found",
       `edit failed: old string not found in ${filePath} (${lineCount} lines) for edits[${edit.editIndex}]`,
-      `Use read(path: "${filePath}") to view the current file content, then retry edit with the exact text from the file.`,
+      currentFileContextRecovery(filePath, content),
     );
   }
   if (matchResult.status === "not_unique") {
+    const spans = matchResult.matches
+      .slice(0, MAX_EDIT_DIAGNOSTIC_MATCHES)
+      .map((match) => originalSpan(normalizedContent, match, content.length));
     throw new KeelError(
       "tool_old_string_not_unique",
       `edit failed: old string appears ${matchResult.occurrenceCount} times in ${filePath} for edits[${edit.editIndex}]`,
-      "Include more surrounding context in oldText to make the match unique, or set replaceAll when every occurrence should change.",
+      notUniqueRecovery(filePath, content, spans, matchResult.occurrenceCount),
     );
   }
   const span = originalSpan(

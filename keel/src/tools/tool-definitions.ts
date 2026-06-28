@@ -280,7 +280,7 @@ const editTool = defineTool({
     "Do not use when: creating a new file (use write), or when you have not read the file and would be guessing oldText from memory.",
     "For non-replaceAll edits, Keel can correct harmless line-ending, trailing-space, smart-punctuation, and common-indentation differences while preserving unrelated file bytes.",
     "Large generated files, bundles, and logs may exceed the edit safety limit; inspect them with grep/read and use a targeted external command when appropriate.",
-    "On failure: if the string is not found, read the file and retry with the exact current text; if it appears more than once, include more surrounding lines in oldText to make it unique.",
+    "On failure: if the string is not found, use the Recovery current-file context to retry, and read only if the target is outside the excerpt; if it appears more than once, use the reported matching locations to add surrounding lines in oldText or set replaceAll when every occurrence should change.",
   ].join("\n"),
   args: toolArgs(editToolArgumentsSchema),
   permission: { kind: "none" },

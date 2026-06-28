@@ -87,8 +87,8 @@ describe("File Editing Failures And Recovery", () => {
   });
 
   test(`Given the first edit cannot find the requested text,
-    When the agent reports the failure and receives a corrected edit,
-    Then the file is updated on disk`, async () => {
+    When the agent reports current file context and receives a corrected edit,
+    Then the file is updated on disk without an extra read`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
@@ -203,6 +203,10 @@ describe("File Editing Failures And Recovery", () => {
         content: expect.stringContaining("old string not found"),
       });
       expect(toolMessage?.content).toContain("Recovery:");
+      expect(toolMessage?.content).toContain(
+        "Current file context for note.txt:",
+      );
+      expect(toolMessage?.content).toContain("1 | hello world");
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "hello there\n",
       );
