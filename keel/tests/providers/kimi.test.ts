@@ -101,7 +101,15 @@ function editToolCallDelta(argumentsJson: string): {
 }
 
 function toolCallDelta(
-  name: "read" | "ls" | "glob" | "grep" | "write" | "bash" | "unknown",
+  name:
+    | "read"
+    | "ls"
+    | "glob"
+    | "grep"
+    | "git_diff"
+    | "write"
+    | "bash"
+    | "unknown",
   argumentsJson: string,
 ): {
   readonly index: number;
@@ -669,6 +677,30 @@ describe("Kimi Provider", () => {
           return;
         }
 
+        if (userMessage === "git-diff-tool-call") {
+          writeSseResponse(res, [
+            sseData({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      toolCallDelta(
+                        "git_diff",
+                        JSON.stringify({ mode: "all", paths: ["src"] }),
+                      ),
+                    ],
+                  },
+                },
+              ],
+            }),
+            `${sseData({
+              choices: [{ delta: {}, finish_reason: "tool_calls" }],
+              usage: { prompt_tokens: 20, completion_tokens: 6 },
+            })}data: [DONE]\n\n`,
+          ]);
+          return;
+        }
+
         if (userMessage === "write-tool-call") {
           writeSseResponse(res, [
             sseData({
@@ -999,6 +1031,7 @@ describe("Kimi Provider", () => {
       "ls",
       "glob",
       "grep",
+      "git_diff",
       "edit",
       "write",
       "apply_patch",
@@ -1048,6 +1081,7 @@ describe("Kimi Provider", () => {
       "ls",
       "glob",
       "grep",
+      "git_diff",
       "edit",
       "write",
       "apply_patch",
@@ -1365,7 +1399,7 @@ describe("Kimi Provider", () => {
     ]);
   });
 
-  test(`Given Kimi returns read, ls, glob, grep, write, and bash tool calls,
+  test(`Given Kimi returns read, ls, glob, grep, git_diff, write, and bash tool calls,
     When each stream finishes with tool_calls,
     Then the provider emits each parsed Keel tool shape`, async () => {
     // When
@@ -1374,6 +1408,7 @@ describe("Kimi Provider", () => {
       lsEvents,
       globEvents,
       grepEvents,
+      gitDiffEvents,
       writeEvents,
       bashEvents,
     ] = await Promise.all([
@@ -1381,6 +1416,7 @@ describe("Kimi Provider", () => {
       streamFor("ls-tool-call"),
       streamFor("glob-tool-call"),
       streamFor("grep-tool-call"),
+      streamFor("git-diff-tool-call"),
       streamFor("write-tool-call"),
       streamFor("bash-tool-call"),
     ]);
@@ -1414,6 +1450,13 @@ describe("Kimi Provider", () => {
       tool: "glob",
       pattern: "**/*.test.ts",
       path: "tests",
+    });
+    expect(gitDiffEvents[0]).toEqual({
+      type: "tool_call",
+      id: "call_kimi_git_diff",
+      tool: "git_diff",
+      mode: "all",
+      paths: ["src"],
     });
     expect(writeEvents[0]).toEqual({
       type: "tool_call",

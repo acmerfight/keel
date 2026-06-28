@@ -244,6 +244,16 @@ export function toolCallAccesses(
       const path = scopedSearchPath(workspace, toolCall.path);
       return path === null ? ToolAccesses.all() : ToolAccesses.searchTree(path);
     }
+    case "git_diff": {
+      const paths = toolCall.paths ?? ["."];
+      const accesses: ToolResourceAccess[] = [];
+      for (const requestedPath of paths) {
+        const path = scopedSearchPath(workspace, requestedPath);
+        if (path === null) return ToolAccesses.all();
+        accesses.push(...ToolAccesses.searchTree(path));
+      }
+      return accesses;
+    }
     case "edit": {
       if (isProjectInstructionPath(toolCall.path)) return ToolAccesses.all();
       const path = existingOrRequestedAccessPath(workspace, toolCall.path);

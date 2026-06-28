@@ -7,6 +7,7 @@ interface OpenAICompatibleToolParameterBase {
 interface OpenAICompatibleStringToolParameter
   extends OpenAICompatibleToolParameterBase {
   readonly type: "string";
+  readonly enum?: readonly string[];
 }
 
 interface OpenAICompatibleIntegerToolParameter
@@ -52,6 +53,7 @@ interface JsonSchemaObject extends JsonObject {
   readonly description?: unknown;
   readonly exclusiveMaximum?: unknown;
   readonly exclusiveMinimum?: unknown;
+  readonly enum?: unknown;
   readonly items?: unknown;
   readonly maximum?: unknown;
   readonly minimum?: unknown;
@@ -221,6 +223,14 @@ function openAICompatibleToolParameterFromSchema(
 
   switch (type) {
     case "string":
+      return {
+        type,
+        ...(description !== undefined ? { description } : {}),
+        ...(() => {
+          const enumValues = stringArray(schema.enum, `${context}.enum`);
+          return enumValues.length > 0 ? { enum: enumValues } : {};
+        })(),
+      };
     case "boolean":
       return {
         type,

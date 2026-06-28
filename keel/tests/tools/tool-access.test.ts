@@ -114,6 +114,11 @@ describe("Tool Access", () => {
         pattern: "old",
         path: "src",
       });
+      const gitDiffSrc = toolCallAccesses(workspace, {
+        id: "git_diff_src",
+        tool: "git_diff",
+        paths: ["src"],
+      });
       const lsRoot = toolCallAccesses(workspace, {
         id: "ls_root",
         tool: "ls",
@@ -130,6 +135,8 @@ describe("Tool Access", () => {
       expect(ToolAccesses.conflict(writeSrc, writeDocs)).toBe(false);
       expect(ToolAccesses.conflict(writeParent, writeChild)).toBe(true);
       expect(ToolAccesses.conflict(editA, grepSrc)).toBe(true);
+      expect(ToolAccesses.conflict(editA, gitDiffSrc)).toBe(true);
+      expect(ToolAccesses.conflict(writeDocs, gitDiffSrc)).toBe(false);
       expect(ToolAccesses.conflict(editA, lsRoot)).toBe(true);
       expect(ToolAccesses.conflict(editA, globDocs)).toBe(false);
     } finally {
@@ -423,6 +430,11 @@ describe("Tool Access", () => {
         pattern: "needle",
         path: outsidePath,
       });
+      const outsideGitDiff = toolCallAccesses(workspace, {
+        id: "outside_git_diff",
+        tool: "git_diff",
+        paths: [outsidePath],
+      });
       const outsideEdit = toolCallAccesses(workspace, {
         id: "outside_edit",
         tool: "edit",
@@ -522,6 +534,7 @@ describe("Tool Access", () => {
         outsideLs,
         outsideGlob,
         outsideGrep,
+        outsideGitDiff,
         outsideEdit,
         outsideWrite,
         outsideSymlinkParentWrite,
