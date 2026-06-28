@@ -90,6 +90,12 @@ describe("Tool Access", () => {
         path: "docs/new.txt",
         content: "new\n",
       });
+      const writeSrc = toolCallAccesses(workspace, {
+        id: "write_src",
+        tool: "write",
+        path: "src/new.txt",
+        content: "new\n",
+      });
       const writeParent = toolCallAccesses(workspace, {
         id: "write_parent",
         tool: "write",
@@ -121,6 +127,7 @@ describe("Tool Access", () => {
 
       // Then
       expect(ToolAccesses.conflict(editA, writeDocs)).toBe(false);
+      expect(ToolAccesses.conflict(writeSrc, writeDocs)).toBe(false);
       expect(ToolAccesses.conflict(writeParent, writeChild)).toBe(true);
       expect(ToolAccesses.conflict(editA, grepSrc)).toBe(true);
       expect(ToolAccesses.conflict(editA, lsRoot)).toBe(true);
@@ -375,10 +382,13 @@ describe("Tool Access", () => {
     Then the scheduler treats them as globally conflicting`, async () => {
     // Given
     const workspace = await createWorkspace();
+    const outsideDirectory = await mkdtemp(join(tmpdir(), "keel-tool-access-"));
     const missingWorkspace = join(workspace, "missing-workspace");
     const outsidePath = join(tmpdir(), "keel-tool-access-outside.txt");
 
     try {
+      await symlink(outsideDirectory, join(workspace, "outside-link"), "dir");
+
       // When
       const readA = toolCallAccesses(workspace, {
         id: "read_a",
@@ -425,6 +435,28 @@ describe("Tool Access", () => {
         path: outsidePath,
         content: "new\n",
       });
+      const outsideSymlinkParentWrite = toolCallAccesses(workspace, {
+        id: "outside_symlink_parent_write",
+        tool: "write",
+        path: "outside-link/new.txt",
+        content: "new\n",
+      });
+      const fileParentWrite = toolCallAccesses(workspace, {
+        id: "file_parent_write",
+        tool: "write",
+        path: "docs/old.txt/new.txt",
+        content: "new\n",
+      });
+      const fileParentAddPatch = toolCallAccesses(workspace, {
+        id: "file_parent_add_patch",
+        tool: "apply_patch",
+        patch: [
+          "*** Begin Patch",
+          "*** Add File: docs/old.txt/new.txt",
+          "+new",
+          "*** End Patch",
+        ].join("\n"),
+      });
       const outsideAddPatch = toolCallAccesses(workspace, {
         id: "outside_add_patch",
         tool: "apply_patch",
@@ -469,6 +501,19 @@ describe("Tool Access", () => {
           "*** End Patch",
         ].join("\n"),
       });
+      const moveToFileParentPatch = toolCallAccesses(workspace, {
+        id: "move_to_file_parent_patch",
+        tool: "apply_patch",
+        patch: [
+          "*** Begin Patch",
+          "*** Update File: docs/old.txt",
+          "*** Move to: docs/old.txt/moved.txt",
+          "@@",
+          "-old",
+          "+new",
+          "*** End Patch",
+        ].join("\n"),
+      });
 
       // Then
       for (const accesses of [
@@ -479,15 +524,21 @@ describe("Tool Access", () => {
         outsideGrep,
         outsideEdit,
         outsideWrite,
+        outsideSymlinkParentWrite,
+        fileParentWrite,
+        fileParentAddPatch,
         outsideAddPatch,
         outsideDeletePatch,
         outsideUpdatePatch,
         moveOutsidePatch,
+        moveToFileParentPatch,
       ]) {
+        expect(accesses).toEqual(ToolAccesses.all());
         expect(ToolAccesses.conflict(readA, accesses)).toBe(true);
       }
     } finally {
       await rm(workspace, { recursive: true, force: true });
+      await rm(outsideDirectory, { recursive: true, force: true });
     }
   });
 });
