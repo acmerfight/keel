@@ -443,11 +443,11 @@ describe("CLI Main - Eval Command", () => {
     }
   });
 
-  test(`Given an invalid eval trial count,
+  test.each(["0", "0x10", " 5 "])(`Given invalid eval trial count %s,
     When the CLI main parses the eval request,
-    Then it returns a trial validation error`, async () => {
+    Then it returns a trial validation error`, async (trials) => {
     // Given
-    const fixture = createRuntime(["eval", "--trials", "0"]);
+    const fixture = createRuntime(["eval", "--trials", trials]);
 
     // When
     const exitCode = await runCliMain(fixture.runtime);

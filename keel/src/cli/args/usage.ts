@@ -13,7 +13,7 @@ export const USAGE = [
   "",
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
   "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Approved or trusted command output may be sent to the provider unredacted. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
-  "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file.",
+  "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file; graceful non-completed stops still exit normally, so automation should read stopReason.",
   "--transcript writes a best-effort redacted provider-visible one-shot transcript as schema-versioned JSONL. Live provider requests are not redacted.",
   "--skill loads .agents/skills/<name>/SKILL.md as explicit workflow guidance for the current run.",
   "--session/--resume persist interactive provider context with best-effort at-rest redaction. Live provider requests may still include raw user and tool content.",

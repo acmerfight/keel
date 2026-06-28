@@ -1,5 +1,6 @@
 import { writeFileSync } from "node:fs";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
+import { errorMessage } from "../core/error.ts";
 import type { EndEvent } from "./output.ts";
 
 // The report schema is consumed by external tooling (the eval runner and any
@@ -35,6 +36,19 @@ interface RunReport {
 
 type EndEventWithCost = EndEvent & { readonly cost: CostReport };
 
+export class RunReportWriteError extends Error {
+  constructor(filePath: string, error: unknown) {
+    super(
+      `Error: cannot write report to ${filePath}: ${reportWriteCause(error)}`,
+    );
+    this.name = "RunReportWriteError";
+  }
+}
+
+function reportWriteCause(error: unknown): string {
+  return errorMessage(error).replace(/^Error: /u, "");
+}
+
 export function assertEndEventHasCost(
   end: EndEvent,
 ): asserts end is EndEventWithCost {
@@ -65,5 +79,9 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     durationMs: input.durationMs,
     costUsd: cost.spentUsd,
   };
-  writeFileSync(filePath, `${JSON.stringify(report)}\n`, "utf8");
+  try {
+    writeFileSync(filePath, `${JSON.stringify(report)}\n`, "utf8");
+  } catch (error) {
+    throw new RunReportWriteError(filePath, error);
+  }
 }

@@ -207,7 +207,7 @@ describe("CLI Main - Session Resume Model State", () => {
       expect(overrideExitCode).toBe(0);
       expect(overrideRun.stdout()).toBe(
         [
-          "Model overridden to qwen/qwen3.7-plus for resumed session.",
+          "Model selected as qwen/qwen3.7-plus for resumed session.",
           "Hello from selected Qwen.",
           "",
         ].join("\n"),
@@ -295,7 +295,7 @@ describe("CLI Main - Session Resume Model State", () => {
       expect(overrideExitCode).toBe(0);
       expect(overrideRun.stdout()).toBe(
         [
-          "Model overridden to fake/fake for resumed session.",
+          "Model selected as fake/fake for resumed session.",
           "Earlier you said: remember alpha",
           "",
         ].join("\n"),

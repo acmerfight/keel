@@ -26,6 +26,7 @@ import {
 import { writeRunReport } from "./report.ts";
 import { resolveResumedWorkflowSkill } from "./resumed-workflow-skill.ts";
 import type { CliRuntime } from "./runtime.ts";
+import { formatCliRuntimeError } from "./runtime-error.ts";
 import { formatSessionForkCreated } from "./session-catalog-format.ts";
 import {
   acquireSessionLock,
@@ -168,8 +169,10 @@ export async function runInteractiveCli(
               to: overrideSelection,
               runtime,
             });
+            const action =
+              previousSelection === null ? "selected as" : "overridden to";
             runtime.writeStdout(
-              `Model overridden to ${overrideSelection.providerId}/${overrideSelection.model} for resumed session.\n`,
+              `Model ${action} ${overrideSelection.providerId}/${overrideSelection.model} for resumed session.\n`,
             );
           }
           initialModelSelection = overrideSelection;
@@ -420,6 +423,11 @@ export async function runInteractiveCli(
     }
     if (error instanceof WorkflowSkillError) {
       runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    const runtimeError = formatCliRuntimeError(error);
+    if (runtimeError !== null) {
+      runtime.writeStderr(runtimeError);
       return 1;
     }
     /* v8 ignore next 3: unexpected interactive runtime failures are allowed to escape. */
