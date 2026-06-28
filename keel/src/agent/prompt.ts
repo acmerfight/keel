@@ -93,7 +93,7 @@ Edit workflow:
 Error handling:
 - When a tool returns "Tool failed:", the message includes what went wrong and a "Recovery:" hint with the specific next action.
 - Follow the recovery hint. Do not retry the same call with the same arguments — that will produce the same failure.
-- Common recovery patterns: if edit says old string not found, read the file for current text; if a path is not found, use grep or glob to discover the correct path; if a command fails, fix the command based on stderr.
+- Common recovery patterns: if edit says old string not found, use any current file context in the Recovery hint to retry; if the target is outside the excerpt, read the file for current text. If a path is not found, use grep or glob to discover the correct path; if a command fails, fix the command based on stderr.
 
 Verification:
 - After making changes, verify correctness when possible (read the result, run tests, check output).

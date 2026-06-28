@@ -160,8 +160,9 @@ Known limits that shape the priorities below:
 - Edit supports multiple replacements per file tool call, `replaceAll` for
   individual targets, fuzzy matching for common copy/paste drift,
   enforced read-before-edit for updates, and apply_patch Add/Update/Delete/Move
-  batches. Remaining gaps are stronger stale-context recovery and fuller diff
-  semantics.
+  batches. Stale or ambiguous edit failures now return bounded current-file
+  diagnostics so the next model turn can retry from visible context. The
+  remaining edit gap is fuller diff semantics.
 - Eval results compare keel across versions; cross-agent comparisons are
   intentionally deferred until the core coding loop is more complete and the
   suite has a larger real-task corpus.
@@ -246,9 +247,9 @@ Codex/Claude Code — or directly moves the eval numbers.
   line-ending drift, trailing whitespace, smart punctuation, common
   indentation, `replaceAll`, enforced read-before-edit, multi-replacement
   edit calls for one file, and apply_patch Add/Update/Delete/Move batches for
-  coordinated larger changes. Remaining gaps are stronger stale-context
-  recovery and fuller diff semantics. Edit success rate is a tracked
-  eval sub-metric.
+  coordinated larger changes. Stale or ambiguous edit failures include bounded
+  current-file diagnostics for retry. The remaining gap is fuller diff
+  semantics. Edit success rate is a tracked eval sub-metric.
 - **Project context injection** — ✅ Partial (2026-06): root `AGENTS.md` is
   loaded into the system prompt with safety checks. Nested `AGENTS.md` files are
   discovered for scoped paths, shown through read/search outputs, restored after

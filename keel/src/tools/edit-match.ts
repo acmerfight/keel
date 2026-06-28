@@ -14,6 +14,7 @@ export type EditMatchResult =
   | {
       readonly status: "not_unique";
       readonly occurrenceCount: number;
+      readonly matches: readonly EditMatchSpan[];
     };
 
 interface LineRecord {
@@ -265,7 +266,11 @@ function uniqueMatchResult(matches: readonly EditMatchSpan[]): EditMatchResult {
   let match: EditMatchSpan | undefined;
   for (const candidate of matches) {
     if (match !== undefined) {
-      return { status: "not_unique", occurrenceCount: matches.length };
+      return {
+        status: "not_unique",
+        occurrenceCount: matches.length,
+        matches,
+      };
     }
     match = candidate;
   }

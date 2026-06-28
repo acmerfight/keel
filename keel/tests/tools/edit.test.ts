@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test } from "vitest";
-import type { KeelErrorCode } from "../../src/core/error.ts";
+import { KeelError, type KeelErrorCode } from "../../src/core/error.ts";
 import {
   createGitWorkspace,
   runGit as git,
@@ -60,6 +60,16 @@ function expectEditError(
         ? { recovery: expect.stringContaining(recovery) }
         : {}),
     });
+  }
+}
+
+function captureEditError(action: () => unknown): KeelError {
+  try {
+    action();
+    throw new Error("Expected edit tool to throw");
+  } catch (error) {
+    if (error instanceof KeelError) return error;
+    throw error;
   }
 }
 
@@ -243,6 +253,179 @@ describe("Edit Tool", () => {
       );
       expect(await readFile(join(workspace, "settings.ts"), "utf8")).toBe(
         original,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit target is stale,
+    When the edit tool cannot find the old text,
+    Then the recovery hint includes bounded current file context`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const original = [
+      'const STATUS_TEXT = "Queued";',
+      "",
+      "function statusLabel() {",
+      "  return STATUS_TEXT;",
+      "}",
+      "",
+      "module.exports = { statusLabel };",
+      "",
+    ].join("\n");
+    await writeFile(join(workspace, "status.js"), original, "utf8");
+
+    try {
+      // When
+      const error = captureEditError(() =>
+        executeEdit(
+          workspace,
+          "status.js",
+          singleEdit(
+            'const statusText = "Pending";',
+            'const STATUS_TEXT = "Ready";',
+          ),
+        ),
+      );
+
+      // Then
+      expect(error).toMatchObject({
+        code: "tool_old_string_not_found",
+        message: expect.stringContaining("old string not found"),
+      });
+      expect(error.recovery).toContain("Current file context for status.js:");
+      expect(error.recovery).toContain('1 | const STATUS_TEXT = "Queued";');
+      expect(error.recovery).toContain("4 |   return STATUS_TEXT;");
+      expect(error.recovery).toContain(
+        "retry edit with edits[].oldText copied from the current file content",
+      );
+      expect(await readFile(join(workspace, "status.js"), "utf8")).toBe(
+        original,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit target is stale in a long file,
+    When the edit tool reports current file context,
+    Then the diagnostic output is bounded`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const original = Array.from(
+      { length: 45 },
+      (_value, index) => `line ${index + 1}`,
+    ).join("\n");
+    await writeFile(join(workspace, "long.txt"), `${original}\n`, "utf8");
+
+    try {
+      // When
+      const error = captureEditError(() =>
+        executeEdit(workspace, "long.txt", singleEdit("missing", "new")),
+      );
+
+      // Then
+      expect(error.message).toContain("(45 lines)");
+      expect(error.recovery).toContain("40 | line 40");
+      expect(error.recovery).toContain("5 more lines omitted");
+      expect(error.recovery).not.toContain("41 | line 41");
+      expect(await readFile(join(workspace, "long.txt"), "utf8")).toBe(
+        `${original}\n`,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a stale replaceAll edit cannot find the target,
+    When the edit tool reports the failure,
+    Then the recovery hint includes current file context`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const original = "keep this\n";
+    await writeFile(join(workspace, "note.txt"), original, "utf8");
+
+    try {
+      // When
+      const error = captureEditError(() =>
+        executeEdit(workspace, "note.txt", singleEdit("missing", "new", true)),
+      );
+
+      // Then
+      expect(error).toMatchObject({
+        code: "tool_old_string_not_found",
+        message: expect.stringContaining("old string not found"),
+      });
+      expect(error.recovery).toContain("Current file context for note.txt:");
+      expect(error.recovery).toContain("1 | keep this");
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        original,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given stale edit diagnostics include CRLF and a long line,
+    When the edit tool reports current file context,
+    Then line endings are rendered cleanly and long lines are truncated`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const longLine = "x".repeat(180);
+    await writeFile(
+      join(workspace, "windows.txt"),
+      `short\r\n${longLine}\r\n`,
+      "utf8",
+    );
+
+    try {
+      // When
+      const error = captureEditError(() =>
+        executeEdit(workspace, "windows.txt", singleEdit("missing", "new")),
+      );
+
+      // Then
+      expect(error.recovery).toContain("1 | short");
+      expect(error.recovery).not.toContain("short\r");
+      expect(error.recovery).toContain(`2 | ${"x".repeat(157)}...`);
+      expect(error.recovery).not.toContain(`2 | ${longLine}`);
+      expect(await readFile(join(workspace, "windows.txt"), "utf8")).toBe(
+        `short\r\n${longLine}\r\n`,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an unread file contains sensitive text,
+    When read-before-edit rejects the edit,
+    Then the recovery hint does not include current file context`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    await writeFile(
+      join(workspace, "secret.txt"),
+      "apiToken = 'secret-token-value'\n",
+      "utf8",
+    );
+
+    try {
+      // When
+      const error = captureEditError(() =>
+        executeEdit(workspace, "secret.txt", singleEdit("apiToken", "token"), {
+          readBeforeEdit: { hasRead: () => false },
+        }),
+      );
+
+      // Then
+      expect(error).toMatchObject({
+        code: "tool_file_not_read",
+        message: expect.stringContaining("file has not been read"),
+      });
+      expect(error.recovery).not.toContain("Current file context");
+      expect(error.recovery).not.toContain("secret-token-value");
+      expect(await readFile(join(workspace, "secret.txt"), "utf8")).toBe(
+        "apiToken = 'secret-token-value'\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -851,6 +1034,96 @@ describe("Edit Tool", () => {
       );
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "old one\nold two\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit target appears more than once,
+    When replaceAll is omitted,
+    Then the recovery hint includes bounded matching locations`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const original = [
+      "target one",
+      "gap one",
+      "target two",
+      "gap two",
+      "target three",
+      "gap three",
+      "target four",
+      "gap four",
+      "target five",
+      "gap five",
+      "target six",
+      "gap six",
+      "target seven",
+      "",
+    ].join("\n");
+    await writeFile(join(workspace, "note.txt"), original, "utf8");
+
+    try {
+      // When
+      const error = captureEditError(() =>
+        executeEdit(workspace, "note.txt", singleEdit("target", "updated")),
+      );
+
+      // Then
+      expect(error).toMatchObject({
+        code: "tool_old_string_not_unique",
+        message: expect.stringContaining("old string appears 7 times"),
+      });
+      expect(error.recovery).toContain(
+        "Current matching locations in note.txt:",
+      );
+      expect(error.recovery).toContain("1 | target one");
+      expect(error.recovery).toContain("9 | target five");
+      expect(error.recovery).toContain("2 more matches omitted");
+      expect(error.recovery).not.toContain("11 | target six");
+      expect(error.recovery).not.toContain("13 | target seven");
+      expect(error.recovery).toContain("Include more surrounding context");
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        original,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given repeated edit targets are far apart,
+    When replaceAll is omitted,
+    Then the recovery hint separates disjoint matching windows`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-tool-"));
+    const original = [
+      "target alpha",
+      "gap one",
+      "gap two",
+      "gap three",
+      "target beta",
+      "",
+    ].join("\n");
+    await writeFile(join(workspace, "note.txt"), original, "utf8");
+
+    try {
+      // When
+      const error = captureEditError(() =>
+        executeEdit(workspace, "note.txt", singleEdit("target", "updated")),
+      );
+
+      // Then
+      expect(error).toMatchObject({
+        code: "tool_old_string_not_unique",
+        message: expect.stringContaining("old string appears 2 times"),
+      });
+      expect(error.recovery).toContain("1 | target alpha");
+      expect(error.recovery).toContain("2 | gap one");
+      expect(error.recovery).toContain("\n--\n");
+      expect(error.recovery).toContain("4 | gap three");
+      expect(error.recovery).toContain("5 | target beta");
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        original,
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
