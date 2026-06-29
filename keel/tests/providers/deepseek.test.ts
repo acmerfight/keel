@@ -860,6 +860,30 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "read-tool-call-stop-finish") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        readToolCallDelta(
+                          JSON.stringify({
+                            path: "note.txt",
+                          }),
+                        ),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseFinish(24, 6, "stop"),
+            ]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "grep-tool-call") {
             writeSseResponse(res, [
               sseData({
@@ -2947,6 +2971,46 @@ describe("DeepSeek Provider", () => {
       provider.stream({
         systemPrompt: "You are helpful.",
         messages: [{ role: "user", content: "read-basic-tool-call" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_read_0",
+        tool: "read",
+        path: "note.txt",
+      },
+      {
+        type: "stop",
+        reason: "stop",
+        usage: {
+          inputTokens: 24,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 24,
+          outputTokens: 6,
+        },
+      },
+    ]);
+  });
+
+  test(`Given a complete streamed tool call finishes with stop,
+    When provider finishes reading the stream,
+    Then it yields the tool call instead of dropping it`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "read-tool-call-stop-finish" }],
         signal: freshSignal(),
       }),
     );
