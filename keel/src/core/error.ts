@@ -58,6 +58,15 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function isAbortThrow(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted === true) return true;
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" ||
+      ("code" in error && error.code === "ABORT_ERR"))
+  );
+}
+
 export class KeelError extends Error {
   readonly code: KeelErrorCode;
   readonly recovery?: string;
