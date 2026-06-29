@@ -1,5 +1,6 @@
 import {
   errorMessage,
+  isAbortThrow,
   isRecoverableToolErrorCode,
   KeelError,
   type RecoverableToolErrorCode,
@@ -96,14 +97,6 @@ function unhandledToolFailureMessage(
     ? message
     : `${toolPrefix} ${message}`;
   return `Tool failed: ${toolMessage}\nRecovery: Inspect the failed tool request and current workspace state, then retry with corrected arguments or choose another approach.`;
-}
-
-function isAbortError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.name === "AbortError" ||
-      ("code" in error && error.code === "ABORT_ERR"))
-  );
 }
 
 function scopedProjectInstructionsFailureMessage(
@@ -338,7 +331,7 @@ export async function executeToolCall(
   try {
     return await executeBuiltinToolCall(context, toolCall);
   } catch (error) {
-    if (context.signal.aborted || isAbortError(error)) {
+    if (isAbortThrow(error, context.signal)) {
       throw error;
     }
     if (error instanceof ScopedProjectInstructionsNotVisibleError) {
