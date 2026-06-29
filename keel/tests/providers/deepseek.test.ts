@@ -129,6 +129,31 @@ function readToolCallDelta(argumentsJson: string): {
   };
 }
 
+function lsToolCallDelta(argumentsJson?: string): {
+  readonly index: number;
+  readonly id: string;
+  readonly type: "function";
+  readonly function: {
+    readonly name: "ls";
+    readonly arguments?: string;
+  };
+} {
+  const toolFunction: {
+    readonly name: "ls";
+    arguments?: string;
+  } = { name: "ls" };
+  if (argumentsJson !== undefined) {
+    toolFunction.arguments = argumentsJson;
+  }
+
+  return {
+    index: 0,
+    id: "call_ls_0",
+    type: "function",
+    function: toolFunction,
+  };
+}
+
 function grepToolCallDelta(argumentsJson: string): {
   readonly index: number;
   readonly id: string;
@@ -730,6 +755,47 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "unknown-finish-reason") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.end(sseFinish(10, 4, "content_filter"));
+            return;
+          }
+
+          if (
+            parsed.messages?.[1]?.content === "tool-call-without-finish-reason"
+          ) {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        readToolCallDelta(JSON.stringify({ path: "note.txt" })),
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: null }],
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "missing-usage") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -1180,6 +1246,44 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (
+            parsed.messages?.[1]?.content ===
+            "missing-zero-argument-tool-arguments"
+          ) {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.write(
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [lsToolCallDelta()],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+            );
+            res.write(
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
+              }),
+            );
+            res.write("data: [DONE]\n\n");
+            res.end();
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "empty-tool-arguments") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -1191,7 +1295,7 @@ describe("DeepSeek Provider", () => {
                 choices: [
                   {
                     delta: {
-                      tool_calls: [editToolCallDelta(0, "")],
+                      tool_calls: [lsToolCallDelta("")],
                     },
                     finish_reason: null,
                   },
@@ -2629,6 +2733,74 @@ describe("DeepSeek Provider", () => {
     });
   });
 
+  test(`Given the stream ends with an unknown finish reason,
+    When provider validates the completed stream,
+    Then it throws a protocol error instead of yielding stop`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "unknown-finish-reason" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream finished with reason: content_filter",
+    });
+  });
+
+  test(`Given a complete tool call stream ends without a finish reason,
+    When provider finalizes the completed stream,
+    Then it yields the tool call before a stop event`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [
+          { role: "user", content: "tool-call-without-finish-reason" },
+        ],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_read_0",
+        tool: "read",
+        path: "note.txt",
+      },
+      {
+        type: "stop",
+        reason: "stop",
+        usage: {
+          inputTokens: 30,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 30,
+          outputTokens: 8,
+        },
+      },
+    ]);
+  });
+
   test(`Given a stream chunk contains invalid JSON,
     When provider reads the chunk,
     Then it throws a protocol error`, async () => {
@@ -3291,7 +3463,7 @@ describe("DeepSeek Provider", () => {
 
   test(`Given an edit tool call never sends arguments,
     When provider finishes the tool call,
-    Then it throws a protocol error with an empty arguments message`, async () => {
+    Then it throws a protocol error with an invalid arguments message`, async () => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "test-key",
@@ -3311,7 +3483,7 @@ describe("DeepSeek Provider", () => {
     ).rejects.toMatchObject({
       name: "KeelError",
       code: "provider_protocol_error",
-      message: "DeepSeek edit tool call has empty arguments",
+      message: "DeepSeek edit tool call has invalid arguments",
     });
   });
 
@@ -3370,9 +3542,12 @@ describe("DeepSeek Provider", () => {
     });
   });
 
-  test(`Given an edit tool call sends empty arguments,
+  test.each([
+    ["empty arguments", "empty-tool-arguments"],
+    ["omitted arguments", "missing-zero-argument-tool-arguments"],
+  ])(`Given a zero-argument tool call sends %s,
     When provider finishes the tool call,
-    Then it throws a protocol error with an empty arguments message`, async () => {
+    Then it treats them as an empty object`, async (_description, message) => {
     // Given
     const provider = createDeepseekProvider({
       apiKey: "test-key",
@@ -3380,20 +3555,33 @@ describe("DeepSeek Provider", () => {
       model: "deepseek-v4-flash",
     });
 
-    // When / Then
-    await expect(
-      collect(
-        provider.stream({
-          systemPrompt: "You are helpful.",
-          messages: [{ role: "user", content: "empty-tool-arguments" }],
-          signal: freshSignal(),
-        }),
-      ),
-    ).rejects.toMatchObject({
-      name: "KeelError",
-      code: "provider_protocol_error",
-      message: "DeepSeek edit tool call has empty arguments",
-    });
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: message }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_ls_0",
+        tool: "ls",
+      },
+      {
+        type: "stop",
+        reason: "stop",
+        usage: {
+          inputTokens: 30,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 30,
+          outputTokens: 8,
+        },
+      },
+    ]);
   });
 
   test(`Given a read tool call sends invalid JSON arguments,
