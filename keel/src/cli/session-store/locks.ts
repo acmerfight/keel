@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   mkdirSync,
@@ -6,6 +7,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { hostname } from "node:os";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../../core/error.ts";
@@ -18,7 +20,7 @@ import {
 } from "./paths.ts";
 import { isoTimestamp } from "./runtime.ts";
 
-const sessionLockOwnerSchema = z
+const legacySessionLockOwnerSchema = z
   .object({
     pid: z.number().int().positive(),
     token: z.string(),
@@ -26,7 +28,26 @@ const sessionLockOwnerSchema = z
   })
   .strict();
 
+const identifiedSessionLockOwnerSchema = legacySessionLockOwnerSchema.extend({
+  hostname: z.string().min(1),
+  processStartTime: z.string().min(1),
+});
+
+const sessionLockOwnerSchema = z.union([
+  identifiedSessionLockOwnerSchema,
+  legacySessionLockOwnerSchema,
+]);
+const processStartTimeOutputSchema = z.string().min(1);
+const PROCESS_IDENTITY_ENV = {
+  ...process.env,
+  LC_ALL: "C",
+  TZ: "UTC",
+};
+
 type SessionLockOwner = z.infer<typeof sessionLockOwnerSchema>;
+type IdentifiedSessionLockOwner = z.infer<
+  typeof identifiedSessionLockOwnerSchema
+>;
 type SessionLockOwnerRead =
   | {
       readonly status: "valid";
@@ -42,9 +63,21 @@ type SessionLockOwnerRead =
       readonly status: "read_error";
       readonly message: string;
     };
+type ProcessStartTimeRead =
+  | {
+      readonly status: "found";
+      readonly processStartTime: string;
+    }
+  | {
+      readonly status: "not_found";
+    }
+  | {
+      readonly status: "unknown";
+    };
 
 // Gives an in-progress lock owner write time to finish before reclaiming a crash-left ownerless directory.
 const OWNERLESS_LOCK_RECLAIM_AFTER_MS = 30_000;
+let cachedCurrentProcessStartTime: string | undefined;
 
 function readSessionLockOwner(lockPath: string): SessionLockOwnerRead {
   let raw: unknown;
@@ -74,6 +107,63 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+function readProcessStartTime(pid: number): ProcessStartTimeRead {
+  let output: string;
+  try {
+    output = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
+      encoding: "utf8",
+      env: PROCESS_IDENTITY_ENV,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return processIsAlive(pid)
+      ? { status: "unknown" }
+      : { status: "not_found" };
+  }
+
+  const parsed = processStartTimeOutputSchema.safeParse(output.trim());
+  if (parsed.success) {
+    return { status: "found", processStartTime: parsed.data };
+  }
+  return processIsAlive(pid) ? { status: "unknown" } : { status: "not_found" };
+}
+
+function currentProcessStartTime(): string | null {
+  if (cachedCurrentProcessStartTime !== undefined) {
+    return cachedCurrentProcessStartTime;
+  }
+  const processStartTime = readProcessStartTime(process.pid);
+  if (processStartTime.status !== "found") {
+    return null;
+  }
+  cachedCurrentProcessStartTime = processStartTime.processStartTime;
+  return cachedCurrentProcessStartTime;
+}
+
+function hasProcessIdentity(
+  owner: SessionLockOwner,
+): owner is IdentifiedSessionLockOwner {
+  return "hostname" in owner && "processStartTime" in owner;
+}
+
+function sessionLockOwnerIsActive(owner: SessionLockOwner): boolean {
+  if (!hasProcessIdentity(owner)) {
+    return processIsAlive(owner.pid);
+  }
+  if (owner.hostname !== hostname()) {
+    return true;
+  }
+
+  const processStartTime = readProcessStartTime(owner.pid);
+  if (processStartTime.status === "not_found") {
+    return false;
+  }
+  if (processStartTime.status === "unknown") {
+    return true;
+  }
+  return processStartTime.processStartTime === owner.processStartTime;
+}
+
 function ownerlessSessionLockIsStale(lockPath: string): boolean {
   try {
     const stats = statSync(lockPath);
@@ -88,7 +178,10 @@ function ownerlessSessionLockIsStale(lockPath: string): boolean {
 
 function removeStaleSessionLock(lockPath: string): boolean {
   const ownerRead = readSessionLockOwner(lockPath);
-  if (ownerRead.status === "valid" && processIsAlive(ownerRead.owner.pid)) {
+  if (
+    ownerRead.status === "valid" &&
+    sessionLockOwnerIsActive(ownerRead.owner)
+  ) {
     return false;
   }
   if (ownerRead.status === "read_error") {
@@ -132,6 +225,8 @@ export function acquireSessionLock(options: {
 }): SessionLock {
   const lockPath = sessionLockPath(options.runtime, options.sessionId);
   const token = randomUUID();
+  const ownerHostname = hostname();
+  const ownerProcessStartTime = currentProcessStartTime();
   for (;;) {
     try {
       mkdirSync(dirname(lockPath), { recursive: true, mode: 0o700 });
@@ -153,11 +248,21 @@ export function acquireSessionLock(options: {
     try {
       writeFileSync(
         sessionLockOwnerPath(lockPath),
-        `${JSON.stringify({
-          pid: process.pid,
-          token,
-          createdAt: isoTimestamp(options.runtime),
-        })}\n`,
+        `${JSON.stringify(
+          ownerProcessStartTime === null
+            ? {
+                pid: process.pid,
+                token,
+                createdAt: isoTimestamp(options.runtime),
+              }
+            : {
+                pid: process.pid,
+                token,
+                createdAt: isoTimestamp(options.runtime),
+                hostname: ownerHostname,
+                processStartTime: ownerProcessStartTime,
+              },
+        )}\n`,
         { encoding: "utf8", flag: "wx", mode: 0o600 },
       );
     } catch (error) {
