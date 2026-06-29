@@ -6,7 +6,11 @@ import { parseCliArgs, USAGE } from "./args.ts";
 import { runForkPointsCommand } from "./fork-points-command.ts";
 import { runInteractiveCli } from "./interactive-run.ts";
 import { runOneShotCli } from "./one-shot-run.ts";
-import type { CliRuntime } from "./runtime.ts";
+import {
+  type CliRuntime,
+  exitWithCliRuntimeError,
+  withCliRuntimeErrorBoundary,
+} from "./runtime.ts";
 import { runSessionsCommand } from "./sessions-command.ts";
 import {
   runDoctorCommand,
@@ -15,7 +19,7 @@ import {
   runUndoCommand,
 } from "./top-level-commands.ts";
 
-export async function runCliMain(runtime: CliRuntime): Promise<number> {
+async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
   const parsedCliArgs = parseCliArgs(runtime.args);
   if (!parsedCliArgs.ok) {
     runtime.writeStderr(`${parsedCliArgs.message}\n`);
@@ -74,6 +78,12 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
   return await runOneShotCli(cliArgs, runtime, userMessage);
 }
 
+export async function runCliMain(runtime: CliRuntime): Promise<number> {
+  return await withCliRuntimeErrorBoundary(runtime, () =>
+    runCliMainUnsafe(runtime),
+  );
+}
+
 /* v8 ignore start: real process adapter is exercised by CLI subprocess tests. */
 function defaultRuntime(): CliRuntime {
   return {
@@ -105,12 +115,18 @@ export async function main(): Promise<void> {
   process.exitCode = await runCliMain(defaultRuntime());
 }
 
+function installProcessRuntimeErrorHandlers(): void {
+  process.on("uncaughtException", exitWithCliRuntimeError);
+  process.on("unhandledRejection", exitWithCliRuntimeError);
+}
+
 // process.argv[1] keeps the launch path; npm/pnpm install bins as symlinks,
 // so resolve to the real path before comparing against the resolved module URL.
 if (
   process.argv[1] !== undefined &&
   import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
 ) {
+  installProcessRuntimeErrorHandlers();
   await main();
 }
 /* v8 ignore stop */
