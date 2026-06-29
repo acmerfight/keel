@@ -168,7 +168,7 @@ describe("Apply Patch Tool", () => {
 
   test(`Given a patch hunk only names an empty removed line,
     When apply_patch validates the update hunk,
-    Then it rejects the patch without hanging or mutating the file`, async () => {
+    Then it rejects the patch as having no effective old lines without mutating the file`, async () => {
     // Given
     const workspace = await createWorkspace();
     const workspacePath = await realpath(workspace);
@@ -192,7 +192,7 @@ describe("Apply Patch Tool", () => {
             },
           }),
         "tool_invalid_patch",
-        "has no locatable old text",
+        "has no effective old lines",
       );
       expect(await readFile(targetPath, "utf8")).toBe("alpha\n\nbravo\n");
     } finally {
@@ -1100,7 +1100,7 @@ describe("Apply Patch Tool", () => {
         patch:
           "*** Begin Patch\n*** Update File: bad.txt\n@@\n+new\n*** End Patch",
         code: "tool_invalid_patch",
-        message: "has no old lines",
+        message: "has no effective old lines",
       },
       {
         patch: "*** Begin Patch\n*** Update File: bad.txt\n*** End Patch",
