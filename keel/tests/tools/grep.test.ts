@@ -256,6 +256,25 @@ describe("Grep Tool Search Semantics", () => {
     }
   });
 
+  test(`Given a matching line crosses the snippet budget at an emoji,
+    When the grep tool truncates the snippet,
+    Then it does not split the UTF-16 surrogate pair`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+    const prefix = `needle ${"x".repeat(232)}`;
+    await writeFile(join(workspace, "app.ts"), `${prefix}😀 suffix\n`, "utf8");
+
+    try {
+      // When
+      const result = await executeGrep(workspace, "needle");
+
+      // Then
+      expect(result.content).toBe(`app.ts:1:${prefix}😀...`);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given no workspace files contain the searched text,
     When the grep tool searches the workspace,
     Then it reports that no matches were found`, async () => {

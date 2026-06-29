@@ -178,6 +178,80 @@ describe("CLI Args", () => {
     });
   });
 
+  test.each([
+    ["--trials", "--check"],
+    ["--provider", "--model"],
+  ])(`Given the %s eval option is followed by the %s flag,
+    When the top-level CLI args are parsed,
+    Then the parser rejects the missing value instead of returning a type-specific error`, (option, nextFlag) => {
+    // Given
+    const args = ["eval", option, nextFlag, "value"];
+
+    // When
+    const result = parseCliArgs(args);
+
+    // Then
+    expect(result).toEqual({
+      ok: false,
+      message: `Error: ${option} requires a value, but got option "${nextFlag}".`,
+    });
+  });
+
+  test(`Given eval run options use inline values,
+    When the top-level CLI args are parsed,
+    Then every value-taking eval option is accepted consistently`, () => {
+    // Given
+    const args = [
+      "eval",
+      "--suite=evals/custom",
+      "--out=/tmp/results.jsonl",
+      "--trials=3",
+      "--task=fix-note",
+      "--provider=fake",
+      "--model=ignored",
+      "--transcript-dir=/tmp/transcripts",
+      "--check",
+    ];
+
+    // When
+    const result = parseCliArgs(args);
+
+    // Then
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        command: "eval",
+        mode: "run",
+        suiteDir: "evals/custom",
+        outFile: "/tmp/results.jsonl",
+        trials: 3,
+        taskId: "fix-note",
+        providerId: "fake",
+        model: "ignored",
+        transcriptDir: "/tmp/transcripts",
+        check: true,
+      },
+    });
+  });
+
+  test.each([
+    ["--suite=", "Error: --suite requires a value."],
+    ["--out=", "Error: --out requires a value."],
+    ["--task=", "Error: --task requires a value."],
+    ["--trials=0", "Error: --trials must be a positive integer."],
+  ])(`Given eval run option %s has an invalid inline value,
+    When the top-level CLI args are parsed,
+    Then it returns the option-specific validation error`, (arg, message) => {
+    // Given
+    const args = ["eval", arg];
+
+    // When
+    const result = parseCliArgs(args);
+
+    // Then
+    expect(result).toEqual({ ok: false, message });
+  });
+
   test(`Given an eval compare base option is followed by the head flag,
     When the top-level CLI args are parsed,
     Then the parser rejects the missing base path instead of treating the flag as data`, () => {
