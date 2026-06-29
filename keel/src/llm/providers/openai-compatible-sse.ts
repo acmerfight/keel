@@ -112,16 +112,13 @@ function parseToolCall(
     );
   }
 
-  if (toolCall.argumentsJson === null || toolCall.argumentsJson === "") {
-    throw new KeelError(
-      "provider_protocol_error",
-      `${providerName} ${toolCallName} tool call has empty arguments`,
-    );
-  }
-
+  const argumentsJson =
+    toolCall.argumentsJson === null || toolCall.argumentsJson === ""
+      ? "{}"
+      : toolCall.argumentsJson;
   let parsedArguments: unknown;
   try {
-    parsedArguments = JSON.parse(toolCall.argumentsJson);
+    parsedArguments = JSON.parse(argumentsJson);
   } catch {
     throw new KeelError(
       "provider_protocol_error",
@@ -213,10 +210,18 @@ function finishReasonToStopReason(
         );
       }
       return "length";
+    case undefined:
+      if (hasToolCallFragments) {
+        return "stop";
+      }
+      throw new KeelError(
+        "provider_protocol_error",
+        `${providerName} stream finished with reason: none`,
+      );
     default:
       throw new KeelError(
         "provider_protocol_error",
-        `${providerName} stream finished with reason: ${finishReason ?? "none"}`,
+        `${providerName} stream finished with reason: ${finishReason}`,
       );
   }
 }
@@ -250,12 +255,6 @@ function* parseSseLine<Chunk extends OpenAICompatibleChunk>(
 
     if (choice.finish_reason) {
       state.finishReason = choice.finish_reason;
-      if (
-        choice.finish_reason === "tool_calls" ||
-        (choice.finish_reason === "stop" && state.toolCalls.size > 0)
-      ) {
-        completePendingToolCall(state, config.providerName);
-      }
     }
   }
 
@@ -316,11 +315,16 @@ export function finalStreamEvents(
     );
   }
 
+  const hasToolCallFragments = state.toolCalls.size > 0;
   const reason = finishReasonToStopReason(
     state.finishReason,
     providerName,
-    state.finishReason === "length" && state.toolCalls.size > 0,
+    hasToolCallFragments,
   );
+
+  if (state.finishReason === "tool_calls" || hasToolCallFragments) {
+    completePendingToolCall(state, providerName);
+  }
 
   const usage = state.usage;
   if (usage === null) {
