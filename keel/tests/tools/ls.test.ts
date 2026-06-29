@@ -177,6 +177,40 @@ describe("Ls Tool Directory Discovery", () => {
     }
   });
 
+  test(`Given directory entry names contain line-breaking characters,
+    When the ls tool lists the directory,
+    Then it renders each entry on one unambiguous output line`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-ls-"));
+    const unicodeLineSeparatorName = `unicode${String.fromCharCode(0x2028)}break.txt`;
+    await mkdir(join(workspace, "dir\nname"));
+    await writeFile(join(workspace, "line\nbreak.txt"), "entry\n", "utf8");
+    await writeFile(
+      join(workspace, unicodeLineSeparatorName),
+      "entry\n",
+      "utf8",
+    );
+    await writeFile(join(workspace, "plain.txt"), "entry\n", "utf8");
+
+    try {
+      // When
+      const result = executeLs(workspace);
+
+      // Then
+      expect(result.content).toBe(
+        [
+          '"dir\\nname"/',
+          '"line\\nbreak.txt"',
+          "plain.txt",
+          '"unicode\\u2028break.txt"',
+        ].join("\n"),
+      );
+      expect(result.content.split("\n")).toHaveLength(4);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a directory has more entries than the maximum limit,
     When the ls tool truncates at that maximum,
     Then it asks the model to narrow the path instead of increasing limit`, async () => {

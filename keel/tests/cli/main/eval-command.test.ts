@@ -443,6 +443,38 @@ describe("CLI Main - Eval Command", () => {
     }
   });
 
+  test(`Given eval run options use equals syntax,
+    When the CLI main dispatches to the eval runner,
+    Then it accepts inline values for the suite, output, trial, and task options`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-main-eval-inline-"),
+    );
+    const fixture = createRuntime(
+      [
+        "eval",
+        `--suite=${join(workspace, "missing-suite")}`,
+        `--out=${join(workspace, "results.jsonl")}`,
+        "--trials=1",
+        "--task=fix-note",
+        `--transcript-dir=${join(workspace, "transcripts")}`,
+        "--check",
+      ],
+      { cwd: workspace },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test.each(["0", "0x10", " 5 "])(`Given invalid eval trial count %s,
     When the CLI main parses the eval request,
     Then it returns a trial validation error`, async (trials) => {

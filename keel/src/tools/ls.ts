@@ -8,6 +8,9 @@ import { isInsideWorkspace, resolveWorkspaceTarget } from "./workspace-path.ts";
 
 const DEFAULT_LS_LIMIT = 200;
 const MAX_LS_LIMIT = 1000;
+const NEXT_LINE = String.fromCharCode(0x85);
+const LINE_SEPARATOR = String.fromCharCode(0x2028);
+const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
 
 export interface LsOptions {
   readonly path?: string;
@@ -40,9 +43,7 @@ function formatLsOutput(
   }
 
   const visibleEntries = entries.slice(0, limit);
-  const lines = visibleEntries.map((entry) =>
-    entry.isDirectory ? `${entry.name}/` : entry.name,
-  );
+  const lines = visibleEntries.map(formatLsEntry);
   if (entries.length > visibleEntries.length) {
     const guidance =
       limit >= MAX_LS_LIMIT
@@ -53,6 +54,39 @@ function formatLsOutput(
     );
   }
   return { content: lines.join("\n") };
+}
+
+function formatLsEntry(entry: LsEntry): string {
+  const name = hasUnsafeEntryNameChars(entry.name)
+    ? escapeUnsafeEntryName(entry.name)
+    : entry.name;
+  return entry.isDirectory ? `${name}/` : name;
+}
+
+function escapeUnsafeEntryName(name: string): string {
+  return JSON.stringify(name)
+    .split(NEXT_LINE)
+    .join("\\u0085")
+    .split(LINE_SEPARATOR)
+    .join("\\u2028")
+    .split(PARAGRAPH_SEPARATOR)
+    .join("\\u2029");
+}
+
+function hasUnsafeEntryNameChars(name: string): boolean {
+  for (let index = 0; index < name.length; index++) {
+    const code = name.charCodeAt(index);
+    if (
+      code <= 0x1f ||
+      code === 0x7f ||
+      code === 0x85 ||
+      code === 0x2028 ||
+      code === 0x2029
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function sortLsEntries(entries: readonly LsEntry[]): LsEntry[] {

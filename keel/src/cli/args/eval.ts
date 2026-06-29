@@ -110,9 +110,13 @@ export function parseEvalArgs(
   let providerId: EvalRunCliArgs["providerId"] | undefined;
   let model: string | undefined;
   let check = false;
+  const suitePrefix = "--suite=";
+  const outPrefix = "--out=";
   const providerPrefix = "--provider=";
   const modelPrefix = "--model=";
   const transcriptDirPrefix = "--transcript-dir=";
+  const trialsPrefix = "--trials=";
+  const taskPrefix = "--task=";
 
   let skipNext = false;
   for (const [index, arg] of args.entries()) {
@@ -132,6 +136,15 @@ export function parseEvalArgs(
       skipNext = true;
       continue;
     }
+    if (arg.startsWith(suitePrefix)) {
+      const parsed = requireOptionValue(
+        "--suite",
+        arg.slice(suitePrefix.length),
+      );
+      if (!parsed.ok) return parsed;
+      suiteDir = parsed.value;
+      continue;
+    }
     if (arg === "--out") {
       const parsed = requireSeparatedOptionValue(
         "--out",
@@ -141,6 +154,12 @@ export function parseEvalArgs(
       if (!parsed.ok) return parsed;
       outFile = parsed.value;
       skipNext = true;
+      continue;
+    }
+    if (arg.startsWith(outPrefix)) {
+      const parsed = requireOptionValue("--out", arg.slice(outPrefix.length));
+      if (!parsed.ok) return parsed;
+      outFile = parsed.value;
       continue;
     }
     if (arg === "--transcript-dir") {
@@ -164,10 +183,22 @@ export function parseEvalArgs(
       continue;
     }
     if (arg === "--trials") {
-      const parsed = parseTrials(args[index + 1]);
+      const parsedValue = requireSeparatedOptionValue(
+        "--trials",
+        args[index + 1],
+        EVAL_RUN_OPTIONS,
+      );
+      if (!parsedValue.ok) return parsedValue;
+      const parsedTrials = parseTrials(parsedValue.value);
+      if (!parsedTrials.ok) return parsedTrials;
+      trials = parsedTrials.value;
+      skipNext = true;
+      continue;
+    }
+    if (arg.startsWith(trialsPrefix)) {
+      const parsed = parseTrials(arg.slice(trialsPrefix.length));
       if (!parsed.ok) return parsed;
       trials = parsed.value;
-      skipNext = true;
       continue;
     }
     if (arg === "--task") {
@@ -181,10 +212,22 @@ export function parseEvalArgs(
       skipNext = true;
       continue;
     }
-    if (arg === "--provider") {
-      const parsed = parseProviderId(args[index + 1]);
+    if (arg.startsWith(taskPrefix)) {
+      const parsed = requireOptionValue("--task", arg.slice(taskPrefix.length));
       if (!parsed.ok) return parsed;
-      providerId = parsed.value;
+      taskId = parsed.value;
+      continue;
+    }
+    if (arg === "--provider") {
+      const parsedValue = requireSeparatedOptionValue(
+        "--provider",
+        args[index + 1],
+        EVAL_RUN_OPTIONS,
+      );
+      if (!parsedValue.ok) return parsedValue;
+      const parsedProvider = parseProviderId(parsedValue.value);
+      if (!parsedProvider.ok) return parsedProvider;
+      providerId = parsedProvider.value;
       skipNext = true;
       continue;
     }
