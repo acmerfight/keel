@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
@@ -139,6 +139,112 @@ describe("Session Store Locks And Validation", () => {
         }),
       ).toThrow(SessionStoreError);
       lock.release();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a previous session lock PID was reused by another process,
+    When the same session lock is acquired again,
+    Then the store recovers the stale lock using the owner process identity`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const lockPath = join(home, "sessions", "reused-pid", "active.lock");
+    await mkdir(lockPath, { recursive: true });
+    await writeFile(
+      join(lockPath, "owner.json"),
+      `${JSON.stringify({
+        pid: process.pid,
+        token: "stale",
+        createdAt: "1970-01-01T00:00:00.000Z",
+        hostname: hostname(),
+        processStartTime: "not-current-process-start-time",
+      })}\n`,
+      "utf8",
+    );
+
+    try {
+      // When
+      const lock = acquireSessionLock({
+        sessionId: "reused-pid",
+        runtime: runtime(home, 1),
+      });
+
+      // Then
+      expect(lock.lockPath).toBe(lockPath);
+      expect(() =>
+        acquireSessionLock({
+          sessionId: "reused-pid",
+          runtime: runtime(home, 2),
+        }),
+      ).toThrow(SessionStoreError);
+      lock.release();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an identified session lock owner process has exited,
+    When the same session lock is acquired again,
+    Then the store recovers the stale lock`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const lockPath = join(home, "sessions", "identified-stale", "active.lock");
+    await mkdir(lockPath, { recursive: true });
+    await writeFile(
+      join(lockPath, "owner.json"),
+      `${JSON.stringify({
+        pid: 999_999_999,
+        token: "stale",
+        createdAt: "1970-01-01T00:00:00.000Z",
+        hostname: hostname(),
+        processStartTime: "old-process-start-time",
+      })}\n`,
+      "utf8",
+    );
+
+    try {
+      // When
+      const lock = acquireSessionLock({
+        sessionId: "identified-stale",
+        runtime: runtime(home, 1),
+      });
+
+      // Then
+      expect(lock.lockPath).toBe(lockPath);
+      lock.release();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a session lock owner belongs to another host,
+    When the same session lock is acquired again,
+    Then the store fails closed instead of reclaiming it locally`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const lockPath = join(home, "sessions", "foreign-host", "active.lock");
+    await mkdir(lockPath, { recursive: true });
+    await writeFile(
+      join(lockPath, "owner.json"),
+      `${JSON.stringify({
+        pid: process.pid,
+        token: "foreign-host",
+        createdAt: "1970-01-01T00:00:00.000Z",
+        hostname: `other-${hostname()}`,
+        processStartTime: "not-current-process-start-time",
+      })}\n`,
+      "utf8",
+    );
+
+    try {
+      // When / Then
+      expect(() =>
+        acquireSessionLock({
+          sessionId: "foreign-host",
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow(SessionStoreError);
     } finally {
       await rm(home, { recursive: true, force: true });
     }
