@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -185,6 +186,79 @@ describe("Apply Patch Tool Race Handling", () => {
     }
   });
 
+  test(`Given an add-file operation creates fresh parents before publish fails,
+    When apply_patch aborts the add,
+    Then it removes the fresh empty parent directories`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-add-parent-"));
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: fresh/nested/new.txt",
+      "+created",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const publishError = new Error("publish failed");
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: () => {
+        throw publishError;
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() => executeApplyPatch(workspace, patch)).toThrow(publishError);
+      expect(await pathExists(join(workspace, "fresh"))).toBe(false);
+      expect(await readdir(workspace)).toEqual(
+        expect.not.arrayContaining([expect.stringContaining(".keel-write-")]),
+      );
+      expect(actualFs.existsSync(join(workspace, "fresh", "nested"))).toBe(
+        false,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given add-file parent validation fails after creating fresh parents,
+    When apply_patch aborts before writing the file,
+    Then it removes the fresh empty parent directories`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-add-parent-validate-"),
+    );
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: fresh/nested/new.txt",
+      "+created",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const validationError = new Error("parent validation failed");
+    let nestedRealpathCalls = 0;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      realpathSync: (path) => {
+        if (String(path).endsWith(join("fresh", "nested"))) {
+          nestedRealpathCalls++;
+          if (nestedRealpathCalls === 2) {
+            throw validationError;
+          }
+        }
+        return actualFs.realpathSync(path);
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() => executeApplyPatch(workspace, patch)).toThrow(
+        validationError,
+      );
+      expect(await pathExists(join(workspace, "fresh"))).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an earlier add target is swapped outside before rollback,
     When a later patch operation fails during publish,
     Then rollback removes the created workspace file without touching outside content`, async () => {
@@ -236,6 +310,42 @@ describe("Apply Patch Tool Race Handling", () => {
     }
   });
 
+  test(`Given an earlier add creates fresh parents before a later operation fails,
+    When apply_patch rolls back the earlier add,
+    Then it removes the fresh empty parent directories`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-add-parent-rollback-"),
+    );
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: fresh/nested/new.txt",
+      "+created",
+      "*** Add File: late.txt",
+      "+late",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const publishError = new Error("late publish failed");
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: (existingPath, newPath) => {
+        if (String(newPath).endsWith("late.txt")) {
+          throw publishError;
+        }
+        return actualFs.linkSync(existingPath, newPath);
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() => executeApplyPatch(workspace, patch)).toThrow(publishError);
+      expect(await pathExists(join(workspace, "fresh"))).toBe(false);
+      expect(await pathExists(join(workspace, "late.txt"))).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given rollback target verification hits an unexpected filesystem failure,
     When a later patch operation fails after an earlier add was published,
     Then apply_patch surfaces the rollback verification failure`, async () => {
@@ -275,6 +385,54 @@ describe("Apply Patch Tool Race Handling", () => {
       // When / Then
       expect(() => executeApplyPatch(workspace, patch)).toThrow(rollbackError);
       expect(rollbackStarted).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an earlier update target is removed before rollback,
+    When a later patch operation fails,
+    Then rollback skips the missing update target and preserves the original failure`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-update-rollback-missing-"),
+    );
+    const workspacePath = await realpath(workspace);
+    const updatePath = join(workspacePath, "updated.txt");
+    await writeFile(updatePath, "old\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: updated.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** Add File: late.txt",
+      "+late",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const publishError = new Error("late publish failed");
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: (existingPath, newPath) => {
+        if (String(newPath).endsWith("late.txt")) {
+          actualFs.rmSync(updatePath, { force: true });
+          throw publishError;
+        }
+        return actualFs.linkSync(existingPath, newPath);
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        executeApplyPatch(workspace, patch, {
+          readBeforeEdit: {
+            hasRead: (targetPath) => targetPath === updatePath,
+          },
+        }),
+      ).toThrow(publishError);
+      expect(await pathExists(updatePath)).toBe(false);
+      expect(await pathExists(join(workspacePath, "late.txt"))).toBe(false);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

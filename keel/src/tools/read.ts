@@ -255,6 +255,12 @@ function readTextWindow(
     }
   }
 
+  if (acc.firstLineExceedsLimit) {
+    return `[Read output truncated: line ${options.offset} exceeds ${formatSize(
+      MAX_READ_BYTES,
+    )}. Use grep to find a smaller target before reading this file.]`;
+  }
+
   if (
     acc.countedLines < options.offset &&
     options.offset !== 1 &&
@@ -265,12 +271,6 @@ function readTextWindow(
       `read failed: offset ${options.offset} is beyond end of file (${acc.countedLines} lines)`,
       `Retry read with a smaller offset, or omit offset to read from the start. Available lines: ${acc.countedLines}.`,
     );
-  }
-
-  if (acc.firstLineExceedsLimit) {
-    return `[Read output truncated: line ${options.offset} exceeds ${formatSize(
-      MAX_READ_BYTES,
-    )}. Use grep to find a smaller target before reading this file.]`;
   }
 
   return acc.truncated

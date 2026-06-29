@@ -4,6 +4,7 @@ import { restoreTextFileByIdentityBestEffort } from "../atomic-write.ts";
 import {
   assertWorkspaceTargetAtAccess,
   findWorkspacePathsByIdentity,
+  rollbackWorkspaceParentDirectoriesBestEffort,
 } from "../workspace-path.ts";
 import {
   isErrnoException,
@@ -95,6 +96,9 @@ export function rollbackAppliedOperations(
         rmSync(operation.destinationTargetPath, { force: true });
       }
       restoreDeletedTextFileBestEffort(operation);
+      rollbackWorkspaceParentDirectoriesBestEffort(
+        operation.createdDestinationParentDirectories,
+      );
       continue;
     }
 
@@ -104,8 +108,6 @@ export function rollbackAppliedOperations(
     }
 
     const targetPaths = rollbackTargetPaths(operation);
-    if (targetPaths.length === 0) continue;
-
     if (operation.kind === "add") {
       for (const targetPath of targetPaths) {
         /* v8 ignore next 1: rollback skips files changed concurrently after the failed operation. */
@@ -113,8 +115,13 @@ export function rollbackAppliedOperations(
           rmSync(targetPath, { force: true });
         }
       }
+      rollbackWorkspaceParentDirectoriesBestEffort(
+        operation.createdParentDirectories,
+      );
       continue;
     }
+
+    if (targetPaths.length === 0) continue;
 
     for (const targetPath of targetPaths) {
       /* v8 ignore next 1: rollback skips paths that lose the applied identity after path discovery. */

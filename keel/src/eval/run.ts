@@ -2,10 +2,12 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  closeSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   rmSync,
   statSync,
@@ -301,9 +303,55 @@ interface EvalProviderSelection {
   readonly model?: string;
 }
 
-function appendResultLine(outFile: string, line: ResultLine): void {
-  mkdirSync(dirname(outFile), { recursive: true });
-  appendFileSync(outFile, `${JSON.stringify(line)}\n`, "utf8");
+function ensureResultOutputDirectory(outFile: string): boolean {
+  try {
+    mkdirSync(dirname(outFile), { recursive: true });
+    return true;
+  } catch (error) {
+    process.stderr.write(
+      `Error: cannot write eval results to ${outFile}: ${errorMessage(error)}\n`,
+    );
+    return false;
+  }
+}
+
+function ensureResultOutputFile(outFile: string): boolean {
+  try {
+    mkdirSync(dirname(outFile), { recursive: true });
+    const fd = openSync(outFile, "a");
+    closeSync(fd);
+    return true;
+  } catch (error) {
+    process.stderr.write(
+      `Error: cannot write eval results to ${outFile}: ${errorMessage(error)}\n`,
+    );
+    return false;
+  }
+}
+
+function appendResultLine(outFile: string, line: ResultLine): boolean {
+  if (!ensureResultOutputDirectory(outFile)) return false;
+  try {
+    appendFileSync(outFile, `${JSON.stringify(line)}\n`, "utf8");
+    return true;
+  } catch (error) {
+    process.stderr.write(
+      `Error: cannot write eval results to ${outFile}: ${errorMessage(error)}\n`,
+    );
+    return false;
+  }
+}
+
+function ensureTranscriptRunDirectory(transcriptRunDir: string): boolean {
+  try {
+    mkdirSync(transcriptRunDir, { recursive: true });
+    return true;
+  } catch (error) {
+    process.stderr.write(
+      `Error: cannot create eval transcript directory ${transcriptRunDir}: ${errorMessage(error)}\n`,
+    );
+    return false;
+  }
 }
 
 export interface EvalCommandArgs {
@@ -366,8 +414,11 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
           `run-${new Date().toISOString().replace(/[:.]/gu, "-")}-${process.pid}`,
         );
   if (transcriptRunDir !== undefined) {
-    mkdirSync(transcriptRunDir, { recursive: true });
+    if (!ensureTranscriptRunDirectory(transcriptRunDir)) return 1;
   }
+
+  if (!ensureResultOutputFile(args.outFile)) return 1;
+
   let passingTasks = 0;
   let passingTrials = 0;
   for (const task of tasks) {
@@ -393,7 +444,7 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
       );
       const pass = result.outcome === "verified";
       if (pass) passes++;
-      appendResultLine(args.outFile, {
+      const appended = appendResultLine(args.outFile, {
         schemaVersion: 1,
         timestamp: new Date().toISOString(),
         keelVersion: version,
@@ -407,6 +458,7 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
           ? { transcriptPath: result.transcriptPath }
           : {}),
       });
+      if (!appended) return 1;
       process.stderr.write(
         `[${task.id}] trial ${trial}: ${result.outcome} (${result.wallMs}ms)\n`,
       );
