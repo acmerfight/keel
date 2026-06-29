@@ -97,6 +97,109 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a patch hunk line only appears inside a longer line,
+    When apply_patch validates the update hunk,
+    Then it rejects the patch without mutating the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    const targetPath = join(workspacePath, "a.ts");
+    await writeFile(targetPath, "const fooBar = 1;\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: a.ts",
+      "@@",
+      "-Bar = 1;",
+      "+Baz = 2;",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (path) => path === targetPath,
+            },
+          }),
+        "tool_patch_hunk_not_found",
+        "expected lines not found in a.ts",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe("const fooBar = 1;\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch hunk line appears inside a longer line and as its own line,
+    When apply_patch validates the update hunk,
+    Then it updates the whole-line match only`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    const targetPath = join(workspacePath, "a.ts");
+    await writeFile(targetPath, "const fooBar = 1;\nBar = 1;\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: a.ts",
+      "@@",
+      "-Bar = 1;",
+      "+Baz = 2;",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (path) => path === targetPath,
+        },
+      });
+
+      // Then
+      expect(await readFile(targetPath, "utf8")).toBe(
+        "const fooBar = 1;\nBaz = 2;\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a patch hunk only names an empty removed line,
+    When apply_patch validates the update hunk,
+    Then it rejects the patch without hanging or mutating the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    const targetPath = join(workspacePath, "note.txt");
+    await writeFile(targetPath, "alpha\n\nbravo\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: note.txt",
+      "@@",
+      "-",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (path) => path === targetPath,
+            },
+          }),
+        "tool_invalid_patch",
+        "has no locatable old text",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe("alpha\n\nbravo\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a patch deletes one read text file,
     When apply_patch validates and applies the patch,
     Then it removes the file and records a delete checkpoint`, async () => {
@@ -373,8 +476,6 @@ describe("Apply Patch Tool", () => {
     const workspacePath = await realpath(workspace);
     await writeFile(join(workspace, "after.txt"), "old\nsuffix", "utf8");
     await writeFile(join(workspace, "before.txt"), "prefix\r\nold", "utf8");
-    await writeFile(join(workspace, "forward.txt"), "old suffix\n", "utf8");
-    await writeFile(join(workspace, "backward.txt"), "prefix\nabc old", "utf8");
     await writeFile(join(workspace, "none.txt"), "old", "utf8");
     const patch = [
       "*** Begin Patch",
@@ -384,16 +485,6 @@ describe("Apply Patch Tool", () => {
       "+new",
       "+line",
       "*** Update File: before.txt",
-      "@@",
-      "-old",
-      "+new",
-      "+line",
-      "*** Update File: forward.txt",
-      "@@",
-      "-old",
-      "+new",
-      "+line",
-      "*** Update File: backward.txt",
       "@@",
       "-old",
       "+new",
@@ -413,8 +504,6 @@ describe("Apply Patch Tool", () => {
           hasRead: (targetPath) =>
             targetPath === join(workspacePath, "after.txt") ||
             targetPath === join(workspacePath, "before.txt") ||
-            targetPath === join(workspacePath, "forward.txt") ||
-            targetPath === join(workspacePath, "backward.txt") ||
             targetPath === join(workspacePath, "none.txt"),
         },
       });
@@ -425,12 +514,6 @@ describe("Apply Patch Tool", () => {
       );
       expect(await readFile(join(workspace, "before.txt"), "utf8")).toBe(
         "prefix\r\nnew\r\nline",
-      );
-      expect(await readFile(join(workspace, "forward.txt"), "utf8")).toBe(
-        "new\nline suffix\n",
-      );
-      expect(await readFile(join(workspace, "backward.txt"), "utf8")).toBe(
-        "prefix\nabc new\nline",
       );
       expect(await readFile(join(workspace, "none.txt"), "utf8")).toBe(
         "new\nline",

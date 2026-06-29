@@ -6,6 +6,8 @@ import type { ToolResult } from "./types.ts";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 60_000;
 const OUTPUT_MAX_BYTES = 20_000;
+const EXIT_STDIO_QUIET_DRAIN_MS = 25;
+const EXIT_STDIO_MAX_DRAIN_MS = 1_000;
 
 export interface BashOptions {
   readonly signal?: AbortSignal;
@@ -188,10 +190,31 @@ function runBashProcess(
 
     let timedOut = false;
     let settled = false;
+    let processExited = false;
+    let exitedCode: number | null = null;
+    let exitedSignal: NodeJS.Signals | null = null;
+    let stdoutClosed = false;
+    let stderrClosed = false;
+    let quietDrainTimer: ReturnType<typeof setTimeout> | undefined;
+    let maxDrainTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const clearDrainTimers = () => {
+      if (quietDrainTimer !== undefined) {
+        clearTimeout(quietDrainTimer);
+        quietDrainTimer = undefined;
+      }
+      if (maxDrainTimer !== undefined) {
+        clearTimeout(maxDrainTimer);
+        maxDrainTimer = undefined;
+      }
+    };
 
     const cleanup = () => {
       clearTimeout(timeout);
+      clearDrainTimers();
       signal?.removeEventListener("abort", abort);
+      child.stdout.destroy();
+      child.stderr.destroy();
     };
 
     const finish = (
@@ -205,19 +228,47 @@ function runBashProcess(
     ) => {
       if (settled) return;
       settled = true;
-      cleanup();
       if (outcome.type === "reject") {
+        cleanup();
         rejectProcess(outcome.error);
         return;
       }
+      const capturedStdout = stdout.capture();
+      const capturedStderr = stderr.capture();
+      cleanup();
       resolveProcess({
-        stdout: stdout.capture(),
-        stderr: stderr.capture(),
+        stdout: capturedStdout,
+        stderr: capturedStderr,
         exitCode: outcome.exitCode,
         signal: outcome.signal,
         timedOut,
         timeoutMs,
       });
+    };
+
+    const finishResolvedProcess = () => {
+      finish({ type: "resolve", exitCode: exitedCode, signal: exitedSignal });
+    };
+
+    const scheduleExitDrain = () => {
+      if (!processExited || settled) return;
+      if (stdoutClosed && stderrClosed) {
+        finishResolvedProcess();
+        return;
+      }
+      if (quietDrainTimer !== undefined) clearTimeout(quietDrainTimer);
+      quietDrainTimer = setTimeout(
+        finishResolvedProcess,
+        EXIT_STDIO_QUIET_DRAIN_MS,
+      );
+      quietDrainTimer.unref();
+      if (maxDrainTimer === undefined) {
+        maxDrainTimer = setTimeout(
+          finishResolvedProcess,
+          EXIT_STDIO_MAX_DRAIN_MS,
+        );
+        maxDrainTimer.unref();
+      }
     };
 
     const abort = () => {
@@ -239,9 +290,19 @@ function runBashProcess(
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout.append(chunk);
+      scheduleExitDrain();
     });
     child.stderr.on("data", (chunk: Buffer) => {
       stderr.append(chunk);
+      scheduleExitDrain();
+    });
+    child.stdout.once("close", () => {
+      stdoutClosed = true;
+      scheduleExitDrain();
+    });
+    child.stderr.once("close", () => {
+      stderrClosed = true;
+      scheduleExitDrain();
     });
     child.once("error", (error) => {
       finish({
@@ -253,8 +314,12 @@ function runBashProcess(
         ),
       });
     });
-    child.once("close", (exitCode, childSignal) => {
-      finish({ type: "resolve", exitCode, signal: childSignal });
+    child.once("exit", (exitCode, childSignal) => {
+      processExited = true;
+      exitedCode = exitCode;
+      exitedSignal = childSignal;
+      clearTimeout(timeout);
+      scheduleExitDrain();
     });
 
     signal?.addEventListener("abort", abort, { once: true });

@@ -27,6 +27,10 @@ export type SourcePreservingReplacementResult =
       readonly reason: string;
     };
 
+interface EditMatchOptions {
+  readonly includeSpan?: (span: EditMatchSpan) => boolean;
+}
+
 interface LineRecord {
   readonly text: string;
   readonly start: number;
@@ -57,6 +61,8 @@ function exactMatches(
   content: string,
   search: string,
 ): readonly EditMatchSpan[] {
+  if (search === "") return [];
+
   const matches: EditMatchSpan[] = [];
   let start = 0;
   while (true) {
@@ -65,6 +71,14 @@ function exactMatches(
     matches.push({ index, length: search.length });
     start = index + search.length;
   }
+}
+
+function includedMatches(
+  matches: readonly EditMatchSpan[],
+  options: EditMatchOptions | undefined,
+): readonly EditMatchSpan[] {
+  if (options?.includeSpan === undefined) return matches;
+  return matches.filter(options.includeSpan);
 }
 
 function parseSearchBlock(search: string): SearchBlock {
@@ -389,22 +403,30 @@ function typographicPunctuationMatches(
 export function locateUniqueEditSpan(
   content: string,
   search: string,
+  options?: EditMatchOptions,
 ): EditMatchResult {
-  const exact = exactMatches(content, search);
+  if (search === "") return { status: "not_found" };
+
+  const exact = includedMatches(exactMatches(content, search), options);
   if (exact.length > 0) return uniqueMatchResult(exact);
 
-  const lineTrimmed = lineBasedMatches(content, search, lineTrimmedMatches);
+  const lineTrimmed = includedMatches(
+    lineBasedMatches(content, search, lineTrimmedMatches),
+    options,
+  );
   if (lineTrimmed.length > 0) return uniqueMatchResult(lineTrimmed);
 
-  const typographicPunctuation = typographicPunctuationMatches(content, search);
+  const typographicPunctuation = includedMatches(
+    typographicPunctuationMatches(content, search),
+    options,
+  );
   if (typographicPunctuation.length > 0) {
     return uniqueMatchResult(typographicPunctuation);
   }
 
-  const indentationFlexible = lineBasedMatches(
-    content,
-    search,
-    indentationFlexibleMatches,
+  const indentationFlexible = includedMatches(
+    lineBasedMatches(content, search, indentationFlexibleMatches),
+    options,
   );
   return uniqueMatchResult(indentationFlexible);
 }
