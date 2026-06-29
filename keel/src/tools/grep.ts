@@ -64,8 +64,16 @@ const ripgrepMatchSchema = z.object({
 type RipgrepTextOrBytes = z.infer<typeof ripgrepTextOrBytesSchema>;
 
 function truncateLineForDisplay(line: string): string {
-  if (line.length <= MAX_SNIPPET_CHARS) return line;
-  return `${line.slice(0, MAX_SNIPPET_CHARS)}...`;
+  let codePointCount = 0;
+  let endIndex = 0;
+  for (const char of line) {
+    if (codePointCount === MAX_SNIPPET_CHARS) {
+      return `${line.slice(0, endIndex)}...`;
+    }
+    endIndex += char.length;
+    codePointCount++;
+  }
+  return line;
 }
 
 function parseRipgrepMatch(line: string): RipgrepMatch | null {
