@@ -4,6 +4,10 @@ import { isAbsolute, relative, resolve, win32 } from "node:path";
 import type { Readable } from "node:stream";
 import { KeelError } from "../core/error.ts";
 import {
+  type CapturedByteOutput,
+  HeadByteOutputLimit,
+} from "./output-limit.ts";
+import {
   createProjectIgnorePolicy,
   type ProjectIgnorePolicy,
 } from "./project-ignore.ts";
@@ -33,14 +37,9 @@ export interface GitDiffOptions {
   readonly signal?: AbortSignal;
 }
 
-interface CapturedStream {
-  readonly text: string;
-  readonly truncated: boolean;
-}
-
 interface GitProcessResult {
-  readonly stdout: CapturedStream;
-  readonly stderr: CapturedStream;
+  readonly stdout: CapturedByteOutput;
+  readonly stderr: CapturedByteOutput;
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly timedOut: boolean;
@@ -55,42 +54,6 @@ interface RunGitOptions {
 
 interface ChangedTrackedEntry {
   readonly diffPath: string;
-}
-
-class HeadBuffer {
-  readonly #maxBytes: number;
-  #chunks: Buffer[] = [];
-  #bytes = 0;
-  #truncated = false;
-
-  constructor(maxBytes: number) {
-    this.#maxBytes = maxBytes;
-  }
-
-  append(chunk: Buffer): void {
-    if (this.#bytes >= this.#maxBytes) {
-      this.#truncated = true;
-      return;
-    }
-
-    const remainingBytes = this.#maxBytes - this.#bytes;
-    if (chunk.length <= remainingBytes) {
-      this.#chunks.push(chunk);
-      this.#bytes += chunk.length;
-      return;
-    }
-
-    this.#chunks.push(chunk.subarray(0, remainingBytes));
-    this.#bytes = this.#maxBytes;
-    this.#truncated = true;
-  }
-
-  capture(): CapturedStream {
-    return {
-      text: Buffer.concat(this.#chunks, this.#bytes).toString("utf8"),
-      truncated: this.#truncated,
-    };
-  }
 }
 
 function nullDevicePath(): string {
@@ -172,8 +135,8 @@ function runGitProcess(
   options: RunGitOptions = {},
 ): Promise<GitProcessResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const stdout = new HeadBuffer(OUTPUT_MAX_BYTES);
-  const stderr = new HeadBuffer(OUTPUT_MAX_BYTES);
+  const stdout = new HeadByteOutputLimit(OUTPUT_MAX_BYTES);
+  const stderr = new HeadByteOutputLimit(OUTPUT_MAX_BYTES);
   const gitArgs = [
     "--no-pager",
     "--no-optional-locks",
