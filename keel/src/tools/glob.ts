@@ -8,6 +8,7 @@ import {
   normalizeRipgrepPath,
   workspaceRootIgnoreArgsForTarget,
 } from "./file-search.ts";
+import { CountOutputLimit } from "./output-limit.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import { runRipgrepProcess } from "./ripgrep-process.ts";
 import type { ToolResult } from "./types.ts";
@@ -73,8 +74,7 @@ async function runGlob(
   signal?: AbortSignal,
   timeoutMs: number = DEFAULT_RIPGREP_TIMEOUT_MS,
 ): Promise<ToolResult> {
-  let killedForLimit = false;
-  const matches: string[] = [];
+  const matches = new CountOutputLimit<string>(MAX_GLOB_MATCHES);
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
 
   const result = await runRipgrepProcess({
@@ -90,22 +90,22 @@ async function runGlob(
       /* v8 ignore next: built-in ignore globs filter these before stdout; this is a symlink/race safety filter. */
       if (hasIgnoredPathSegment(workspacePath, absoluteMatchPath)) return;
 
-      if (matches.length === MAX_GLOB_MATCHES) {
-        killedForLimit = true;
+      if (!matches.append(normalizeRipgrepPath(workspacePath, line))) {
         stopRipgrep();
         return;
       }
-
-      matches.push(normalizeRipgrepPath(workspacePath, line));
     },
   });
 
-  if (killedForLimit) {
-    return formatGlobResult(pattern, matches, { truncated: true });
+  const limitedMatches = matches.capture();
+  if (limitedMatches.truncated) {
+    return formatGlobResult(pattern, limitedMatches.items, { truncated: true });
   }
 
   if (result.code === 0 || result.code === 1) {
-    return formatGlobResult(pattern, matches, { truncated: false });
+    return formatGlobResult(pattern, limitedMatches.items, {
+      truncated: false,
+    });
   }
 
   if (result.code === 2 && result.stderr.trim() !== "") {

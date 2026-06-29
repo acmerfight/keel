@@ -1,6 +1,10 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import type { Readable } from "node:stream";
 import { KeelError } from "../core/error.ts";
+import {
+  type CapturedByteOutput,
+  TailByteOutputLimit,
+} from "./output-limit.ts";
 import type { ToolResult } from "./types.ts";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -15,62 +19,12 @@ export interface BashOptions {
 }
 
 interface BashProcessResult {
-  readonly stdout: CapturedStream;
-  readonly stderr: CapturedStream;
+  readonly stdout: CapturedByteOutput;
+  readonly stderr: CapturedByteOutput;
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly timedOut: boolean;
   readonly timeoutMs: number;
-}
-
-interface CapturedStream {
-  readonly text: string;
-  readonly truncated: boolean;
-}
-
-class TailBuffer {
-  readonly #maxBytes: number;
-  #chunks: Buffer[] = [];
-  #bytes = 0;
-  #truncated = false;
-
-  constructor(maxBytes: number) {
-    this.#maxBytes = maxBytes;
-  }
-
-  append(chunk: Buffer): void {
-    if (chunk.length > this.#maxBytes) {
-      this.#chunks = [chunk.subarray(chunk.length - this.#maxBytes)];
-      this.#bytes = this.#maxBytes;
-      this.#truncated = true;
-      return;
-    }
-
-    this.#chunks.push(chunk);
-    this.#bytes += chunk.length;
-
-    while (this.#bytes > this.#maxBytes) {
-      const first = this.#chunks[0];
-      if (first === undefined) return;
-
-      const excessBytes = this.#bytes - this.#maxBytes;
-      if (first.length <= excessBytes) {
-        this.#chunks.shift();
-        this.#bytes -= first.length;
-      } else {
-        this.#chunks[0] = first.subarray(excessBytes);
-        this.#bytes -= excessBytes;
-      }
-      this.#truncated = true;
-    }
-  }
-
-  capture(): CapturedStream {
-    return {
-      text: Buffer.concat(this.#chunks, this.#bytes).toString("utf8"),
-      truncated: this.#truncated,
-    };
-  }
 }
 
 function normalizeTimeout(timeoutMs: number | undefined): number {
@@ -122,7 +76,7 @@ function stopChildProcess(childPid: number | undefined): void {
 
 function formatCapturedOutput(
   label: "stdout" | "stderr",
-  stream: CapturedStream,
+  stream: CapturedByteOutput,
 ): string {
   if (stream.text === "" && !stream.truncated) return "";
 
@@ -161,8 +115,8 @@ function runBashProcess(
   signal: AbortSignal | undefined,
   timeoutMs: number,
 ): Promise<BashProcessResult> {
-  const stdout = new TailBuffer(OUTPUT_MAX_BYTES);
-  const stderr = new TailBuffer(OUTPUT_MAX_BYTES);
+  const stdout = new TailByteOutputLimit(OUTPUT_MAX_BYTES);
+  const stderr = new TailByteOutputLimit(OUTPUT_MAX_BYTES);
 
   return new Promise<BashProcessResult>((resolveProcess, rejectProcess) => {
     if (signal?.aborted === true) {
