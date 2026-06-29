@@ -6,6 +6,7 @@ import { KeelError } from "../core/error.ts";
 import {
   type CapturedByteOutput,
   HeadByteOutputLimit,
+  limitCountedOutput,
 } from "./output-limit.ts";
 import {
   createProjectIgnorePolicy,
@@ -606,8 +607,8 @@ async function appendUntrackedDiffs(
     signal,
     projectIgnorePolicy,
   );
-  const visibleFiles = files.slice(0, UNTRACKED_FILE_LIMIT);
-  for (const file of visibleFiles) {
+  const visibleFiles = limitCountedOutput(files, UNTRACKED_FILE_LIMIT);
+  for (const file of visibleFiles.items) {
     const result = await runGitProcess(
       workspacePath,
       ["diff", ...DIFF_SAFETY_ARGS, "--no-index", "--", nullDevicePath(), file],
@@ -619,9 +620,9 @@ async function appendUntrackedDiffs(
       expectExitCode("diff --no-index", result, new Set([0, 1])),
     );
   }
-  if (files.length > visibleFiles.length) {
+  if (visibleFiles.truncated) {
     sections.push(
-      `[git_diff output truncated: showing first ${visibleFiles.length} untracked files. Use paths to narrow output.]`,
+      `[git_diff output truncated: showing first ${visibleFiles.items.length} untracked files. Use paths to narrow output.]`,
     );
   }
 }

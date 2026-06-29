@@ -445,6 +445,43 @@ describe("git_diff tool", () => {
     }
   });
 
+  test(`Given the untracked file list exactly reaches the display limit,
+    When git_diff includes untracked files,
+    Then it returns every untracked diff without claiming the list was truncated`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-diff-exact-untracked-",
+    );
+    for (let index = 0; index < 50; index += 1) {
+      await writeFile(
+        join(workspace, `untracked-${index}.txt`),
+        `file ${index}\n`,
+        "utf8",
+      );
+    }
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "exact_untracked_diff",
+          tool: "git_diff",
+          mode: "unstaged",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toContain("untracked-49.txt");
+      expect(result.content).not.toContain("[git_diff output truncated");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the run is already aborted,
     When git_diff starts,
     Then it rejects with an aborted tool error`, async () => {

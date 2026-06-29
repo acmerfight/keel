@@ -554,4 +554,62 @@ describe("Tool Access", () => {
       await rm(outsideDirectory, { recursive: true, force: true });
     }
   });
+
+  test(`Given create targets are denied by project ignore rules,
+    When scheduling access is derived,
+    Then the scheduler treats them as globally conflicting`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+
+    try {
+      await writeFile(
+        join(workspace, ".gitignore"),
+        ["secret-dir/", "generated.secret"].join("\n"),
+        "utf8",
+      );
+
+      // When
+      const readA = toolCallAccesses(workspace, {
+        id: "read_a",
+        tool: "read",
+        path: "src/a.txt",
+      });
+      const ignoredWrite = toolCallAccesses(workspace, {
+        id: "ignored_write",
+        tool: "write",
+        path: "secret-dir/new.txt",
+        content: "new\n",
+      });
+      const ignoredAddPatch = toolCallAccesses(workspace, {
+        id: "ignored_add_patch",
+        tool: "apply_patch",
+        patch: [
+          "*** Begin Patch",
+          "*** Add File: secret-dir/new.txt",
+          "+new",
+          "*** End Patch",
+        ].join("\n"),
+      });
+      const ignoredMovePatch = toolCallAccesses(workspace, {
+        id: "ignored_move_patch",
+        tool: "apply_patch",
+        patch: [
+          "*** Begin Patch",
+          "*** Update File: docs/old.txt",
+          "*** Move to: generated.secret",
+          "@@",
+          "-old",
+          "+new",
+          "*** End Patch",
+        ].join("\n"),
+      });
+
+      // Then
+      expect(ToolAccesses.conflict(readA, ignoredWrite)).toBe(true);
+      expect(ToolAccesses.conflict(readA, ignoredAddPatch)).toBe(true);
+      expect(ToolAccesses.conflict(readA, ignoredMovePatch)).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 });

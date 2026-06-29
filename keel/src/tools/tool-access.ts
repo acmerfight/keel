@@ -2,7 +2,11 @@ import { realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { type ParsedPatchOperation, parsePatch } from "./apply-patch.ts";
 import type { ToolCall } from "./tool-call.ts";
-import { isInsideWorkspace } from "./workspace-path.ts";
+import {
+  type FileToolName,
+  isInsideWorkspace,
+  resolveWorkspaceCreateTargetCore,
+} from "./workspace-path.ts";
 
 type ToolFileAccessOperation = "read" | "write" | "readwrite" | "search";
 
@@ -126,6 +130,23 @@ function requestedAccessPath(
   }
 }
 
+function createAccessPath(
+  workspace: string,
+  requestedPath: string,
+  toolName: Extract<FileToolName, "apply_patch" | "write">,
+): string | null {
+  try {
+    const resolution = resolveWorkspaceCreateTargetCore(
+      workspace,
+      requestedPath,
+      toolName,
+    );
+    return resolution.ok ? resolution.target.resolvedTargetPath : null;
+  } catch {
+    return null;
+  }
+}
+
 function resolvedAccessPath(
   workspacePath: string,
   absoluteRequestedPath: string,
@@ -180,7 +201,7 @@ function accessForParsedPatchOperation(
 ): ToolAccesses | null {
   if (isProjectInstructionPath(operation.path)) return null;
   if (operation.kind === "add") {
-    const path = requestedAccessPath(workspace, operation.path);
+    const path = createAccessPath(workspace, operation.path, "apply_patch");
     return path === null ? null : ToolAccesses.writeTree(path);
   }
   if (operation.kind === "delete") {
@@ -195,7 +216,11 @@ function accessForParsedPatchOperation(
     return ToolAccesses.readWriteFile(source);
   }
   if (isProjectInstructionPath(operation.movePath)) return null;
-  const destination = requestedAccessPath(workspace, operation.movePath);
+  const destination = createAccessPath(
+    workspace,
+    operation.movePath,
+    "apply_patch",
+  );
   if (destination === null) return null;
   return [
     ...ToolAccesses.readWriteFile(source),
@@ -264,7 +289,7 @@ export function toolCallAccesses(
     }
     case "write": {
       if (isProjectInstructionPath(toolCall.path)) return ToolAccesses.all();
-      const path = requestedAccessPath(workspace, toolCall.path);
+      const path = createAccessPath(workspace, toolCall.path, "write");
       return path === null ? ToolAccesses.all() : ToolAccesses.writeTree(path);
     }
     case "apply_patch":
