@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -5,7 +6,6 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
-import { formatCliRuntimeError } from "../../../src/cli/runtime-error.ts";
 import { KeelError } from "../../../src/core/error.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
@@ -20,6 +20,44 @@ function expectNoCrashOutput(stderr: string): void {
   expect(stderr).not.toContain(" at ");
   expect(stderr).not.toContain("Node.js v");
   expect(stderr).not.toContain("KeelError:");
+}
+
+function abortError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+interface ProcessResult {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number;
+}
+
+function processExitCode(
+  error: { readonly code?: unknown } | null,
+  exitCode: number | null,
+): number {
+  if (typeof error?.code === "number") return error.code;
+  if (exitCode !== null) return exitCode;
+  return error === null ? 0 : 1;
+}
+
+function runNodeProcess(script: string): Promise<ProcessResult> {
+  return new Promise((resolve) => {
+    const child = execFile(
+      process.execPath,
+      ["--experimental-strip-types", "--input-type=module", "-e", script],
+      { cwd: process.cwd(), maxBuffer: 1024 * 1024 },
+      (error, stdout, stderr) => {
+        resolve({
+          stdout,
+          stderr,
+          exitCode: processExitCode(error, child.exitCode),
+        });
+      },
+    );
+  });
 }
 
 describe("CLI Main - Runtime Errors", () => {
@@ -274,38 +312,145 @@ describe("CLI Main - Runtime Errors", () => {
     }
   });
 
-  test(`Given a recoverable runtime error reaches the CLI formatter,
-    When the error is formatted,
-    Then the recovery guidance is preserved`, () => {
+  test(`Given the environment cannot be read,
+    When the user starts an interactive session,
+    Then the CLI reports a clean unexpected runtime error`, async () => {
     // Given
-    const error = new KeelError(
-      "provider_network_error",
-      "temporary provider outage",
-      "Retry after checking the provider status page.",
-    );
+    const fixture = createRuntime([]);
+    const runtime = {
+      ...fixture.runtime,
+      env: () => {
+        throw new Error("environment lookup failed\n    at raw-stack.ts:1:1");
+      },
+    };
 
     // When
-    const formatted = formatCliRuntimeError(error);
+    const exitCode = await runCliMain(runtime);
 
     // Then
-    expect(formatted).toBe(
-      "Error: temporary provider outage\nRecovery: Retry after checking the provider status page.\n",
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: unexpected runtime failure: environment lookup failed\n",
     );
+    expectNoCrashOutput(fixture.stderr());
   });
 
-  test(`Given a runtime error message already has the CLI error prefix,
-    When the error is formatted,
-    Then the prefix is not duplicated`, () => {
+  test(`Given startup is aborted before command dispatch,
+    When the user starts an interactive session,
+    Then the CLI exits as interrupted without crash output`, async () => {
     // Given
-    const error = new KeelError(
-      "provider_network_error",
-      "Error: upstream failed",
-    );
+    const fixture = createRuntime([]);
+    const runtime = {
+      ...fixture.runtime,
+      env: () => {
+        throw abortError("environment lookup aborted");
+      },
+    };
 
     // When
-    const formatted = formatCliRuntimeError(error);
+    const exitCode = await runCliMain(runtime);
 
     // Then
-    expect(formatted).toBe("Error: upstream failed\n");
+    expect(exitCode).toBe(130);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given interactive startup is aborted,
+    When the user starts an interactive session,
+    Then the CLI exits as interrupted without crash output`, async () => {
+    // Given
+    const fixture = createRuntime([], {
+      env: { KEEL_FORCE_INTERACTIVE: "1" },
+    });
+    const runtime = {
+      ...fixture.runtime,
+      cwd: () => {
+        throw abortError("workspace lookup aborted");
+      },
+    };
+
+    // When
+    const exitCode = await runCliMain(runtime);
+
+    // Then
+    expect(exitCode).toBe(130);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given the CLI process has a fatal runtime failure,
+    When stderr is piped,
+    Then the user sees the complete clean error before exit`, async () => {
+    // Given
+    const bodyLength = 200_000;
+    const script = `
+      import { exitWithCliRuntimeError } from "./src/cli/runtime.ts";
+
+      process.on("uncaughtException", exitWithCliRuntimeError);
+      setImmediate(() => {
+        throw new Error("fatal-pipe-" + "x".repeat(${bodyLength}) + "-done");
+      });
+    `;
+
+    // When
+    const result = await runNodeProcess(script);
+
+    // Then
+    const prefix = "Error: unexpected runtime failure: fatal-pipe-";
+    const suffix = "-done\n";
+    const expectedLength =
+      "Error: unexpected runtime failure: ".length +
+      "fatal-pipe-".length +
+      bodyLength +
+      "-done".length +
+      1;
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.length).toBe(expectedLength);
+    expect(result.stderr.startsWith(prefix)).toBe(true);
+    expect(result.stderr.endsWith(suffix)).toBe(true);
+    expectNoCrashOutput(result.stderr);
+  });
+
+  test.each([
+    {
+      name: "recovery guidance",
+      error: new KeelError(
+        "provider_network_error",
+        "temporary provider outage",
+        "Retry after checking the provider status page.",
+      ),
+      stderr:
+        "Error: temporary provider outage\nRecovery: Retry after checking the provider status page.\n",
+    },
+    {
+      name: "existing error prefix",
+      error: new KeelError("provider_network_error", "Error: upstream failed"),
+      stderr: "Error: upstream failed\n",
+    },
+  ])(`Given startup fails with $name,
+    When the user runs a one-shot request,
+    Then the CLI preserves the clean error text`, async ({ error, stderr }) => {
+    // Given
+    const fixture = createRuntime(["hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+    const runtime = {
+      ...fixture.runtime,
+      cwd: () => {
+        throw error;
+      },
+    };
+
+    // When
+    const exitCode = await runCliMain(runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(stderr);
+    expectNoCrashOutput(fixture.stderr());
   });
 });

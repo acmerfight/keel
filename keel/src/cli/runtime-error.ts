@@ -1,4 +1,4 @@
-import { KeelError } from "../core/error.ts";
+import { errorMessage, KeelError } from "../core/error.ts";
 import { RunReportWriteError } from "./report.ts";
 
 function formatKeelError(error: KeelError): string {
@@ -9,8 +9,14 @@ function formatKeelError(error: KeelError): string {
   return `${message}\nRecovery: ${error.recovery}\n`;
 }
 
-export function formatCliRuntimeError(error: unknown): string | null {
+function firstErrorLine(error: unknown): string {
+  return errorMessage(error)
+    .replace(/[\r\n][\s\S]*/u, "")
+    .trim();
+}
+
+export function formatCliRuntimeError(error: unknown): string {
   if (error instanceof KeelError) return formatKeelError(error);
   if (error instanceof RunReportWriteError) return `${error.message}\n`;
-  return null;
+  return `Error: unexpected runtime failure: ${firstErrorLine(error)}\n`;
 }

@@ -1,3 +1,4 @@
+import { isAbortThrow } from "../core/error.ts";
 import type { Message } from "../llm/types.ts";
 import type { BashApprovalGrant } from "../permissions/bash.ts";
 import type { CliArgs } from "./args.ts";
@@ -425,16 +426,14 @@ export async function runInteractiveCli(
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
-    const runtimeError = formatCliRuntimeError(error);
-    if (runtimeError !== null) {
-      runtime.writeStderr(runtimeError);
+    if (isAbortThrow(error)) {
+      return 130;
+    }
+    if (error instanceof SessionStoreError) {
+      runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
-    /* v8 ignore next 3: unexpected interactive runtime failures are allowed to escape. */
-    if (!(error instanceof SessionStoreError)) {
-      throw error;
-    }
-    runtime.writeStderr(`${error.message}\n`);
+    runtime.writeStderr(formatCliRuntimeError(error));
     return 1;
   }
   return exitCode;

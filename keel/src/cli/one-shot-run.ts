@@ -1,6 +1,7 @@
 import { runAgent } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
+import { isAbortThrow } from "../core/error.ts";
 import type { Message } from "../llm/types.ts";
 import {
   type BashMode,
@@ -150,16 +151,11 @@ export async function runOneShotCli(
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
-    if (abortController.signal.aborted) {
+    if (isAbortThrow(error, abortController.signal)) {
       runtime.writeStdout("\n");
       return 130;
     }
-    const runtimeError = formatCliRuntimeError(error);
-    /* v8 ignore next 3: unexpected runtime failures are allowed to escape. */
-    if (runtimeError === null) {
-      throw error;
-    }
-    runtime.writeStderr(runtimeError);
+    runtime.writeStderr(formatCliRuntimeError(error));
     return 1;
   } finally {
     runtime.offSigint(abort);
