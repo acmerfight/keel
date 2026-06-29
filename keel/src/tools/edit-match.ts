@@ -49,11 +49,17 @@ interface NormalizedTypographicPunctuation {
   readonly sourceLength: number;
 }
 
-type SourcePreservingReplacementAttempt =
-  | SourcePreservingReplacementResult
-  | {
-      readonly status: "not_applicable";
-    };
+interface EditMatchStrategy {
+  readonly locate: (
+    content: string,
+    search: string,
+  ) => readonly EditMatchSpan[];
+  readonly reconstruct: (
+    source: string,
+    oldText: string,
+    newText: string,
+  ) => SourcePreservingReplacementResult;
+}
 
 const MAX_ALIGNMENT_CELLS = 1_000_000;
 
@@ -71,6 +77,14 @@ function exactMatches(
     matches.push({ index, length: search.length });
     start = index + search.length;
   }
+}
+
+function exactReplacement(
+  _source: string,
+  _oldText: string,
+  newText: string,
+): SourcePreservingReplacementResult {
+  return { status: "matched", replacement: newText };
 }
 
 function includedMatches(
@@ -229,7 +243,10 @@ function sameLengthArraysEqual(
   left: readonly string[],
   right: readonly string[],
 ): boolean {
-  return left.every((value, index) => value === right[index]);
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 function candidateSpan(
@@ -407,28 +424,11 @@ export function locateUniqueEditSpan(
 ): EditMatchResult {
   if (search === "") return { status: "not_found" };
 
-  const exact = includedMatches(exactMatches(content, search), options);
-  if (exact.length > 0) return uniqueMatchResult(exact);
-
-  const lineTrimmed = includedMatches(
-    lineBasedMatches(content, search, lineTrimmedMatches),
-    options,
-  );
-  if (lineTrimmed.length > 0) return uniqueMatchResult(lineTrimmed);
-
-  const typographicPunctuation = includedMatches(
-    typographicPunctuationMatches(content, search),
-    options,
-  );
-  if (typographicPunctuation.length > 0) {
-    return uniqueMatchResult(typographicPunctuation);
+  for (const strategy of EDIT_MATCH_STRATEGIES) {
+    const matches = includedMatches(strategy.locate(content, search), options);
+    if (matches.length > 0) return uniqueMatchResult(matches);
   }
-
-  const indentationFlexible = includedMatches(
-    lineBasedMatches(content, search, indentationFlexibleMatches),
-    options,
-  );
-  return uniqueMatchResult(indentationFlexible);
+  return { status: "not_found" };
 }
 
 export function locateExactEditSpans(
@@ -618,16 +618,9 @@ function lineTrimmedReplacement(
   source: string,
   oldText: string,
   newText: string,
-): SourcePreservingReplacementAttempt {
+): SourcePreservingReplacementResult {
   const sourceBlock = parseSearchBlock(source);
   const oldBlock = parseSearchBlock(oldText);
-  if (
-    sourceBlock.lines.length !== oldBlock.lines.length ||
-    !lineTrimmedMatches(sourceBlock.lines, oldBlock.lines)
-  ) {
-    return { status: "not_applicable" };
-  }
-
   const newBlock = parseSearchBlock(newText);
   const alignedOldLines = alignedOldIndexes(
     oldBlock.lines,
@@ -776,15 +769,11 @@ function normalizedCharacters(text: string): readonly string[] {
 
 function typographicPunctuationReplacementText(
   source: string,
-  oldText: string,
+  _oldText: string,
   newText: string,
-): SourcePreservingReplacementAttempt {
+): SourcePreservingReplacementResult {
   const normalizedSource =
     typographicPunctuationNormalizedWithSourceMap(source);
-  if (normalizedSource.text !== typographicPunctuationNormalized(oldText)) {
-    return { status: "not_applicable" };
-  }
-
   const normalizedNew = typographicPunctuationNormalizedWithSourceMap(newText);
   const alignedOldCharacters = alignedOldIndexes(
     normalizedCharacters(normalizedSource.text),
@@ -898,24 +887,49 @@ function indentationFlexibleReplacement(
   };
 }
 
+const EDIT_MATCH_STRATEGIES: readonly EditMatchStrategy[] = [
+  {
+    locate: exactMatches,
+    reconstruct: exactReplacement,
+  },
+  {
+    locate: (content, search) =>
+      lineBasedMatches(content, search, lineTrimmedMatches),
+    reconstruct: lineTrimmedReplacement,
+  },
+  {
+    locate: typographicPunctuationMatches,
+    reconstruct: typographicPunctuationReplacementText,
+  },
+  {
+    locate: (content, search) =>
+      lineBasedMatches(content, search, indentationFlexibleMatches),
+    reconstruct: indentationFlexibleReplacement,
+  },
+];
+
+function strategyMatchesWholeSource(
+  strategy: EditMatchStrategy,
+  source: string,
+  oldText: string,
+): boolean {
+  return strategy
+    .locate(source, oldText)
+    .some((match) => match.index === 0 && match.length === source.length);
+}
+
 export function sourcePreservingReplacement(
   source: string,
   oldText: string,
   newText: string,
 ): SourcePreservingReplacementResult {
-  if (source === oldText) return { status: "matched", replacement: newText };
-
-  // Keep this fallback order in sync with locateUniqueEditSpan; it rebuilds
-  // the replacement for the same fuzzy strategy that found the source span.
-  const lineTrimmed = lineTrimmedReplacement(source, oldText, newText);
-  if (lineTrimmed.status !== "not_applicable") return lineTrimmed;
-
-  const typographic = typographicPunctuationReplacementText(
-    source,
-    oldText,
-    newText,
-  );
-  if (typographic.status !== "not_applicable") return typographic;
-
-  return indentationFlexibleReplacement(source, oldText, newText);
+  for (const strategy of EDIT_MATCH_STRATEGIES) {
+    if (strategyMatchesWholeSource(strategy, source, oldText)) {
+      return strategy.reconstruct(source, oldText, newText);
+    }
+  }
+  return {
+    status: "not_preservable",
+    reason: "fuzzy source span does not match any edit strategy",
+  };
 }
