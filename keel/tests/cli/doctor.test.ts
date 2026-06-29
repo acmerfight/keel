@@ -106,7 +106,7 @@ describe("CLI Doctor", () => {
 
   test(`Given Qwen is selected by doctor flags,
     When user runs the offline doctor command,
-    Then the CLI reports the selected provider config without calling the provider`, async () => {
+    Then the CLI rejects credentials and query text before calling the provider`, async () => {
     // Given
     const apiKeySecret = "test-api-key-secret-that-must-not-print";
     const baseUrlSecret = "test-base-url-secret-that-must-not-print";
@@ -131,7 +131,7 @@ describe("CLI Doctor", () => {
     );
 
     // Then
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
     expectRipgrepDiagnostics(result.stdout);
     expect(result.stdout).toContain("provider: qwen (source: --provider)");
     expect(result.stdout).toContain("model: qwen3.7-plus (source: --model)");
@@ -143,7 +143,12 @@ describe("CLI Doctor", () => {
       "context window: 8192 tokens (source: KEEL_CONTEXT_WINDOW_TOKENS)",
     );
     expect(result.stdout).toContain("cost model: known");
-    expect(result.stdout).toContain("provider auth: skipped (--offline)");
+    expect(result.stdout).toContain(
+      "error: base URL must not include credentials, query, or fragment",
+    );
+    expect(result.stdout).toContain(
+      "provider auth: skipped (local provider diagnostics failed)",
+    );
     expect(result.stdout).not.toContain(apiKeySecret);
     expect(result.stdout).not.toContain(baseUrlSecret);
     expect(result.stdout).not.toContain("user:");
@@ -247,7 +252,7 @@ describe("CLI Doctor", () => {
 
   test(`Given the selected provider has an invalid base URL,
     When user runs the online doctor command,
-    Then the CLI reports the provider auth URL failure without printing URL secrets`, async () => {
+    Then the CLI reports the local provider config failure without printing URL secrets`, async () => {
     // Given
     const baseUrlSecret = "doctor-url-secret";
 
@@ -266,14 +271,17 @@ describe("CLI Doctor", () => {
     expect(result.stdout).toContain(
       "base url: <unparseable URL> (source: DEEPSEEK_BASE_URL)",
     );
-    expect(result.stdout).toContain("provider auth: failed (invalid base URL)");
+    expect(result.stdout).toContain("error: invalid base URL");
+    expect(result.stdout).toContain(
+      "provider auth: skipped (local provider diagnostics failed)",
+    );
     expect(result.stdout).not.toContain(baseUrlSecret);
     expect(result.stderr).toBe("");
   });
 
   test(`Given the selected provider base URL includes credentials or query text,
     When user runs the online doctor command,
-    Then the CLI fails the provider auth probe without printing URL secrets`, async () => {
+    Then the CLI reports the local provider config failure without printing URL secrets`, async () => {
     // Given
     const userSecret = "doctor-user-secret";
     const querySecret = "doctor-query-secret";
@@ -294,10 +302,44 @@ describe("CLI Doctor", () => {
       "base url: https://example.test/v1 (source: DEEPSEEK_BASE_URL)",
     );
     expect(result.stdout).toContain(
-      "provider auth: failed (base URL must not include credentials, query, or fragment)",
+      "error: base URL must not include credentials, query, or fragment",
+    );
+    expect(result.stdout).toContain(
+      "provider auth: skipped (local provider diagnostics failed)",
     );
     expect(result.stdout).not.toContain(userSecret);
     expect(result.stdout).not.toContain(querySecret);
+    expect(result.stderr).toBe("");
+  });
+
+  test(`Given offline doctor receives a provider base URL with an unsupported scheme,
+    When user runs the doctor command,
+    Then the CLI rejects the local provider config before reporting readiness`, async () => {
+    // Given
+    const env = {
+      DEEPSEEK_API_KEY: "test-key",
+      DEEPSEEK_BASE_URL: "ftp://example.test/v1",
+    };
+
+    // When
+    const result = await runCli(
+      ["--doctor", "--offline", "--provider", "deepseek"],
+      {
+        env,
+      },
+    );
+
+    // Then
+    expect(result.exitCode).toBe(1);
+    expectRipgrepDiagnostics(result.stdout);
+    expect(result.stdout).toContain("provider: deepseek (source: --provider)");
+    expect(result.stdout).toContain(
+      "base url: ftp://example.test/v1 (source: DEEPSEEK_BASE_URL)",
+    );
+    expect(result.stdout).toContain("error: base URL must use http or https");
+    expect(result.stdout).toContain(
+      "provider auth: skipped (local provider diagnostics failed)",
+    );
     expect(result.stderr).toBe("");
   });
 

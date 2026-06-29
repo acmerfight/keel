@@ -38,6 +38,7 @@ interface TaskSummary {
   readonly passRate: number;
   readonly outcomes: readonly OutcomeCount[];
   readonly harnessFailures: number;
+  readonly harnessFailureRate: number;
   readonly failedTranscripts: readonly string[];
   readonly turns: MetricSummary;
   readonly inputTokens: MetricSummary;
@@ -147,6 +148,7 @@ function summarizeTask(
     passRate: passes / lines.length,
     outcomes: outcomesForTask,
     harnessFailures,
+    harnessFailureRate: harnessFailures / lines.length,
     failedTranscripts,
     turns: reportMetric(lines, (report) => report.turns),
     inputTokens: reportMetric(lines, (report) => report.usage.inputTokens),
@@ -270,7 +272,9 @@ function statusFor(
 ): string {
   if (base === undefined) return "ADDED";
   if (head === undefined) return "REMOVED";
-  if (head.harnessFailures > base.harnessFailures) return "HARNESS FAILURE";
+  if (head.harnessFailureRate > base.harnessFailureRate) {
+    return "HARNESS FAILURE";
+  }
   if (head.passRate < base.passRate) return "REGRESSION";
   if (head.passRate > base.passRate) return "IMPROVEMENT";
   if (efficiencyRegressed(base, head)) return "EFFICIENCY REGRESSION";
