@@ -1,4 +1,5 @@
 import {
+  isAbortThrow,
   KeelError,
   type KeelErrorCode,
   type RecoverableToolErrorCode,
@@ -110,11 +111,6 @@ function isContextOverflowHttpError(status: number, body: string): boolean {
   ].some((pattern) => pattern.test(body));
 }
 
-function isAbortError(error: unknown, signal: AbortSignal): boolean {
-  if (signal.aborted) return true;
-  return error instanceof Error && error.name === "AbortError";
-}
-
 export function transportError(
   error: unknown,
   signal: AbortSignal,
@@ -122,7 +118,7 @@ export function transportError(
   message: string,
 ): KeelError {
   if (error instanceof KeelError) return error;
-  if (isAbortError(error, signal)) {
+  if (isAbortThrow(error, signal)) {
     return new KeelError(
       "provider_aborted",
       `${providerName} request was aborted`,

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { KeelError } from "../core/error.ts";
+import { isAbortThrow, KeelError } from "../core/error.ts";
 import { resolveRipgrep } from "./ripgrep.ts";
 
 const RIPGREP_KILL_GRACE_MS = 1_000;
@@ -37,10 +37,6 @@ function recoverableRipgrepStartErrorCode(
     return error.code;
   }
   return null;
-}
-
-function isAbortError(error: NodeJS.ErrnoException): boolean {
-  return error.name === "AbortError" || error.code === "ABORT_ERR";
 }
 
 function ripgrepStartRecovery(code: RecoverableRipgrepStartErrorCode): string {
@@ -141,7 +137,7 @@ export async function runRipgrepProcess(
     child.on("error", (error: NodeJS.ErrnoException) => {
       cleanup();
       settle(() => {
-        if (isAbortError(error)) {
+        if (isAbortThrow(error, options.signal)) {
           rejectResult(error);
           return;
         }
