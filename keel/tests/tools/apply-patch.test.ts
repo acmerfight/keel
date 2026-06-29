@@ -523,6 +523,47 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a CRLF file needs an indentation-preserving fuzzy hunk,
+    When apply_patch applies the replacement,
+    Then it preserves source indentation and CRLF line endings`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(
+      join(workspace, "indented.txt"),
+      "  alpha\r\n  omega\r\n",
+      "utf8",
+    );
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: indented.txt",
+      "@@",
+      "-alpha",
+      "-omega",
+      "+alpha",
+      "+omega",
+      "+beta",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When
+      executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "indented.txt"),
+        },
+      });
+
+      // Then
+      expect(await readFile(join(workspace, "indented.txt"), "utf8")).toBe(
+        "  alpha\r\n  omega\r\n  beta\r\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a patch hunk omits the matched block indentation,
     When apply_patch uses indentation matching,
     Then it preserves source indentation for unchanged and changed lines`, async () => {
