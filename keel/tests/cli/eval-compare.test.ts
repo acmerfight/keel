@@ -234,6 +234,75 @@ describe("Eval Compare", () => {
     }
   });
 
+  test(`Given head has more harness failures but a lower harness failure rate,
+    When the compare command summarizes the task,
+    Then it reports the pass-rate improvement without regression transcripts`, async () => {
+    // Given
+    const root = await mkdtemp(join(tmpdir(), "keel-eval-compare-rate-"));
+    const baseFile = join(root, "base.jsonl");
+    const headFile = join(root, "head.jsonl");
+    await writeResultFile(baseFile, [
+      resultLine({
+        taskId: "more-reliable-head",
+        trial: 1,
+        pass: false,
+        outcome: "crashed",
+        transcriptPath: "/tmp/base/crashed.jsonl",
+      }),
+    ]);
+    await writeResultFile(headFile, [
+      resultLine({
+        taskId: "more-reliable-head",
+        trial: 1,
+        pass: false,
+        outcome: "crashed",
+        transcriptPath: "/tmp/head/crashed-1.jsonl",
+      }),
+      resultLine({
+        taskId: "more-reliable-head",
+        trial: 2,
+        pass: false,
+        outcome: "timeout",
+        transcriptPath: "/tmp/head/timeout-2.jsonl",
+      }),
+      resultLine({
+        taskId: "more-reliable-head",
+        trial: 3,
+        pass: true,
+      }),
+      resultLine({
+        taskId: "more-reliable-head",
+        trial: 4,
+        pass: true,
+      }),
+      resultLine({
+        taskId: "more-reliable-head",
+        trial: 5,
+        pass: true,
+      }),
+    ]);
+
+    try {
+      // When
+      const result = runCompare(baseFile, headFile);
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("task: more-reliable-head");
+      expect(result.stdout).toContain("status: IMPROVEMENT");
+      expect(result.stdout).toContain(
+        "pass: 0/1 (0.0%) -> 3/5 (60.0%) (+60.0pp)",
+      );
+      expect(result.stdout).toContain("head harness failures: 2");
+      expect(result.stdout).not.toContain("regression transcripts:");
+      expect(result.stdout).not.toContain("/tmp/head/crashed-1.jsonl");
+      expect(result.stdout).not.toContain("/tmp/head/timeout-2.jsonl");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an eval result file has no usable result lines,
     When the compare command reads it,
     Then it reports the empty file instead of printing a comparison`, async () => {
