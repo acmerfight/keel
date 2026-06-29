@@ -177,6 +177,32 @@ describe("Ls Tool Directory Discovery", () => {
     }
   });
 
+  test(`Given a directory has fewer entries than requested,
+    When the ls tool lists it with that limit,
+    Then it returns every entry without claiming the output was truncated`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-ls-"));
+    await mkdir(join(workspace, "cases"), { recursive: true });
+    for (let index = 0; index < 2; index++) {
+      await writeFile(
+        join(workspace, "cases", `case-${index}.ts`),
+        "case\n",
+        "utf8",
+      );
+    }
+
+    try {
+      // When
+      const result = await executeLs(workspace, { path: "cases", limit: 3 });
+
+      // Then
+      expect(result.content).toBe(["case-0.ts", "case-1.ts"].join("\n"));
+      expect(result.content).not.toContain("[ls output truncated");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a directory has exactly as many entries as requested,
     When the ls tool lists it with that limit,
     Then it returns every entry without claiming the output was truncated`, async () => {

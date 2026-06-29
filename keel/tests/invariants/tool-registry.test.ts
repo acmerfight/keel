@@ -1,11 +1,16 @@
-import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, test } from "vitest";
-
-interface ParsedSource {
-  readonly path: string;
-  readonly sourceFile: ts.SourceFile;
-}
+import {
+  arrayIdentifierElements,
+  importedBindings,
+  location,
+  objectLiteralPropertyNames,
+  objectProperty,
+  type ParsedSource,
+  parseSource,
+  unwrapExpression,
+  variableInitializer,
+} from "./_ast.ts";
 
 const registryPath = "src/tools/registry.ts";
 const toolCallPath = "src/tools/tool-call.ts";
@@ -34,101 +39,6 @@ const perToolArgumentSchemaNames = new Set(
   ),
 );
 const perToolExecutorNames = new Set(importedExecutorNames(executionSource));
-
-function parseSource(path: string): ParsedSource {
-  const text = readFileSync(path, "utf8");
-  return {
-    path,
-    sourceFile: ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true),
-  };
-}
-
-function location(source: ParsedSource, node: ts.Node): string {
-  const position = source.sourceFile.getLineAndCharacterOfPosition(
-    node.getStart(source.sourceFile),
-  );
-  return `${source.path}:${position.line + 1}:${position.character + 1}`;
-}
-
-function propertyNameText(node: ts.PropertyName): string | null {
-  if (
-    ts.isIdentifier(node) ||
-    ts.isStringLiteral(node) ||
-    ts.isNumericLiteral(node)
-  ) {
-    return node.text;
-  }
-  return null;
-}
-
-function variableInitializer(
-  source: ParsedSource,
-  name: string,
-): ts.Expression | null {
-  let initializer: ts.Expression | null = null;
-
-  function visit(node: ts.Node): void {
-    if (
-      initializer === null &&
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.name.text === name
-    ) {
-      initializer = node.initializer ?? null;
-      return;
-    }
-    ts.forEachChild(node, visit);
-  }
-
-  visit(source.sourceFile);
-  return initializer;
-}
-
-function unwrapExpression(expression: ts.Expression): ts.Expression {
-  if (
-    ts.isAsExpression(expression) ||
-    ts.isParenthesizedExpression(expression)
-  ) {
-    return unwrapExpression(expression.expression);
-  }
-  return expression;
-}
-
-function arrayIdentifierElements(
-  source: ParsedSource,
-  variableName: string,
-): readonly string[] {
-  const initializer = variableInitializer(source, variableName);
-  const expression =
-    initializer === null ? null : unwrapExpression(initializer);
-  if (expression === null || !ts.isArrayLiteralExpression(expression)) {
-    throw new Error(`${source.path} missing ${variableName} array literal`);
-  }
-
-  const names: string[] = [];
-  for (const element of expression.elements) {
-    if (!ts.isIdentifier(element)) {
-      throw new Error(`${location(source, element)} must be an identifier`);
-    }
-    names.push(element.text);
-  }
-  return names;
-}
-
-function objectProperty(
-  object: ts.ObjectLiteralExpression,
-  name: string,
-): ts.PropertyAssignment | null {
-  for (const property of object.properties) {
-    if (
-      ts.isPropertyAssignment(property) &&
-      propertyNameText(property.name) === name
-    ) {
-      return property;
-    }
-  }
-  return null;
-}
 
 function defineToolObject(
   source: ParsedSource,
@@ -211,24 +121,9 @@ function builtinToolArgumentSchemaNames(
 }
 
 function importedExecutorNames(source: ParsedSource): readonly string[] {
-  const names: string[] = [];
-
-  function visit(node: ts.Node): void {
-    if (ts.isImportDeclaration(node)) {
-      const namedBindings = node.importClause?.namedBindings;
-      if (namedBindings !== undefined && ts.isNamedImports(namedBindings)) {
-        for (const element of namedBindings.elements) {
-          if (/^execute[A-Z]/.test(element.name.text)) {
-            names.push(element.name.text);
-          }
-        }
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-
-  visit(source.sourceFile);
-  return names;
+  return importedBindings(source)
+    .map((binding) => binding.name)
+    .filter((name) => /^execute[A-Z]/.test(name));
 }
 
 function stringLiteralText(node: ts.Node): string | null {
@@ -381,30 +276,13 @@ function builtinToolSwitchCases(
   return cases;
 }
 
-function importedBindings(
+function importedBindingViolations(
   source: ParsedSource,
   names: ReadonlySet<string>,
 ): readonly string[] {
-  const violations: string[] = [];
-
-  function visit(node: ts.Node): void {
-    if (ts.isImportDeclaration(node)) {
-      const namedBindings = node.importClause?.namedBindings;
-      if (namedBindings !== undefined && ts.isNamedImports(namedBindings)) {
-        for (const element of namedBindings.elements) {
-          if (names.has(element.name.text)) {
-            violations.push(
-              `${location(source, element)} ${element.name.text}`,
-            );
-          }
-        }
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-
-  visit(source.sourceFile);
-  return violations;
+  return importedBindings(source)
+    .filter((binding) => names.has(binding.name))
+    .map((binding) => `${binding.location} ${binding.name}`);
 }
 
 function perToolFakeResponseHelpers(source: ParsedSource): readonly string[] {
@@ -495,10 +373,10 @@ describe("builtin tool registry invariants", () => {
       [],
     );
     expect(
-      importedBindings(toolCallSource, new Set(["ToolArgDefinition"])),
+      importedBindingViolations(toolCallSource, new Set(["ToolArgDefinition"])),
     ).toEqual([]);
     expect(
-      importedBindings(registrySource, new Set(["ToolArgDefinition"])),
+      importedBindingViolations(registrySource, new Set(["ToolArgDefinition"])),
     ).toEqual([]);
   });
 
@@ -506,6 +384,19 @@ describe("builtin tool registry invariants", () => {
     When tool-call contract syntax is inspected,
     Then it does not keep per-tool provider definition objects`, () => {
     expect(perToolProviderConstants(toolCallSource)).toEqual([]);
+  });
+
+  test(`Given builtin tool metadata is owned by defineTool objects,
+    When object-literal properties are inspected,
+    Then every builtin tool definition exposes name and args metadata`, () => {
+    for (const constantName of builtinToolConstantNames) {
+      const properties = objectLiteralPropertyNames(
+        defineToolObject(toolDefinitionsSource, constantName),
+      );
+
+      expect(properties).toContain("name");
+      expect(properties).toContain("args");
+    }
   });
 
   test(`Given builtin tool names are owned by builtinTools,
@@ -523,7 +414,7 @@ describe("builtin tool registry invariants", () => {
     );
 
     expect(
-      importedBindings(toolCallSource, perToolArgumentSchemaNames),
+      importedBindingViolations(toolCallSource, perToolArgumentSchemaNames),
     ).toEqual([]);
     expect(
       parser === null ? [] : switchStatements(toolCallSource, parser),
@@ -535,10 +426,14 @@ describe("builtin tool registry invariants", () => {
     Then metadata and provider-facing contracts do not import per-tool executors`, () => {
     expect(perToolExecutorNames.size).toBeGreaterThan(0);
     expect(
-      importedBindings(toolDefinitionsSource, perToolExecutorNames),
+      importedBindingViolations(toolDefinitionsSource, perToolExecutorNames),
     ).toEqual([]);
-    expect(importedBindings(toolCallSource, perToolExecutorNames)).toEqual([]);
-    expect(importedBindings(registrySource, perToolExecutorNames)).toEqual([]);
+    expect(
+      importedBindingViolations(toolCallSource, perToolExecutorNames),
+    ).toEqual([]);
+    expect(
+      importedBindingViolations(registrySource, perToolExecutorNames),
+    ).toEqual([]);
   });
 
   test(`Given canonical tool arguments are derived from builtin metadata,
@@ -563,7 +458,7 @@ describe("builtin tool registry invariants", () => {
     const printer = functionDeclaration(cliOutputSource, "printAgentEvents");
 
     expect(
-      importedBindings(cliOutputSource, new Set(["toolCallLabel"])),
+      importedBindingViolations(cliOutputSource, new Set(["toolCallLabel"])),
     ).toHaveLength(1);
     expect(
       contractLabeler === null

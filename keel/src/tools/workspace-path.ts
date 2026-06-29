@@ -22,7 +22,7 @@ import {
 import { KeelError } from "../core/error.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 
-type FileToolName =
+export type FileToolName =
   | "apply_patch"
   | "edit"
   | "glob"
@@ -44,6 +44,16 @@ export interface WorkspaceCreateTarget {
   readonly resolvedTargetPath: string;
   readonly parentPath: string;
 }
+
+export type WorkspaceCreateTargetResolution =
+  | {
+      readonly ok: true;
+      readonly target: WorkspaceCreateTarget;
+    }
+  | {
+      readonly ok: false;
+      readonly error: KeelError;
+    };
 
 export interface FileIdentity {
   readonly dev: number;
@@ -466,7 +476,17 @@ export function resolveWorkspaceTarget(
   return { workspacePath, requestedPath: absoluteRequestedPath, targetPath };
 }
 
-export function resolveWorkspaceCreateTarget(
+function ignoredCreatePath(
+  projectIgnorePolicy: ReturnType<typeof createProjectIgnorePolicy>,
+  path: string,
+): boolean {
+  return (
+    projectIgnorePolicy.isIgnored(path, false) ||
+    projectIgnorePolicy.isIgnored(path, true)
+  );
+}
+
+function resolveWorkspaceCreateTargetUnsafe(
   workspace: string,
   requestedPath: string,
   toolName: FileToolName,
@@ -490,8 +510,7 @@ export function resolveWorkspaceCreateTarget(
   const requestIsWorkspaceRoot = absoluteRequestedPath === workspacePath;
   if (
     !requestIsWorkspaceRoot &&
-    (projectIgnorePolicy.isIgnored(absoluteRequestedPath, false) ||
-      projectIgnorePolicy.isIgnored(absoluteRequestedPath, true))
+    ignoredCreatePath(projectIgnorePolicy, absoluteRequestedPath)
   ) {
     throw ignoredPathError(toolName, requestedPath);
   }
@@ -522,6 +541,9 @@ export function resolveWorkspaceCreateTarget(
     existingAncestorRealPath,
     targetFromExistingAncestor,
   );
+  if (ignoredCreatePath(projectIgnorePolicy, resolvedTargetPath)) {
+    throw ignoredPathError(toolName, requestedPath);
+  }
 
   return {
     workspacePath,
@@ -530,4 +552,38 @@ export function resolveWorkspaceCreateTarget(
     resolvedTargetPath,
     parentPath,
   };
+}
+
+export function resolveWorkspaceCreateTargetCore(
+  workspace: string,
+  requestedPath: string,
+  toolName: FileToolName,
+): WorkspaceCreateTargetResolution {
+  try {
+    return {
+      ok: true,
+      target: resolveWorkspaceCreateTargetUnsafe(
+        workspace,
+        requestedPath,
+        toolName,
+      ),
+    };
+  } catch (error) {
+    if (error instanceof KeelError) return { ok: false, error };
+    throw error;
+  }
+}
+
+export function resolveWorkspaceCreateTarget(
+  workspace: string,
+  requestedPath: string,
+  toolName: FileToolName,
+): WorkspaceCreateTarget {
+  const resolution = resolveWorkspaceCreateTargetCore(
+    workspace,
+    requestedPath,
+    toolName,
+  );
+  if (!resolution.ok) throw resolution.error;
+  return resolution.target;
 }
