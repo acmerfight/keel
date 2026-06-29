@@ -15,6 +15,7 @@ import {
   findWorkspacePathsByIdentity,
   resolveWorkspaceCreateTarget,
   resolveWorkspaceCreateTargetAtAccess,
+  rollbackWorkspaceParentDirectoriesBestEffort,
 } from "./workspace-path.ts";
 
 interface WriteToolResult extends ToolResult {
@@ -51,68 +52,69 @@ export function executeWrite(
     resolvedTargetPath,
   ]);
 
-  createWorkspaceParentDirectories({
+  const createdParentDirectories = createWorkspaceParentDirectories({
     workspacePath,
     parentPath,
     toolName: "write",
     requestedPath: filePath,
   });
 
-  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
-  const realTargetPath = resolveWorkspaceCreateTargetAtAccess({
-    workspacePath,
-    parentPath,
-    targetPath,
-    toolName: "write",
-    requestedPath: filePath,
-  });
-  if (projectIgnorePolicy.isIgnored(realTargetPath, false)) {
-    throw ignoredPathError(filePath);
-  }
-  options.projectInstructions?.assertMutationAllowed([realTargetPath]);
-
-  const validateTargetAtAccess = (): string => {
-    const accessTargetPath = resolveWorkspaceCreateTargetAtAccess({
+  try {
+    const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+    const realTargetPath = resolveWorkspaceCreateTargetAtAccess({
       workspacePath,
       parentPath,
       targetPath,
       toolName: "write",
       requestedPath: filePath,
     });
-    if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+    if (projectIgnorePolicy.isIgnored(realTargetPath, false)) {
       throw ignoredPathError(filePath);
     }
-    options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
-    return accessTargetPath;
-  };
-  const validateOpenedTempAtAccess = (tempPath: string, fd: number): void => {
-    assertWorkspaceOpenTargetAtAccess({
-      fd,
-      workspacePath,
-      targetPath: tempPath,
-      toolName: "write",
-      requestedPath: filePath,
-    });
-  };
-  let publishedTargetPath = realTargetPath;
-  const validatePublishedTargetAtAccess = (
-    publishedPath: string,
-    identity: FileIdentity,
-  ): void => {
-    const accessTargetPath = assertWorkspaceFileIdentityAtAccess({
-      identity,
-      workspacePath,
-      targetPath: publishedPath,
-      toolName: "write",
-      requestedPath: filePath,
-    });
-    if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
-      throw ignoredPathError(filePath);
-    }
-    options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
-    publishedTargetPath = accessTargetPath;
-  };
-  try {
+    options.projectInstructions?.assertMutationAllowed([realTargetPath]);
+
+    const validateTargetAtAccess = (): string => {
+      const accessTargetPath = resolveWorkspaceCreateTargetAtAccess({
+        workspacePath,
+        parentPath,
+        targetPath,
+        toolName: "write",
+        requestedPath: filePath,
+      });
+      if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+        throw ignoredPathError(filePath);
+      }
+      options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
+      return accessTargetPath;
+    };
+    const validateOpenedTempAtAccess = (tempPath: string, fd: number): void => {
+      assertWorkspaceOpenTargetAtAccess({
+        fd,
+        workspacePath,
+        targetPath: tempPath,
+        toolName: "write",
+        requestedPath: filePath,
+      });
+    };
+    let publishedTargetPath = realTargetPath;
+    const validatePublishedTargetAtAccess = (
+      publishedPath: string,
+      identity: FileIdentity,
+    ): void => {
+      const accessTargetPath = assertWorkspaceFileIdentityAtAccess({
+        identity,
+        workspacePath,
+        targetPath: publishedPath,
+        toolName: "write",
+        requestedPath: filePath,
+      });
+      if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+        throw ignoredPathError(filePath);
+      }
+      options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
+      publishedTargetPath = accessTargetPath;
+    };
+
     createTextFileAtomically(realTargetPath, content, {
       beforeAccess: validateTargetAtAccess,
       beforeWrite: validateOpenedTempAtAccess,
@@ -121,7 +123,25 @@ export function executeWrite(
       cleanupPathsByIdentity: (identity) =>
         findWorkspacePathsByIdentity(workspacePath, identity),
     });
+
+    const createdPath = publishedTargetPath;
+    recordLastCreateCheckpoint({
+      workspace: workspacePath,
+      filePath: createdPath,
+      afterContent: content,
+    });
+
+    return {
+      content: `Wrote ${filePath}`,
+      targetPath: createdPath,
+      checkpointOperation: {
+        operation: "create",
+        filePath: createdPath,
+        afterContent: content,
+      },
+    };
   } catch (error) {
+    rollbackWorkspaceParentDirectoriesBestEffort(createdParentDirectories);
     if (isErrnoException(error) && error.code === "EEXIST") {
       throw new KeelError(
         "tool_file_exists",
@@ -138,21 +158,4 @@ export function executeWrite(
     }
     throw error;
   }
-
-  const createdPath = publishedTargetPath;
-  recordLastCreateCheckpoint({
-    workspace: workspacePath,
-    filePath: createdPath,
-    afterContent: content,
-  });
-
-  return {
-    content: `Wrote ${filePath}`,
-    targetPath: createdPath,
-    checkpointOperation: {
-      operation: "create",
-      filePath: createdPath,
-      afterContent: content,
-    },
-  };
 }

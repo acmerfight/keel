@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readdirSync,
   realpathSync,
+  rmdirSync,
   type Stats,
   statSync,
 } from "node:fs";
@@ -209,11 +210,12 @@ function childEntryExistsForParentCreate(path: string): boolean {
 function createChildDirectory(
   path: string,
   input: WorkspaceParentDirectoriesInput,
-): void {
+): boolean {
   try {
     mkdirSync(path);
+    return true;
   } catch (error) {
-    if (isErrnoException(error) && error.code === "EEXIST") return;
+    if (isErrnoException(error) && error.code === "EEXIST") return false;
     if (isErrnoException(error) && error.code === "ENOTDIR") {
       throw notDirectoryError(input.toolName, input.requestedPath);
     }
@@ -246,15 +248,38 @@ function childDirectoryRealPath(
 
 export function createWorkspaceParentDirectories(
   input: WorkspaceParentDirectoriesInput,
-): void {
+): readonly string[] {
   const segments = workspaceParentSegments(input);
+  const createdDirectories: string[] = [];
   let currentPath = input.workspacePath;
-  for (const segment of segments) {
-    const childPath = join(currentPath, segment);
-    if (!childEntryExistsForParentCreate(childPath)) {
-      createChildDirectory(childPath, input);
+  try {
+    for (const segment of segments) {
+      const childPath = join(currentPath, segment);
+      let createdDirectory = false;
+      if (!childEntryExistsForParentCreate(childPath)) {
+        createdDirectory = createChildDirectory(childPath, input);
+      }
+      if (createdDirectory) {
+        createdDirectories.push(childPath);
+      }
+      currentPath = childDirectoryRealPath(childPath, input);
     }
-    currentPath = childDirectoryRealPath(childPath, input);
+  } catch (error) {
+    rollbackWorkspaceParentDirectoriesBestEffort(createdDirectories);
+    throw error;
+  }
+  return createdDirectories;
+}
+
+export function rollbackWorkspaceParentDirectoriesBestEffort(
+  createdDirectories: readonly string[],
+): void {
+  for (const directory of createdDirectories.toReversed()) {
+    try {
+      rmdirSync(directory);
+    } catch {
+      /* v8 ignore next 1: rollback is best-effort and skips non-empty or raced directories. */
+    }
   }
 }
 

@@ -15,6 +15,7 @@ import {
   type FileIdentity,
   findWorkspacePathsByIdentity,
   resolveWorkspaceCreateTargetAtAccess,
+  rollbackWorkspaceParentDirectoriesBestEffort,
 } from "../workspace-path.ts";
 import {
   changedTargetError,
@@ -65,56 +66,58 @@ export function applyPreparedOperation(
   options: ExecuteApplyPatchOptions,
 ): AppliedPatchOperation {
   if (operation.kind === "add") {
-    createWorkspaceParentDirectories({
+    const createdParentDirectories = createWorkspaceParentDirectories({
       workspacePath: operation.workspacePath,
       parentPath: operation.parentPath,
       toolName: "apply_patch",
       requestedPath: operation.path,
     });
-    const realTargetPath = validateCreateTargetAfterMkdir(
-      operation,
-      options.projectInstructions,
-    );
-    const validateTargetAtAccess = (): void => {
-      validateCreateTargetAfterMkdir(operation, options.projectInstructions);
-    };
-    const validateOpenedTempAtAccess = (tempPath: string, fd: number): void => {
-      assertWorkspaceOpenTargetAtAccess({
-        fd,
-        workspacePath: operation.workspacePath,
-        targetPath: tempPath,
-        toolName: "apply_patch",
-        requestedPath: operation.path,
-      });
-    };
-    let publishedTargetPath = realTargetPath;
-    const validatePublishedTargetAtAccess = (
-      publishedPath: string,
-      identity: FileIdentity,
-    ): void => {
-      const accessTargetPath = assertWorkspaceFileIdentityAtAccess({
-        identity,
-        workspacePath: operation.workspacePath,
-        targetPath: publishedPath,
-        toolName: "apply_patch",
-        requestedPath: operation.path,
-      });
-      const projectIgnorePolicy = createProjectIgnorePolicy(
-        operation.workspacePath,
-      );
-      if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
-        throw new KeelError(
-          "tool_path_ignored",
-          `apply_patch failed: ignored path: ${operation.path}`,
-          "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
-        );
-      }
-      options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
-      publishedTargetPath = accessTargetPath;
-    };
-    let result: AtomicWriteResult;
     try {
-      result = createTextFileAtomically(
+      const realTargetPath = validateCreateTargetAfterMkdir(
+        operation,
+        options.projectInstructions,
+      );
+      const validateTargetAtAccess = (): void => {
+        validateCreateTargetAfterMkdir(operation, options.projectInstructions);
+      };
+      const validateOpenedTempAtAccess = (
+        tempPath: string,
+        fd: number,
+      ): void => {
+        assertWorkspaceOpenTargetAtAccess({
+          fd,
+          workspacePath: operation.workspacePath,
+          targetPath: tempPath,
+          toolName: "apply_patch",
+          requestedPath: operation.path,
+        });
+      };
+      let publishedTargetPath = realTargetPath;
+      const validatePublishedTargetAtAccess = (
+        publishedPath: string,
+        identity: FileIdentity,
+      ): void => {
+        const accessTargetPath = assertWorkspaceFileIdentityAtAccess({
+          identity,
+          workspacePath: operation.workspacePath,
+          targetPath: publishedPath,
+          toolName: "apply_patch",
+          requestedPath: operation.path,
+        });
+        const projectIgnorePolicy = createProjectIgnorePolicy(
+          operation.workspacePath,
+        );
+        if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+          throw new KeelError(
+            "tool_path_ignored",
+            `apply_patch failed: ignored path: ${operation.path}`,
+            "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+          );
+        }
+        options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
+        publishedTargetPath = accessTargetPath;
+      };
+      const result = createTextFileAtomically(
         realTargetPath,
         operation.afterContent,
         {
@@ -126,7 +129,14 @@ export function applyPreparedOperation(
             findWorkspacePathsByIdentity(operation.workspacePath, identity),
         },
       );
+      return {
+        ...operation,
+        targetPath: publishedTargetPath,
+        appliedIdentity: result.identity,
+        createdParentDirectories,
+      };
     } catch (error) {
+      rollbackWorkspaceParentDirectoriesBestEffort(createdParentDirectories);
       /* v8 ignore next 7: EEXIST requires a concurrent create after prevalidation. */
       if (isErrnoException(error) && error.code === "EEXIST") {
         throw new KeelError(
@@ -138,130 +148,138 @@ export function applyPreparedOperation(
       /* v8 ignore next 1: unknown atomic create errors are rethrown unchanged. */
       throw error;
     }
-    return {
-      ...operation,
-      targetPath: publishedTargetPath,
-      appliedIdentity: result.identity,
-    };
   }
 
   const projectIgnorePolicy = createProjectIgnorePolicy(
     operation.workspacePath,
   );
   if (operation.kind === "move") {
-    createWorkspaceParentDirectories({
-      workspacePath: operation.workspacePath,
-      parentPath: operation.destinationParentPath,
-      toolName: "apply_patch",
-      requestedPath: operation.movePath,
-    });
-    const destinationCreateTarget = {
-      workspacePath: operation.workspacePath,
-      parentPath: operation.destinationParentPath,
-      targetPath: operation.destinationTargetPath,
-      path: operation.movePath,
-    };
-    const realDestinationPath = validateCreateTargetAfterMkdir(
-      destinationCreateTarget,
-      options.projectInstructions,
-    );
-    const validateDestinationAtAccess = (): void => {
-      validateCreateTargetAfterMkdir(
+    const createdDestinationParentDirectories =
+      createWorkspaceParentDirectories({
+        workspacePath: operation.workspacePath,
+        parentPath: operation.destinationParentPath,
+        toolName: "apply_patch",
+        requestedPath: operation.movePath,
+      });
+    try {
+      const destinationCreateTarget = {
+        workspacePath: operation.workspacePath,
+        parentPath: operation.destinationParentPath,
+        targetPath: operation.destinationTargetPath,
+        path: operation.movePath,
+      };
+      const realDestinationPath = validateCreateTargetAfterMkdir(
         destinationCreateTarget,
         options.projectInstructions,
       );
-    };
-    const validateOpenedTempAtAccess = (tempPath: string, fd: number): void => {
-      assertWorkspaceOpenTargetAtAccess({
-        fd,
-        workspacePath: operation.workspacePath,
-        targetPath: tempPath,
-        toolName: "apply_patch",
-        requestedPath: operation.movePath,
-      });
-    };
-    let publishedDestinationPath = realDestinationPath;
-    const validatePublishedDestinationAtAccess = (
-      publishedPath: string,
-      identity: FileIdentity,
-    ): void => {
-      const accessTargetPath = assertWorkspaceFileIdentityAtAccess({
-        identity,
-        workspacePath: operation.workspacePath,
-        targetPath: publishedPath,
-        toolName: "apply_patch",
-        requestedPath: operation.movePath,
-      });
-      if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
-        throw new KeelError(
-          "tool_path_ignored",
-          `apply_patch failed: ignored path: ${operation.movePath}`,
-          "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+      const validateDestinationAtAccess = (): void => {
+        validateCreateTargetAfterMkdir(
+          destinationCreateTarget,
+          options.projectInstructions,
         );
-      }
-      options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
-      publishedDestinationPath = accessTargetPath;
-    };
-    let result: AtomicWriteResult;
-    try {
-      result = createTextFileAtomically(
-        realDestinationPath,
-        operation.afterContent,
-        {
-          mode: operation.mode,
-          beforeAccess: validateDestinationAtAccess,
-          beforeWrite: validateOpenedTempAtAccess,
-          beforePublish: validateDestinationAtAccess,
-          afterPublish: validatePublishedDestinationAtAccess,
-          cleanupPathsByIdentity: (identity) =>
-            findWorkspacePathsByIdentity(operation.workspacePath, identity),
-        },
-      );
-    } catch (error) {
-      /* v8 ignore next 7: EEXIST requires a concurrent create after prevalidation. */
-      if (isErrnoException(error) && error.code === "EEXIST") {
-        throw new KeelError(
-          "tool_file_exists",
-          `apply_patch failed: file already exists: ${operation.movePath}`,
-          "Read the existing file and use an Update File hunk instead of moving over it.",
-        );
-      }
-      /* v8 ignore next 1: unknown atomic create errors are rethrown unchanged. */
-      throw error;
-    }
-
-    try {
-      const accessTargetPath = assertWorkspaceTargetAtAccess({
-        workspacePath: operation.workspacePath,
-        targetPath: operation.targetPath,
-        toolName: "apply_patch",
-        requestedPath: operation.path,
-      });
-      if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
-        throw new KeelError(
-          "tool_path_ignored",
-          `apply_patch failed: ignored path: ${operation.path}`,
-          "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
-        );
-      }
-      options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
-      if (!pathHasIdentity(accessTargetPath, operation.targetIdentity)) {
-        throw changedTargetError(operation);
-      }
-      rmSync(accessTargetPath);
-      return {
-        ...operation,
-        targetPath: accessTargetPath,
-        destinationTargetPath: publishedDestinationPath,
-        destinationIdentity: result.identity,
       };
-    } catch (error) {
-      if (
-        pathHasIdentity(publishedDestinationPath, result.identity) &&
-        readFileIfPossible(publishedDestinationPath) === operation.afterContent
-      ) {
-        rmSync(publishedDestinationPath, { force: true });
+      const validateOpenedTempAtAccess = (
+        tempPath: string,
+        fd: number,
+      ): void => {
+        assertWorkspaceOpenTargetAtAccess({
+          fd,
+          workspacePath: operation.workspacePath,
+          targetPath: tempPath,
+          toolName: "apply_patch",
+          requestedPath: operation.movePath,
+        });
+      };
+      let publishedDestinationPath = realDestinationPath;
+      const validatePublishedDestinationAtAccess = (
+        publishedPath: string,
+        identity: FileIdentity,
+      ): void => {
+        const accessTargetPath = assertWorkspaceFileIdentityAtAccess({
+          identity,
+          workspacePath: operation.workspacePath,
+          targetPath: publishedPath,
+          toolName: "apply_patch",
+          requestedPath: operation.movePath,
+        });
+        if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+          throw new KeelError(
+            "tool_path_ignored",
+            `apply_patch failed: ignored path: ${operation.movePath}`,
+            "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+          );
+        }
+        options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
+        publishedDestinationPath = accessTargetPath;
+      };
+      let result: AtomicWriteResult;
+      try {
+        result = createTextFileAtomically(
+          realDestinationPath,
+          operation.afterContent,
+          {
+            mode: operation.mode,
+            beforeAccess: validateDestinationAtAccess,
+            beforeWrite: validateOpenedTempAtAccess,
+            beforePublish: validateDestinationAtAccess,
+            afterPublish: validatePublishedDestinationAtAccess,
+            cleanupPathsByIdentity: (identity) =>
+              findWorkspacePathsByIdentity(operation.workspacePath, identity),
+          },
+        );
+      } catch (error) {
+        /* v8 ignore next 7: EEXIST requires a concurrent create after prevalidation. */
+        if (isErrnoException(error) && error.code === "EEXIST") {
+          throw new KeelError(
+            "tool_file_exists",
+            `apply_patch failed: file already exists: ${operation.movePath}`,
+            "Read the existing file and use an Update File hunk instead of moving over it.",
+          );
+        }
+        /* v8 ignore next 1: unknown atomic create errors are rethrown unchanged. */
+        throw error;
       }
+
+      try {
+        const accessTargetPath = assertWorkspaceTargetAtAccess({
+          workspacePath: operation.workspacePath,
+          targetPath: operation.targetPath,
+          toolName: "apply_patch",
+          requestedPath: operation.path,
+        });
+        if (projectIgnorePolicy.isIgnored(accessTargetPath, false)) {
+          throw new KeelError(
+            "tool_path_ignored",
+            `apply_patch failed: ignored path: ${operation.path}`,
+            "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+          );
+        }
+        options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
+        if (!pathHasIdentity(accessTargetPath, operation.targetIdentity)) {
+          throw changedTargetError(operation);
+        }
+        rmSync(accessTargetPath);
+        return {
+          ...operation,
+          targetPath: accessTargetPath,
+          destinationTargetPath: publishedDestinationPath,
+          destinationIdentity: result.identity,
+          createdDestinationParentDirectories,
+        };
+      } catch (error) {
+        if (
+          pathHasIdentity(publishedDestinationPath, result.identity) &&
+          readFileIfPossible(publishedDestinationPath) ===
+            operation.afterContent
+        ) {
+          rmSync(publishedDestinationPath, { force: true });
+        }
+        throw error;
+      }
+    } catch (error) {
+      rollbackWorkspaceParentDirectoriesBestEffort(
+        createdDestinationParentDirectories,
+      );
       throw error;
     }
   }
