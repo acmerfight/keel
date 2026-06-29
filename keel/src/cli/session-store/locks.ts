@@ -37,7 +37,8 @@ const sessionLockOwnerSchema = z.union([
   identifiedSessionLockOwnerSchema,
   legacySessionLockOwnerSchema,
 ]);
-const processStartTimeOutputSchema = z.string().min(1);
+const linuxProcProcessStartTimeSchema = z.string().regex(/^\d+$/);
+const psProcessStartTimeOutputSchema = z.string().min(1);
 const PROCESS_IDENTITY_ENV = {
   ...process.env,
   LC_ALL: "C",
@@ -107,7 +108,38 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-function readProcessStartTime(pid: number): ProcessStartTimeRead {
+function parseLinuxProcStatStartTime(stat: string): string | null {
+  const commEnd = stat.lastIndexOf(")");
+  if (commEnd === -1) {
+    return null;
+  }
+
+  const fieldsAfterComm = stat
+    .slice(commEnd + 1)
+    .trim()
+    .split(/\s+/);
+  const parsed = linuxProcProcessStartTimeSchema.safeParse(fieldsAfterComm[19]);
+  return parsed.success ? parsed.data : null;
+}
+
+function readLinuxProcProcessStartTime(pid: number): ProcessStartTimeRead {
+  try {
+    const processStartTime = parseLinuxProcStatStartTime(
+      readFileSync(`/proc/${pid}/stat`, "utf8"),
+    );
+    if (processStartTime !== null) {
+      return { status: "found", processStartTime };
+    }
+  } catch {
+    return processIsAlive(pid)
+      ? { status: "unknown" }
+      : { status: "not_found" };
+  }
+
+  return processIsAlive(pid) ? { status: "unknown" } : { status: "not_found" };
+}
+
+function readDarwinPsProcessStartTime(pid: number): ProcessStartTimeRead {
   let output: string;
   try {
     output = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
@@ -121,9 +153,19 @@ function readProcessStartTime(pid: number): ProcessStartTimeRead {
       : { status: "not_found" };
   }
 
-  const parsed = processStartTimeOutputSchema.safeParse(output.trim());
+  const parsed = psProcessStartTimeOutputSchema.safeParse(output.trim());
   if (parsed.success) {
     return { status: "found", processStartTime: parsed.data };
+  }
+  return processIsAlive(pid) ? { status: "unknown" } : { status: "not_found" };
+}
+
+function readProcessStartTime(pid: number): ProcessStartTimeRead {
+  if (process.platform === "linux") {
+    return readLinuxProcProcessStartTime(pid);
+  }
+  if (process.platform === "darwin") {
+    return readDarwinPsProcessStartTime(pid);
   }
   return processIsAlive(pid) ? { status: "unknown" } : { status: "not_found" };
 }
