@@ -250,7 +250,10 @@ function* parseSseLine<Chunk extends OpenAICompatibleChunk>(
 
     if (choice.finish_reason) {
       state.finishReason = choice.finish_reason;
-      if (choice.finish_reason === "tool_calls") {
+      if (
+        choice.finish_reason === "tool_calls" ||
+        (choice.finish_reason === "stop" && state.toolCalls.size > 0)
+      ) {
         completePendingToolCall(state, config.providerName);
       }
     }
