@@ -1,12 +1,22 @@
-import { readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { withGitWorkspace as withHarnessGitWorkspace } from "../../src/testing/cli-harness.ts";
 
 interface FsOverrides {
+  readonly fchmodSync?: typeof import("node:fs").fchmodSync;
+  readonly openSync?: typeof import("node:fs").openSync;
   readonly realpathSync?: (
     path: Parameters<typeof import("node:fs").realpathSync>[0],
   ) => string;
+  readonly rmSync?: typeof import("node:fs").rmSync;
   readonly writeFileSync?: typeof import("node:fs").writeFileSync;
 }
 
@@ -181,13 +191,13 @@ describe("Git Checkpoint Race Handling", () => {
       let racedRestore = false;
       const { recordLastDeleteCheckpoint, restoreLastEditCheckpoint } =
         await importGitWithFs({
-          writeFileSync: (path, data, options) => {
+          openSync: (path, flags, mode) => {
             if (!racedRestore && String(path) === deletedRealPath) {
               racedRestore = true;
               actualFs.writeFileSync(path, "user recreated\n", "utf8");
               throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
             }
-            return actualFs.writeFileSync(path, data, options);
+            return actualFs.openSync(path, flags, mode);
           },
         });
       recordLastDeleteCheckpoint({
@@ -229,13 +239,13 @@ describe("Git Checkpoint Race Handling", () => {
       let racedRestore = false;
       const { recordLastBatchCheckpoint, restoreLastEditCheckpoint } =
         await importGitWithFs({
-          writeFileSync: (path, data, options) => {
+          openSync: (path, flags, mode) => {
             if (!racedRestore && String(path) === deletedRealPath) {
               racedRestore = true;
               actualFs.writeFileSync(path, "user recreated\n", "utf8");
               throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
             }
-            return actualFs.writeFileSync(path, data, options);
+            return actualFs.openSync(path, flags, mode);
           },
         });
       recordLastBatchCheckpoint({
@@ -265,6 +275,206 @@ describe("Git Checkpoint Race Handling", () => {
       });
       expect(await readFile(filePath, "utf8")).toBe("user recreated\n");
       expect(racedRestore).toBe(true);
+    });
+  });
+
+  test(`Given a batch edit restore write fails after earlier create and delete restores,
+    When restoring the batch checkpoint,
+    Then undo rolls every restored file back and preserves the checkpoint`, async () => {
+    await withGitWorkspace(async (workspace) => {
+      // Given
+      const firstPath = join(workspace, "first.txt");
+      const createdPath = join(workspace, "created.txt");
+      const deletedPath = join(workspace, "obsolete.txt");
+      await writeFile(firstPath, "first new\n", "utf8");
+      await writeFile(createdPath, "created\n", "utf8");
+      await writeFile(deletedPath, "obsolete old\n", "utf8");
+      if (process.platform !== "win32") {
+        await chmod(createdPath, 0o600);
+      }
+      const firstRealPath = await realpath(firstPath);
+      const createdRealPath = await realpath(createdPath);
+      const deletedRealPath = await realpath(deletedPath);
+      await rm(deletedPath);
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const { recordLastBatchCheckpoint, restoreLastEditCheckpoint } =
+        await importGitWithFs({
+          writeFileSync: (path, data, options) => {
+            if (
+              String(path) === firstRealPath &&
+              String(data) === "first old\n"
+            ) {
+              actualFs.writeFileSync(path, "first partial\n", options);
+              throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+            }
+            return actualFs.writeFileSync(path, data, options);
+          },
+        });
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath: firstRealPath,
+            beforeContent: "first old\n",
+            afterContent: "first new\n",
+          },
+          {
+            operation: "delete",
+            filePath: deletedRealPath,
+            beforeContent: "obsolete old\n",
+            mode: 0o644,
+          },
+          {
+            operation: "create",
+            filePath: createdRealPath,
+            afterContent: "created\n",
+          },
+        ],
+      });
+
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+      const secondResult = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toEqual({
+        status: "blocked",
+        filePath: "first.txt",
+        message: "Cannot undo first.txt: Could not restore file.",
+      });
+      expect(secondResult).toEqual({
+        status: "blocked",
+        filePath: "first.txt",
+        message: "Cannot undo first.txt: Could not restore file.",
+      });
+      expect(await readFile(firstPath, "utf8")).toBe("first new\n");
+      expect(await readFile(createdPath, "utf8")).toBe("created\n");
+      if (process.platform !== "win32") {
+        expect((await stat(createdPath)).mode & 0o777).toBe(0o600);
+      }
+      await expect(readFile(deletedPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
+  test(`Given a batch create restore removal fails after an earlier file was restored,
+    When restoring the batch checkpoint,
+    Then undo rolls the earlier file back and preserves the checkpoint`, async () => {
+    await withGitWorkspace(async (workspace) => {
+      // Given
+      const editedPath = join(workspace, "edited.txt");
+      const createdPath = join(workspace, "created.txt");
+      await writeFile(editedPath, "edited new\n", "utf8");
+      await writeFile(createdPath, "created\n", "utf8");
+      const editedRealPath = await realpath(editedPath);
+      const createdRealPath = await realpath(createdPath);
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const { recordLastBatchCheckpoint, restoreLastEditCheckpoint } =
+        await importGitWithFs({
+          rmSync: (path, options) => {
+            if (String(path) === createdRealPath) {
+              throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+            }
+            return actualFs.rmSync(path, options);
+          },
+        });
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "create",
+            filePath: createdRealPath,
+            afterContent: "created\n",
+          },
+          {
+            operation: "edit",
+            filePath: editedRealPath,
+            beforeContent: "edited old\n",
+            afterContent: "edited new\n",
+          },
+        ],
+      });
+
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+      const secondResult = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toEqual({
+        status: "blocked",
+        filePath: "created.txt",
+        message: "Cannot undo created.txt: Could not restore file.",
+      });
+      expect(secondResult).toEqual({
+        status: "blocked",
+        filePath: "created.txt",
+        message: "Cannot undo created.txt: Could not restore file.",
+      });
+      expect(await readFile(editedPath, "utf8")).toBe("edited new\n");
+      expect(await readFile(createdPath, "utf8")).toBe("created\n");
+    });
+  });
+
+  test(`Given a batch delete restore fails after creating the current file,
+    When restoring the batch checkpoint,
+    Then undo removes the current file, rolls earlier files back, and preserves the checkpoint`, async () => {
+    await withGitWorkspace(async (workspace) => {
+      // Given
+      const editedPath = join(workspace, "edited.txt");
+      const deletedPath = join(workspace, "obsolete.txt");
+      await writeFile(editedPath, "edited new\n", "utf8");
+      await writeFile(deletedPath, "obsolete old\n", "utf8");
+      const editedRealPath = await realpath(editedPath);
+      const deletedRealPath = await realpath(deletedPath);
+      await rm(deletedPath);
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const { recordLastBatchCheckpoint, restoreLastEditCheckpoint } =
+        await importGitWithFs({
+          fchmodSync: (_fd, _mode) => {
+            throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+          },
+        });
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "delete",
+            filePath: deletedRealPath,
+            beforeContent: "obsolete old\n",
+            mode: 0o644,
+          },
+          {
+            operation: "edit",
+            filePath: editedRealPath,
+            beforeContent: "edited old\n",
+            afterContent: "edited new\n",
+          },
+        ],
+      });
+
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+      const secondResult = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "blocked",
+        filePath: "obsolete.txt",
+      });
+      expect(secondResult).toMatchObject({
+        status: "blocked",
+        filePath: "obsolete.txt",
+      });
+      await expect(readFile(deletedPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await readFile(editedPath, "utf8")).toBe("edited new\n");
+      expect(() => actualFs.accessSync(deletedRealPath)).toThrow();
     });
   });
 });

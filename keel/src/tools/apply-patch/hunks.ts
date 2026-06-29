@@ -120,6 +120,15 @@ function originalSpan(
   return { index, length: end - index };
 }
 
+function isLineBoundarySpan(content: string, span: EditMatchSpan): boolean {
+  const start = span.index;
+  const end = span.index + span.length;
+  return (
+    (start === 0 || content[start - 1] === "\n") &&
+    (end === content.length || content[end] === "\n")
+  );
+}
+
 export function withUtf8Bom(content: string, hasUtf8Bom: boolean): string {
   return hasUtf8Bom ? `\uFEFF${content}` : content;
 }
@@ -139,8 +148,17 @@ export function applyUpdateHunks(
   for (const hunk of hunks) {
     const oldText = normalizeLineEndings(hunk.oldLines.join("\n"));
     const newText = hunk.newLines.join("\n");
+    if (oldText === "") {
+      throw patchError(
+        "tool_invalid_patch",
+        `apply_patch failed: update hunk for ${filePath} has no locatable old text`,
+        "Include at least one non-empty context or removed line so the patch can locate the target text.",
+      );
+    }
     const normalized = normalizeWithSourceMap(updated);
-    const matchResult = locateUniqueEditSpan(normalized.text, oldText);
+    const matchResult = locateUniqueEditSpan(normalized.text, oldText, {
+      includeSpan: (span) => isLineBoundarySpan(normalized.text, span),
+    });
     if (matchResult.status === "not_found") {
       throw patchError(
         "tool_patch_hunk_not_found",
