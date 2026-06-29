@@ -2,6 +2,7 @@ import { readdirSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { KeelError } from "../core/error.ts";
 import { hasIgnoredPathSegment } from "./file-search.ts";
+import { limitCountedOutput } from "./output-limit.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
 import { isInsideWorkspace, resolveWorkspaceTarget } from "./workspace-path.ts";
@@ -42,15 +43,15 @@ function formatLsOutput(
     return { content: "(empty directory)" };
   }
 
-  const visibleEntries = entries.slice(0, limit);
-  const lines = visibleEntries.map(formatLsEntry);
-  if (entries.length > visibleEntries.length) {
+  const limitedEntries = limitCountedOutput(entries, limit);
+  const lines = limitedEntries.items.map(formatLsEntry);
+  if (limitedEntries.truncated) {
     const guidance =
       limit >= MAX_LS_LIMIT
         ? "Narrow the path to see more."
         : "Narrow the path or increase limit to see more.";
     lines.push(
-      `[ls output truncated: showing first ${visibleEntries.length} entries. ${guidance}]`,
+      `[ls output truncated: showing first ${limitedEntries.items.length} entries. ${guidance}]`,
     );
   }
   return { content: lines.join("\n") };

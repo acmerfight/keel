@@ -9,6 +9,7 @@ import {
   normalizeRipgrepPath,
   workspaceRootIgnoreArgsForTarget,
 } from "./file-search.ts";
+import { CountOutputLimit } from "./output-limit.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import { runRipgrepProcess } from "./ripgrep-process.ts";
 import type { ToolResult } from "./types.ts";
@@ -198,11 +199,10 @@ async function runRipgrep(
   signal?: AbortSignal,
   timeoutMs: number = DEFAULT_RIPGREP_TIMEOUT_MS,
 ): Promise<GrepToolResult> {
-  let killedForLimit = false;
-  const matches: {
+  const matches = new CountOutputLimit<{
     readonly output: string;
     readonly targetPath?: string;
-  }[] = [];
+  }>(MAX_GREP_MATCHES);
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
 
   const result = await runRipgrepProcess({
@@ -226,35 +226,31 @@ async function runRipgrep(
       if (matchTargetPath === null && match.pathEncoding === "text") return;
 
       const matchPath = normalizeRipgrepPath(workspacePath, match.path);
-      if (matches.length === MAX_GREP_MATCHES) {
-        killedForLimit = true;
-        stopRipgrep();
-        return;
-      }
-
-      matches.push({
+      const appended = matches.append({
         output: `${matchPath}:${match.lineNumber}:${truncateLineForDisplay(match.line)}`,
         ...(matchTargetPath !== null ? { targetPath: matchTargetPath } : {}),
       });
+      if (!appended) stopRipgrep();
     },
   });
 
-  if (killedForLimit) {
-    return formatGrepResult(pattern, matches, {
+  const limitedMatches = matches.capture();
+  if (limitedMatches.truncated) {
+    return formatGrepResult(pattern, limitedMatches.items, {
       truncated: true,
       partial: false,
     });
   }
 
   if (result.code === 0 || result.code === 1) {
-    return formatGrepResult(pattern, matches, {
+    return formatGrepResult(pattern, limitedMatches.items, {
       truncated: false,
       partial: false,
     });
   }
 
   if (result.code === 2 && result.stderr.trim() === "") {
-    return formatGrepResult(pattern, matches, {
+    return formatGrepResult(pattern, limitedMatches.items, {
       truncated: false,
       partial: true,
     });
