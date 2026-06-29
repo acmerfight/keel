@@ -10,7 +10,7 @@ const PRIVATE_KEY_BLOCK_PATTERN =
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gu;
 const ENV_SECRET_ASSIGNMENT_PATTERN =
   /(^|[\r\n])([A-Z0-9_]*(?:SECRET|TOKEN|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|PASSWORD)[A-Z0-9_]*\s*=\s*)([^\r\n#]+)/giu;
-const BEARER_TOKEN_PATTERN = /\bBearer\s+[-._~+/=A-Za-z0-9]+/gu;
+const BEARER_TOKEN_PATTERN = /\bBearer[ \t]+[-._~+/=A-Za-z0-9]+/gu;
 const OPENAI_STYLE_KEY_PATTERN = /\bsk-[A-Za-z0-9][A-Za-z0-9_-]{3,}\b/gu;
 const GITHUB_TOKEN_PATTERN =
   /\b(?:gh[opusr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}_[A-Za-z0-9_]{20,})\b/gu;

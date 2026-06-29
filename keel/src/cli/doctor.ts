@@ -11,6 +11,7 @@ import {
   type ProviderConfigDiagnostic,
   type ProviderConfigRuntime,
   type ProviderSelection,
+  validateProviderBaseUrl,
 } from "./provider-config.ts";
 
 export interface DoctorResult {
@@ -76,7 +77,10 @@ type ProviderModelsUrlResult =
   | { readonly status: "ok"; readonly url: URL }
   | {
       readonly status: "failed";
-      readonly message: "base URL must not include credentials, query, or fragment";
+      readonly message:
+        | "invalid base URL"
+        | "base URL must use http or https"
+        | "base URL must not include credentials, query, or fragment";
     };
 
 function ripgrepVersionError(error: Error, stderr: string): KeelError {
@@ -136,18 +140,11 @@ export async function readBundledRipgrepDiagnostic(): Promise<RipgrepDoctorDiagn
 }
 
 function providerModelsUrl(baseUrl: string): ProviderModelsUrlResult {
-  const url = new URL(baseUrl);
-  if (
-    url.username !== "" ||
-    url.password !== "" ||
-    url.search !== "" ||
-    url.hash !== ""
-  ) {
-    return {
-      status: "failed",
-      message: "base URL must not include credentials, query, or fragment",
-    };
+  const validation = validateProviderBaseUrl(baseUrl);
+  if (validation.status === "invalid") {
+    return { status: "failed", message: validation.message };
   }
+  const url = validation.url;
   const basePath = url.pathname.endsWith("/")
     ? url.pathname.slice(0, -1)
     : url.pathname;
@@ -162,16 +159,11 @@ function responseStatusMessage(response: Response): string {
 export async function readProviderModelsDiagnostic(
   request: ProviderOnlineDiagnosticRequest,
 ): Promise<ProviderAuthDiagnostic> {
-  let url: URL;
-  try {
-    const result = providerModelsUrl(request.baseUrl);
-    if (result.status === "failed") {
-      return { status: "failed", message: result.message };
-    }
-    url = result.url;
-  } catch {
-    return { status: "failed", message: "invalid base URL" };
+  const result = providerModelsUrl(request.baseUrl);
+  if (result.status === "failed") {
+    return { status: "failed", message: result.message };
   }
+  const url = result.url;
 
   let response: Response;
   try {
@@ -316,10 +308,6 @@ async function readProviderAuthDiagnostic(
   options: DoctorOptions,
   diagnostic: ProviderConfigDiagnostic,
 ): Promise<ProviderAuthDiagnostic> {
-  if (options.onlineMode === "offline") {
-    return { status: "skipped", reason: "--offline" };
-  }
-
   if (diagnostic.apiKey.status === "missing") {
     return { status: "skipped", reason: "missing API key" };
   }
@@ -329,6 +317,10 @@ async function readProviderAuthDiagnostic(
       status: "skipped",
       reason: "local provider diagnostics failed",
     };
+  }
+
+  if (options.onlineMode === "offline") {
+    return { status: "skipped", reason: "--offline" };
   }
 
   if (

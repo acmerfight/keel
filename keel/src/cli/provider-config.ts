@@ -5,6 +5,7 @@ export {
   inspectProviderConfig,
   type ModelMetadataDiagnostic,
   type ProviderConfigDiagnostic,
+  validateProviderBaseUrl,
 } from "./provider-diagnostics.ts";
 export {
   type ResolvedProvider,

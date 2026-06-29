@@ -68,7 +68,7 @@ describe("CLI Main - Doctor Command", () => {
 
   test(`Given Qwen diagnostics use equals flags with an unparseable base URL,
     When the CLI main dispatches the doctor command,
-    Then it redacts the base URL value while preserving the source`, async () => {
+    Then it rejects the local provider config while preserving the source`, async () => {
     // Given
     const fixture = createRuntime(
       ["--doctor", "--offline", "--provider=qwen", "--model=qwen3.7-plus"],
@@ -84,14 +84,73 @@ describe("CLI Main - Doctor Command", () => {
     const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(exitCode).toBe(0);
+    expect(exitCode).toBe(1);
     expect(fixture.stdout()).toContain("provider: qwen (source: --provider)");
     expect(fixture.stdout()).toContain("model: qwen3.7-plus (source: --model)");
     expect(fixture.stdout()).toContain(
       "base url: <unparseable URL> (source: QWEN_BASE_URL)",
     );
-    expect(fixture.stdout()).toContain("provider auth: skipped (--offline)");
+    expect(fixture.stdout()).toContain("error: invalid base URL");
+    expect(fixture.stdout()).toContain(
+      "provider auth: skipped (local provider diagnostics failed)",
+    );
     expect(fixture.stdout()).not.toContain("secret-token");
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given diagnostics use a base URL with an unsupported scheme,
+    When the CLI main dispatches the offline doctor command,
+    Then it rejects the local provider config before reporting readiness`, async () => {
+    // Given
+    const fixture = createRuntime(
+      ["--doctor", "--offline", "--provider=deepseek"],
+      {
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: "ftp://example.test/v1",
+        },
+      },
+    );
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toContain(
+      "base url: ftp://example.test/v1 (source: DEEPSEEK_BASE_URL)",
+    );
+    expect(fixture.stdout()).toContain(
+      "error: base URL must use http or https",
+    );
+    expect(fixture.stdout()).toContain(
+      "provider auth: skipped (local provider diagnostics failed)",
+    );
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given offline diagnostics are missing a provider API key,
+    When the CLI main dispatches the doctor command,
+    Then it reports the missing key as the auth skip reason`, async () => {
+    // Given
+    const fixture = createRuntime(["--doctor", "--offline"], {
+      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toContain(
+      "provider: deepseek (source: KEEL_PROVIDER)",
+    );
+    expect(fixture.stdout()).toContain(
+      "api key: missing (expected DEEPSEEK_API_KEY)",
+    );
+    expect(fixture.stdout()).toContain(
+      "provider auth: skipped (missing API key)",
+    );
     expect(fixture.stderr()).toBe("");
   });
 

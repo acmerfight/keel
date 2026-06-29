@@ -28,6 +28,22 @@ interface ProviderDiagnosticIssue {
   readonly message: string;
 }
 
+type BaseUrlValidationMessage =
+  | "invalid base URL"
+  | "base URL must use http or https"
+  | "base URL must not include credentials, query, or fragment";
+const PROVIDER_BASE_URL_PROTOCOLS: ReadonlySet<string> = new Set([
+  "http:",
+  "https:",
+]);
+
+export type ProviderBaseUrlValidation =
+  | { readonly status: "valid"; readonly url: URL }
+  | {
+      readonly status: "invalid";
+      readonly message: BaseUrlValidationMessage;
+    };
+
 export type ApiKeyDiagnostic =
   | {
       readonly status: "not-required";
@@ -50,6 +66,35 @@ export type BaseUrlDiagnostic =
       readonly value: string;
       readonly source: BaseUrlSource;
     };
+
+export function validateProviderBaseUrl(
+  value: string,
+): ProviderBaseUrlValidation {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return { status: "invalid", message: "invalid base URL" };
+  }
+
+  if (!PROVIDER_BASE_URL_PROTOCOLS.has(url.protocol)) {
+    return { status: "invalid", message: "base URL must use http or https" };
+  }
+
+  if (
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    return {
+      status: "invalid",
+      message: "base URL must not include credentials, query, or fragment",
+    };
+  }
+
+  return { status: "valid", url };
+}
 
 export type ContextWindowDiagnostic =
   | { readonly status: "disabled" }
@@ -201,6 +246,7 @@ export function inspectProviderConfig(
   const selected = selectedModelFromProfile(runtime, selection, profile);
   const apiKey = inspectApiKey(runtime, profile);
   const metadata = modelMetadata(provider.providerId, selected.model);
+  const baseUrl = inspectBaseUrl(runtime, profile);
   const contextWindow = inspectContextWindow(runtime, metadata);
   const costModel =
     modelCostModel(provider.providerId, selected.model) === null
@@ -213,6 +259,16 @@ export function inspectProviderConfig(
       severity: "error",
       message: `missing API key: expected ${apiKeyLabel(apiKey)}`,
     });
+  }
+
+  if (baseUrl.status === "configured") {
+    const validation = validateProviderBaseUrl(baseUrl.value);
+    if (validation.status === "invalid") {
+      issues.push({
+        severity: "error",
+        message: validation.message,
+      });
+    }
   }
 
   if (contextWindow.status === "invalid") {
@@ -242,7 +298,7 @@ export function inspectProviderConfig(
     model: selected.model,
     modelSource: selected.source,
     apiKey,
-    baseUrl: inspectBaseUrl(runtime, profile),
+    baseUrl,
     contextWindow,
     modelMetadata: inspectModelMetadata(metadata),
     costModel,
