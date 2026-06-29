@@ -148,13 +148,6 @@ export function applyUpdateHunks(
   for (const hunk of hunks) {
     const oldText = normalizeLineEndings(hunk.oldLines.join("\n"));
     const newText = hunk.newLines.join("\n");
-    if (oldText === "") {
-      throw patchError(
-        "tool_invalid_patch",
-        `apply_patch failed: update hunk for ${filePath} has no locatable old text`,
-        "Include at least one non-empty context or removed line so the patch can locate the target text.",
-      );
-    }
     const normalized = normalizeWithSourceMap(updated);
     const matchResult = locateUniqueEditSpan(normalized.text, oldText, {
       includeSpan: (span) => isLineBoundarySpan(normalized.text, span),

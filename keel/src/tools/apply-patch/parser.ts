@@ -115,11 +115,11 @@ function parseUpdateHunk(
     index++;
   }
 
-  if (oldLines.length === 0) {
+  if (oldLines.length === 0 || oldLines.every((line) => line === "")) {
     throw patchError(
       "tool_invalid_patch",
-      `apply_patch failed: update hunk for ${path} has no old lines`,
-      "Include context or removed lines so the patch can locate the target text.",
+      `apply_patch failed: update hunk for ${path} has no effective old lines`,
+      "Include at least one non-empty context or removed line so the patch can locate the target text.",
     );
   }
 
