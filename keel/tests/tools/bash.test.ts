@@ -89,6 +89,29 @@ describe("Bash Tool", () => {
     }
   });
 
+  test(`Given a workspace command writes a large foreground output burst,
+    When the bash tool resolves after process exit,
+    Then it drains the foreground tail before returning`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+
+    try {
+      // When
+      const result = await executeBash(
+        workspace,
+        `node -e "process.stdout.write('x'.repeat(1000000)); console.log('end')"`,
+      );
+
+      // Then
+      expect(result.content).toContain(
+        "[bash stdout truncated: showing last 20000 bytes]",
+      );
+      expect(result.content).toContain("end\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a workspace command produces exactly the output budget,
     When the bash tool captures the result,
     Then it returns the full output without a truncation notice`, async () => {
@@ -151,6 +174,31 @@ describe("Bash Tool", () => {
 
       // Then
       expect(result.content).toContain("Command timed out after 50ms");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a workspace command backgrounds a child with inherited output,
+    When the foreground shell exits before the timeout,
+    Then the bash tool reports completion without a false timeout`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const startedAt = Date.now();
+
+    try {
+      // When
+      const result = await executeBash(
+        workspace,
+        "echo hi; (sleep 1) & echo done",
+        { timeoutMs: 100 },
+      );
+
+      // Then
+      expect(Date.now() - startedAt).toBeLessThan(800);
+      expect(result.content).not.toContain("Command timed out");
+      expect(result.content).toContain("Exit code: 0");
+      expect(result.content).toContain("stdout:\nhi\ndone\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
