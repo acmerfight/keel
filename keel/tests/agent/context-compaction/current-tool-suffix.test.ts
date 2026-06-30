@@ -10,10 +10,13 @@ import {
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
 
+const CURRENT_TOOL_OUTPUT_MARKER =
+  "[current tool output compacted after context overflow:";
+
 describe("Context Compaction Current Tool Suffix", () => {
   test(`Given retained recent context contains an unconsumed large tool output before a steering user,
     When overflow recovery compacts the conversation,
-    Then the retry keeps the current tool output intact`, async () => {
+    Then the retry keeps the current tool linkage and compacts the current tool output`, async () => {
     // Given
     const currentToolOutput = [
       "CURRENT_LOG_START",
@@ -71,16 +74,19 @@ describe("Context Compaction Current Tool Suffix", () => {
               message.role === "tool" &&
               message.toolCallId === "read_current_log",
           )?.content ?? "";
-        if (!retainedToolOutput.includes("CURRENT_LOG_END")) {
+        if (
+          !retainedToolOutput.includes(CURRENT_TOOL_OUTPUT_MARKER) ||
+          retainedToolOutput.includes("CURRENT_LOG_END")
+        ) {
           throw new KeelError(
             "provider_context_overflow",
-            "Retry lost the unconsumed current tool output",
+            "Retry did not compact the unconsumed current tool output",
           );
         }
 
         yield {
           type: "text",
-          text: "Continued with the current tool output intact.",
+          text: "Continued with the compacted current tool output.",
         };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
@@ -116,20 +122,22 @@ describe("Context Compaction Current Tool Suffix", () => {
     expect(retainedTool).toEqual({
       role: "tool",
       toolCallId: "read_current_log",
-      content: currentToolOutput,
+      content: expect.stringContaining(CURRENT_TOOL_OUTPUT_MARKER),
     });
+    expect(retainedTool?.content).not.toBe(currentToolOutput);
+    expect(retainedTool?.content).not.toContain("CURRENT_LOG_END");
     expect(retainedTool?.content).not.toContain(
       "[stale tool output compacted:",
     );
     expect(events).toContainEqual({
       type: "text",
-      text: "Continued with the current tool output intact.",
+      text: "Continued with the compacted current tool output.",
     });
   });
 
-  test(`Given split-turn compaction cannot safely shrink an unconsumed tool result,
-    When the provider still rejects the retry for context overflow,
-    Then the unconsumed tool result stays intact and the overflow is surfaced`, async () => {
+  test(`Given split-turn compaction would keep an oversized unconsumed tool result,
+    When overflow recovery retries after summarizing older context,
+    Then the unconsumed tool result is compacted before the retry`, async () => {
     // Given
     const currentToolOutput = [
       "UNCONSUMED_LOG_START",
@@ -192,34 +200,48 @@ describe("Context Compaction Current Tool Suffix", () => {
         }
 
         retriedMessages = [...options.messages];
-        throw new KeelError(
-          "provider_context_overflow",
-          "Unconsumed tool output remains too large",
-        );
+        const retriedToolOutput =
+          retriedMessages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.toolCallId === "read_unconsumed_log",
+          )?.content ?? "";
+        if (
+          !retriedToolOutput.includes(CURRENT_TOOL_OUTPUT_MARKER) ||
+          retriedToolOutput.includes("UNCONSUMED_LOG_END")
+        ) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Retry did not compact the unconsumed tool output",
+          );
+        }
+
+        yield {
+          type: "text",
+          text: "Continued after compacting the unconsumed tool output.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
 
-    // When / Then
-    await expect(
-      collect(
-        runAgentTurn({
-          workspace: workspace(),
-          provider,
-          messages,
-          systemPrompt: "You are helpful.",
-          signal: freshSignal(),
-          allowBash: false,
-          stopPolicy: defaultStopPolicy(),
-          contextCompaction: {
-            keepRecentTokens: 20,
-            toolOutputMaxChars: 128,
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({
-      name: "KeelError",
-      code: "provider_context_overflow",
-    });
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 20,
+          toolOutputMaxChars: 128,
+        },
+      }),
+    );
+
+    // Then
     expect(mainRequests).toBe(2);
     expect(summaryPrompt).toContain("Older recent note can be summarized.");
     expect(summaryPrompt).not.toContain("Read the current log.");
@@ -244,17 +266,27 @@ describe("Context Compaction Current Tool Suffix", () => {
     expect(retriedMessages[toolResultIndex]).toEqual({
       role: "tool",
       toolCallId: "read_unconsumed_log",
-      content: currentToolOutput,
+      content: expect.stringContaining(CURRENT_TOOL_OUTPUT_MARKER),
     });
+    expect(retriedMessages[toolResultIndex]?.content).not.toBe(
+      currentToolOutput,
+    );
+    expect(retriedMessages[toolResultIndex]?.content).not.toContain(
+      "UNCONSUMED_LOG_END",
+    );
     expect(retriedMessages).toContainEqual({
       role: "user",
       content: "Latest instruction: answer only after using that log.",
+    });
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued after compacting the unconsumed tool output.",
     });
   });
 
   test(`Given an unconsumed tool result is followed by multiple steering users,
     When split-turn compaction retries after context overflow,
-    Then no steering boundary can drop the current tool result`, async () => {
+    Then no steering boundary can drop the compacted current tool result`, async () => {
     // Given
     const currentToolOutput = [
       "QUEUED_STEERING_LOG_START",
@@ -318,10 +350,13 @@ describe("Context Compaction Current Tool Suffix", () => {
             message.role === "tool" &&
             message.toolCallId === "read_queued_steering_log",
         );
-        if (toolResult?.content !== currentToolOutput) {
+        if (
+          toolResult?.content.includes(CURRENT_TOOL_OUTPUT_MARKER) !== true ||
+          toolResult.content.includes("QUEUED_STEERING_LOG_END")
+        ) {
           throw new KeelError(
             "provider_context_overflow",
-            "Retry dropped the current tool result behind steering users",
+            "Retry did not compact the current tool result behind steering users",
           );
         }
 
@@ -359,7 +394,7 @@ describe("Context Compaction Current Tool Suffix", () => {
     expect(retriedMessages).toContainEqual({
       role: "tool",
       toolCallId: "read_queued_steering_log",
-      content: currentToolOutput,
+      content: expect.stringContaining(CURRENT_TOOL_OUTPUT_MARKER),
     });
     expect(retriedMessages).toContainEqual({
       role: "user",
@@ -377,7 +412,7 @@ describe("Context Compaction Current Tool Suffix", () => {
 
   test(`Given split-turn compaction retains an unconsumed multi-tool round,
     When overflow recovery retries,
-    Then the retry keeps the assistant tool calls and all sibling tool results together`, async () => {
+    Then the retry keeps the assistant tool calls and all compacted sibling tool results together`, async () => {
     // Given
     const firstToolOutput = [
       "FIRST_CURRENT_LOG_START",
@@ -474,7 +509,7 @@ describe("Context Compaction Current Tool Suffix", () => {
 
         yield {
           type: "text",
-          text: "Continued with both current tool results intact.",
+          text: "Continued with both compacted current tool results.",
         };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
@@ -502,12 +537,12 @@ describe("Context Compaction Current Tool Suffix", () => {
     expect(retriedMessages).toContainEqual({
       role: "tool",
       toolCallId: "read_first_current_log",
-      content: firstToolOutput,
+      content: expect.stringContaining(CURRENT_TOOL_OUTPUT_MARKER),
     });
     expect(retriedMessages).toContainEqual({
       role: "tool",
       toolCallId: "read_second_current_log",
-      content: secondToolOutput,
+      content: expect.stringContaining(CURRENT_TOOL_OUTPUT_MARKER),
     });
     expect(retriedMessages).toContainEqual({
       role: "user",
@@ -515,13 +550,13 @@ describe("Context Compaction Current Tool Suffix", () => {
     });
     expect(events).toContainEqual({
       type: "text",
-      text: "Continued with both current tool results intact.",
+      text: "Continued with both compacted current tool results.",
     });
   });
 
   test(`Given an unconsumed current tool result follows earlier tool progress in the same user turn,
     When split-turn compaction retries after context overflow,
-    Then the retry keeps the original user instruction and final unconsumed tool result`, async () => {
+    Then the retry keeps the original user instruction and compacts the final unconsumed tool result`, async () => {
     // Given
     const firstToolOutput = [
       "SEQUENTIAL_FIRST_LOG_START",
@@ -595,7 +630,7 @@ describe("Context Compaction Current Tool Suffix", () => {
         retriedMessages = [...options.messages];
         yield {
           type: "text",
-          text: "Continued with the full sequential tool suffix.",
+          text: "Continued with the compacted sequential tool suffix.",
         };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
@@ -631,14 +666,23 @@ describe("Context Compaction Current Tool Suffix", () => {
     );
     expect(firstToolResult?.content).toContain("SEQUENTIAL_FIRST_LOG_START");
     expect(firstToolResult?.content).toContain("[stale tool output compacted:");
-    expect(retriedMessages).toContainEqual({
+    const secondToolResult = retriedMessages.find(
+      (message) =>
+        message.role === "tool" &&
+        message.toolCallId === "read_sequential_second_log",
+    );
+    expect(secondToolResult).toEqual({
       role: "tool",
       toolCallId: "read_sequential_second_log",
-      content: secondToolOutput,
+      content: expect.stringContaining(CURRENT_TOOL_OUTPUT_MARKER),
     });
+    expect(secondToolResult?.content).not.toBe(secondToolOutput);
+    expect(secondToolResult?.content).not.toContain(
+      "SEQUENTIAL_SECOND_LOG_END",
+    );
     expect(events).toContainEqual({
       type: "text",
-      text: "Continued with the full sequential tool suffix.",
+      text: "Continued with the compacted sequential tool suffix.",
     });
   });
 });

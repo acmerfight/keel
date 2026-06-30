@@ -463,6 +463,7 @@ describe("module boundaries", () => {
 
   test(`source re-export facades stay explicit and allowlisted`, () => {
     const allowedReExportFiles = [
+      "src/agent/context-compaction.ts",
       "src/cli/args.ts",
       "src/cli/interactive-session.ts",
       "src/cli/interactive-session/types.ts",

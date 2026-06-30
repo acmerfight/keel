@@ -9,9 +9,18 @@ import {
   selectCompactionSplit,
 } from "./context-compaction/planning.ts";
 import {
+  compactCurrentToolOutputs,
+  EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+  isCompactedCurrentToolOutput as isCompactedCurrentToolOutputFromContent,
+  mergeStaleToolOutputCompactionStats,
+} from "./context-compaction/stale-tool-output.ts";
+import {
   buildCompactedMessages,
   collectCompactionSummary,
 } from "./context-compaction/summary.ts";
+
+export { currentToolRound } from "./context-compaction/current-tool-round.ts";
+
 import {
   captureContextCompactionAccountingSnapshot as captureContextCompactionAccountingSnapshotFromAccounting,
   contextCompactionStatsForCurrentMessages as contextCompactionStatsForCurrentMessagesFromAccounting,
@@ -27,6 +36,10 @@ export type ContextCompactionRequestMetadata =
 export type ContextCompactionAccountingSnapshot =
   InternalContextCompactionAccountingSnapshot;
 export type ContextCompactionStats = InternalContextCompactionStats;
+
+export function isCompactedCurrentToolOutput(text: string): boolean {
+  return isCompactedCurrentToolOutputFromContent(text);
+}
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -44,6 +57,7 @@ interface CompactMessagesOptions {
   readonly contextAccounting?: ContextCompactionAccountingSnapshot;
   readonly requestMetadata?: ContextCompactionRequestMetadata;
   readonly focusInstruction?: string;
+  readonly allowCurrentToolOutputCompaction?: boolean;
 }
 
 export type CompactMessagesResult =
@@ -113,9 +127,36 @@ export async function compactMessages(
 
   const plan = planCompaction(options.messages, split, resolved);
   if (plan.messagesToSummarize.length === 0) {
-    // The protected current suffix starts at the beginning of the transcript.
-    // Creating an empty checkpoint would only make the retry larger, so report
-    // no compaction and allow overflow recovery to surface the provider error.
+    if (options.allowCurrentToolOutputCompaction === true) {
+      const currentToolOutputCompaction = compactCurrentToolOutputs(
+        options.messages,
+        resolved.toolOutputMaxChars,
+      );
+      if (currentToolOutputCompaction.stats.toolOutputsCompacted > 0) {
+        options.messages.splice(
+          0,
+          options.messages.length,
+          ...currentToolOutputCompaction.messages,
+        );
+        return {
+          compacted: true,
+          usage: ZERO_USAGE,
+          stats: {
+            beforeMessageCount,
+            afterMessageCount: options.messages.length,
+            beforeEstimatedTokens,
+            afterEstimatedTokens: estimateRequestTokens(
+              options.systemPrompt,
+              options.messages,
+            ),
+            ...currentToolOutputCompaction.stats,
+          },
+        };
+      }
+    }
+    // The protected current suffix starts at the beginning of the transcript and
+    // has no oversized current tool output we can shrink. Creating an empty
+    // checkpoint would only make the retry larger, so report no compaction.
     return { compacted: false, usage: ZERO_USAGE };
   }
 
@@ -135,7 +176,25 @@ export async function compactMessages(
     summaryTurn.text,
     resolved,
   );
-  options.messages.splice(0, options.messages.length, ...compacted.messages);
+  const currentToolOutputCompaction =
+    options.allowCurrentToolOutputCompaction === true
+      ? compactCurrentToolOutputs(
+          compacted.messages,
+          resolved.toolOutputMaxChars,
+        )
+      : {
+          messages: compacted.messages,
+          stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+        };
+  const toolOutputStats = mergeStaleToolOutputCompactionStats(
+    compacted.staleToolOutputStats,
+    currentToolOutputCompaction.stats,
+  );
+  options.messages.splice(
+    0,
+    options.messages.length,
+    ...currentToolOutputCompaction.messages,
+  );
   return {
     compacted: true,
     usage: summaryTurn.usage,
@@ -147,7 +206,7 @@ export async function compactMessages(
         options.systemPrompt,
         options.messages,
       ),
-      ...compacted.staleToolOutputStats,
+      ...toolOutputStats,
     },
   };
 }

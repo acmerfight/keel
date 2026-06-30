@@ -46,6 +46,10 @@ export interface LedgerTurnOptions extends StreamTurnOptions {
   readonly setLedger: (ledger: SessionLedger) => void;
 }
 
+interface AttemptContextCompactionOptions {
+  readonly allowCurrentToolOutputCompaction?: boolean;
+}
+
 function requestMetadataForStream(
   options: StreamTurnOptions,
 ): ContextCompactionRequestMetadata {
@@ -61,6 +65,7 @@ async function attemptContextCompaction(
   config: CompactionConfig,
   state: CompactionState,
   streamOptions: LedgerTurnOptions,
+  options?: AttemptContextCompactionOptions,
 ): Promise<CompactMessagesResult> {
   const targetMessages = [
     ...projectSessionLedgerToProviderMessages(streamOptions.getLedger()),
@@ -78,6 +83,9 @@ async function attemptContextCompaction(
       ? { contextAccounting: state.contextAccounting }
       : {}),
     requestMetadata,
+    ...(options?.allowCurrentToolOutputCompaction === true
+      ? { allowCurrentToolOutputCompaction: true }
+      : {}),
   });
   let finalResult = result;
   if (result.compacted) {
@@ -177,6 +185,7 @@ export async function* streamTurnWithOverflowRecovery(
             config,
             state,
             streamOptions,
+            { allowCurrentToolOutputCompaction: true },
           );
           if (compaction.compacted) {
             yield {
