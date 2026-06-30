@@ -14,7 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
-import { createGitWorkspace } from "../../src/testing/cli-harness.ts";
+import {
+  createGitWorkspace,
+  runGit as git,
+} from "../../src/testing/cli-harness.ts";
 import { executeApplyPatch } from "../../src/tools/apply-patch.ts";
 
 async function createWorkspace(): Promise<string> {
@@ -28,6 +31,16 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function checkpointPath(workspace: string): Promise<string> {
+  const result = await git(workspace, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "keel/last-edit-checkpoint.json",
+  ]);
+  return result.stdout.trim();
 }
 
 function expectApplyPatchError(
@@ -1491,6 +1504,78 @@ describe("Apply Patch Tool", () => {
       ).rejects.toMatchObject({
         code: "ENOENT",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an existing undo checkpoint and a multi-file patch fails mid-batch,
+    When apply_patch rolls back the applied operations,
+    Then it restores touched files and preserves the previous checkpoint`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-rollback-");
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "checkpointed.txt"), "old\n", "utf8");
+    await writeFile(join(workspace, "target.txt"), "alpha\n", "utf8");
+    await writeFile(join(workspace, ".gitignore"), "private/\n", "utf8");
+    await mkdir(join(workspace, "private"));
+    await symlink("private", join(workspace, "link"));
+
+    executeApplyPatch(
+      workspace,
+      [
+        "*** Begin Patch",
+        "*** Update File: checkpointed.txt",
+        "@@",
+        "-old",
+        "+new",
+        "*** End Patch",
+      ].join("\n"),
+      {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "checkpointed.txt"),
+        },
+      },
+    );
+    const checkpoint = await checkpointPath(workspace);
+    const previousCheckpoint = await readFile(checkpoint, "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: created.txt",
+      "+created",
+      "*** Update File: target.txt",
+      "@@",
+      "-alpha",
+      "+beta",
+      "*** Add File: link/secret.txt",
+      "+secret",
+      "*** End Patch",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "target.txt"),
+            },
+          }),
+        "tool_path_ignored",
+        "ignored path: link/secret.txt",
+      );
+      await expect(
+        readFile(join(workspace, "created.txt"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(join(workspace, "target.txt"), "utf8")).toBe(
+        "alpha\n",
+      );
+      await expect(
+        readFile(join(workspace, "private", "secret.txt"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(checkpoint, "utf8")).toBe(previousCheckpoint);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
