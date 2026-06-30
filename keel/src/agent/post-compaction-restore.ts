@@ -2,6 +2,11 @@ import { isRecoverableToolErrorCode, KeelError } from "../core/error.ts";
 import type { Message, ToolCall } from "../llm/types.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
 import type { ProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
+import { resolveWorkspaceTarget } from "../tools/workspace-path.ts";
+import {
+  currentToolRound,
+  isCompactedCurrentToolOutput,
+} from "./context-compaction.ts";
 import {
   clearReadVisibilityState,
   type ReadVisibilityState,
@@ -23,6 +28,12 @@ interface RestoredPostCompactionProjectInstructions {
   readonly instructionPaths: readonly string[];
   readonly content: string;
   readonly complete: boolean;
+}
+
+interface ReadRestoreTarget {
+  readonly targetPath: string;
+  readonly offset?: number;
+  readonly limit?: number;
 }
 
 function fitPostCompactionReadContent(
@@ -51,6 +62,68 @@ function fitPostCompactionReadContent(
   }
 }
 
+function currentCompactedReadToolCalls(
+  messages: readonly Message[],
+): readonly Extract<ToolCall, { readonly tool: "read" }>[] {
+  const round = currentToolRound(messages);
+  if (round === null) {
+    return [];
+  }
+
+  const toolCallsById = new Map(
+    round.toolRequest.toolCalls.map((toolCall) => [toolCall.id, toolCall]),
+  );
+  const compactedReadToolCalls: Extract<ToolCall, { readonly tool: "read" }>[] =
+    [];
+  for (const toolOutput of round.toolOutputs) {
+    if (!isCompactedCurrentToolOutput(toolOutput.message.content)) {
+      continue;
+    }
+    const toolCall = toolCallsById.get(toolOutput.message.toolCallId);
+    if (toolCall?.tool === "read") {
+      compactedReadToolCalls.push(toolCall);
+    }
+  }
+  return compactedReadToolCalls;
+}
+
+function compactedReadRestoreTarget(
+  workspace: string,
+  toolCall: Extract<ToolCall, { readonly tool: "read" }>,
+): ReadRestoreTarget | null {
+  try {
+    const target = resolveWorkspaceTarget(workspace, toolCall.path, "read");
+    return {
+      targetPath: target.targetPath,
+      ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
+      ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function compactedCurrentReadRestoreTargets(options: {
+  readonly workspace: string;
+  readonly messages: readonly Message[];
+}): readonly ReadRestoreTarget[] {
+  return currentCompactedReadToolCalls(options.messages).flatMap((toolCall) => {
+    const target = compactedReadRestoreTarget(options.workspace, toolCall);
+    return target === null ? [] : [target];
+  });
+}
+
+function sameReadRestoreTarget(
+  left: ReadRestoreTarget,
+  right: ReadRestoreTarget,
+): boolean {
+  return (
+    left.targetPath === right.targetPath &&
+    left.offset === right.offset &&
+    left.limit === right.limit
+  );
+}
+
 function shouldSkipProjectInstructionRestore(error: unknown): boolean {
   return error instanceof KeelError && isRecoverableToolErrorCode(error.code);
 }
@@ -75,8 +148,18 @@ export async function restorePostCompactionReads(options: {
   readonly messages: Message[];
   readonly nextToolCallId: () => string;
 }): Promise<void> {
+  const skippedReadTargets = compactedCurrentReadRestoreTargets({
+    workspace: options.workspace,
+    messages: options.messages,
+  });
   const targetPaths = options.readVisibility
     .visibleReadsMostRecentFirst()
+    .filter(
+      (read) =>
+        !skippedReadTargets.some((target) =>
+          sameReadRestoreTarget(read, target),
+        ),
+    )
     .slice(0, POST_COMPACTION_MAX_RESTORED_FILES);
   const projectInstructionSnapshots =
     options.projectInstructionVisibility.visibleInstructionsMostRecentFirst();

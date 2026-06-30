@@ -14,7 +14,180 @@ import {
 } from "../../../src/testing/file-editing-fixtures.ts";
 import { createProjectInstructionVisibilityState } from "../../../src/tools/scoped-project-instructions.ts";
 
+const CURRENT_TOOL_OUTPUT_MARKER =
+  "[current tool output compacted after context overflow: approximately omitted 100 chars; rerun the tool with narrower parameters if needed]";
+
 describe("File Editing Post-Compaction Read Restore", () => {
+  test(`Given a compacted current windowed read is still retained,
+    When recent reads are restored after compaction,
+    Then that retained read window is not restored again`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const notePath = join(workspace, "note.txt");
+    await writeFile(notePath, "first\nsecond\nthird\n", "utf8");
+    const noteTargetPath = await realpath(notePath);
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_current_window",
+            tool: "read",
+            path: "note.txt",
+            offset: 2,
+            limit: 1,
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_current_window",
+        content: `second\n${CURRENT_TOOL_OUTPUT_MARKER}`,
+      },
+    ];
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(workspace);
+    readVisibility.applyVisibleToolExecutions([
+      {
+        ok: true,
+        content: "",
+        readTargetPath: noteTargetPath,
+        readTargetOffset: 2,
+        readTargetLimit: 1,
+      },
+    ]);
+    let sequence = 0;
+
+    try {
+      // When
+      await restorePostCompactionReads({
+        workspace,
+        signal: freshSignal(),
+        readVisibility,
+        projectInstructionVisibility,
+        messages,
+        nextToolCallId: () => `post_compaction_read_${sequence++}`,
+      });
+
+      // Then
+      expect(sequence).toBe(0);
+      expect(messages).toEqual([
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "read_current_window",
+              tool: "read",
+              path: "note.txt",
+              offset: 2,
+              limit: 1,
+            },
+          ],
+        },
+        {
+          role: "tool",
+          toolCallId: "read_current_window",
+          content: `second\n${CURRENT_TOOL_OUTPUT_MARKER}`,
+        },
+      ]);
+      expect(readVisibility.hasRead(noteTargetPath)).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a compacted current non-read tool output is retained,
+    When recent reads are restored after compaction,
+    Then unrelated visible reads are still restored`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const notePath = join(workspace, "note.txt");
+    await writeFile(notePath, "visible note\n", "utf8");
+    const noteTargetPath = await realpath(notePath);
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "grep_current_log",
+            tool: "grep",
+            pattern: "needle",
+            path: "current.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "grep_current_log",
+        content: `large grep output\n${CURRENT_TOOL_OUTPUT_MARKER}`,
+      },
+    ];
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(workspace);
+    readVisibility.applyVisibleToolExecutions([
+      { ok: true, content: "", readTargetPath: noteTargetPath },
+    ]);
+    let sequence = 0;
+
+    try {
+      // When
+      await restorePostCompactionReads({
+        workspace,
+        signal: freshSignal(),
+        readVisibility,
+        projectInstructionVisibility,
+        messages,
+        nextToolCallId: () => `post_compaction_read_${sequence++}`,
+      });
+
+      // Then
+      expect(sequence).toBe(1);
+      expect(messages).toEqual([
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "grep_current_log",
+              tool: "grep",
+              pattern: "needle",
+              path: "current.log",
+            },
+          ],
+        },
+        {
+          role: "tool",
+          toolCallId: "grep_current_log",
+          content: `large grep output\n${CURRENT_TOOL_OUTPUT_MARKER}`,
+        },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            expect.objectContaining({
+              id: "post_compaction_read_0",
+              tool: "read",
+              path: noteTargetPath,
+            }),
+          ],
+        },
+        {
+          role: "tool",
+          toolCallId: "post_compaction_read_0",
+          content: "visible note\n",
+        },
+      ]);
+      expect(readVisibility.hasRead(noteTargetPath)).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a previous read is compacted before the next model request,
     When the assistant edits that file without manually rereading,
     Then the edit uses a fresh post-compaction read snapshot`, async () => {

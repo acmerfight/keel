@@ -1,3 +1,5 @@
+import { rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { compactMessages } from "../../../src/agent/context-compaction.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
@@ -10,16 +12,193 @@ import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   collect,
   endEvent,
+  estimatedTextTokens,
   failingStream,
   freshSignal,
+  onlyContextCompactedEvent,
   workspace,
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
+import { createWorkspace } from "../../../src/testing/file-editing-fixtures.ts";
 
 describe("Context Compaction Overflow Edge Cases", () => {
+  test(`Given the current tool output was already compacted by overflow recovery,
+    When current tool-output compaction runs again with no history to summarize,
+    Then it reports no compaction instead of compacting the marker again`, async () => {
+    // Given
+    const alreadyCompactedOutput = [
+      "large log output",
+      "[current tool output compacted after context overflow: approximately omitted 6000 chars; rerun the tool with narrower parameters if needed]",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Read the large log and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_large_log",
+            tool: "read",
+            path: "large.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_large_log",
+        content: alreadyCompactedOutput,
+      },
+    ];
+    const provider: LLMProvider = {
+      id: "already-compacted-current-output-provider",
+      stream() {
+        return failingStream(new Error("No summary request should be needed"));
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 1,
+        toolOutputMaxChars: 128,
+      },
+      allowCurrentToolOutputCompaction: true,
+    });
+
+    // Then
+    expect(result).toEqual({
+      compacted: false,
+      usage: ZERO_USAGE,
+    });
+    expect(messages).toEqual([
+      { role: "user", content: "Read the large log and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_large_log",
+            tool: "read",
+            path: "large.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_large_log",
+        content: alreadyCompactedOutput,
+      },
+    ]);
+  });
+
+  test(`Given a real current read result overflows before assistant output,
+    When overflow recovery compacts the current tool output,
+    Then the retry does not restore a duplicate post-compaction read`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const messages: Message[] = [
+      { role: "user", content: "Read the large log and continue." },
+    ];
+    const largeLogOutput = "large log output ".repeat(400);
+    let mainRequests = 0;
+    let summaryRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "real-current-read-overflow-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          yield { type: "text", text: "Unexpected summary." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_large_log",
+            tool: "read",
+            path: "large.log",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (mainRequests === 2) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Current read result made request too large",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        yield {
+          type: "text",
+          text: "Continued after compacting the current read result.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      await writeFile(join(workspace, "large.log"), largeLogOutput, "utf8");
+
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          contextCompaction: {
+            keepRecentTokens: 1,
+            toolOutputMaxChars: 128,
+          },
+        }),
+      );
+
+      // Then
+      expect(mainRequests).toBe(3);
+      expect(summaryRequests).toBe(0);
+      const retriedToolMessages = retriedMessages.filter(
+        (message): message is Extract<Message, { readonly role: "tool" }> =>
+          message.role === "tool",
+      );
+      expect(retriedToolMessages).toHaveLength(1);
+      expect(retriedToolMessages[0]).toEqual({
+        role: "tool",
+        toolCallId: "read_large_log",
+        content: expect.stringContaining(
+          "[current tool output compacted after context overflow:",
+        ),
+      });
+      expect(
+        retriedMessages
+          .flatMap((message) =>
+            message.role === "assistant" ? message.toolCalls : [],
+          )
+          .some((toolCall) => toolCall.id.startsWith("post_compaction_read")),
+      ).toBe(false);
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Continued after compacting the current read result.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an unconsumed tool result is the final message when the provider reports context overflow,
     When preserving the latest user and current tool round leaves no history to summarize,
-    Then overflow recovery surfaces the overflow without adding an empty checkpoint`, async () => {
+    Then overflow recovery compacts the current tool output and retries without a summary request`, async () => {
     // Given
     const currentToolOutput = "large log output ".repeat(400);
     const messages: Message[] = [
@@ -44,6 +223,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     let mainRequests = 0;
     let summaryRequests = 0;
     let summaryPrompt = "";
+    let retriedMessages: readonly Message[] = [];
     const provider: LLMProvider = {
       id: "tool-tail-overflow-provider",
       async *stream(options) {
@@ -71,58 +251,107 @@ describe("Context Compaction Overflow Edge Cases", () => {
             "Tool result made request too large",
           );
         }
-        throw new Error(
-          "Overflow recovery should not retry without compaction",
-        );
+
+        retriedMessages = [...options.messages];
+        const retriedToolOutput =
+          retriedMessages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.toolCallId === "read_large_log",
+          )?.content ?? "";
+        if (
+          retriedToolOutput === currentToolOutput ||
+          !retriedToolOutput.includes(
+            "[current tool output compacted after context overflow:",
+          )
+        ) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Retry did not compact the current tool output",
+          );
+        }
+
+        yield {
+          type: "text",
+          text: "Continued after shrinking current tool output.",
+        };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 20,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 20,
+            outputTokens: 7,
+          },
+        };
       },
     };
 
-    // When / Then
-    await expect(
-      collect(
-        runAgentTurn({
-          workspace: workspace(),
-          provider,
-          messages,
-          systemPrompt: "You are helpful.",
-          signal: freshSignal(),
-          allowBash: false,
-          stopPolicy: defaultStopPolicy(),
-          contextCompaction: {
-            keepRecentTokens: 1,
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({
-      name: "KeelError",
-      code: "provider_context_overflow",
-    });
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 1,
+          toolOutputMaxChars: 128,
+        },
+      }),
+    );
 
-    expect(mainRequests).toBe(1);
+    // Then
+    const compactionEvent = onlyContextCompactedEvent(events);
+    expect(mainRequests).toBe(2);
     expect(summaryRequests).toBe(0);
     expect(summaryPrompt).toBe("");
-    expect(messages).toEqual([
-      {
-        role: "user",
-        content: "Read the large log and continue.",
-      },
-      {
-        role: "assistant",
-        content: "",
-        toolCalls: [
-          {
-            id: "read_large_log",
-            tool: "read",
-            path: "large.log",
-          },
-        ],
-      },
-      {
-        role: "tool",
-        toolCallId: "read_large_log",
-        content: currentToolOutput,
-      },
-    ]);
+    expect(retriedMessages).toContainEqual({
+      role: "user",
+      content: "Read the large log and continue.",
+    });
+    const toolCallIndex = retriedMessages.findIndex(
+      (message) =>
+        message.role === "assistant" &&
+        message.toolCalls.some((toolCall) => toolCall.id === "read_large_log"),
+    );
+    const toolResultIndex = retriedMessages.findIndex(
+      (message) =>
+        message.role === "tool" && message.toolCallId === "read_large_log",
+    );
+    expect(toolCallIndex).toBeGreaterThan(-1);
+    expect(toolResultIndex).toBe(toolCallIndex + 1);
+    const retriedToolOutput =
+      retriedMessages[toolResultIndex]?.role === "tool"
+        ? retriedMessages[toolResultIndex].content
+        : "";
+    expect(retriedToolOutput).toContain("large log output");
+    expect(retriedToolOutput).toContain(
+      "[current tool output compacted after context overflow:",
+    );
+    expect(retriedToolOutput).not.toBe(currentToolOutput);
+    expect(compactionEvent).toMatchObject({
+      reason: "overflow_recovery",
+      toolOutputsCompacted: 1,
+      toolOutputCharsBefore: currentToolOutput.length,
+      toolOutputCharsAfter: retriedToolOutput.length,
+      toolOutputEstimatedTokensBefore: estimatedTextTokens(currentToolOutput),
+      toolOutputEstimatedTokensAfter: estimatedTextTokens(retriedToolOutput),
+    });
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued after shrinking current tool output.",
+    });
+    expect(endEvent(events).usage).toEqual({
+      inputTokens: 20,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 20,
+      outputTokens: 7,
+    });
   });
 
   test(`Given a malformed current tool suffix has no preceding user,

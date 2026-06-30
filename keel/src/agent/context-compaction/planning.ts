@@ -1,4 +1,5 @@
 import type { Message } from "../../llm/types.ts";
+import { currentToolRound } from "./current-tool-round.ts";
 import type { ResolvedContextCompactionOptions } from "./options.ts";
 import { compactStaleToolOutputs } from "./stale-tool-output.ts";
 import {
@@ -87,33 +88,6 @@ export function selectCompactionSplit(
   return null;
 }
 
-function currentToolOutputSuffixStart(
-  messages: readonly Message[],
-): number | null {
-  const toolRequestIndex = messages.findLastIndex(
-    (message) => message.role === "assistant",
-  );
-  const toolRequest = messages[toolRequestIndex];
-  if (toolRequest?.role !== "assistant" || toolRequest.toolCalls.length === 0) {
-    return null;
-  }
-
-  if (messages[toolRequestIndex + 1]?.role !== "tool") {
-    return null;
-  }
-
-  for (
-    let messageIndex = toolRequestIndex - 1;
-    messageIndex >= 0;
-    messageIndex--
-  ) {
-    if (messages[messageIndex]?.role === "user") {
-      return messageIndex;
-    }
-  }
-  return toolRequestIndex;
-}
-
 function canSplitTurnAfter(
   lastAssistantIndex: number,
   messageIndex: number,
@@ -148,7 +122,8 @@ function selectSplitTurnBoundary(
     messages.length - 1,
     Math.max(1, firstOverBudgetIndex + 1),
   );
-  const protectedSuffixStart = currentToolOutputSuffixStart(messages);
+  const protectedSuffixStart =
+    currentToolRound(messages)?.instructionStartIndex ?? null;
   const maxBoundary = protectedSuffixStart ?? messages.length - 1;
   const lastAssistantIndex = messages.findLastIndex(
     (message) => message.role === "assistant",
@@ -188,7 +163,8 @@ function firstRetainedIndexPreservingCurrentToolOutput(
   messages: readonly Message[],
   firstRetainedIndex: number,
 ): number {
-  const protectedSuffixStart = currentToolOutputSuffixStart(messages);
+  const protectedSuffixStart =
+    currentToolRound(messages)?.instructionStartIndex ?? null;
   return protectedSuffixStart !== null &&
     firstRetainedIndex > protectedSuffixStart
     ? protectedSuffixStart
