@@ -15,6 +15,54 @@ describe("CLI Args", () => {
     expect(result).toEqual({ ok: true, value: { command: "help" } });
   });
 
+  test(`Given the undo list command,
+    When the top-level CLI args are parsed,
+    Then the parser returns an undo list command instead of a run prompt`, () => {
+    // Given
+    const args = ["/undo", "--list"];
+
+    // When
+    const result = parseCliArgs(args);
+
+    // Then
+    expect(result).toEqual({
+      ok: true,
+      value: { command: "undo", mode: "list" },
+    });
+  });
+
+  test(`Given an unknown undo option,
+    When the top-level CLI args are parsed,
+    Then the parser rejects the option instead of running undo`, () => {
+    // Given
+    const args = ["/undo", "--all"];
+
+    // When
+    const result = parseCliArgs(args);
+
+    // Then
+    expect(result).toEqual({
+      ok: false,
+      message: 'Error: unknown undo option "--all"',
+    });
+  });
+
+  test(`Given an extra undo list argument,
+    When the top-level CLI args are parsed,
+    Then the parser reports the extra argument instead of the list flag`, () => {
+    // Given
+    const args = ["/undo", "--list", "extra"];
+
+    // When
+    const result = parseCliArgs(args);
+
+    // Then
+    expect(result).toEqual({
+      ok: false,
+      message: 'Error: unknown undo option "extra"',
+    });
+  });
+
   test(`Given an unknown run option,
     When the top-level CLI args are parsed,
     Then the parser returns a usage error instead of a run prompt`, () => {

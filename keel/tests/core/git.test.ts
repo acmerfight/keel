@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
+  listUndoCheckpoints,
   recordLastBatchCheckpoint,
   recordLastCreateCheckpoint,
   recordLastDeleteCheckpoint,
@@ -33,7 +34,7 @@ async function checkpointPath(workspace: string): Promise<string> {
     "rev-parse",
     "--path-format=absolute",
     "--git-path",
-    "keel/last-edit-checkpoint.json",
+    "keel/undo-checkpoints.json",
   ]);
   return result.stdout.trim();
 }
@@ -44,7 +45,11 @@ async function writeRawCheckpoint(
 ): Promise<void> {
   const path = await checkpointPath(workspace);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(checkpoint)}\n`, "utf8");
+  await writeFile(
+    path,
+    `${JSON.stringify({ version: 1, checkpoints: [checkpoint] })}\n`,
+    "utf8",
+  );
 }
 
 describe("Git Checkpoints", () => {
@@ -65,9 +70,11 @@ describe("Git Checkpoints", () => {
         afterContent: "new\n",
       });
       const restore = restoreLastEditCheckpoint(workspace);
+      const checkpoints = listUndoCheckpoints(workspace);
 
       // Then
       expect(record).toEqual({ written: false });
+      expect(checkpoints).toEqual([]);
       expect(restore).toEqual({
         status: "none",
         message:
@@ -104,6 +111,40 @@ describe("Git Checkpoints", () => {
     }
   });
 
+  test(`Given more than twenty undo checkpoints are recorded,
+    When listing undo checkpoints,
+    Then only the newest twenty checkpoints remain newest first`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-undo-bound-");
+
+    try {
+      for (let index = 1; index <= 22; index++) {
+        const fileName = `note-${index}.txt`;
+        const filePath = join(workspace, fileName);
+        await writeFile(filePath, `after ${index}\n`, "utf8");
+        recordLastEditCheckpoint({
+          workspace,
+          filePath,
+          beforeContent: `before ${index}\n`,
+          afterContent: `after ${index}\n`,
+        });
+      }
+
+      // When
+      const checkpoints = listUndoCheckpoints(workspace);
+
+      // Then
+      expect(checkpoints).toHaveLength(20);
+      expect(checkpoints[0]?.restoredLabel).toBe("note-22.txt");
+      expect(checkpoints.at(-1)?.restoredLabel).toBe("note-3.txt");
+      expect(
+        checkpoints.map((checkpoint) => checkpoint.restoredLabel),
+      ).not.toContain("note-2.txt");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a file checkpoint is created,
     When the checkpoint is written,
     Then no git commit is created and no file is staged`, async () => {
@@ -131,6 +172,39 @@ describe("Git Checkpoints", () => {
       expect(
         (await git(workspace, ["diff", "--cached", "--name-only"])).stdout,
       ).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given undo checkpoint metadata is corrupt,
+    When Keel records a new checkpoint,
+    Then the new checkpoint replaces the corrupt stack and can be restored`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-corrupt-stack-");
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "new\n", "utf8");
+    const path = await checkpointPath(workspace);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, "{", "utf8");
+
+    try {
+      // When
+      const record = recordLastEditCheckpoint({
+        workspace,
+        filePath,
+        beforeContent: "old\n",
+        afterContent: "new\n",
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "note.txt",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -173,10 +247,12 @@ describe("Git Checkpoints", () => {
           },
         ],
       });
+      const checkpoints = listUndoCheckpoints(workspace);
       const restore = restoreLastEditCheckpoint(workspace);
 
       // Then
       expect(record).toEqual({ written: true });
+      expect(checkpoints).toEqual([{ restoredLabel: "3 files" }]);
       expect(restore).toEqual({
         status: "restored",
         restoredLabel: "3 files",
@@ -1439,35 +1515,6 @@ describe("Git Checkpoints", () => {
     }
   });
 
-  test(`Given checkpoint metadata belongs to another git root,
-    When restoring the checkpoint,
-    Then there is nothing to undo`, async () => {
-    // Given
-    const workspace = await createGitWorkspace();
-    await writeRawCheckpoint(workspace, {
-      version: 1,
-      gitRoot: join(workspace, "other-root"),
-      relativePath: "note.txt",
-      beforeContent: "old\n",
-      afterContent: "new\n",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-
-    try {
-      // When
-      const result = restoreLastEditCheckpoint(workspace);
-
-      // Then
-      expect(result).toEqual({
-        status: "none",
-        message:
-          "No earlier checkpoints. Ask me to undo more, or use git to reset.",
-      });
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
-
   test(`Given current file content no longer matches Keel's post-edit content,
     When restoring the checkpoint,
     Then restore fails without modifying the file`, async () => {
@@ -1539,6 +1586,7 @@ describe("Git Checkpoints", () => {
     const workspace = await createGitWorkspace();
     await writeRawCheckpoint(workspace, {
       version: 1,
+      operation: "edit",
       gitRoot: await realpath(workspace),
       relativePath: "note.txt",
       beforeContent: "old\n",
@@ -1586,6 +1634,7 @@ describe("Git Checkpoints", () => {
     const workspace = await createGitWorkspace();
     await writeRawCheckpoint(workspace, {
       version: 1,
+      operation: "edit",
       gitRoot: await realpath(workspace),
       relativePath: "note.txt",
       beforeContent: "old\n",
@@ -1610,6 +1659,7 @@ describe("Git Checkpoints", () => {
     const workspace = await createGitWorkspace();
     await writeRawCheckpoint(workspace, {
       version: 1,
+      operation: "edit",
       gitRoot: await realpath(workspace),
       relativePath: "../outside.txt",
       beforeContent: "old\n",

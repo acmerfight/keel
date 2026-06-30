@@ -39,6 +39,7 @@ interface BuiltinToolExecutionContext {
   readonly workspace: string;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
+  readonly recordCheckpoints?: boolean;
   readonly bashPermission?: BashPermissionPolicy;
   readonly readBeforeEdit?: {
     readonly hasRead: (targetPath: string) => boolean;
@@ -193,6 +194,7 @@ function executeEditTool(
     workspace,
     readBeforeEdit,
     projectInstructions,
+    recordCheckpoints,
   }: BuiltinToolExecutionContext,
   toolCall: EditToolCall,
 ): ToolExecution {
@@ -207,6 +209,7 @@ function executeEditTool(
   }));
   const result = executeEdit(workspace, toolCall.path, edits, {
     ...(readBeforeEdit !== undefined ? { readBeforeEdit } : {}),
+    recordCheckpoint: recordCheckpoints !== false,
   });
   return {
     content: result.content,
@@ -217,7 +220,11 @@ function executeEditTool(
 }
 
 function executeWriteTool(
-  { workspace, projectInstructions }: BuiltinToolExecutionContext,
+  {
+    workspace,
+    projectInstructions,
+    recordCheckpoints,
+  }: BuiltinToolExecutionContext,
   toolCall: WriteToolCall,
 ): ToolExecution {
   if (projectInstructions !== undefined) {
@@ -233,6 +240,7 @@ function executeWriteTool(
   }
   const result = executeWrite(workspace, toolCall.path, toolCall.content, {
     ...(projectInstructions !== undefined ? { projectInstructions } : {}),
+    recordCheckpoint: recordCheckpoints !== false,
   });
   return {
     content: result.content,
@@ -247,12 +255,14 @@ function executeApplyPatchTool(
     workspace,
     readBeforeEdit,
     projectInstructions,
+    recordCheckpoints,
   }: BuiltinToolExecutionContext,
   toolCall: ApplyPatchToolCall,
 ): ToolExecution {
   const result = executeApplyPatch(workspace, toolCall.patch, {
     ...(readBeforeEdit !== undefined ? { readBeforeEdit } : {}),
     ...(projectInstructions !== undefined ? { projectInstructions } : {}),
+    recordCheckpoint: recordCheckpoints !== false,
   });
   return {
     content: result.content,

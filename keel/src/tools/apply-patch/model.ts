@@ -6,6 +6,7 @@ export interface ExecuteApplyPatchOptions {
     readonly hasRead: (targetPath: string) => boolean;
   };
   readonly projectInstructions?: ProjectInstructionVisibilityState;
+  readonly recordCheckpoint?: boolean;
 }
 
 export interface ValidatedUpdateTarget {

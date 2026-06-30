@@ -129,7 +129,7 @@ describe("Git Checkpoint Race Handling", () => {
         await vi.importActual<typeof import("node:fs")>("node:fs");
       const gitModule = await importGitWithFs({
         writeFileSync: (path, data, options) => {
-          if (String(path).endsWith("last-edit-checkpoint.json")) {
+          if (String(path).endsWith("undo-checkpoints.json")) {
             throw Object.assign(new Error("EACCES"), { code: "EACCES" });
           }
           return actualFs.writeFileSync(path, data, options);
@@ -157,7 +157,7 @@ describe("Git Checkpoint Race Handling", () => {
         await vi.importActual<typeof import("node:fs")>("node:fs");
       const { recordLastDeleteCheckpoint } = await importGitWithFs({
         writeFileSync: (path, data, options) => {
-          if (String(path).endsWith("last-edit-checkpoint.json")) {
+          if (String(path).endsWith("undo-checkpoints.json")) {
             throw Object.assign(new Error("EACCES"), { code: "EACCES" });
           }
           return actualFs.writeFileSync(path, data, options);

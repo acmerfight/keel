@@ -30,6 +30,11 @@ export interface DoctorCliArgs {
   readonly model?: string;
 }
 
+interface UndoCliArgs {
+  readonly command: "undo";
+  readonly mode: "restore" | "list";
+}
+
 interface SessionsListCliArgs {
   readonly command: "sessions";
   readonly mode: "list";
@@ -75,7 +80,7 @@ export interface RunCliArgs {
 export type CliArgs =
   | { readonly command: "help" }
   | DoctorCliArgs
-  | { readonly command: "undo" }
+  | UndoCliArgs
   | { readonly command: "skills" }
   | SessionsCliArgs
   | EvalCliArgs

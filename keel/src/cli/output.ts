@@ -88,6 +88,22 @@ export function sanitizeStatusLineText(text: string): string {
     : `${escaped.slice(0, STATUS_LINE_TEXT_MAX_LENGTH)}...`;
 }
 
+export function formatUndoCheckpointList(
+  checkpoints: readonly { readonly restoredLabel: string }[],
+): string {
+  if (checkpoints.length === 0) {
+    return "No undo checkpoints.\n";
+  }
+  return [
+    "Undo checkpoints:",
+    ...checkpoints.map(
+      (checkpoint, index) =>
+        `${index + 1}. ${sanitizeStatusLineText(checkpoint.restoredLabel)}`,
+    ),
+    "",
+  ].join("\n");
+}
+
 const providerRetryReasonLabels: Readonly<Record<string, string>> = {
   provider_rate_limited: "rate limited",
   provider_server_error: "server error",

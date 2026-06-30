@@ -1,5 +1,6 @@
-import { restoreLastEditCheckpoint } from "../core/git.ts";
+import { listUndoCheckpoints, restoreLastEditCheckpoint } from "../core/git.ts";
 import type { CliArgs } from "./args.ts";
+import { formatUndoCheckpointList } from "./output.ts";
 import type { CliRuntime } from "./runtime.ts";
 import {
   formatWorkflowSkillList,
@@ -10,6 +11,7 @@ import {
 
 type DoctorCliArgs = Extract<CliArgs, { readonly command: "doctor" }>;
 type EvalCliArgs = Extract<CliArgs, { readonly command: "eval" }>;
+type UndoCliArgs = Extract<CliArgs, { readonly command: "undo" }>;
 
 export async function runDoctorCommand(
   cliArgs: DoctorCliArgs,
@@ -67,7 +69,17 @@ export async function runEvalCommand(
   });
 }
 
-export function runUndoCommand(runtime: CliRuntime): number {
+export function runUndoCommand(
+  cliArgs: UndoCliArgs,
+  runtime: CliRuntime,
+): number {
+  if (cliArgs.mode === "list") {
+    runtime.writeStdout(
+      formatUndoCheckpointList(listUndoCheckpoints(runtime.cwd())),
+    );
+    return 0;
+  }
+
   const result = restoreLastEditCheckpoint(runtime.cwd());
   switch (result.status) {
     case "restored":

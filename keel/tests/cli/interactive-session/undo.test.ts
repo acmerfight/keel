@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import { parseInteractiveCommand } from "../../../src/cli/interactive-session/commands.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
   createSessionStore,
@@ -83,7 +84,7 @@ describe("Interactive Session - Undo", () => {
     }
   });
 
-  test(`Given the user passes arguments to /undo,
+  test(`Given the user passes unsupported arguments to /undo,
     When the command is parsed,
     Then the command is rejected without starting a model turn`, async () => {
     // Given
@@ -120,13 +121,101 @@ describe("Interactive Session - Undo", () => {
     });
 
     // When
-    input.end("/undo now\n");
+    input.end("/undo --list now\n");
 
     // Then
     await session;
     expect(stdout).toBe("");
-    expect(stderr).toBe("Error: /undo does not accept arguments.\n");
+    expect(stderr).toBe('Error: unknown /undo option "now".\n');
     expect(providerResolved).toBe(false);
+  });
+
+  test(`Given the user passes an unsupported /undo argument,
+    When the interactive command is parsed,
+    Then the parser reports the unsupported argument`, () => {
+    // Given / When
+    const command = parseInteractiveCommand("/undo now");
+
+    // Then
+    expect(command).toEqual({
+      kind: "invalid",
+      message: 'Error: unknown /undo option "now".',
+    });
+  });
+
+  test(`Given undo checkpoints exist,
+    When user enters /undo --list,
+    Then the command reports checkpoints without starting a model turn`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-interactive-undo-list-");
+    await commitFile(workspace, "first.txt", "before first\n");
+    await writeFile(join(workspace, "first.txt"), "after first\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath: join(workspace, "first.txt"),
+      beforeContent: "before first\n",
+      afterContent: "after first\n",
+    });
+    await commitFile(workspace, "second.txt", "before second\n");
+    await writeFile(join(workspace, "second.txt"), "after second\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath: join(workspace, "second.txt"),
+      beforeContent: "before second\n",
+      afterContent: "after second\n",
+    });
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("undo list should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("undo list should not start a model turn");
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.end("/undo --list\n");
+
+      // Then
+      await session;
+      expect(stdout).toBe(
+        ["Undo checkpoints:", "1. second.txt", "2. first.txt", ""].join("\n"),
+      );
+      expect(stderr).toBe("");
+      expect(providerResolved).toBe(false);
+      expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
+        "after first\n",
+      );
+      expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
+        "after second\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test(`Given an edit checkpoint no longer matches the workspace,

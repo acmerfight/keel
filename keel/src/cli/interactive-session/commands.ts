@@ -9,6 +9,7 @@ interface HelpCommand {
 
 interface UndoCommand {
   readonly kind: "undo";
+  readonly mode: "restore" | "list";
 }
 
 export interface ManualCompactCommand {
@@ -59,7 +60,8 @@ export function formatInteractiveHelp(): string {
   return [
     "Interactive commands:",
     "  /help              Show this help.",
-    "  /undo              Restore the last edit checkpoint.",
+    "  /undo              Restore the latest undo checkpoint.",
+    "  /undo --list       List undo checkpoints.",
     "  /model             Show the active provider/model.",
     "  /model <provider>/<model>",
     "                     Switch the active provider/model for later prompts.",
@@ -221,13 +223,19 @@ export function parseInteractiveCommand(
   const undoMatch = /^\/undo(?:\s+(.*))?$/u.exec(trimmed);
   if (undoMatch !== null) {
     const extraArgs = undoMatch[1]?.trim();
-    if (extraArgs !== undefined && extraArgs !== "") {
-      return {
-        kind: "invalid",
-        message: "Error: /undo does not accept arguments.",
-      };
+    if (extraArgs === undefined || extraArgs === "") {
+      return { kind: "undo", mode: "restore" };
     }
-    return { kind: "undo" };
+    const undoArgs = extraArgs.split(/\s+/u);
+    if (undoArgs.length === 1 && undoArgs[0] === "--list") {
+      return { kind: "undo", mode: "list" };
+    }
+    const unknownUndoOption =
+      undoArgs[0] === "--list" ? undoArgs[1] : undoArgs[0];
+    return {
+      kind: "invalid",
+      message: `Error: unknown /undo option "${unknownUndoOption}".`,
+    };
   }
 
   const modelMatch = /^\/model(?:\s+(.*))?$/u.exec(trimmed);

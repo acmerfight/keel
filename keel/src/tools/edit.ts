@@ -39,6 +39,7 @@ interface ExecuteEditOptions {
   readonly readBeforeEdit?: {
     readonly hasRead: (targetPath: string) => boolean;
   };
+  readonly recordCheckpoint?: boolean;
 }
 
 interface EditToolResult extends ToolResult {
@@ -606,12 +607,14 @@ function executeEditBatch(
       findWorkspacePathsByIdentity(workspacePath, identity),
   });
   const finalTargetPath = publishedTargetPath;
-  recordLastEditCheckpoint({
-    workspace: workspacePath,
-    filePath: finalTargetPath,
-    beforeContent,
-    afterContent,
-  });
+  if (options.recordCheckpoint !== false) {
+    recordLastEditCheckpoint({
+      workspace: workspacePath,
+      filePath: finalTargetPath,
+      beforeContent,
+      afterContent,
+    });
+  }
 
   return {
     content: `Edited ${filePath}`,
