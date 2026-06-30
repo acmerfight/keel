@@ -15,14 +15,14 @@ import {
 import type { AppliedPatchOperation } from "./model.ts";
 
 export function applyWithRollback<AppliedOperation, Result>(options: {
-  readonly appliedOperations: readonly AppliedOperation[];
-  readonly apply: () => Result;
+  readonly apply: (appliedOperations: AppliedOperation[]) => Result;
   readonly rollback: (appliedOperations: readonly AppliedOperation[]) => void;
 }): Result {
+  const appliedOperations: AppliedOperation[] = [];
   try {
-    return options.apply();
+    return options.apply(appliedOperations);
   } catch (error) {
-    options.rollback(options.appliedOperations);
+    options.rollback(appliedOperations);
     throw error;
   }
 }
