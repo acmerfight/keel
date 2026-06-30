@@ -4,6 +4,11 @@ AI coding agent built from scratch for maximum harness execution quality. TypeSc
 
 All development happens in `keel/`. See [`keel/CLAUDE.md`](keel/CLAUDE.md) for architecture, style, and workflow.
 
+Keel is pre-release. For work in `keel/`, implement only the latest product
+model. Do not add compatibility shims, migrations, fallback readers, old CLI
+aliases, legacy schema support, or compatibility tests for old internal data,
+draft schemas, or unfinished command shapes unless explicitly requested.
+
 ## Submodules
 
 Read-only reference agents for architectural study.
