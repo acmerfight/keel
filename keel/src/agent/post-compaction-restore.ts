@@ -3,7 +3,10 @@ import type { Message, ToolCall } from "../llm/types.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
 import type { ProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
 import { resolveWorkspaceTarget } from "../tools/workspace-path.ts";
-import { isCompactedCurrentToolOutput } from "./context-compaction.ts";
+import {
+  currentToolRound,
+  isCompactedCurrentToolOutput,
+} from "./context-compaction.ts";
 import {
   clearReadVisibilityState,
   type ReadVisibilityState,
@@ -62,32 +65,21 @@ function fitPostCompactionReadContent(
 function currentCompactedReadToolCalls(
   messages: readonly Message[],
 ): readonly Extract<ToolCall, { readonly tool: "read" }>[] {
-  const toolRequestIndex = messages.findLastIndex(
-    (message) => message.role === "assistant",
-  );
-  const toolRequest = messages[toolRequestIndex];
-  if (toolRequest?.role !== "assistant" || toolRequest.toolCalls.length === 0) {
+  const round = currentToolRound(messages);
+  if (round === null) {
     return [];
   }
 
   const toolCallsById = new Map(
-    toolRequest.toolCalls.map((toolCall) => [toolCall.id, toolCall]),
+    round.toolRequest.toolCalls.map((toolCall) => [toolCall.id, toolCall]),
   );
   const compactedReadToolCalls: Extract<ToolCall, { readonly tool: "read" }>[] =
     [];
-  for (
-    let messageIndex = toolRequestIndex + 1;
-    messageIndex < messages.length;
-    messageIndex++
-  ) {
-    const message = messages[messageIndex];
-    if (message?.role !== "tool") {
-      break;
-    }
-    if (!isCompactedCurrentToolOutput(message.content)) {
+  for (const toolOutput of round.toolOutputs) {
+    if (!isCompactedCurrentToolOutput(toolOutput.message.content)) {
       continue;
     }
-    const toolCall = toolCallsById.get(message.toolCallId);
+    const toolCall = toolCallsById.get(toolOutput.message.toolCallId);
     if (toolCall?.tool === "read") {
       compactedReadToolCalls.push(toolCall);
     }

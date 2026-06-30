@@ -18,6 +18,9 @@ import {
   buildCompactedMessages,
   collectCompactionSummary,
 } from "./context-compaction/summary.ts";
+
+export { currentToolRound } from "./context-compaction/current-tool-round.ts";
+
 import {
   captureContextCompactionAccountingSnapshot as captureContextCompactionAccountingSnapshotFromAccounting,
   contextCompactionStatsForCurrentMessages as contextCompactionStatsForCurrentMessagesFromAccounting,

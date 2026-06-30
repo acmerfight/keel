@@ -1,4 +1,5 @@
 import type { Message } from "../../llm/types.ts";
+import { currentToolRound } from "./current-tool-round.ts";
 import { estimateTextTokens } from "./token-accounting.ts";
 
 const STALE_TOOL_OUTPUT_COMPACTED_PREFIX =
@@ -141,32 +142,6 @@ function shouldCompactStaleToolOutput(
   );
 }
 
-function currentToolOutputMessageIndexes(
-  messages: readonly Message[],
-): readonly number[] {
-  const toolRequestIndex = messages.findLastIndex(
-    (message) => message.role === "assistant",
-  );
-  const toolRequest = messages[toolRequestIndex];
-  if (toolRequest?.role !== "assistant" || toolRequest.toolCalls.length === 0) {
-    return [];
-  }
-
-  const indexes: number[] = [];
-  for (
-    let messageIndex = toolRequestIndex + 1;
-    messageIndex < messages.length;
-    messageIndex++
-  ) {
-    const message = messages[messageIndex];
-    if (message?.role !== "tool") {
-      break;
-    }
-    indexes.push(messageIndex);
-  }
-  return indexes;
-}
-
 function shouldCompactCurrentToolOutput(
   message: Message,
   messageIndex: number,
@@ -249,7 +224,9 @@ export function compactCurrentToolOutputs(
   toolOutputMaxChars: number,
 ): StaleToolOutputCompactionResult {
   const currentToolOutputIndexes = new Set(
-    currentToolOutputMessageIndexes(messages),
+    currentToolRound(messages)?.toolOutputs.map(
+      (toolOutput) => toolOutput.messageIndex,
+    ) ?? [],
   );
   const needsCompaction = messages.some((message, index) =>
     shouldCompactCurrentToolOutput(
