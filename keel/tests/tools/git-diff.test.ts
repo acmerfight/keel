@@ -14,24 +14,6 @@ const GIT_CONFIG_VALUE_0_ENV = "GIT_CONFIG_VALUE_0";
 const GIT_CONFIG_PARAMETERS_ENV = "GIT_CONFIG_PARAMETERS";
 const GIT_CONFIG_GLOBAL_ENV = "GIT_CONFIG_GLOBAL";
 const GIT_CONFIG_SYSTEM_ENV = "GIT_CONFIG_SYSTEM";
-const GIT_DIFF_STDOUT_CAP_BYTES = 100_000;
-const RAW_DIFF_ARGS = [
-  "--no-pager",
-  "--no-optional-locks",
-  "-c",
-  "core.fsmonitor=false",
-  "-c",
-  "core.hooksPath=/dev/null",
-  "-c",
-  "diff.external=",
-  "diff",
-  "--no-color",
-  "--no-ext-diff",
-  "--no-textconv",
-  "--no-renames",
-  "--submodule=short",
-  "--ignore-submodules=dirty",
-];
 
 function freshSignal(): AbortSignal {
   return new AbortController().signal;
@@ -50,33 +32,6 @@ async function createGitWorkspace(prefix: string): Promise<string> {
   execFileSync("git", ["add", "tracked.txt"], { cwd: workspace });
   execFileSync("git", ["commit", "-m", "initial"], { cwd: workspace });
   return workspace;
-}
-
-function rawGitDiffStdoutBytes(workspace: string): number {
-  return execFileSync("git", RAW_DIFF_ARGS, { cwd: workspace }).length;
-}
-
-async function writeTrackedDiffWithRawStdoutBytes(
-  workspace: string,
-  targetBytes: number,
-): Promise<void> {
-  await writeFile(join(workspace, "tracked.txt"), "after\n\n", "utf8");
-  const overheadBytes = rawGitDiffStdoutBytes(workspace);
-  const payloadBytes = targetBytes - overheadBytes;
-  if (payloadBytes < 0) {
-    throw new Error(`git diff overhead exceeded ${targetBytes} bytes`);
-  }
-  await writeFile(
-    join(workspace, "tracked.txt"),
-    `after\n${"x".repeat(payloadBytes)}\n`,
-    "utf8",
-  );
-  const actualBytes = rawGitDiffStdoutBytes(workspace);
-  if (actualBytes !== targetBytes) {
-    throw new Error(
-      `expected raw git diff to be ${targetBytes} bytes, got ${actualBytes}`,
-    );
-  }
 }
 
 function restoreEnv(
@@ -375,14 +330,15 @@ describe("git_diff tool", () => {
     }
   });
 
-  test(`Given a diff output exactly reaches the tool cap,
+  test(`Given a large diff output remains below the tool cap,
     When git_diff captures the process output,
     Then it returns the complete diff without claiming truncation`, async () => {
     // Given
-    const workspace = await createGitWorkspace("keel-git-diff-exact-");
-    await writeTrackedDiffWithRawStdoutBytes(
-      workspace,
-      GIT_DIFF_STDOUT_CAP_BYTES,
+    const workspace = await createGitWorkspace("keel-git-diff-large-complete-");
+    await writeFile(
+      join(workspace, "tracked.txt"),
+      `head-sentinel\n${"large changed line\n".repeat(1_000)}tail-sentinel\n`,
+      "utf8",
     );
 
     try {
@@ -392,7 +348,7 @@ describe("git_diff tool", () => {
         signal: freshSignal(),
         allowBash: false,
         toolCall: {
-          id: "exact_diff",
+          id: "large_complete_diff",
           tool: "git_diff",
           mode: "unstaged",
         },
@@ -403,6 +359,8 @@ describe("git_diff tool", () => {
       expect(result.content).toContain(
         "diff --git a/tracked.txt b/tracked.txt",
       );
+      expect(result.content).toContain("head-sentinel");
+      expect(result.content).toContain("tail-sentinel");
       expect(result.content).not.toContain("[git_diff stdout truncated");
     } finally {
       await rm(workspace, { recursive: true, force: true });

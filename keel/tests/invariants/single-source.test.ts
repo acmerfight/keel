@@ -133,6 +133,8 @@ function consumesEditMatchStrategies(
   const declaration = functionDeclaration(source, consumer.functionName);
   let consumes = false;
 
+  // This intentionally requires an explicit registry loop; update the matcher if
+  // a future consumer shape still derives from EDIT_MATCH_STRATEGIES.
   function visit(node: ts.Node): void {
     if (
       !consumes &&
