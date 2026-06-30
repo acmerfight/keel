@@ -68,6 +68,21 @@ export interface OpenAICompatibleStreamConfig<
 
 type ToolCallEvent = Extract<LLMEvent, { readonly type: "tool_call" }>;
 
+class MissingDoneSignalError extends KeelError {
+  constructor(providerName: string) {
+    super(
+      "provider_protocol_error",
+      `${providerName} stream ended without [DONE] signal`,
+    );
+  }
+}
+
+export function isMissingDoneSignalError(
+  error: KeelError,
+): error is KeelError & { readonly code: "provider_protocol_error" } {
+  return error instanceof MissingDoneSignalError;
+}
+
 export function getResponseReader(
   response: Response,
   providerName: string,
@@ -309,10 +324,7 @@ export function finalStreamEvents(
   providerName: string,
 ): readonly LLMEvent[] {
   if (!state.receivedDone) {
-    throw new KeelError(
-      "provider_protocol_error",
-      `${providerName} stream ended without [DONE] signal`,
-    );
+    throw new MissingDoneSignalError(providerName);
   }
 
   const hasToolCallFragments = state.toolCalls.size > 0;

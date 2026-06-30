@@ -54,6 +54,30 @@ interface FailureCase {
   readonly message: (provider: OpenAICompatibleConformanceProvider) => string;
 }
 
+interface ReplaySuccessCase {
+  readonly label: string;
+  readonly prompt: string;
+  readonly chunks: (
+    provider: OpenAICompatibleConformanceProvider,
+    requestCount: number,
+  ) => readonly string[];
+  readonly expectedEvents: (
+    provider: OpenAICompatibleConformanceProvider,
+  ) => readonly LLMEvent[];
+  readonly expectedRequests: number;
+}
+
+interface ReplayFailureCase {
+  readonly label: string;
+  readonly prompt: string;
+  readonly chunks: (
+    provider: OpenAICompatibleConformanceProvider,
+    requestCount: number,
+  ) => readonly string[];
+  readonly message: (provider: OpenAICompatibleConformanceProvider) => string;
+  readonly expectedRequests: number;
+}
+
 const usageTokens = {
   inputTokens: 10,
   outputTokens: 3,
@@ -150,6 +174,29 @@ function zeroArgumentToolResponse(
   return [
     toolCallChunk("call_conformance_ls", "ls", argumentsJson),
     finishChunk(provider, { kind: "value", value: "tool_calls" }),
+    sseDone(),
+  ];
+}
+
+function textDelta(content: string): string {
+  return sseData({
+    choices: [
+      {
+        delta: { content },
+        finish_reason: null,
+      },
+    ],
+    usage: null,
+  });
+}
+
+function textResponse(
+  provider: OpenAICompatibleConformanceProvider,
+  content: string,
+): readonly string[] {
+  return [
+    textDelta(content),
+    finishChunk(provider, { kind: "value", value: "stop" }),
     sseDone(),
   ];
 }
@@ -265,6 +312,68 @@ const failureCases = [
   },
 ] satisfies readonly FailureCase[];
 
+function providerRetryEvent(
+  provider: OpenAICompatibleConformanceProvider,
+): LLMEvent {
+  return {
+    type: "provider_retry",
+    provider: provider.name,
+    reason: "provider_protocol_error",
+    attempt: 1,
+    maxRetries: 1,
+    delayMs: 0,
+  };
+}
+
+const replaySuccessCases = [
+  {
+    label: "a pre-output incomplete stream before text",
+    prompt: "conformance-replay-before-text",
+    chunks: (provider, requestCount) =>
+      requestCount === 1 ? [] : textResponse(provider, "recovered"),
+    expectedEvents: (provider) => [
+      providerRetryEvent(provider),
+      { type: "text", text: "recovered" },
+      {
+        type: "stop",
+        reason: "stop",
+        usage: expectedUsage,
+      },
+    ],
+    expectedRequests: 2,
+  },
+  {
+    label: "a pre-output incomplete stream after tool call fragments",
+    prompt: "conformance-replay-before-tool-call",
+    chunks: (provider, requestCount) =>
+      requestCount === 1
+        ? [
+            toolCallChunk(
+              "call_discarded_read",
+              "read",
+              JSON.stringify({ path: "discarded.md" }),
+            ),
+          ]
+        : toolResponse(provider, { kind: "value", value: "tool_calls" }),
+    expectedEvents: (provider) => [
+      providerRetryEvent(provider),
+      ...readToolCallEvents,
+    ],
+    expectedRequests: 2,
+  },
+] satisfies readonly ReplaySuccessCase[];
+
+const replayFailureCases = [
+  {
+    label: "an incomplete stream after text output",
+    prompt: "conformance-no-replay-after-text",
+    chunks: () => [textDelta("partial")],
+    message: (provider) =>
+      `${provider.name} stream ended without [DONE] signal`,
+    expectedRequests: 1,
+  },
+] satisfies readonly ReplayFailureCase[];
+
 function requestBody(req: IncomingMessage): Promise<string> {
   let body = "";
   return new Promise((resolve, reject) => {
@@ -290,10 +399,16 @@ function promptFromRequestBody(body: string): string | null {
 function chunksForPrompt(
   prompt: string | null,
   provider: OpenAICompatibleConformanceProvider,
+  requestCount: number,
 ): readonly string[] | null {
   for (const row of [...successCases, ...failureCases]) {
     if (row.prompt === prompt) {
       return row.chunks(provider);
+    }
+  }
+  for (const row of [...replaySuccessCases, ...replayFailureCases]) {
+    if (row.prompt === prompt) {
+      return row.chunks(provider, requestCount);
     }
   }
   return null;
@@ -318,6 +433,7 @@ async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
   provider: OpenAICompatibleConformanceProvider,
+  requestCounts: Map<string, number>,
 ): Promise<void> {
   if (req.url !== "/chat/completions") {
     res.writeHead(404);
@@ -327,7 +443,13 @@ async function handleRequest(
 
   try {
     const body = await requestBody(req);
-    const chunks = chunksForPrompt(promptFromRequestBody(body), provider);
+    const prompt = promptFromRequestBody(body);
+    const requestCount =
+      (prompt === null ? 0 : (requestCounts.get(prompt) ?? 0)) + 1;
+    if (prompt !== null) {
+      requestCounts.set(prompt, requestCount);
+    }
+    const chunks = chunksForPrompt(prompt, provider, requestCount);
     if (chunks === null) {
       res.writeHead(500);
       res.end("unknown conformance prompt");
@@ -343,12 +465,13 @@ async function handleRequest(
 function createProvider(
   spec: OpenAICompatibleConformanceProvider,
   baseUrl: string,
+  retry: ProviderRetryConfig = { maxRetries: 0 },
 ): LLMProvider {
   return spec.createProvider({
     apiKey: `test-${spec.id}-key`,
     baseUrl,
     model: spec.model,
-    retry: { maxRetries: 0 },
+    retry,
   });
 }
 
@@ -383,10 +506,12 @@ export function runOpenAICompatibleConformance(
   describe.each(providers)("OpenAI-compatible conformance: $name", (spec) => {
     let server: Server;
     let provider: LLMProvider;
+    let requestCounts: Map<string, number>;
 
     beforeAll(async () => {
+      requestCounts = new Map();
       server = createServer((req, res) => {
-        void handleRequest(req, res, spec);
+        void handleRequest(req, res, spec, requestCounts);
       });
       await listen(server);
       provider = createProvider(spec, `http://127.0.0.1:${getPort(server)}`);
@@ -415,6 +540,55 @@ export function runOpenAICompatibleConformance(
         code: "provider_protocol_error",
         message: row.message(spec),
       });
+    });
+
+    test.each(replaySuccessCases)(`Given the enrolled provider loses $label,
+      When retry budget remains and no assistant output was emitted,
+      Then the provider replays the request and emits one recovered stream`, async (row) => {
+      // Given
+      const retryingProvider = createProvider(
+        spec,
+        `http://127.0.0.1:${getPort(server)}`,
+        {
+          maxRetries: 1,
+          initialDelayMs: 0,
+          maxDelayMs: 0,
+          jitterRatio: 0,
+        },
+      );
+
+      // When
+      const events = await streamFor(retryingProvider, row.prompt);
+
+      // Then
+      expect(events).toEqual(row.expectedEvents(spec));
+      expect(requestCounts.get(row.prompt)).toBe(row.expectedRequests);
+    });
+
+    test.each(replayFailureCases)(`Given the enrolled provider loses $label,
+      When the stream already emitted assistant output,
+      Then the provider does not replay partial output`, async (row) => {
+      // Given
+      const retryingProvider = createProvider(
+        spec,
+        `http://127.0.0.1:${getPort(server)}`,
+        {
+          maxRetries: 1,
+          initialDelayMs: 0,
+          maxDelayMs: 0,
+          jitterRatio: 0,
+        },
+      );
+
+      // When / Then
+      await expect(
+        streamFor(retryingProvider, row.prompt),
+      ).rejects.toMatchObject({
+        name: "KeelError",
+        code: "provider_protocol_error",
+        message: row.message(spec),
+      });
+      expect(requestCounts.get(row.prompt)).toBe(row.expectedRequests);
     });
   });
 }
