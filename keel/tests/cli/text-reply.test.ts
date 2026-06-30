@@ -808,6 +808,61 @@ describe("CLI Text Reply", () => {
     }
   });
 
+  test(`Given the provider stream disconnects before answering,
+    When user runs the CLI,
+    Then the CLI reports a retry and prints the recovered answer`, async () => {
+    // Given
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      req.resume();
+      req.on("end", () => {
+        requestCount++;
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (requestCount === 1) {
+          res.end();
+          return;
+        }
+        res.end(
+          sseTextReplyWithUsage("Recovered.", {
+            promptTokens: 10,
+            promptCacheHitTokens: 0,
+            promptCacheMissTokens: 10,
+            completionTokens: 3,
+          }),
+        );
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["hello"], {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(requestCount).toBe(2);
+      expect(result.stdout).toBe("Recovered.\n");
+      expect(result.stderr).toMatch(
+        /^Provider retry: DeepSeek stream interrupted \(attempt 1\/4 in \d+ms\)\n$/,
+      );
+    } finally {
+      await close(server);
+    }
+  });
+
   test(`Given no provider API key and no demo provider,
     When user runs the CLI,
     Then the CLI exits with an error message`, async () => {

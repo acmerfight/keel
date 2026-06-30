@@ -40,6 +40,13 @@ type ProviderRetryEvent = Extract<
   { readonly type: "provider_retry" }
 >;
 
+interface RetryDecision {
+  readonly reason: Exclude<KeelErrorCode, RecoverableToolErrorCode>;
+  readonly delayMs: number;
+  readonly attemptIndex: number;
+  readonly maxRetries: number;
+}
+
 const DEFAULT_PROVIDER_RETRY_CONFIG: ResolvedProviderRetryConfig = {
   maxRetries: 4,
   initialDelayMs: 500,
@@ -264,6 +271,59 @@ function retryResponseDecision(
   };
 }
 
+export class ProviderRetryController {
+  #retry: ResolvedProviderRetryConfig;
+  #attemptCount = 0;
+  #totalRetryDelayMs = 0;
+
+  constructor(retry: ProviderRetryConfig | undefined) {
+    this.#retry = resolveRetryConfig(retry);
+  }
+
+  transportDecision(
+    reason: Exclude<KeelErrorCode, RecoverableToolErrorCode>,
+  ): RetryDecision | null {
+    if (this.#attemptCount >= this.#retry.maxRetries) {
+      return null;
+    }
+
+    const delayMs = exponentialRetryDelayMs(this.#attemptCount, this.#retry);
+    if (!fitsRetryDelayBudget(this.#totalRetryDelayMs, delayMs, this.#retry)) {
+      return null;
+    }
+
+    return {
+      reason,
+      delayMs,
+      attemptIndex: this.#attemptCount,
+      maxRetries: this.#retry.maxRetries,
+    };
+  }
+
+  responseDecision(response: Response): RetryDecision | null {
+    const decision = retryResponseDecision(
+      response,
+      this.#attemptCount,
+      this.#retry,
+      this.#totalRetryDelayMs,
+    );
+    if (decision === null) {
+      return null;
+    }
+
+    return {
+      ...decision,
+      attemptIndex: this.#attemptCount,
+      maxRetries: this.#retry.maxRetries,
+    };
+  }
+
+  recordRetry(decision: RetryDecision): void {
+    this.#attemptCount = decision.attemptIndex + 1;
+    this.#totalRetryDelayMs += decision.delayMs;
+  }
+}
+
 function providerRetryEvent(
   providerName: string,
   reason: KeelErrorCode,
@@ -281,18 +341,31 @@ function providerRetryEvent(
   };
 }
 
+export async function* waitForProviderRetry(
+  retry: ProviderRetryController,
+  providerName: string,
+  signal: AbortSignal,
+  decision: RetryDecision,
+): AsyncGenerator<LLMEvent> {
+  yield providerRetryEvent(
+    providerName,
+    decision.reason,
+    decision.attemptIndex,
+    decision.maxRetries,
+    decision.delayMs,
+  );
+  retry.recordRetry(decision);
+  await sleepWithAbort(decision.delayMs, signal, providerName);
+}
+
 export async function* requestChatCompletions(
   config: ProviderConfig,
   body: string,
   signal: AbortSignal,
   providerName: string,
+  retry: ProviderRetryController = new ProviderRetryController(config.retry),
 ): AsyncGenerator<LLMEvent, Response> {
-  const retry = resolveRetryConfig(config.retry);
-  let totalRetryDelayMs = 0;
-  // Retries cover request setup and HTTP error responses before SSE parsing.
-  // Mid-stream disconnects still fail the turn to avoid replaying partial text
-  // or tool calls.
-  for (let attempt = 0; ; attempt++) {
+  for (;;) {
     let response: Response;
     try {
       response = await fetch(`${config.baseUrl}/chat/completions`, {
@@ -311,25 +384,14 @@ export async function* requestChatCompletions(
         providerName,
         `${providerName} request failed before response`,
       );
-      if (
-        attempt >= retry.maxRetries ||
-        keelError.code !== "provider_network_error"
-      ) {
+      if (keelError.code !== "provider_network_error") {
         throw keelError;
       }
-      const delayMs = exponentialRetryDelayMs(attempt, retry);
-      if (!fitsRetryDelayBudget(totalRetryDelayMs, delayMs, retry)) {
+      const decision = retry.transportDecision(keelError.code);
+      if (decision === null) {
         throw keelError;
       }
-      yield providerRetryEvent(
-        providerName,
-        keelError.code,
-        attempt,
-        retry.maxRetries,
-        delayMs,
-      );
-      totalRetryDelayMs += delayMs;
-      await sleepWithAbort(delayMs, signal, providerName);
+      yield* waitForProviderRetry(retry, providerName, signal, decision);
       continue;
     }
 
@@ -337,23 +399,10 @@ export async function* requestChatCompletions(
       return response;
     }
 
-    const retryDecision = retryResponseDecision(
-      response,
-      attempt,
-      retry,
-      totalRetryDelayMs,
-    );
+    const retryDecision = retry.responseDecision(response);
     if (retryDecision !== null) {
-      yield providerRetryEvent(
-        providerName,
-        retryDecision.reason,
-        attempt,
-        retry.maxRetries,
-        retryDecision.delayMs,
-      );
       await discardResponseBody(response);
-      totalRetryDelayMs += retryDecision.delayMs;
-      await sleepWithAbort(retryDecision.delayMs, signal, providerName);
+      yield* waitForProviderRetry(retry, providerName, signal, retryDecision);
       continue;
     }
 
