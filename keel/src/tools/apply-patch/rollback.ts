@@ -14,6 +14,19 @@ import {
 } from "./filesystem.ts";
 import type { AppliedPatchOperation } from "./model.ts";
 
+export function applyWithRollback<AppliedOperation, Result>(options: {
+  readonly apply: (appliedOperations: AppliedOperation[]) => Result;
+  readonly rollback: (appliedOperations: readonly AppliedOperation[]) => void;
+}): Result {
+  const appliedOperations: AppliedOperation[] = [];
+  try {
+    return options.apply(appliedOperations);
+  } catch (error) {
+    options.rollback(appliedOperations);
+    throw error;
+  }
+}
+
 function restoreDeletedTextFileBestEffort(
   operation: Extract<
     AppliedPatchOperation,
