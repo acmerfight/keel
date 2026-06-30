@@ -15,6 +15,40 @@ export interface ImportedBinding {
   readonly location: string;
 }
 
+export type LiteralValue = string | number;
+export type TestExpectationMatcher = "toBe" | "toContain" | "toHaveLength";
+
+export type TestExpectationArgument =
+  | {
+      readonly kind: "literal";
+      readonly value: LiteralValue;
+    }
+  | {
+      readonly kind: "identifier";
+      readonly name: string;
+    }
+  | {
+      readonly kind: "containsString";
+      readonly value: string;
+    };
+
+export interface TestExpectationEvidence {
+  readonly matcher: TestExpectationMatcher;
+  readonly argument: TestExpectationArgument;
+  readonly negated: boolean;
+}
+
+export interface ActiveTestEvidence {
+  readonly bodyStrings: readonly string[];
+  readonly testEachValues: readonly LiteralValue[];
+  readonly expectations: readonly TestExpectationEvidence[];
+}
+
+export interface ActiveTestBody {
+  readonly body: ts.ConciseBody;
+  readonly testEachValues: readonly LiteralValue[];
+}
+
 export function collectTypeScriptFiles(directory: string): readonly string[] {
   const files: string[] = [];
 
@@ -73,6 +107,203 @@ export function propertyNameText(node: ts.PropertyName): string | null {
   }
   /* v8 ignore next -- invariant scans intentionally ignore computed keys. */
   return null;
+}
+
+export function stringLiteralValue(node: ts.Node): string | null {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return node.text;
+  }
+  return null;
+}
+
+function literalValue(node: ts.Node): LiteralValue | null {
+  const stringValue = stringLiteralValue(node);
+  if (stringValue !== null) return stringValue;
+  if (ts.isNumericLiteral(node)) return Number(node.text);
+  return null;
+}
+
+function stringLiteralsIn(node: ts.Node): readonly string[] {
+  const literals: string[] = [];
+
+  function visit(child: ts.Node): void {
+    const value = stringLiteralValue(child);
+    if (value !== null) {
+      literals.push(value);
+    }
+    ts.forEachChild(child, visit);
+  }
+
+  visit(node);
+  return literals;
+}
+
+function expressionContainsStringLiteral(
+  expression: ts.Expression,
+  expected: string,
+): boolean {
+  let found = false;
+
+  function visit(node: ts.Node): void {
+    if (found) return;
+    if (stringLiteralValue(node) === expected) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(expression);
+  return found;
+}
+
+function argumentMatchesEvidence(
+  argument: ts.Expression,
+  expected: TestExpectationArgument,
+): boolean {
+  if (expected.kind === "literal") {
+    return literalValue(argument) === expected.value;
+  }
+  if (expected.kind === "identifier") {
+    return ts.isIdentifier(argument) && argument.text === expected.name;
+  }
+  return expressionContainsStringLiteral(argument, expected.value);
+}
+
+function testEachValues(
+  expression: ts.Expression,
+): readonly LiteralValue[] | null {
+  if (
+    !ts.isCallExpression(expression) ||
+    !ts.isPropertyAccessExpression(expression.expression) ||
+    expression.expression.name.text !== "each" ||
+    !ts.isIdentifier(expression.expression.expression) ||
+    expression.expression.expression.text !== "test"
+  ) {
+    return null;
+  }
+
+  const cases = expression.arguments[0];
+  if (cases === undefined || !ts.isArrayLiteralExpression(cases)) return [];
+  const values: LiteralValue[] = [];
+  for (const element of cases.elements) {
+    const value = literalValue(element);
+    if (value !== null) values.push(value);
+  }
+  return values;
+}
+
+function activeTestBody(node: ts.CallExpression): ActiveTestBody | null {
+  const eachValues = testEachValues(node.expression);
+  const isTestCall =
+    ts.isIdentifier(node.expression) && node.expression.text === "test";
+  if (!isTestCall && eachValues === null) return null;
+
+  const callback = node.arguments[1];
+  if (
+    callback === undefined ||
+    (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback))
+  ) {
+    return null;
+  }
+
+  return {
+    body: callback.body,
+    testEachValues: eachValues ?? [],
+  };
+}
+
+export function activeTestBodies(
+  source: ParsedSource,
+): readonly ActiveTestBody[] {
+  const bodies: ActiveTestBody[] = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node)) {
+      const body = activeTestBody(node);
+      if (body !== null) {
+        bodies.push(body);
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source.sourceFile);
+  return bodies;
+}
+
+function callMatchesExpectation(
+  call: ts.CallExpression,
+  expectation: TestExpectationEvidence,
+): boolean {
+  if (
+    !ts.isPropertyAccessExpression(call.expression) ||
+    call.expression.name.text !== expectation.matcher
+  ) {
+    return false;
+  }
+
+  const value = call.arguments[0];
+  if (
+    value === undefined ||
+    !argumentMatchesEvidence(value, expectation.argument)
+  ) {
+    return false;
+  }
+
+  const receiver = call.expression.expression;
+  const negated =
+    ts.isPropertyAccessExpression(receiver) && receiver.name.text === "not";
+  return negated === expectation.negated;
+}
+
+function bodyHasExpectation(
+  body: ts.Node,
+  expectation: TestExpectationEvidence,
+): boolean {
+  let found = false;
+
+  function visit(node: ts.Node): void {
+    if (found) return;
+    if (
+      ts.isCallExpression(node) &&
+      callMatchesExpectation(node, expectation)
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(body);
+  return found;
+}
+
+export function activeTestSatisfiesEvidence(
+  testBody: ActiveTestBody,
+  evidence: ActiveTestEvidence,
+): boolean {
+  const bodyStrings = new Set(stringLiteralsIn(testBody.body));
+  for (const bodyString of evidence.bodyStrings) {
+    if (!bodyStrings.has(bodyString)) return false;
+  }
+  for (const value of evidence.testEachValues) {
+    if (!testBody.testEachValues.includes(value)) return false;
+  }
+  for (const expectation of evidence.expectations) {
+    if (!bodyHasExpectation(testBody.body, expectation)) return false;
+  }
+  return true;
+}
+
+export function sourceHasActiveTestEvidence(
+  source: ParsedSource,
+  evidence: ActiveTestEvidence,
+): boolean {
+  return activeTestBodies(source).some((body) =>
+    activeTestSatisfiesEvidence(body, evidence),
+  );
 }
 
 export function variableInitializer(

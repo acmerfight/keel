@@ -1,16 +1,18 @@
 import ts from "typescript";
 import { describe, expect, test } from "vitest";
 import {
+  type ActiveTestEvidence,
   collectTypeScriptFiles,
   importedBindings,
   type ParsedSource,
   parseSource,
   parseSourceText,
+  sourceHasActiveTestEvidence,
+  stringLiteralValue,
 } from "./_ast.ts";
 
 type ProcessLifecycle = "exit-drain" | "close-settle";
 type ProcessLifecycleEvent = "exit" | "close";
-type BehavioralMatcher = "toBe" | "toContain";
 
 interface ProcessLifecycleEntry {
   readonly tool: string;
@@ -31,14 +33,7 @@ interface BehavioralLifecycleEntry {
 
 interface BehavioralEvidence {
   readonly testPath: string;
-  readonly bodyStrings: readonly string[];
-  readonly expectations: readonly BehavioralExpectation[];
-}
-
-interface BehavioralExpectation {
-  readonly matcher: BehavioralMatcher;
-  readonly value: string;
-  readonly negated: boolean;
+  readonly evidence: ActiveTestEvidence;
 }
 
 const applyPatchSource = parseSource("src/tools/apply-patch.ts");
@@ -75,15 +70,21 @@ const statefulBehaviorCatalog = [
     evidence: [
       {
         testPath: "tests/cli/main/session-errors.test.ts",
-        bodyStrings: [],
-        expectations: [
-          {
-            matcher: "toBe",
-            value:
-              'Error: session "active" is already active. Stop the other Keel process before using it again.\n',
-            negated: false,
-          },
-        ],
+        evidence: {
+          bodyStrings: [],
+          testEachValues: [],
+          expectations: [
+            {
+              matcher: "toBe",
+              argument: {
+                kind: "literal",
+                value:
+                  'Error: session "active" is already active. Stop the other Keel process before using it again.\n',
+              },
+              negated: false,
+            },
+          ],
+        },
       },
     ],
   },
@@ -92,19 +93,28 @@ const statefulBehaviorCatalog = [
     evidence: [
       {
         testPath: "tests/cli/main/session-errors.test.ts",
-        bodyStrings: ["snapshot-question"],
-        expectations: [
-          {
-            matcher: "toBe",
-            value: "Earlier you said: remember alpha\n",
-            negated: false,
-          },
-          {
-            matcher: "toContain",
-            value: '"consumedInputIds":["snapshot-question"]',
-            negated: false,
-          },
-        ],
+        evidence: {
+          bodyStrings: ["snapshot-question"],
+          testEachValues: [],
+          expectations: [
+            {
+              matcher: "toBe",
+              argument: {
+                kind: "literal",
+                value: "Earlier you said: remember alpha\n",
+              },
+              negated: false,
+            },
+            {
+              matcher: "toContain",
+              argument: {
+                kind: "literal",
+                value: '"consumedInputIds":["snapshot-question"]',
+              },
+              negated: false,
+            },
+          ],
+        },
       },
     ],
   },
@@ -113,14 +123,17 @@ const statefulBehaviorCatalog = [
     evidence: [
       {
         testPath: "tests/cli/main/session-fork.test.ts",
-        bodyStrings: ["remember alpha"],
-        expectations: [
-          {
-            matcher: "toContain",
-            value: "remember beta",
-            negated: true,
-          },
-        ],
+        evidence: {
+          bodyStrings: ["remember alpha"],
+          testEachValues: [],
+          expectations: [
+            {
+              matcher: "toContain",
+              argument: { kind: "literal", value: "remember beta" },
+              negated: true,
+            },
+          ],
+        },
       },
     ],
   },
@@ -129,19 +142,28 @@ const statefulBehaviorCatalog = [
     evidence: [
       {
         testPath: "tests/cli/main/skills-command.test.ts",
-        bodyStrings: [],
-        expectations: [
-          {
-            matcher: "toContain",
-            value: "> Original review workflow body.",
-            negated: false,
-          },
-          {
-            matcher: "toContain",
-            value: "Changed review workflow body.",
-            negated: true,
-          },
-        ],
+        evidence: {
+          bodyStrings: [],
+          testEachValues: [],
+          expectations: [
+            {
+              matcher: "toContain",
+              argument: {
+                kind: "literal",
+                value: "> Original review workflow body.",
+              },
+              negated: false,
+            },
+            {
+              matcher: "toContain",
+              argument: {
+                kind: "literal",
+                value: "Changed review workflow body.",
+              },
+              negated: true,
+            },
+          ],
+        },
       },
     ],
   },
@@ -173,13 +195,6 @@ function callsIdentifier(source: ParsedSource, name: string): boolean {
 
   visit(source.sourceFile);
   return found;
-}
-
-function stringLiteralValue(node: ts.Node): string | null {
-  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-    return node.text;
-  }
-  return null;
 }
 
 function sourceMap(
@@ -356,102 +371,6 @@ function multiFileMutatorViolations(
   return violations;
 }
 
-function activeTestBodies(source: ParsedSource): readonly ts.Node[] {
-  const bodies: ts.Node[] = [];
-
-  function visit(node: ts.Node): void {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "test"
-    ) {
-      const callback = node.arguments[1];
-      if (
-        callback !== undefined &&
-        (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))
-      ) {
-        bodies.push(callback.body);
-      }
-      return;
-    }
-    ts.forEachChild(node, visit);
-  }
-
-  visit(source.sourceFile);
-  return bodies;
-}
-
-function stringLiteralsIn(node: ts.Node): readonly string[] {
-  const literals: string[] = [];
-
-  function visit(child: ts.Node): void {
-    const value = stringLiteralValue(child);
-    if (value !== null) {
-      literals.push(value);
-    }
-    ts.forEachChild(child, visit);
-  }
-
-  visit(node);
-  return literals;
-}
-
-function callMatchesExpectation(
-  call: ts.CallExpression,
-  expectation: BehavioralExpectation,
-): boolean {
-  if (
-    !ts.isPropertyAccessExpression(call.expression) ||
-    call.expression.name.text !== expectation.matcher
-  ) {
-    return false;
-  }
-  const value = call.arguments[0];
-  if (value === undefined || stringLiteralValue(value) !== expectation.value) {
-    return false;
-  }
-  const receiver = call.expression.expression;
-  const negated =
-    ts.isPropertyAccessExpression(receiver) && receiver.name.text === "not";
-  return negated === expectation.negated;
-}
-
-function bodyHasExpectation(
-  body: ts.Node,
-  expectation: BehavioralExpectation,
-): boolean {
-  let found = false;
-
-  function visit(node: ts.Node): void {
-    if (found) return;
-    if (
-      ts.isCallExpression(node) &&
-      callMatchesExpectation(node, expectation)
-    ) {
-      found = true;
-      return;
-    }
-    ts.forEachChild(node, visit);
-  }
-
-  visit(body);
-  return found;
-}
-
-function bodySatisfiesEvidence(
-  body: ts.Node,
-  evidence: BehavioralEvidence,
-): boolean {
-  const literals = new Set(stringLiteralsIn(body));
-  for (const bodyString of evidence.bodyStrings) {
-    if (!literals.has(bodyString)) return false;
-  }
-  for (const expectation of evidence.expectations) {
-    if (!bodyHasExpectation(body, expectation)) return false;
-  }
-  return true;
-}
-
 function behavioralLifecycleViolations(
   entries: readonly BehavioralLifecycleEntry[] = statefulBehaviorCatalog,
   sourceOverrides: ReadonlyMap<string, ParsedSource> = new Map(),
@@ -465,11 +384,7 @@ function behavioralLifecycleViolations(
         source = parseSource(evidence.testPath);
         parsedSources.set(evidence.testPath, source);
       }
-      if (
-        !activeTestBodies(source).some((body) =>
-          bodySatisfiesEvidence(body, evidence),
-        )
-      ) {
+      if (!sourceHasActiveTestEvidence(source, evidence.evidence)) {
         violations.push(
           `${entry.behavior} evidence missing from ${evidence.testPath}`,
         );
@@ -622,14 +537,20 @@ describe("lifecycle invariants", () => {
             evidence: [
               {
                 testPath: "tests/cli/main/session-errors.test.ts",
-                bodyStrings: ["snapshot-question"],
-                expectations: [
-                  {
-                    matcher: "toBe",
-                    value: "Earlier you said: remember alpha\n",
-                    negated: false,
-                  },
-                ],
+                evidence: {
+                  bodyStrings: ["snapshot-question"],
+                  testEachValues: [],
+                  expectations: [
+                    {
+                      matcher: "toBe",
+                      argument: {
+                        kind: "literal",
+                        value: "Earlier you said: remember alpha\n",
+                      },
+                      negated: false,
+                    },
+                  ],
+                },
               },
             ],
           },
