@@ -41,7 +41,7 @@ Layer rules are enforced by `tests/invariants/boundaries.test.ts`:
 
 Build user-runnable vertical slices. After each PR, a user should be able to run a command or exercise an agent workflow and observe the improvement; avoid shipping only internal architecture unless it directly unlocks the slice.
 
-Keel is pre-release. Prefer clean breaking changes over compatibility shims for old internal schemas or unfinished command shapes, while keeping each slice runnable and preserving safety boundaries.
+Keel is pre-release. Implement only the latest product model. Do not add compatibility shims, migrations, fallback readers, old CLI aliases, legacy schema support, or compatibility tests for old internal data, draft schemas, or unfinished command shapes unless explicitly requested. Keep each slice runnable and preserve safety boundaries.
 
 Prioritize foundational usability before expansion. Interactive/provider/model/context/edit/session/approval gaps come before standalone eval-corpus work, marketplaces, MCP, IDE integration, or sub-agents. Add eval tasks when they are tied to a real product fix or preserved failure.
 

@@ -46,8 +46,9 @@ Read the diff once, inspect key surrounding code, then produce findings.
 1. Identify the exact review target and base. Prefer the PR base or `origin/main...HEAD`.
 2. Inspect the diff first, then read owning code, tests, and only the relevant repo docs.
 3. Review against reachable behavior, safety invariants, and repo boundaries from the docs.
-4. For GitHub PRs, check PR CI status with `gh pr checks` before local verification. If the current PR head already has passing CI, do not run local `pnpm` checks unless checks are stale/missing/failing or the diff exposes a specific uncovered risk.
-5. Treat submodules as read-only references unless the review target explicitly includes submodule changes.
+4. Flag unrequested legacy compatibility. Keel is pre-release; compatibility shims, migrations, fallback readers, old CLI aliases, legacy schema support, and compatibility tests for old internal data, draft schemas, or unfinished command shapes are defects unless explicitly requested. Current-schema recovery is allowed only when it does not read, transform, or preserve old formats.
+5. For GitHub PRs, check PR CI status with `gh pr checks` before local verification. If the current PR head already has passing CI, do not run local `pnpm` checks unless checks are stale/missing/failing or the diff exposes a specific uncovered risk.
+6. Treat submodules as read-only references unless the review target explicitly includes submodule changes.
 
 ## PR Comment
 

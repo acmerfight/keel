@@ -16,8 +16,13 @@ Detailed engineering guidance for Keel. `AGENTS.md` and `CLAUDE.md` stay short b
 
 ## Pre-Release Compatibility
 
-Keel is not released yet. Prefer clean product model changes over compatibility
-shims for old internal data, unfinished CLI shapes, or draft schemas.
+Keel is pre-release. Implement only the latest product model.
+Do not add compatibility shims, migrations, fallback readers, old CLI aliases,
+legacy schema support, or compatibility tests for old internal data, draft
+schemas, or unfinished command shapes unless explicitly requested.
+
+Current-schema recovery may handle corrupted current data only; it must not
+read, transform, or preserve old formats.
 
 Allowed breaking changes:
 

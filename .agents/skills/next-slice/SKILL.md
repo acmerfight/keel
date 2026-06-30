@@ -77,7 +77,8 @@ Do not modify submodule contents. Treat reference agents as read-only evidence.
 5. Compare with peer agents when a candidate overlaps a known agent capability. Cite local source files and line numbers for each factual claim.
 6. Prefer foundational gaps over eval-only or polish work when basic product capabilities are incomplete.
 7. Prefer narrow vertical slices over broad infrastructure unless the infrastructure is blocking multiple high-value slices.
-8. Mark inferences explicitly. Do not present guesses as facts.
+8. Reject candidates that add compatibility shims, migrations, fallback readers, old CLI aliases, legacy schema support, or compatibility tests for old internal data, draft schemas, or unfinished command shapes unless explicitly requested. Optimize for the latest product model.
+9. Mark inferences explicitly. Do not present guesses as facts.
 
 ## Output
 
