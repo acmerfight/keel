@@ -23,7 +23,14 @@ export function parseCliArgs(args: readonly string[]): CliArgsParseResult {
   }
 
   if (args[0] === "/undo") {
-    return parseOk({ command: "undo" });
+    if (args.length === 1) {
+      return parseOk({ command: "undo", mode: "restore" });
+    }
+    if (args.length === 2 && args[1] === "--list") {
+      return parseOk({ command: "undo", mode: "list" });
+    }
+    const unknownUndoOption = args[1] === "--list" ? args[2] : args[1];
+    return parseError(`Error: unknown undo option "${unknownUndoOption}"`);
   }
 
   if (args[0] === "sessions") {

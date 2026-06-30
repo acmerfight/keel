@@ -49,10 +49,12 @@ export function executeApplyPatch(
           verifyAppliedOperation(appliedOperation);
       }
       const operations = appliedOperations.flatMap(checkpointOperationsFor);
-      recordLastBatchCheckpoint({
-        workspace,
-        operations,
-      });
+      if (options.recordCheckpoint !== false) {
+        recordLastBatchCheckpoint({
+          workspace,
+          operations,
+        });
+      }
       return {
         checkpointOperations: operations,
         targetPaths: appliedOperations.flatMap(appliedTargetPaths),

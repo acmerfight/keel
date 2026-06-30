@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import {
+  formatUndoCheckpointList,
   printAgentEvents,
   printStableInteractiveAgentEvents,
   sanitizeStatusLineText,
@@ -20,6 +21,19 @@ async function* agentEvents(
 }
 
 describe("CLI Output", () => {
+  test(`Given there are no undo checkpoints,
+    When the CLI formats the undo checkpoint list,
+    Then it tells the user there are no checkpoints`, () => {
+    // Given
+    const checkpoints: readonly { readonly restoredLabel: string }[] = [];
+
+    // When
+    const output = formatUndoCheckpointList(checkpoints);
+
+    // Then
+    expect(output).toBe("No undo checkpoints.\n");
+  });
+
   test(`Given a glob tool call searches the workspace root,
     When the CLI prints agent events,
     Then the progress label only includes the pattern`, async () => {

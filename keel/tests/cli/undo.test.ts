@@ -205,6 +205,9 @@ describe("CLI Undo", () => {
       expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
         "second old\n",
       );
+      const list = await runCli(["/undo", "--list"], { cwd: workspace });
+      expect(list.exitCode).toBe(0);
+      expect(list.stdout).toBe("No undo checkpoints.\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -427,7 +430,7 @@ describe("CLI Undo", () => {
 
       // Then
       expect(undo.exitCode).toBe(0);
-      expect(undo.stdout).toBe("Restored 1 files\n");
+      expect(undo.stdout).toBe("Restored obsolete.txt\n");
       expect(await readFile(join(workspace, "obsolete.txt"), "utf8")).toBe(
         "obsolete\n",
       );
@@ -573,8 +576,8 @@ describe("CLI Undo", () => {
   });
 
   test(`Given Keel successfully edits two files in separate runs,
-    When user runs the undo command once and asks again,
-    Then only the latest edit is restored and the second attempt explains the next actions`, async () => {
+    When user runs the undo command twice,
+    Then each task is restored in reverse order`, async () => {
     // Given
     const workspace = await createGitWorkspace();
     await commitFile(workspace, "first.txt", "first old\n");
@@ -595,19 +598,63 @@ describe("CLI Undo", () => {
       // When
       const undo = await runCli(["/undo"], { cwd: workspace });
       const secondUndo = await runCli(["/undo"], { cwd: workspace });
+      const thirdUndo = await runCli(["/undo"], { cwd: workspace });
 
       // Then
       expect(undo.exitCode).toBe(0);
-      expect(secondUndo.exitCode).not.toBe(0);
-      expect(secondUndo.stdout).toBe("");
-      expect(secondUndo.stderr).toBe(
+      expect(undo.stdout).toBe("Restored second.txt\n");
+      expect(secondUndo.exitCode).toBe(0);
+      expect(secondUndo.stdout).toBe("Restored first.txt\n");
+      expect(thirdUndo.exitCode).not.toBe(0);
+      expect(thirdUndo.stdout).toBe("");
+      expect(thirdUndo.stderr).toBe(
         "No earlier checkpoints. Ask me to undo more, or use git to reset.\n",
+      );
+      expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
+        "first old\n",
+      );
+      expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
+        "second old\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given Keel has multiple undo checkpoints,
+    When user lists undo checkpoints,
+    Then the CLI shows the remaining tasks newest first without restoring them`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    await commitFile(workspace, "first.txt", "first old\n");
+    await commitFile(workspace, "second.txt", "second old\n");
+
+    try {
+      const firstEdit = await runCli(["replace old with new in first.txt"], {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "fake" },
+      });
+      expect(firstEdit.exitCode).toBe(0);
+      const secondEdit = await runCli(["replace old with new in second.txt"], {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "fake" },
+      });
+      expect(secondEdit.exitCode).toBe(0);
+
+      // When
+      const list = await runCli(["/undo", "--list"], { cwd: workspace });
+
+      // Then
+      expect(list.exitCode).toBe(0);
+      expect(list.stderr).toBe("");
+      expect(list.stdout).toBe(
+        ["Undo checkpoints:", "1. second.txt", "2. first.txt", ""].join("\n"),
       );
       expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
         "first new\n",
       );
       expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
-        "second old\n",
+        "second new\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

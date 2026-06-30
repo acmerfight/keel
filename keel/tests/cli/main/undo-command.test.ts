@@ -28,7 +28,7 @@ describe("CLI Main - Undo Command", () => {
     }
   });
 
-  test(`Given the last edit checkpoint can be restored,
+  test(`Given the latest undo checkpoint can be restored,
     When the CLI main dispatches undo,
     Then it restores the file and reports the path`, async () => {
     // Given
@@ -59,7 +59,50 @@ describe("CLI Main - Undo Command", () => {
     }
   });
 
-  test(`Given the last edit checkpoint no longer matches the file,
+  test(`Given undo checkpoints exist,
+    When the CLI main dispatches undo list,
+    Then it reports the checkpoints without restoring files`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-undo-list-"));
+    await runGit(workspace, ["init"]);
+    await writeFile(join(workspace, "first.txt"), "after first\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath: join(workspace, "first.txt"),
+      beforeContent: "before first\n",
+      afterContent: "after first\n",
+    });
+    await writeFile(join(workspace, "second.txt"), "after second\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath: join(workspace, "second.txt"),
+      beforeContent: "before second\n",
+      afterContent: "after second\n",
+    });
+    const fixture = createRuntime(["/undo", "--list"], { cwd: workspace });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe(
+        ["Undo checkpoints:", "1. second.txt", "2. first.txt", ""].join("\n"),
+      );
+      expect(fixture.stderr()).toBe("");
+      expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
+        "after first\n",
+      );
+      expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
+        "after second\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the latest undo checkpoint no longer matches the file,
     When the CLI main dispatches undo,
     Then it refuses to overwrite the user's newer changes`, async () => {
     // Given
