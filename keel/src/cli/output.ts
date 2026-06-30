@@ -92,6 +92,7 @@ const providerRetryReasonLabels: Readonly<Record<string, string>> = {
   provider_rate_limited: "rate limited",
   provider_server_error: "server error",
   provider_network_error: "network error",
+  provider_protocol_error: "stream interrupted",
   provider_http_error: "HTTP error",
 };
 

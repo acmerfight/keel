@@ -2,10 +2,11 @@
 
 ## Principles
 
-1. **Only mock LLM in agent-facing tests.** `fake` provider is the agent seam. Everything else — filesystem, processes, git — is real. Provider contract tests may use a local protocol server instead of the real upstream API. Isolation means tmpdir, not mock.
+1. **Only mock the LLM.** In agent-facing tests, the `fake` provider is the agent seam. Everything else — filesystem, processes, git — is real. Provider contract tests may use a local protocol server instead of the real upstream API. Isolation means tmpdir, not mock.
 2. **BDD.** Tests are written in GWTE (Given-When-Then-Expect) language for the audience that owns that boundary. `agent/` and `cli/` titles should read as product behavior. `tools/`, `providers/`, and `invariants/` titles should read as tool, protocol, or architecture contracts.
 3. **Slice acceptance is user-visible.** A behavior slice needs at least one BDD test that proves the user-runnable command or agent workflow and its observable result.
-4. **Tests = executable specification.** If a behavior isn't in the test suite, it doesn't exist. If a test passes, the feature works.
+4. **Test observable behavior, not implementation.** Assert the result visible at the boundary that owns the risk: CLI output and exit status, file or state changes, emitted events, requests sent to a local server, error codes/messages, or tool results. Do not assert private control flow, helper calls, random samples, sleep decisions, loop shape, or other implementation details.
+5. **Tests = executable specification.** If a behavior isn't in the test suite, it doesn't exist. If a test passes, the feature works.
 
 ## Test Titles
 
@@ -117,6 +118,7 @@ Provider history replay must preserve all model-visible context across turns. Do
 ## Do NOT
 
 - Mock anything except LLM
+- Test implementation details
 - Test private functions
 - Put fixture or protocol language in `agent/` and `cli/` test names
 

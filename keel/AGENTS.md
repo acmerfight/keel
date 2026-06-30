@@ -45,7 +45,7 @@ Keel is pre-release. Prefer clean breaking changes over compatibility shims for 
 
 Prioritize foundational usability before expansion. Interactive/provider/model/context/edit/session/approval gaps come before standalone eval-corpus work, marketplaces, MCP, IDE integration, or sub-agents. Add eval tasks when they are tied to a real product fix or preserved failure.
 
-Test behavior before implementation. Start with a failing GWTE test that proves the user-visible slice result, then add narrower provider, tool, or invariant tests for the contracts that own the risk.
+Test observable behavior before implementation. Start with a failing GWTE test that proves the user-visible slice result, then add narrower provider, tool, or invariant tests for the boundary contracts that own the risk. Do not test implementation details.
 
 Keep safety boundaries explicit. Preserve every representation that can carry authorization meaning, validate both requested and resolved paths before acting, and parse external data through schemas before business logic.
 
@@ -78,7 +78,7 @@ When a workflow skill is triggered, follow that skill's description and `SKILL.m
 
 ## Development
 
-BDD first. Every feature starts with a failing GWTE test unless the change is pure mechanical docs/refactor and cannot change behavior.
+BDD first. Every feature starts with a failing GWTE test for observable behavior unless the change is pure mechanical docs/refactor and cannot change behavior.
 
 Every deliverable is a vertical slice: after the PR, a user can run a command or exercise an agent workflow and observe the result. See [SLICING.md](SLICING.md).
 
@@ -106,5 +106,6 @@ See [TESTING.md](TESTING.md). Short version:
 
 1. Only mock the LLM through the `fake` provider; everything else is real.
 2. BDD with GWTE titles.
-3. PR-ready verification uses `pnpm test:coverage`, then `pnpm coverage:patch` when coverable code changed.
-4. The slice acceptance test proves the user-visible result. Add narrower tests at the risk boundary: agent for loop control flow, provider for protocol, tools for tool contracts, invariants for architecture.
+3. Test observable behavior, not implementation details.
+4. PR-ready verification uses `pnpm test:coverage`, then `pnpm coverage:patch` when coverable code changed.
+5. The slice acceptance test proves the user-visible result. Add narrower tests at the risk boundary: agent for loop outcomes, provider for protocol, tools for tool contracts, invariants for architecture.

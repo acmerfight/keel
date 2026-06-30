@@ -535,6 +535,16 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "empty-truncated") {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+            });
+            res.end();
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "length-limit") {
             res.writeHead(200, {
               "Content-Type": "text/event-stream",
@@ -2646,6 +2656,33 @@ describe("DeepSeek Provider", () => {
     });
   });
 
+  test(`Given the stream ends before output and retries are disabled,
+    When provider finishes reading,
+    Then it throws the incomplete stream error without replaying`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: { maxRetries: 0 },
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "empty-truncated" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_protocol_error",
+      message: "DeepSeek stream ended without [DONE] signal",
+    });
+  });
+
   test(`Given the model hits max tokens,
     When finish_reason is "length",
     Then provider yields a length stop reason with the partial response`, async () => {
@@ -3929,6 +3966,86 @@ describe("DeepSeek Provider", () => {
     }
   });
 
+  test(`Given the provider stream disconnects before assistant output,
+    When retry budget remains,
+    Then it retries the stream network error and streams successfully`, async () => {
+    // Given
+    let requests = 0;
+    const retryServer = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        requests++;
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (requests === 1) {
+          res.flushHeaders();
+          res.destroy();
+          return;
+        }
+        res.end([sseChunk("stream recovered"), sseFinish(1, 1)].join(""));
+      });
+    });
+    await new Promise<void>((resolve) => {
+      retryServer.listen(0, "127.0.0.1", resolve);
+    });
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl: `http://127.0.0.1:${getPort(retryServer)}`,
+      model: "deepseek-v4-flash",
+      retry: {
+        maxRetries: 1,
+        initialDelayMs: 0,
+        maxDelayMs: 0,
+        jitterRatio: 0,
+      },
+    });
+
+    try {
+      // When
+      const events = await collect(
+        provider.stream({
+          systemPrompt: "You are helpful.",
+          messages: [{ role: "user", content: "hi" }],
+          signal: freshSignal(),
+        }),
+      );
+
+      // Then
+      expect(requests).toBe(2);
+      expect(events).toEqual([
+        {
+          type: "provider_retry",
+          provider: "DeepSeek",
+          reason: "provider_network_error",
+          attempt: 1,
+          maxRetries: 1,
+          delayMs: 0,
+        },
+        { type: "text", text: "stream recovered" },
+        {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+        },
+      ]);
+    } finally {
+      await closeServer(retryServer);
+    }
+  });
+
   test(`Given a network retry would exceed the total retry budget,
     When provider cannot connect,
     Then it stops without waiting for the retry`, async () => {
@@ -3947,20 +4064,25 @@ describe("DeepSeek Provider", () => {
       },
     });
 
+    const events: LLMEvent[] = [];
+
     // When / Then
     await expect(
-      collect(
-        provider.stream({
+      (async () => {
+        for await (const event of provider.stream({
           systemPrompt: "You are helpful.",
           messages: [{ role: "user", content: "hi" }],
           signal: freshSignal(),
-        }),
-      ),
+        })) {
+          events.push(event);
+        }
+      })(),
     ).rejects.toMatchObject({
       name: "KeelError",
       code: "provider_network_error",
       message: "DeepSeek request failed before response",
     });
+    expect(events).toEqual([]);
   });
 
   test(`Given a retryable provider failure enters backoff,
