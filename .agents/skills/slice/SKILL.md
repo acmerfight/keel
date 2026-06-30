@@ -21,6 +21,17 @@ Use this only after the implementation target is clear.
 
 Once this workflow starts, continue implementation, review, QA, CI triage, and PR updates inside `$slice`. Resolve ordinary best-practice checks from local project docs and the current code. If a genuinely unresolved design question blocks progress, ask whether to pause the slice for `$agent-research` instead of auto-switching.
 
+## Pre-Release Compatibility Gate
+
+Keel is pre-release. Implement only the latest product model.
+Do not add compatibility shims, migrations, fallback readers, old CLI aliases,
+legacy schema support, or compatibility tests for old internal data, draft
+schemas, or unfinished command shapes unless explicitly requested.
+
+Current-schema recovery may handle corrupted current data only; it must not
+read, transform, or preserve old formats. Treat unrequested legacy compatibility
+as a correctness defect.
+
 ## Fast Invocation
 
 Accept short requests. The target can be a GitHub issue number, issue URL, PR URL, or plain slice description.
@@ -99,6 +110,7 @@ Run professional QA before opening or updating the PR.
 - Run `pnpm test:coverage` for PR-ready verification. Use `pnpm test` only for fast local iteration.
 - Run `pnpm coverage:patch` after coverage and after commit, before push, when the slice changes coverable code.
 - For pure docs/skill-only changes, run the relevant metadata or Markdown validators and explain why the Keel test suite was not run.
+- Before opening or updating the PR, search changed files for `legacy`, `old schema`, `migration`, `fallback`, `backward compatibility`, `compatibility shim`, `compatibility test`, and `old CLI alias`; remove unrequested compatibility code or note why the hit is only current-schema recovery or documentation.
 - Use a real DeepSeek key for end-to-end QA when the slice has provider-visible behavior and the key is available. Never fake this result.
 - Record exact commands and outcomes in the PR body.
 

@@ -50,10 +50,12 @@ attached to a real product fix or when a real failure must be preserved for
 regression, but do not let eval work displace foundational usability.
 
 Keel is pre-release. Optimize the roadmap for a coherent first usable product,
-not for compatibility with old internal schemas or unfinished command shapes.
-Breaking session, report, eval, or provider-config formats is acceptable when it
-simplifies the product model, as long as each merged slice remains runnable and
-safety boundaries stay intact.
+not for compatibility with old internal data, draft schemas, or unfinished
+command shapes. Do not add compatibility shims, migrations, fallback readers,
+old CLI aliases, legacy schema support, or compatibility tests unless explicitly
+requested. Breaking session, report, eval, or provider-config formats is
+acceptable when it simplifies the product model, as long as each merged slice
+remains runnable and safety boundaries stay intact.
 
 ## Current State (2026-06)
 
