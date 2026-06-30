@@ -45,6 +45,16 @@ Edit fuzzy matching is only a locator. Replacement must splice the original file
 
 For safety boundaries, prefer one authoritative execution path. Parallel allow/deny paths drift over time and can leave dead code that only looks protective.
 
+## Anti-Drift Patterns
+
+Use a paired table when two decisions must stay coupled. `EDIT_MATCH_STRATEGIES` is the model: each locate strategy owns its matching source-preserving reconstruct strategy in the same object literal. Consumers must derive from the table instead of maintaining parallel locate/reconstruct lists.
+
+Use an authoritative resolver when callers need different error contracts but the policy decision is the same. `resolveWorkspaceCreateTargetCore` owns create-target path resolution and returns a non-throwing result; executor paths can throw the returned `KeelError`, while scheduling paths can fail closed without duplicating path policy.
+
+Use a shared helper when two tools perform the same safety-sensitive transformation. `edit-match.ts` owns CRLF normalization, source span reprojection, and source-line-ending replacement for both `edit` and `apply_patch`; neither tool should reimplement that source-preserving path locally.
+
+Use curated invariants for declared registries and mechanical completeness, not broad structural similarity scans. The shared invariant AST helpers in `tests/invariants/_ast.ts` are for focused checks such as builtin tool metadata, limited-output registrations, and edit matching single sources. Prefer behavioral tests when the risk is runtime semantics rather than source ownership.
+
 ## Shell And Provider Visibility
 
 Keel's project ignore policy is enforced by the built-in file tools: `read`, `ls`, `glob`, `grep`, `edit`, and `write`.
