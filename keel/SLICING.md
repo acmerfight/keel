@@ -4,12 +4,12 @@ How to slice work in this project. Every task, feature, and iteration follows th
 
 ## Checklist (execute before every implementation task)
 
-0. **Find the current user entrypoint:** What command can a user run today? If there is no real runnable entrypoint, the next slice must create the smallest runnable path before adding deeper agent capabilities.
-1. **State the slice in one sentence:** "After this, a user can run ___ and see ___." If you can't name the command and observable result, the slice is too internal.
-2. **Write the e2e test first** (GWTE format). The test is the slice definition.
+0. **Find the current user entrypoint:** What command or agent workflow can a user exercise today? If there is no real runnable entrypoint, the next slice must create the smallest runnable path before adding deeper agent capabilities.
+1. **State the slice in one sentence:** "After this, a user can ___ and see ___." If you can't name the user action and observable result, the slice is too internal.
+2. **Write the user-visible acceptance test first** (GWTE format). It must prove the user action and observable result named in step 1.
 3. **Implement only what the failing test demands.** Do not create files, types, or modules that no test requires.
 4. **Build on the existing working system.** Do not rewrite or replace what already works.
-5. **Before opening a PR, verify:** can someone run the result and see it do something? If no, the slice is not done.
+5. **Before opening a PR, verify:** can someone exercise the entrypoint and see it do something? If no, the slice is not done.
 
 Pre-release priority: choose foundational usability before measurement or
 expansion. If interactive use, provider/model selection, context safety, editing,
@@ -18,7 +18,7 @@ standalone eval-corpus growth, marketplaces, MCP, IDE integration, or sub-agents
 
 ## The Rule
 
-Each deliverable is a vertical slice: a user can run it end-to-end and get a result. If a user can't use what you shipped, you shipped nothing.
+Each deliverable is a vertical slice: a user can use it end-to-end and get a result. If a user can't use what you shipped, you shipped nothing.
 
 ## How to Slice
 
@@ -26,7 +26,7 @@ Each deliverable is a vertical slice: a user can run it end-to-end and get a res
 
 **Horizontal (wrong):** cut by layer — "finish types first", "finish tools next". No slice works until the last one is done.
 
-Test: *Can someone run this and see it do something useful?* Yes = vertical. No = horizontal.
+Test: *Can someone use this and see it do something useful?* Yes = vertical. No = horizontal.
 
 ## Example
 
@@ -70,7 +70,7 @@ Examples are illustrative, not a fixed roadmap. Always re-check the current prod
 
 ## Applying to Tests (BDD)
 
-Each test is also a vertical slice. It starts with user intent and ends with an observable outcome:
+The primary test for a slice is also vertical. It starts with user intent and ends with an observable outcome:
 
 ```
 Given [a situation a user is in]
@@ -79,6 +79,8 @@ Then  [something the user can see changes]
 ```
 
 A test like "LLMProvider.stream returns AsyncIterable" is horizontal — it tests a layer, not a behavior. Prefer: "Given a buggy file, When user asks to fix it, Then the file is corrected."
+
+Lower-level provider, tool, or invariant tests may cover contracts and edge cases, but they cannot be the only proof for a slice whose promised result is visible through the CLI or agent. First prove the user can see the improvement; then add narrower tests for the risky internals.
 
 ## When You're Stuck
 

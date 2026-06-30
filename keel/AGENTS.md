@@ -39,13 +39,13 @@ Layer rules are enforced by `tests/invariants/boundaries.test.ts`:
 
 ## Core Principles
 
-Build user-runnable vertical slices. After each PR, a user should be able to run a command and observe the improvement; avoid shipping only internal architecture unless it directly unlocks the slice.
+Build user-runnable vertical slices. After each PR, a user should be able to run a command or exercise an agent workflow and observe the improvement; avoid shipping only internal architecture unless it directly unlocks the slice.
 
 Keel is pre-release. Prefer clean breaking changes over compatibility shims for old internal schemas or unfinished command shapes, while keeping each slice runnable and preserving safety boundaries.
 
 Prioritize foundational usability before expansion. Interactive/provider/model/context/edit/session/approval gaps come before standalone eval-corpus work, marketplaces, MCP, IDE integration, or sub-agents. Add eval tasks when they are tied to a real product fix or preserved failure.
 
-Test behavior before implementation. Start with a failing GWTE test at the boundary that owns the risk, then make the smallest product change that passes it.
+Test behavior before implementation. Start with a failing GWTE test that proves the user-visible slice result, then add narrower provider, tool, or invariant tests for the contracts that own the risk.
 
 Keep safety boundaries explicit. Preserve every representation that can carry authorization meaning, validate both requested and resolved paths before acting, and parse external data through schemas before business logic.
 
@@ -80,7 +80,7 @@ When a workflow skill is triggered, follow that skill's description and `SKILL.m
 
 BDD first. Every feature starts with a failing GWTE test unless the change is pure mechanical docs/refactor and cannot change behavior.
 
-Every deliverable is a vertical slice: after the PR, a user can run a command and observe the result. See [SLICING.md](SLICING.md).
+Every deliverable is a vertical slice: after the PR, a user can run a command or exercise an agent workflow and observe the result. See [SLICING.md](SLICING.md).
 
 Pick the highest-priority roadmap gap that can ship as a bounded vertical slice. Re-check the current product entrypoint before choosing work.
 
@@ -107,4 +107,4 @@ See [TESTING.md](TESTING.md). Short version:
 1. Only mock the LLM through the `fake` provider; everything else is real.
 2. BDD with GWTE titles.
 3. PR-ready verification uses `pnpm test:coverage`, then `pnpm coverage:patch` when coverable code changed.
-4. Put tests at the boundary that owns the risk: CLI for user-visible CLI behavior, agent for loop control flow, provider for protocol, tools for tool contracts, invariants for architecture.
+4. The slice acceptance test proves the user-visible result. Add narrower tests at the risk boundary: agent for loop control flow, provider for protocol, tools for tool contracts, invariants for architecture.

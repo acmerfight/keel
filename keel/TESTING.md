@@ -4,7 +4,8 @@
 
 1. **Only mock LLM in agent-facing tests.** `fake` provider is the agent seam. Everything else — filesystem, processes, git — is real. Provider contract tests may use a local protocol server instead of the real upstream API. Isolation means tmpdir, not mock.
 2. **BDD.** Tests are written in GWTE (Given-When-Then-Expect) language for the audience that owns that boundary. `agent/` and `cli/` titles should read as product behavior. `tools/`, `providers/`, and `invariants/` titles should read as tool, protocol, or architecture contracts.
-3. **Tests = executable specification.** If a behavior isn't in the test suite, it doesn't exist. If a test passes, the feature works.
+3. **Slice acceptance is user-visible.** A behavior slice needs at least one BDD test that proves the user-runnable command or agent workflow and its observable result.
+4. **Tests = executable specification.** If a behavior isn't in the test suite, it doesn't exist. If a test passes, the feature works.
 
 ## Test Titles
 
@@ -92,6 +93,8 @@ Any tool behavior that changes agent control flow also needs at least one `tests
 When testing real failure paths, include uncooperative callees if the caller owns user-visible recovery, retry, timeout, cleanup, or exit behavior. Inject failures through test boundaries such as the fake provider, a local server, or the test runtime, not production-only hooks. Env switches are acceptable only for documented runtime behavior.
 
 This means new user-facing behavior should usually add agent coverage, CLI-visible behavior should add a CLI smoke test, and control-flow-sensitive tool behavior should add agent coverage. It does not mean provider or tool boundary tests should be promoted into agent or CLI tests when the risk lives at that narrower boundary.
+
+Do not confuse implementation risk with slice acceptance. Provider, tool, and invariant tests prove narrow contracts; they cannot replace the user-visible BDD case when the PR promise is observable through CLI or agent behavior.
 
 For safety boundaries, derive tests from invariants instead of implementation shape. Include cases where the requested input and resolved target differ, and assert the policy holds for every security-relevant representation.
 
