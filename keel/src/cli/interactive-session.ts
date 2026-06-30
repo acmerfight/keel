@@ -9,6 +9,7 @@ import {
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
 import {
+  listUndoCheckpoints,
   type RecordLastBatchCheckpointOperation,
   recordLastTaskCheckpoint,
   restoreLastEditCheckpoint,
@@ -55,6 +56,7 @@ import type {
   InteractiveSessionResult,
   ProviderSelection,
 } from "./interactive-session/types.ts";
+import { formatUndoCheckpointList } from "./output.ts";
 import type { SessionModelSelection } from "./session-store.ts";
 
 export type {
@@ -321,6 +323,13 @@ export async function runInteractiveSession(
         continue;
       }
       if (interactiveCommand?.kind === "undo") {
+        if (interactiveCommand.mode === "list") {
+          options.writeStdout(
+            formatUndoCheckpointList(listUndoCheckpoints(options.workspace)),
+          );
+          consumeQueuedInputLines([rawInput]);
+          continue;
+        }
         const result = restoreLastEditCheckpoint(options.workspace);
         switch (result.status) {
           case "restored":
@@ -716,7 +725,7 @@ export async function runInteractiveSession(
         consumeQueuedInputLines([rawInput]);
         options.writeStdout("\n");
       } finally {
-        if (checkpointOperations.length > 1) {
+        if (checkpointOperations.length > 0) {
           recordLastTaskCheckpoint({
             workspace: options.workspace,
             operations: checkpointOperations,

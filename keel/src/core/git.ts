@@ -87,12 +87,17 @@ export type RestoreLastEditCheckpointResult =
       readonly message: string;
     };
 
+export interface UndoCheckpointSummary {
+  readonly restoredLabel: string;
+}
+
 interface GitWorkspace {
   readonly root: string;
   readonly checkpointPath: string;
 }
 
-const CHECKPOINT_METADATA_PATH = "keel/last-edit-checkpoint.json";
+const CHECKPOINT_METADATA_PATH = "keel/undo-checkpoints.json";
+const MAX_UNDO_CHECKPOINTS = 20;
 const NO_UNDO_CHECKPOINT_MESSAGE =
   "No earlier checkpoints. Ask me to undo more, or use git to reset.";
 
@@ -104,17 +109,14 @@ const gitOutputSchema = z
 const editCheckpointSchema = z
   .object({
     version: z.literal(1),
+    operation: z.literal("edit"),
     gitRoot: z.string().min(1),
     relativePath: z.string().min(1),
     beforeContent: z.string(),
     afterContent: z.string(),
     createdAt: z.string().min(1),
   })
-  .strict()
-  .transform((checkpoint) => ({
-    ...checkpoint,
-    operation: "edit" as const,
-  }));
+  .strict();
 
 const createCheckpointSchema = z
   .object({
@@ -182,9 +184,16 @@ const checkpointSchema = z.union([
   batchCheckpointSchema,
 ]);
 
+const checkpointStackSchema = z
+  .object({
+    version: z.literal(1),
+    checkpoints: z.array(checkpointSchema).max(MAX_UNDO_CHECKPOINTS),
+  })
+  .strict();
+
 type LastEditCheckpoint = z.infer<typeof checkpointSchema>;
-type PersistedCheckpoint = z.input<typeof checkpointSchema>;
-type PersistedBatchCheckpointOperation = z.input<
+type PersistedCheckpoint = z.infer<typeof checkpointSchema>;
+type PersistedBatchCheckpointOperation = z.infer<
   typeof batchCheckpointOperationSchema
 >;
 
@@ -253,31 +262,62 @@ function findGitWorkspace(workspace: string): GitWorkspace | null {
 
 function writeCheckpoint(
   checkpointPath: string,
-  checkpoint: PersistedCheckpoint,
+  checkpoints: readonly PersistedCheckpoint[],
 ): void {
   mkdirSync(dirname(checkpointPath), { recursive: true });
-  writeFileSync(checkpointPath, `${JSON.stringify(checkpoint)}\n`, "utf8");
+  writeFileSync(
+    checkpointPath,
+    `${JSON.stringify({ version: 1, checkpoints })}\n`,
+    "utf8",
+  );
 }
 
-function readCheckpoint(checkpointPath: string): LastEditCheckpoint {
+function invalidCheckpointError(): never {
+  throw new KeelError("tool_unavailable", "undo failed: checkpoint is invalid");
+}
+
+function readCheckpoints(
+  checkpointPath: string,
+): readonly LastEditCheckpoint[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(checkpointPath, "utf8"));
   } catch {
-    throw new KeelError(
-      "tool_unavailable",
-      "undo failed: checkpoint is invalid",
-    );
+    invalidCheckpointError();
   }
 
-  const result = checkpointSchema.safeParse(parsed);
+  const result = checkpointStackSchema.safeParse(parsed);
   if (!result.success) {
-    throw new KeelError(
-      "tool_unavailable",
-      "undo failed: checkpoint is invalid",
-    );
+    invalidCheckpointError();
   }
-  return result.data;
+  return result.data.checkpoints;
+}
+
+function readExistingCheckpointsForAppend(
+  checkpointPath: string,
+): readonly LastEditCheckpoint[] {
+  if (!existsSync(checkpointPath)) return [];
+  try {
+    return readCheckpoints(checkpointPath);
+  } catch (error) {
+    debugLog(
+      `undo checkpoint stack reset: path=${checkpointPath} error=${error}`,
+    );
+    return [];
+  }
+}
+
+function appendCheckpoint(
+  gitWorkspace: GitWorkspace,
+  checkpoint: PersistedCheckpoint,
+): void {
+  const existingCheckpoints = readExistingCheckpointsForAppend(
+    gitWorkspace.checkpointPath,
+  );
+  writeCheckpoint(
+    gitWorkspace.checkpointPath,
+    [...existingCheckpoints, checkpoint].slice(-MAX_UNDO_CHECKPOINTS),
+  );
 }
 
 function readFileIfPossible(filePath: string): string | null {
@@ -344,8 +384,9 @@ export function recordLastEditCheckpoint(
       );
     }
 
-    writeCheckpoint(gitWorkspace.checkpointPath, {
+    appendCheckpoint(gitWorkspace, {
       version: 1,
+      operation: "edit",
       gitRoot: gitWorkspace.root,
       relativePath,
       beforeContent: options.beforeContent,
@@ -379,7 +420,7 @@ export function recordLastCreateCheckpoint(
       );
     }
 
-    writeCheckpoint(gitWorkspace.checkpointPath, {
+    appendCheckpoint(gitWorkspace, {
       version: 2,
       operation: "create",
       gitRoot: gitWorkspace.root,
@@ -414,7 +455,7 @@ export function recordLastDeleteCheckpoint(
       );
     }
 
-    writeCheckpoint(gitWorkspace.checkpointPath, {
+    appendCheckpoint(gitWorkspace, {
       version: 4,
       operation: "delete",
       gitRoot: gitWorkspace.root,
@@ -479,7 +520,7 @@ export function recordLastBatchCheckpoint(
       return skippedBatchCheckpointRecord(options, "empty batch checkpoint");
     }
 
-    writeCheckpoint(gitWorkspace.checkpointPath, {
+    appendCheckpoint(gitWorkspace, {
       version: 3,
       operation: "batch",
       gitRoot: gitWorkspace.root,
@@ -885,26 +926,16 @@ function restoreBatchCheckpoint(
       }
     }
   }
-  rmSync(gitWorkspace.checkpointPath, { force: true });
   return {
     status: "restored",
     restoredLabel: `${checkpoint.operations.length} files`,
   };
 }
 
-export function restoreLastEditCheckpoint(
-  workspace: string,
+function restoreCheckpoint(
+  checkpoint: LastEditCheckpoint,
+  gitWorkspace: GitWorkspace,
 ): RestoreLastEditCheckpointResult {
-  const gitWorkspace = findGitWorkspace(workspace);
-  if (gitWorkspace === null || !existsSync(gitWorkspace.checkpointPath)) {
-    return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
-  }
-
-  const checkpoint = readCheckpoint(gitWorkspace.checkpointPath);
-  if (checkpoint.gitRoot !== gitWorkspace.root) {
-    return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
-  }
-
   if (checkpoint.operation === "batch") {
     return restoreBatchCheckpoint(checkpoint, gitWorkspace);
   }
@@ -917,7 +948,6 @@ export function restoreLastEditCheckpoint(
   if (checkpoint.operation === "create") {
     const targetStat = lstatIfPossible(filePath);
     if (targetStat === null) {
-      rmSync(gitWorkspace.checkpointPath, { force: true });
       return {
         status: "restored",
         restoredLabel: checkpoint.relativePath,
@@ -939,7 +969,6 @@ export function restoreLastEditCheckpoint(
     }
 
     rmSync(filePath);
-    rmSync(gitWorkspace.checkpointPath, { force: true });
     return {
       status: "restored",
       restoredLabel: checkpoint.relativePath,
@@ -960,7 +989,6 @@ export function restoreLastEditCheckpoint(
     ) {
       return blockedRestore(checkpoint);
     }
-    rmSync(gitWorkspace.checkpointPath, { force: true });
     return {
       status: "restored",
       restoredLabel: checkpoint.relativePath,
@@ -978,9 +1006,58 @@ export function restoreLastEditCheckpoint(
   }
 
   writeFileSync(restorePath, checkpoint.beforeContent, "utf8");
-  rmSync(gitWorkspace.checkpointPath, { force: true });
   return {
     status: "restored",
     restoredLabel: checkpoint.relativePath,
   };
+}
+
+function checkpointRestoredLabel(checkpoint: LastEditCheckpoint): string {
+  if (checkpoint.operation === "batch") {
+    return `${checkpoint.operations.length} files`;
+  }
+  return checkpoint.relativePath;
+}
+
+function readWorkspaceCheckpointStack(
+  gitWorkspace: GitWorkspace,
+): readonly LastEditCheckpoint[] {
+  if (!existsSync(gitWorkspace.checkpointPath)) {
+    return [];
+  }
+  return readCheckpoints(gitWorkspace.checkpointPath);
+}
+
+export function listUndoCheckpoints(
+  workspace: string,
+): readonly UndoCheckpointSummary[] {
+  const gitWorkspace = findGitWorkspace(workspace);
+  if (gitWorkspace === null) return [];
+
+  return readWorkspaceCheckpointStack(gitWorkspace)
+    .toReversed()
+    .map((checkpoint) => ({
+      restoredLabel: checkpointRestoredLabel(checkpoint),
+    }));
+}
+
+export function restoreLastEditCheckpoint(
+  workspace: string,
+): RestoreLastEditCheckpointResult {
+  const gitWorkspace = findGitWorkspace(workspace);
+  if (gitWorkspace === null) {
+    return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
+  }
+
+  const checkpoints = readWorkspaceCheckpointStack(gitWorkspace);
+  const checkpoint = checkpoints.at(-1);
+  if (checkpoint === undefined) {
+    return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
+  }
+
+  const result = restoreCheckpoint(checkpoint, gitWorkspace);
+  if (result.status === "restored") {
+    writeCheckpoint(gitWorkspace.checkpointPath, checkpoints.slice(0, -1));
+  }
+  return result;
 }

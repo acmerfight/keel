@@ -28,7 +28,7 @@ async function checkpointPath(workspace: string): Promise<string> {
     "rev-parse",
     "--path-format=absolute",
     "--git-path",
-    "keel/last-edit-checkpoint.json",
+    "keel/undo-checkpoints.json",
   ]);
   return result.stdout.trim();
 }
@@ -181,7 +181,7 @@ describe("Edit Tool", () => {
         expect.not.arrayContaining([expect.stringContaining(".keel-edit-")]),
       );
       expect(await readdir(dirname(checkpoint))).toContain(
-        "last-edit-checkpoint.json",
+        "undo-checkpoints.json",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

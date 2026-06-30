@@ -41,7 +41,7 @@ async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
   }
 
   if (cliArgs.command === "undo") {
-    return runUndoCommand(runtime);
+    return runUndoCommand(cliArgs, runtime);
   }
 
   if (cliArgs.command === "skills") {

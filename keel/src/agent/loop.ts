@@ -345,6 +345,7 @@ export async function* runAgentTurn(
         toolCall,
         signal,
         allowBash,
+        recordCheckpoints: options.recordCheckpointOperations === undefined,
         readBeforeEdit: {
           hasRead: readVisibility.hasRead,
         },
@@ -461,7 +462,7 @@ export async function* runAgent(
     });
     options.onTranscriptReady?.(messages);
   } finally {
-    if (checkpointOperations.length > 1) {
+    if (checkpointOperations.length > 0) {
       recordLastTaskCheckpoint({
         workspace: options.workspace,
         operations: checkpointOperations,

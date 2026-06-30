@@ -25,6 +25,7 @@ interface WriteToolResult extends ToolResult {
 
 interface WriteToolOptions {
   readonly projectInstructions?: ProjectInstructionVisibilityState;
+  readonly recordCheckpoint?: boolean;
 }
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
@@ -125,11 +126,13 @@ export function executeWrite(
     });
 
     const createdPath = publishedTargetPath;
-    recordLastCreateCheckpoint({
-      workspace: workspacePath,
-      filePath: createdPath,
-      afterContent: content,
-    });
+    if (options.recordCheckpoint !== false) {
+      recordLastCreateCheckpoint({
+        workspace: workspacePath,
+        filePath: createdPath,
+        afterContent: content,
+      });
+    }
 
     return {
       content: `Wrote ${filePath}`,
