@@ -61,10 +61,11 @@ If the user later asks to merge, use `/merge-pr <target>` for merge and cleanup.
 
 For behavior changes, write the BDD case before production code.
 
-- Define the slice with the `keel/SLICING.md` sentence: "After this, a user can run ___ and see ___."
+- Define the slice with the `keel/SLICING.md` sentence: "After this, a user can ___ and see ___."
 - Use Given / When / Then style.
 - Make the test fail on the old behavior when practical.
-- Cover product-visible behavior at the owning boundary.
+- Make the first behavior test prove that sentence through the current user entrypoint.
+- Add provider, tool, or invariant tests for narrow contracts; they do not replace the user-visible acceptance test for CLI- or agent-visible PRs.
 - Do not test unreachable states or artificial TypeScript-invalid behavior just to raise coverage.
 - If the work is a pure mechanical refactor with no behavior change, explain why no new test is needed.
 
