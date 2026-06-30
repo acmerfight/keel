@@ -11,6 +11,7 @@ import {
   createStreamState,
   finalStreamEvents,
   getResponseReader,
+  isMissingDoneSignalError,
   type OpenAICompatibleChunk,
   type OpenAICompatibleStreamConfig,
   readSseEvents,
@@ -30,17 +31,13 @@ interface OpenAICompatibleProviderConfig<Chunk extends OpenAICompatibleChunk>
 
 function isRetryablePreOutputStreamError(
   error: KeelError,
-  providerName: string,
 ): error is KeelError & {
   readonly code: "provider_network_error" | "provider_protocol_error";
 } {
   if (error.code === "provider_network_error") {
     return true;
   }
-  return (
-    error.code === "provider_protocol_error" &&
-    error.message === `${providerName} stream ended without [DONE] signal`
-  );
+  return isMissingDoneSignalError(error);
 }
 
 export function createOpenAICompatibleProvider<
@@ -97,7 +94,7 @@ export function createOpenAICompatibleProvider<
           }
           if (
             emittedAssistantOutput ||
-            !isRetryablePreOutputStreamError(error, providerConfig.providerName)
+            !isRetryablePreOutputStreamError(error)
           ) {
             throw error;
           }

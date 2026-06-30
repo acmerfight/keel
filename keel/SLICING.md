@@ -78,9 +78,9 @@ When  [the user does something]
 Then  [something the user can see changes]
 ```
 
-A test like "LLMProvider.stream returns AsyncIterable" is horizontal — it tests a layer, not a behavior. Prefer: "Given a buggy file, When user asks to fix it, Then the file is corrected."
+As slice acceptance, a test like "LLMProvider.stream returns AsyncIterable" is horizontal — it tests a layer, not the user-visible result. Prefer: "Given a buggy file, When user asks to fix it, Then the file is corrected."
 
-Lower-level provider, tool, or invariant tests may cover contracts and edge cases, but they cannot be the only proof for a slice whose promised result is visible through the CLI or agent. First prove the user can see the improvement; then add narrower tests for the risky internals.
+Lower-level provider, tool, or invariant tests may cover contracts and edge cases at the boundary that owns the risk, but they cannot be the only proof for a slice whose promised result is visible through the CLI or agent. First prove the user can see the improvement; then add narrower tests for observable boundary results.
 
 ## When You're Stuck
 

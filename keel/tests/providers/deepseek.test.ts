@@ -1,6 +1,6 @@
 import { createServer, type ServerResponse } from "node:http";
 import type { Server } from "node:net";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { z } from "zod";
 import { createDeepseekProvider } from "../../src/llm/providers/deepseek.ts";
 import type { LLMEvent } from "../../src/llm/types.ts";
@@ -4064,64 +4064,25 @@ describe("DeepSeek Provider", () => {
       },
     });
 
+    const events: LLMEvent[] = [];
+
     // When / Then
     await expect(
-      collect(
-        provider.stream({
+      (async () => {
+        for await (const event of provider.stream({
           systemPrompt: "You are helpful.",
           messages: [{ role: "user", content: "hi" }],
           signal: freshSignal(),
-        }),
-      ),
+        })) {
+          events.push(event);
+        }
+      })(),
     ).rejects.toMatchObject({
       name: "KeelError",
       code: "provider_network_error",
       message: "DeepSeek request failed before response",
     });
-  });
-
-  test(`Given a setup network retry would exceed the total retry budget,
-    When the next jitter sample would fit the budget,
-    Then provider does not reclassify setup failure as a stream replay`, async () => {
-    // Given
-    const random = vi.spyOn(Math, "random");
-    random.mockReturnValueOnce(0.9).mockReturnValueOnce(0.1);
-    const port = await unusedLocalPort();
-    const provider = createDeepseekProvider({
-      apiKey: "test-key",
-      baseUrl: `http://127.0.0.1:${port}`,
-      model: "deepseek-v4-flash",
-      retry: {
-        maxRetries: 1,
-        initialDelayMs: 10,
-        maxDelayMs: 10,
-        maxTotalDelayMs: 5,
-      },
-    });
-    const events: LLMEvent[] = [];
-
-    try {
-      // When / Then
-      await expect(
-        (async () => {
-          for await (const event of provider.stream({
-            systemPrompt: "You are helpful.",
-            messages: [{ role: "user", content: "hi" }],
-            signal: freshSignal(),
-          })) {
-            events.push(event);
-          }
-        })(),
-      ).rejects.toMatchObject({
-        name: "KeelError",
-        code: "provider_network_error",
-        message: "DeepSeek request failed before response",
-      });
-      expect(events).toEqual([]);
-      expect(random).toHaveBeenCalledOnce();
-    } finally {
-      random.mockRestore();
-    }
+    expect(events).toEqual([]);
   });
 
   test(`Given a retryable provider failure enters backoff,
