@@ -18,7 +18,10 @@ import {
   preparedMutationTargetPaths,
   preparePatchOperations,
 } from "./apply-patch/prepare.ts";
-import { rollbackAppliedOperations } from "./apply-patch/rollback.ts";
+import {
+  applyWithRollback,
+  rollbackAppliedOperations,
+} from "./apply-patch/rollback.ts";
 import type { ToolResult } from "./types.ts";
 
 export type { ParsedPatchOperation } from "./apply-patch/model.ts";
@@ -40,22 +43,23 @@ export function executeApplyPatch(
     prepared.flatMap(preparedMutationTargetPaths),
   );
   const applied: AppliedPatchOperation[] = [];
-  let checkpointOperations: readonly RecordLastBatchCheckpointOperation[];
-  try {
-    for (const operation of prepared) {
-      const appliedOperation = applyPreparedOperation(operation, options);
-      applied.push(appliedOperation);
-      applied[applied.length - 1] = verifyAppliedOperation(appliedOperation);
-    }
-    checkpointOperations = applied.flatMap(checkpointOperationsFor);
-    recordLastBatchCheckpoint({
-      workspace,
-      operations: checkpointOperations,
-    });
-  } catch (error) {
-    rollbackAppliedOperations(applied);
-    throw error;
-  }
+  const checkpointOperations = applyWithRollback({
+    appliedOperations: applied,
+    rollback: rollbackAppliedOperations,
+    apply: () => {
+      for (const operation of prepared) {
+        const appliedOperation = applyPreparedOperation(operation, options);
+        applied.push(appliedOperation);
+        applied[applied.length - 1] = verifyAppliedOperation(appliedOperation);
+      }
+      const operations = applied.flatMap(checkpointOperationsFor);
+      recordLastBatchCheckpoint({
+        workspace,
+        operations,
+      });
+      return operations;
+    },
+  });
 
   return {
     content: ["Applied patch:", ...prepared.map(summaryLine)].join("\n"),
