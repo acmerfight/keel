@@ -182,7 +182,7 @@ interface CompletedTurnToolExecution {
 
 interface SettledTurnToolExecution extends CompletedTurnToolExecution {
   readonly content: string;
-  readonly notice?: ToolOutputArtifactNotice;
+  readonly notice: ToolOutputArtifactNotice | undefined;
 }
 
 function scheduledToolCalls(
@@ -284,9 +284,6 @@ function settlementPlanByExecutionIndex(
 
   for (const candidate of candidates) {
     const currentInlineChars = plan.get(candidate.index) ?? candidate.length;
-    if (currentInlineChars <= aggregatePreviewChars) {
-      continue;
-    }
     plan.set(candidate.index, aggregatePreviewChars);
     estimatedInlineChars -= currentInlineChars - aggregatePreviewChars;
     if (estimatedInlineChars <= maxAggregateInlineChars) {
@@ -306,6 +303,7 @@ async function settleToolExecutionContents(options: {
       toolCall,
       execution,
       content: execution.content,
+      notice: undefined,
     }));
   }
   const plan = settlementPlanByExecutionIndex(
@@ -320,6 +318,7 @@ async function settleToolExecutionContents(options: {
         toolCall,
         execution,
         content: execution.content,
+        notice: undefined,
       });
       continue;
     }
@@ -333,16 +332,12 @@ async function settleToolExecutionContents(options: {
         execution.sourceTruncated === true ? "source-truncated" : "complete",
       purpose: "settlement",
     });
-    settledExecutions.push(
-      settled.notice === undefined
-        ? { toolCall, execution, content: settled.content }
-        : {
-            toolCall,
-            execution,
-            content: settled.content,
-            notice: settled.notice,
-          },
-    );
+    settledExecutions.push({
+      toolCall,
+      execution,
+      content: settled.content,
+      notice: settled.notice,
+    });
   }
   return settledExecutions;
 }
