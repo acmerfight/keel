@@ -1894,10 +1894,15 @@ describe("DeepSeek Provider", () => {
     expect(capturedMessages).toEqual([
       { role: "system", content: "You are helpful." },
       { role: "user", content: "serialize-history" },
-      { role: "assistant", content: "plain answer" },
+      {
+        role: "assistant",
+        content: "plain answer",
+        reasoning_content: "",
+      },
       {
         role: "assistant",
         content: "I need to inspect the readme.",
+        reasoning_content: "",
         tool_calls: [
           {
             id: "read_0",
@@ -1917,6 +1922,7 @@ describe("DeepSeek Provider", () => {
       {
         role: "assistant",
         content: "I need to inspect a file window.",
+        reasoning_content: "",
         tool_calls: [
           {
             id: "read_1",
@@ -1936,6 +1942,7 @@ describe("DeepSeek Provider", () => {
       {
         role: "assistant",
         content: "I need to search the workspace.",
+        reasoning_content: "",
         tool_calls: [
           {
             id: "grep_1",
@@ -1955,6 +1962,7 @@ describe("DeepSeek Provider", () => {
       {
         role: "assistant",
         content: "I can now edit.",
+        reasoning_content: "",
         tool_calls: [
           {
             id: "edit_1",
@@ -1974,6 +1982,7 @@ describe("DeepSeek Provider", () => {
       {
         role: "assistant",
         content: "I can now create a file.",
+        reasoning_content: "",
         tool_calls: [
           {
             id: "write_1",
@@ -1993,6 +2002,7 @@ describe("DeepSeek Provider", () => {
       {
         role: "assistant",
         content: "I need to run the test command.",
+        reasoning_content: "",
         tool_calls: [
           {
             id: "bash_1",
@@ -2094,6 +2104,102 @@ describe("DeepSeek Provider", () => {
         timeoutMs: 1000,
       },
     );
+  });
+
+  test(`Given DeepSeek replays a synthetic assistant tool call after compaction,
+    When provider sends the next request,
+    Then the assistant replay carries empty reasoning_content`, async () => {
+    // Given
+    capturedMessages = undefined;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [
+          { role: "user", content: "serialize-history" },
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              {
+                id: "post_compaction_read_0",
+                tool: "read",
+                path: "note.txt",
+              },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "post_compaction_read_0",
+            content: "fresh note body\n",
+          },
+        ],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    const assistantReplay = arrayElement(capturedMessages, 2);
+    expect(objectProperty(assistantReplay, "content")).toBeNull();
+    expect(objectProperty(assistantReplay, "reasoning_content")).toBe("");
+    expect(
+      objectProperty(arrayElement(capturedMessages, 3), "tool_call_id"),
+    ).toBe("post_compaction_read_0");
+  });
+
+  test(`Given DeepSeek replays stored assistant reasoning metadata,
+    When provider sends the next request,
+    Then the assistant replay carries the original reasoning_content`, async () => {
+    // Given
+    capturedMessages = undefined;
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [
+          { role: "user", content: "serialize-history" },
+          {
+            role: "assistant",
+            content: "I need to inspect note.txt.",
+            toolCalls: [
+              {
+                id: "read_note",
+                tool: "read",
+                path: "note.txt",
+              },
+            ],
+            providerMetadata: {
+              openaiCompatible: {
+                reasoningContent: "The user asked about note.txt.",
+              },
+            },
+          },
+          {
+            role: "tool",
+            toolCallId: "read_note",
+            content: "note body\n",
+          },
+        ],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(
+      objectProperty(arrayElement(capturedMessages, 2), "reasoning_content"),
+    ).toBe("The user asked about note.txt.");
   });
 
   test(`Given the API rejects authentication,

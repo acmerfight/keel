@@ -183,6 +183,8 @@ async function collectTextOnlyTurn(options: {
       case "text":
         text += event.text;
         break;
+      case "reasoning":
+        break;
       case "tool_call":
         throw new KeelError(
           "provider_protocol_error",

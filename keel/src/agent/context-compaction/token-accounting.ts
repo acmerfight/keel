@@ -1,4 +1,9 @@
-import type { Message, ToolCall, Usage } from "../../llm/types.ts";
+import type {
+  AssistantProviderMetadata,
+  Message,
+  ToolCall,
+  Usage,
+} from "../../llm/types.ts";
 import { toolCallCanonicalArguments } from "../../tools/registry.ts";
 import type {
   ContextCompactionOptions,
@@ -30,6 +35,7 @@ type MessageFingerprintCache =
   | {
       readonly role: "assistant";
       readonly content: string;
+      readonly providerMetadata: AssistantProviderMetadata | null;
       readonly toolCalls: readonly ToolCallFingerprintCache[];
       readonly fingerprint: string;
     }
@@ -68,6 +74,14 @@ function estimateToolCallTokens(toolCall: ToolCall): number {
   return estimateTextTokens(JSON.stringify(toolCall));
 }
 
+function estimateAssistantProviderMetadataTokens(
+  providerMetadata: AssistantProviderMetadata | undefined,
+): number {
+  return estimateTextTokens(
+    providerMetadata?.openaiCompatible.reasoningContent ?? "",
+  );
+}
+
 export function estimateMessageTokens(message: Message): number {
   const roleOverhead = 4;
   switch (message.role) {
@@ -77,6 +91,7 @@ export function estimateMessageTokens(message: Message): number {
       return (
         roleOverhead +
         estimateTextTokens(message.content) +
+        estimateAssistantProviderMetadataTokens(message.providerMetadata) +
         message.toolCalls.reduce(
           (total, toolCall) => total + estimateToolCallTokens(toolCall),
           0,
@@ -226,6 +241,7 @@ function messageFingerprint(message: Message): string {
       return JSON.stringify([
         message.role,
         message.content,
+        message.providerMetadata ?? null,
         message.toolCalls.map(toolCallFingerprint),
       ]);
     case "tool":
@@ -252,10 +268,12 @@ function captureMessageFingerprintCache(
       return {
         role: message.role,
         content: message.content,
+        providerMetadata: message.providerMetadata ?? null,
         toolCalls: toolCalls.map((toolCall) => toolCall.cache),
         fingerprint: JSON.stringify([
           message.role,
           message.content,
+          message.providerMetadata ?? null,
           toolCalls.map((toolCall) => toolCall.fingerprint),
         ]),
       };
@@ -295,6 +313,8 @@ function cachedMessageFingerprint(
       const toolCallCaches = cache.toolCalls;
       if (
         cache.content === message.content &&
+        stableJson(cache.providerMetadata) ===
+          stableJson(message.providerMetadata ?? null) &&
         toolCalls.length === toolCallCaches.length &&
         toolCalls.every((toolCall, index) => {
           const toolCallCache = toolCallCaches[index];

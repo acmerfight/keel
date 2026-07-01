@@ -1,6 +1,9 @@
 import { KeelError } from "../../core/error.ts";
 import type { LLMEvent, LLMProvider } from "../types.ts";
-import { createChatCompletionsBody } from "./openai-compatible-messages.ts";
+import {
+  createChatCompletionsBody,
+  type OpenAICompatibleMessageOptions,
+} from "./openai-compatible-messages.ts";
 import {
   type ProviderConfig,
   ProviderRetryController,
@@ -27,6 +30,7 @@ interface OpenAICompatibleProviderConfig<Chunk extends OpenAICompatibleChunk>
   extends OpenAICompatibleStreamConfig<Chunk> {
   readonly id: string;
   readonly config: ProviderConfig;
+  readonly messageOptions?: OpenAICompatibleMessageOptions;
 }
 
 function isRetryablePreOutputStreamError(
@@ -49,6 +53,7 @@ export function createOpenAICompatibleProvider<
       const body = createChatCompletionsBody(
         providerConfig.config.model,
         options,
+        providerConfig.messageOptions,
       );
       const retry = new ProviderRetryController(providerConfig.config.retry);
 

@@ -259,6 +259,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
     ];
     const githubToken = `ghp_${"A".repeat(36)}`;
     const googleApiKey = `AIza${"B".repeat(35)}`;
+    const reasoningSecret = "sk-reasoning-secret-213";
     const secretMessages: readonly Message[] = [
       {
         role: "user",
@@ -267,6 +268,11 @@ describe("Session Store Transcript Workflow Redaction", () => {
       {
         role: "assistant",
         content: "Reading with Bearer live-secret-213-token.",
+        providerMetadata: {
+          openaiCompatible: {
+            reasoningContent: `Need to inspect ${reasoningSecret}.`,
+          },
+        },
         toolCalls: [
           {
             id: "read_secret",
@@ -321,6 +327,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
       expect(ledger.includes("sk-secret-213")).toBe(false);
       expect(ledger.includes("env-secret-213")).toBe(false);
       expect(ledger.includes("live-secret-213-token")).toBe(false);
+      expect(ledger.includes(reasoningSecret)).toBe(false);
       expect(ledger.includes(githubToken)).toBe(false);
       expect(ledger.includes(googleApiKey)).toBe(false);
       expect(ledger.includes("[REDACTED_SECRET]")).toBe(true);
@@ -338,6 +345,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
       });
       expect(JSON.stringify(snapshot).includes("sk-secret-213")).toBe(false);
       expect(JSON.stringify(snapshot).includes("env-secret-213")).toBe(false);
+      expect(JSON.stringify(snapshot).includes(reasoningSecret)).toBe(false);
       expect(JSON.stringify(snapshot).includes(githubToken)).toBe(false);
       expect(JSON.stringify(snapshot).includes(googleApiKey)).toBe(false);
       expect(JSON.stringify(snapshot).includes("[REDACTED_SECRET]")).toBe(true);
@@ -345,6 +353,9 @@ describe("Session Store Transcript Workflow Redaction", () => {
         false,
       );
       expect(JSON.stringify(resumed.messages).includes("env-secret-213")).toBe(
+        false,
+      );
+      expect(JSON.stringify(resumed.messages).includes(reasoningSecret)).toBe(
         false,
       );
       expect(JSON.stringify(resumed.messages).includes(githubToken)).toBe(

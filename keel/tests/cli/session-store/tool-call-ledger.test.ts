@@ -111,6 +111,62 @@ describe("Session Store Tool Call Ledger", () => {
     }
   });
 
+  test(`Given a persisted assistant message has provider reasoning metadata,
+    When the session is resumed,
+    Then the reasoning metadata survives the disk boundary`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const messages: readonly Message[] = [
+      { role: "user", content: "read note" },
+      {
+        role: "assistant",
+        content: "I need to inspect note.txt.",
+        providerMetadata: {
+          openaiCompatible: {
+            reasoningContent: "The user asked about note.txt.",
+          },
+        },
+        toolCalls: [
+          {
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          },
+        ],
+      },
+      { role: "tool", toolCallId: "read_note", content: "note body" },
+    ];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "provider-metadata",
+        workspace,
+        runtime: runtime(home),
+      });
+      persistSessionMessages({
+        session,
+        previousMessages: [],
+        currentMessages: messages,
+        runtime: runtime(home, 1),
+        reason: "turn",
+      });
+
+      // When
+      const resumed = resumeSessionStore({
+        sessionId: "provider-metadata",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(resumed.messages).toEqual(messages);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given tool calls omit optional fields,
     When the session is resumed,
     Then the minimal tool-call shapes survive the disk boundary`, async () => {

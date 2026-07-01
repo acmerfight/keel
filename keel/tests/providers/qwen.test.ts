@@ -381,6 +381,45 @@ describe("Qwen Provider", () => {
     ]);
   });
 
+  test(`Given Qwen replays history produced by a DeepSeek reasoning model,
+    When it sends the OpenAI-compatible request,
+    Then DeepSeek reasoning_content metadata is omitted`, async () => {
+    // Given
+    const provider = createQwenProvider({
+      apiKey: "test-qwen-key",
+      baseUrl,
+      model: "qwen3.7-plus",
+    });
+
+    // When
+    await collect(
+      provider.stream({
+        systemPrompt: "You are Keel.",
+        messages: [
+          { role: "user", content: "inspect" },
+          {
+            role: "assistant",
+            content: "I inspected the file.",
+            providerMetadata: {
+              openaiCompatible: {
+                reasoningContent: "DeepSeek-only reasoning.",
+              },
+            },
+            toolCalls: [],
+          },
+          { role: "user", content: "continue" },
+        ],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(capturedBody?.messages[2]).toEqual({
+      role: "assistant",
+      content: "I inspected the file.",
+    });
+  });
+
   test(`Given Qwen stops because the output token limit was reached,
     When the provider reads finish_reason length,
     Then it yields partial text and a length stop reason`, async () => {
