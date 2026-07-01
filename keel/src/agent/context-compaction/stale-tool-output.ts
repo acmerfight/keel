@@ -230,8 +230,24 @@ async function artifactMarkerForCompactedToolOutput(options: {
   const existingArtifact = generatedToolOutputArtifactMarker(options.content);
   if (existingArtifact !== null) {
     try {
-      if (await options.store.exists(existingArtifact.ref)) {
-        return { marker: existingArtifact.marker };
+      const verification = await options.store.verifyReusable({
+        ref: existingArtifact.ref,
+        toolCallId: options.toolCallId,
+        contentPrefix: options.content.slice(0, existingArtifact.markerIndex),
+        omittedChars: existingArtifact.omittedChars,
+        sourceStatus: existingArtifact.sourceStatus,
+        ...(existingArtifact.contentSha256 === undefined
+          ? {}
+          : { contentSha256: existingArtifact.contentSha256 }),
+      });
+      if (verification.status === "reusable") {
+        return {
+          marker: toolOutputArtifactStoredMarker(
+            existingArtifact.ref,
+            existingArtifact.sourceStatus,
+            verification.contentSha256,
+          ),
+        };
       }
     } catch {}
   }
@@ -246,7 +262,11 @@ async function artifactMarkerForCompactedToolOutput(options: {
   });
   if (saveResult.status === "stored") {
     return {
-      marker: toolOutputArtifactStoredMarker(saveResult.ref, sourceStatus),
+      marker: toolOutputArtifactStoredMarker(
+        saveResult.ref,
+        sourceStatus,
+        saveResult.contentSha256,
+      ),
       notice: {
         status: "stored",
         ref: saveResult.ref,

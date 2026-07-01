@@ -308,14 +308,12 @@ describe("Interactive Session - Manual Compact Success", () => {
       { role: "user", content: "Continue later." },
     ];
     const saved: ToolOutputArtifactSaveInput[] = [];
-    const existingRefs = new Set<string>();
     const store: ToolOutputArtifactStore = {
-      exists: async (ref) => existingRefs.has(ref),
+      verifyReusable: async () => ({ status: "not_reusable" }),
       save: async (input) => {
         const ref = `tool-output:test/${saved.length + 1}`;
         saved.push(input);
-        existingRefs.add(ref);
-        return { status: "stored", ref };
+        return { status: "stored", ref, contentSha256: "0".repeat(64) };
       },
     };
     const provider: LLMProvider = {

@@ -55,10 +55,14 @@ describe("Agent Tool Output Artifacts", () => {
     );
     const saved: ToolOutputArtifactSaveInput[] = [];
     const store: ToolOutputArtifactStore = {
-      exists: async () => false,
+      verifyReusable: async () => ({ status: "not_reusable" }),
       save: async (input) => {
         saved.push(input);
-        return { status: "stored", ref: `tool-output:test/${saved.length}` };
+        return {
+          status: "stored",
+          ref: `tool-output:test/${saved.length}`,
+          contentSha256: "0".repeat(64),
+        };
       },
     };
     const messages: Message[] = [{ role: "user", content: "inspect the logs" }];

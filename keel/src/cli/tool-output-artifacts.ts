@@ -10,6 +10,8 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import type {
+  ToolOutputArtifactReuseInput,
+  ToolOutputArtifactReuseResult,
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactSaveResult,
   ToolOutputArtifactStore,
@@ -32,6 +34,11 @@ interface ToolOutputArtifactStoreOptions {
 interface ParsedToolOutputArtifactRef {
   readonly scope: string;
   readonly id: string;
+}
+
+interface ParsedArtifactContent {
+  readonly metadata: ReadonlyMap<string, string>;
+  readonly body: string;
 }
 
 function isValidArtifactSegment(kind: string, value: string): boolean {
@@ -95,6 +102,10 @@ function toolOutputArtifactRef(scope: string, id: string): string {
   return `tool-output:${scope}/${id}`;
 }
 
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
 function parseToolOutputArtifactRef(
   ref: string,
 ): ParsedToolOutputArtifactRef | null {
@@ -123,9 +134,7 @@ function artifactContent(input: {
   readonly savedAt: string;
   readonly saveInput: ToolOutputArtifactSaveInput;
 }): string {
-  const hash = createHash("sha256")
-    .update(input.saveInput.content)
-    .digest("hex");
+  const hash = sha256(input.saveInput.content);
   return [
     `ref: ${input.ref}`,
     `id: ${input.id}`,
@@ -141,6 +150,55 @@ function artifactContent(input: {
     "---",
     input.saveInput.content,
   ].join("\n");
+}
+
+function parseArtifactContent(content: string): ParsedArtifactContent | null {
+  const separator = "\n---\n";
+  const separatorIndex = content.indexOf(separator);
+  if (separatorIndex === -1) {
+    return null;
+  }
+  const metadata = new Map<string, string>();
+  for (const line of content.slice(0, separatorIndex).split("\n")) {
+    const separatorOffset = line.indexOf(": ");
+    if (separatorOffset === -1) {
+      continue;
+    }
+    metadata.set(
+      line.slice(0, separatorOffset),
+      line.slice(separatorOffset + 2),
+    );
+  }
+  return {
+    metadata,
+    body: content.slice(separatorIndex + separator.length),
+  };
+}
+
+function artifactMatchesReuseInput(
+  parsed: ParsedArtifactContent,
+  input: ToolOutputArtifactReuseInput,
+): ToolOutputArtifactReuseResult {
+  const contentChars = Number(parsed.metadata.get("contentChars"));
+  const contentSha256 = parsed.metadata.get("sha256");
+  const expectedChars = input.contentPrefix.length + input.omittedChars;
+  if (
+    input.omittedChars < 0 ||
+    !Number.isSafeInteger(contentChars) ||
+    contentChars !== expectedChars ||
+    parsed.body.length !== contentChars ||
+    parsed.metadata.get("ref") !== input.ref ||
+    parsed.metadata.get("toolCallId") !== input.toolCallId ||
+    parsed.metadata.get("sourceStatus") !== input.sourceStatus ||
+    contentSha256 === undefined ||
+    sha256(parsed.body) !== contentSha256 ||
+    (input.contentSha256 !== undefined &&
+      input.contentSha256 !== contentSha256) ||
+    !parsed.body.startsWith(input.contentPrefix)
+  ) {
+    return { status: "not_reusable" };
+  }
+  return { status: "reusable", contentSha256 };
 }
 
 export async function cleanupExpiredToolOutputArtifacts(options: {
@@ -197,16 +255,25 @@ export function createToolOutputArtifactStore(
 ): ToolOutputArtifactStore {
   validateArtifactSegment("scope", options.scope);
   return {
-    exists: async (ref: string): Promise<boolean> => {
-      const parsed = parseToolOutputArtifactRef(ref);
+    verifyReusable: async (
+      input: ToolOutputArtifactReuseInput,
+    ): Promise<ToolOutputArtifactReuseResult> => {
+      const parsed = parseToolOutputArtifactRef(input.ref);
       if (parsed === null) {
-        return false;
+        return { status: "not_reusable" };
       }
       try {
-        const artifactStats = await stat(artifactPath(options.runtime, parsed));
-        return artifactStats.isFile();
+        const content = await readFile(
+          artifactPath(options.runtime, parsed),
+          "utf8",
+        );
+        const artifact = parseArtifactContent(content);
+        if (artifact === null) {
+          return { status: "not_reusable" };
+        }
+        return artifactMatchesReuseInput(artifact, input);
       } catch {
-        return false;
+        return { status: "not_reusable" };
       }
     },
     save: async (
@@ -227,7 +294,11 @@ export function createToolOutputArtifactStore(
           }),
           { encoding: "utf8", flag: "wx", mode: 0o600 },
         );
-        return { status: "stored", ref };
+        return {
+          status: "stored",
+          ref,
+          contentSha256: sha256(input.content),
+        };
       } catch (error) {
         /* v8 ignore next 3: fs/promises rejects with Error instances in supported Node runtimes. */
         const reason =

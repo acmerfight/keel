@@ -23,14 +23,35 @@ export type ToolOutputArtifactSaveResult =
   | {
       readonly status: "stored";
       readonly ref: string;
+      readonly contentSha256: string;
     }
   | {
       readonly status: "failed";
       readonly reason: string;
     };
 
+export interface ToolOutputArtifactReuseInput {
+  readonly ref: string;
+  readonly toolCallId: string;
+  readonly contentPrefix: string;
+  readonly omittedChars: number;
+  readonly sourceStatus: ToolOutputArtifactSourceStatus;
+  readonly contentSha256?: string;
+}
+
+export type ToolOutputArtifactReuseResult =
+  | {
+      readonly status: "reusable";
+      readonly contentSha256: string;
+    }
+  | {
+      readonly status: "not_reusable";
+    };
+
 export interface ToolOutputArtifactStore {
-  readonly exists: (ref: string) => Promise<boolean>;
+  readonly verifyReusable: (
+    input: ToolOutputArtifactReuseInput,
+  ) => Promise<ToolOutputArtifactReuseResult>;
   readonly save: (
     input: ToolOutputArtifactSaveInput,
   ) => Promise<ToolOutputArtifactSaveResult>;
@@ -69,11 +90,13 @@ export interface GeneratedToolOutputArtifactMarker {
   readonly ref: string;
   readonly marker: string;
   readonly markerIndex: number;
+  readonly omittedChars: number;
   readonly sourceStatus: ToolOutputArtifactSourceStatus;
+  readonly contentSha256?: string;
 }
 
 const TOOL_OUTPUT_ARTIFACT_MARKER_SUFFIX_PATTERN =
-  /\n\[(?:tool output shortened|stale tool output compacted|current tool output compacted after context overflow): [^\]]*full output artifact: (tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+); inspect with: keel artifacts show \1; source status: (complete|source-truncated\/lossy before artifact capture)(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
+  /\n\[(?:tool output shortened|stale tool output compacted|current tool output compacted after context overflow): (?:approximately )?omitted ([0-9]+) chars; full output artifact: (tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+); inspect with: keel artifacts show \2(?:; sha256: ([a-f0-9]{64}))?; source status: (complete|source-truncated\/lossy before artifact capture)(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
 const TOOL_OUTPUT_ARTIFACT_FAILED_MARKER_SUFFIX_PATTERN =
   /\n\[(?:tool output shortened|stale tool output compacted|current tool output compacted after context overflow): [^\]]*artifact storage failed: .*; lossy; rerun the tool with narrower parameters if needed(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
 
@@ -104,12 +127,15 @@ export function isGeneratedSettledToolOutput(
 export function toolOutputArtifactStoredMarker(
   ref: string,
   sourceStatus: ToolOutputArtifactSourceStatus,
+  contentSha256?: string,
 ): string {
   const sourceStatusText =
     sourceStatus === "complete"
       ? "source status: complete"
       : "source status: source-truncated/lossy before artifact capture";
-  return `full output artifact: ${ref}; inspect with: keel artifacts show ${ref}; ${sourceStatusText}`;
+  const sha256Text =
+    contentSha256 === undefined ? "" : `; sha256: ${contentSha256}`;
+  return `full output artifact: ${ref}; inspect with: keel artifacts show ${ref}${sha256Text}; ${sourceStatusText}`;
 }
 
 export function generatedToolOutputArtifactMarker(
@@ -119,14 +145,21 @@ export function generatedToolOutputArtifactMarker(
   if (marker === null) {
     return null;
   }
-  const [, ref = "", rawSourceStatus] = marker;
+  const [, rawOmittedChars = "", ref = "", contentSha256, rawSourceStatus] =
+    marker;
+  const omittedChars = Number(rawOmittedChars);
+  if (!Number.isSafeInteger(omittedChars) || omittedChars < 0) {
+    return null;
+  }
   const sourceStatus =
     rawSourceStatus === "complete" ? "complete" : "source-truncated";
   return {
     ref,
-    marker: toolOutputArtifactStoredMarker(ref, sourceStatus),
+    marker: toolOutputArtifactStoredMarker(ref, sourceStatus, contentSha256),
     markerIndex: marker.index,
+    omittedChars,
     sourceStatus,
+    ...(contentSha256 === undefined ? {} : { contentSha256 }),
   };
 }
 
@@ -158,6 +191,7 @@ export async function settleOversizedToolOutput(options: {
     const marker = `[tool output shortened: omitted ${omittedChars} chars; ${toolOutputArtifactStoredMarker(
       saveResult.ref,
       options.sourceStatus,
+      saveResult.contentSha256,
     )}]`;
     return {
       content: `${preview}\n${marker}`,

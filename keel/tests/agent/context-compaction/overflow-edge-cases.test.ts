@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -29,16 +30,50 @@ interface SavedToolOutputArtifact {
   readonly input: ToolOutputArtifactSaveInput;
 }
 
+interface ExistingToolOutputArtifact {
+  readonly ref: string;
+  readonly toolCallId: string;
+  readonly sourceStatus: "complete" | "source-truncated";
+  readonly content: string;
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
 function failingArtifactStore(
   saved: SavedToolOutputArtifact[],
   options?: {
     readonly reason?: string;
-    readonly existingRefs?: readonly string[];
+    readonly existingArtifacts?: readonly ExistingToolOutputArtifact[];
   },
 ): ToolOutputArtifactStore {
-  const existingRefs = new Set(options?.existingRefs ?? []);
+  const existingArtifacts = new Map(
+    (options?.existingArtifacts ?? []).map((artifact) => [
+      artifact.ref,
+      artifact,
+    ]),
+  );
   return {
-    exists: async (ref) => existingRefs.has(ref),
+    verifyReusable: async (input) => {
+      const artifact = existingArtifacts.get(input.ref);
+      if (artifact === undefined) {
+        return { status: "not_reusable" };
+      }
+      const contentSha256 = sha256(artifact.content);
+      if (
+        artifact.toolCallId !== input.toolCallId ||
+        artifact.sourceStatus !== input.sourceStatus ||
+        artifact.content.length !==
+          input.contentPrefix.length + input.omittedChars ||
+        !artifact.content.startsWith(input.contentPrefix) ||
+        (input.contentSha256 !== undefined &&
+          input.contentSha256 !== contentSha256)
+      ) {
+        return { status: "not_reusable" };
+      }
+      return { status: "reusable", contentSha256 };
+    },
     save: async (input) => {
       saved.push({ input });
       return { status: "failed", reason: options?.reason ?? "disk full" };
@@ -145,10 +180,14 @@ describe("Context Compaction Overflow Edge Cases", () => {
     ];
     const saved: SavedToolOutputArtifact[] = [];
     const store: ToolOutputArtifactStore = {
-      exists: async () => false,
+      verifyReusable: async () => ({ status: "not_reusable" }),
       save: async (input) => {
         saved.push({ input });
-        return { status: "stored", ref: "tool-output:test/1" };
+        return {
+          status: "stored",
+          ref: "tool-output:test/1",
+          contentSha256: "0".repeat(64),
+        };
       },
     };
     const provider: LLMProvider = {
@@ -308,7 +347,12 @@ describe("Context Compaction Overflow Edge Cases", () => {
       "settled current output line ".repeat(500),
       "CURRENT_SETTLED_PREVIEW_END",
     ].join("\n");
-    const currentToolOutput = `${currentPreview}\n[tool output shortened: omitted 90000 chars; full output artifact: tool-output:run/current-first; inspect with: keel artifacts show tool-output:run/current-first; source status: source-truncated/lossy before artifact capture]`;
+    const currentFullOutput = `${currentPreview}\n${"hidden settled output ".repeat(
+      500,
+    )}`;
+    const currentOmittedChars =
+      currentFullOutput.length - currentPreview.length;
+    const currentToolOutput = `${currentPreview}\n[tool output shortened: omitted ${currentOmittedChars} chars; full output artifact: tool-output:run/current-first; inspect with: keel artifacts show tool-output:run/current-first; source status: source-truncated/lossy before artifact capture]`;
     const messages: Message[] = [
       { role: "user", content: "Read the large log and continue." },
       {
@@ -367,7 +411,14 @@ describe("Context Compaction Overflow Edge Cases", () => {
         },
         toolOutputArtifacts: {
           store: failingArtifactStore(saved, {
-            existingRefs: ["tool-output:run/current-first"],
+            existingArtifacts: [
+              {
+                ref: "tool-output:run/current-first",
+                toolCallId: "read_large_log",
+                sourceStatus: "source-truncated",
+                content: currentFullOutput,
+              },
+            ],
           }),
         },
       }),
