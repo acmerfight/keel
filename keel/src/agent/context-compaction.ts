@@ -21,6 +21,10 @@ import {
 } from "./context-compaction/summary.ts";
 
 export { currentToolRound } from "./context-compaction/current-tool-round.ts";
+export {
+  compactStaleToolOutputs,
+  compactStaleToolOutputsWithArtifacts,
+} from "./context-compaction/stale-tool-output.ts";
 
 import {
   captureContextCompactionAccountingSnapshot as captureContextCompactionAccountingSnapshotFromAccounting,

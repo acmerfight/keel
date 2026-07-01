@@ -288,6 +288,103 @@ describe("Context Compaction Overflow Edge Cases", () => {
     });
   });
 
+  test(`Given current tool output already has an artifact-backed settlement marker,
+    When overflow recovery compacts the current tool output,
+    Then the retry reuses the original artifact ref without saving another artifact`, async () => {
+    // Given
+    const currentPreview = [
+      "CURRENT_SETTLED_START",
+      "settled current output line ".repeat(500),
+      "CURRENT_SETTLED_PREVIEW_END",
+    ].join("\n");
+    const currentToolOutput = `${currentPreview}\n[tool output shortened: omitted 90000 chars; full output artifact: tool-output:run/current-first; inspect with: keel artifacts show tool-output:run/current-first; source status: source-truncated/lossy before artifact capture]`;
+    const messages: Message[] = [
+      { role: "user", content: "Read the large log and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_large_log",
+            tool: "read",
+            path: "large.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_large_log",
+        content: currentToolOutput,
+      },
+    ];
+    const saved: SavedToolOutputArtifact[] = [];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "current-output-reuses-existing-artifact-provider",
+      async *stream(options) {
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Settled current output made request too large",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        yield {
+          type: "text",
+          text: "Continued after reusing the current output artifact.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 1,
+          toolOutputMaxChars: 128,
+        },
+        toolOutputArtifacts: { store: failingArtifactStore(saved) },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(saved).toHaveLength(0);
+    const retriedToolOutput =
+      retriedMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "read_large_log",
+      )?.content ?? "";
+    expect(retriedToolOutput).toContain(
+      "[current tool output compacted after context overflow:",
+    );
+    expect(retriedToolOutput).toContain(
+      "inspect with: keel artifacts show tool-output:run/current-first",
+    );
+    expect(retriedToolOutput).toContain(
+      "source status: source-truncated/lossy before artifact capture",
+    );
+    expect(retriedToolOutput).not.toContain("CURRENT_SETTLED_PREVIEW_END");
+    expect(events.some((event) => event.type === "tool_output_artifact")).toBe(
+      false,
+    );
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued after reusing the current output artifact.",
+    });
+  });
+
   test(`Given a real current read result overflows before assistant output,
     When overflow recovery compacts the current tool output,
     Then the retry does not restore a duplicate post-compaction read`, async () => {

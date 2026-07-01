@@ -1,5 +1,6 @@
 import type { Message } from "../../llm/types.ts";
 import {
+  generatedToolOutputArtifactMarker,
   isGeneratedSettledToolOutput,
   type ToolOutputArtifactNotice,
   type ToolOutputArtifactPurpose,
@@ -140,14 +141,18 @@ function isAlreadyCompactedCurrentToolOutput(
 }
 
 function compactStaleToolOutput(text: string, maxChars: number): string {
+  const existingArtifact = generatedToolOutputArtifactMarker(text);
   return `${text.slice(0, maxChars)}\n${staleToolOutputCompactedMarker(
     text.length - maxChars,
+    existingArtifact?.marker,
   )}`;
 }
 
 function compactCurrentToolOutput(text: string, maxChars: number): string {
+  const existingArtifact = generatedToolOutputArtifactMarker(text);
   return `${text.slice(0, maxChars)}\n${currentToolOutputCompactedMarker(
     text.length - maxChars,
+    existingArtifact?.marker,
   )}`;
 }
 
@@ -224,8 +229,13 @@ async function artifactMarkerForCompactedToolOutput(options: {
   readonly purpose: ToolOutputArtifactPurpose;
 }): Promise<{
   readonly marker: string;
-  readonly notice: ToolOutputArtifactNotice;
+  readonly notice?: ToolOutputArtifactNotice;
 }> {
+  const existingArtifact = generatedToolOutputArtifactMarker(options.content);
+  if (existingArtifact !== null) {
+    return { marker: existingArtifact.marker };
+  }
+
   const sourceStatus = sourceStatusForCompaction(options.content);
   const saveResult = await options.store.save({
     toolCallId: options.toolCallId,
@@ -386,7 +396,9 @@ export async function compactStaleToolOutputsWithArtifacts(
             message.content,
             compactedContent,
           ),
-          artifactNotice: artifact.notice,
+          ...(artifact.notice === undefined
+            ? {}
+            : { artifactNotice: artifact.notice }),
         };
       },
     ),
@@ -402,7 +414,7 @@ export async function compactStaleToolOutputsWithArtifacts(
   return {
     messages: compactedMessages,
     stats,
-    artifactNotices,
+    ...(artifactNotices.length === 0 ? {} : { artifactNotices }),
   };
 }
 
@@ -539,7 +551,9 @@ export async function compactCurrentToolOutputsWithArtifacts(
             message.content,
             compactedContent,
           ),
-          artifactNotice: artifact.notice,
+          ...(artifact.notice === undefined
+            ? {}
+            : { artifactNotice: artifact.notice }),
         };
       },
     ),
@@ -555,6 +569,6 @@ export async function compactCurrentToolOutputsWithArtifacts(
   return {
     messages: compactedMessages,
     stats,
-    artifactNotices,
+    ...(artifactNotices.length === 0 ? {} : { artifactNotices }),
   };
 }

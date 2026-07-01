@@ -64,8 +64,15 @@ export interface ToolOutputArtifactSettlementResult {
   readonly notice?: ToolOutputArtifactNotice;
 }
 
+export interface GeneratedToolOutputArtifactMarker {
+  readonly ref: string;
+  readonly marker: string;
+  readonly markerIndex: number;
+  readonly sourceStatus: ToolOutputArtifactSourceStatus;
+}
+
 const TOOL_OUTPUT_ARTIFACT_MARKER_SUFFIX_PATTERN =
-  /\n\[(?:tool output shortened|stale tool output compacted|current tool output compacted after context overflow): [^\]]*full output artifact: (tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+); inspect with: keel artifacts show \1; source status: (?:complete|source-truncated\/lossy before artifact capture)(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
+  /\n\[(?:tool output shortened|stale tool output compacted|current tool output compacted after context overflow): [^\]]*full output artifact: (tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+); inspect with: keel artifacts show \1; source status: (complete|source-truncated\/lossy before artifact capture)(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
 const TOOL_OUTPUT_ARTIFACT_FAILED_MARKER_SUFFIX_PATTERN =
   /\n\[(?:tool output shortened|stale tool output compacted|current tool output compacted after context overflow): [^\]]*artifact storage failed: .*; lossy; rerun the tool with narrower parameters if needed(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
 
@@ -77,8 +84,8 @@ export function isGeneratedArtifactBackedToolOutput(
   text: string,
   maxInlineChars: number,
 ): boolean {
-  const marker = TOOL_OUTPUT_ARTIFACT_MARKER_SUFFIX_PATTERN.exec(text);
-  return marker !== null && marker.index <= maxInlineChars;
+  const marker = generatedToolOutputArtifactMarker(text);
+  return marker !== null && marker.markerIndex <= maxInlineChars;
 }
 
 export function isGeneratedSettledToolOutput(
@@ -102,6 +109,24 @@ export function toolOutputArtifactStoredMarker(
       ? "source status: complete"
       : "source status: source-truncated/lossy before artifact capture";
   return `full output artifact: ${ref}; inspect with: keel artifacts show ${ref}; ${sourceStatusText}`;
+}
+
+export function generatedToolOutputArtifactMarker(
+  text: string,
+): GeneratedToolOutputArtifactMarker | null {
+  const marker = TOOL_OUTPUT_ARTIFACT_MARKER_SUFFIX_PATTERN.exec(text);
+  if (marker === null) {
+    return null;
+  }
+  const [, ref = "", rawSourceStatus] = marker;
+  const sourceStatus =
+    rawSourceStatus === "complete" ? "complete" : "source-truncated";
+  return {
+    ref,
+    marker: toolOutputArtifactStoredMarker(ref, sourceStatus),
+    markerIndex: marker.index,
+    sourceStatus,
+  };
 }
 
 export function toolOutputArtifactFailedMarker(reason: string): string {

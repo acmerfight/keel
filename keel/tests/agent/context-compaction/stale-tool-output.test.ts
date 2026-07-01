@@ -1,8 +1,13 @@
 import { describe, expect, test } from "vitest";
-import { compactMessages } from "../../../src/agent/context-compaction.ts";
+import {
+  compactMessages,
+  compactStaleToolOutputs,
+  compactStaleToolOutputsWithArtifacts,
+} from "../../../src/agent/context-compaction.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
 import {
+  generatedToolOutputArtifactMarker,
   isGeneratedArtifactBackedToolOutput,
   isGeneratedSettledToolOutput,
   type ToolOutputArtifactSaveInput,
@@ -50,6 +55,8 @@ describe("Context Compaction Stale Tool Output", () => {
     // Given
     const marker =
       "[tool output shortened: omitted 10 chars; full output artifact: tool-output:test/1; inspect with: keel artifacts show tool-output:test/1; source status: complete]";
+    const sourceTruncatedMarker =
+      "[tool output shortened: omitted 10 chars; full output artifact: tool-output:test/2; inspect with: keel artifacts show tool-output:test/2; source status: source-truncated/lossy before artifact capture]";
     const failedMarker = `[tool output shortened: omitted 10 chars; ${toolOutputArtifactFailedMarker(
       "disk full",
     )}]`;
@@ -69,6 +76,22 @@ describe("Context Compaction Stale Tool Output", () => {
       isGeneratedArtifactBackedToolOutput(`${"x".repeat(32)}\n${marker}`, 16),
     ).toBe(false);
     expect(
+      generatedToolOutputArtifactMarker(`${"x".repeat(32)}\n${marker}`),
+    ).toMatchObject({
+      ref: "tool-output:test/1",
+      markerIndex: 32,
+      sourceStatus: "complete",
+    });
+    expect(
+      generatedToolOutputArtifactMarker(`preview\n${sourceTruncatedMarker}`),
+    ).toMatchObject({
+      ref: "tool-output:test/2",
+      marker: expect.stringContaining(
+        "source status: source-truncated/lossy before artifact capture",
+      ),
+      sourceStatus: "source-truncated",
+    });
+    expect(
       isGeneratedSettledToolOutput(`${"x".repeat(32)}\n${failedMarker}`, 16),
     ).toBe(false);
     expect(isGeneratedArtifactBackedToolOutput("ordinary output", 16)).toBe(
@@ -77,6 +100,123 @@ describe("Context Compaction Stale Tool Output", () => {
     expect(toolOutputArtifactFailedMarker(" \n\t ")).toContain(
       "unknown storage error",
     );
+  });
+
+  test(`Given a settled artifact-backed output is larger than the compaction preview,
+    When artifact-backed stale compaction shrinks it again,
+    Then Keel reuses the existing artifact ref without saving a second artifact`, async () => {
+    // Given
+    const settledPreview = [
+      "SETTLED_REPORT_START",
+      "settled report line ".repeat(500),
+      "SETTLED_REPORT_PREVIEW_END",
+    ].join("\n");
+    const settledMarker =
+      "[tool output shortened: omitted 90000 chars; full output artifact: tool-output:run/first; inspect with: keel artifacts show tool-output:run/first; source status: complete]";
+    const settledToolOutput = `${settledPreview}\n${settledMarker}`;
+    const messages: Message[] = [
+      { role: "user", content: "Read the old report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_old_report",
+            tool: "read",
+            path: "old-report.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_old_report",
+        content: settledToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The old report was inspected.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue." },
+    ];
+    const artifacts = memoryArtifactStore();
+
+    // When
+    const result = await compactStaleToolOutputsWithArtifacts(
+      messages,
+      128,
+      artifacts.store,
+    );
+
+    // Then
+    expect(artifacts.saved).toHaveLength(0);
+    expect(result.artifactNotices).toBeUndefined();
+    const compactedToolOutput =
+      result.messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "read_old_report",
+      )?.content ?? "";
+    expect(compactedToolOutput).toContain(
+      "full output artifact: tool-output:run/first",
+    );
+    expect(compactedToolOutput).toContain(
+      "inspect with: keel artifacts show tool-output:run/first",
+    );
+    expect(compactedToolOutput).not.toContain("tool-output:test/1");
+    expect(compactedToolOutput).not.toContain("SETTLED_REPORT_PREVIEW_END");
+    expect(result.stats).toMatchObject({
+      toolOutputsCompacted: 1,
+      toolOutputCharsBefore: settledToolOutput.length,
+    });
+  });
+
+  test(`Given a settled artifact-backed output is compacted without a store,
+    When stale compaction shrinks it again,
+    Then Keel keeps the original artifact ref in the compacted marker`, () => {
+    // Given
+    const settledToolOutput = `${"settled report line ".repeat(
+      500,
+    )}\n[tool output shortened: omitted 90000 chars; full output artifact: tool-output:run/first; inspect with: keel artifacts show tool-output:run/first; source status: complete]`;
+    const messages: Message[] = [
+      { role: "user", content: "Read the old report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_old_report",
+            tool: "read",
+            path: "old-report.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_old_report",
+        content: settledToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The old report was inspected.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue." },
+    ];
+
+    // When
+    const result = compactStaleToolOutputs(messages, 128);
+
+    // Then
+    const compactedToolOutput =
+      result.messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "read_old_report",
+      )?.content ?? "";
+    expect(compactedToolOutput).toContain(
+      "inspect with: keel artifacts show tool-output:run/first",
+    );
+    expect(compactedToolOutput).not.toContain("omitted 90000 chars");
+    expect(result.stats.toolOutputsCompacted).toBe(1);
   });
 
   test(`Given artifact storage is enabled but retained context has no stale large tool output,
