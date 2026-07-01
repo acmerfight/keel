@@ -104,6 +104,9 @@ export function redactMessageForPersistence(message: Message): Message {
         role: "tool",
         toolCallId: message.toolCallId,
         content: redactTextForPersistence(message.content),
+        ...(message.sourceTruncated !== undefined
+          ? { sourceTruncated: message.sourceTruncated }
+          : {}),
       };
   }
 }

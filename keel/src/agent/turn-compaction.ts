@@ -26,12 +26,14 @@ import {
   type SessionLedger,
   sessionLedgerFromMessages,
 } from "./session-ledger.ts";
+import type { ToolOutputArtifactsOptions } from "./tool-output-artifacts.ts";
 
 export interface CompactionConfig {
   readonly provider: LLMProvider;
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
   readonly contextCompaction: ContextCompactionOptions | undefined;
+  readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly costTracking: CostTrackingOptions | undefined;
   readonly onContextCompacted?: (messages: Message[]) => Promise<void>;
 }
@@ -78,6 +80,9 @@ async function attemptContextCompaction(
     signal: config.signal,
     ...(config.contextCompaction !== undefined
       ? { contextCompaction: config.contextCompaction }
+      : {}),
+    ...(config.toolOutputArtifacts !== undefined
+      ? { toolOutputArtifacts: config.toolOutputArtifacts }
       : {}),
     ...(state.contextAccounting !== undefined
       ? { contextAccounting: state.contextAccounting }
@@ -148,6 +153,9 @@ export async function* streamTurnWithOverflowRecovery(
           reason: "proactive",
           ...compaction.stats,
         };
+        for (const notice of compaction.artifactNotices ?? []) {
+          yield { type: "tool_output_artifact", ...notice };
+        }
       }
     }
     try {
@@ -193,6 +201,9 @@ export async function* streamTurnWithOverflowRecovery(
               reason: "overflow_recovery",
               ...compaction.stats,
             };
+            for (const notice of compaction.artifactNotices ?? []) {
+              yield { type: "tool_output_artifact", ...notice };
+            }
             compactedBeforeRequest = true;
             continue;
           }

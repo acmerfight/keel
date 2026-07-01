@@ -145,6 +145,7 @@ function formatGrepResult(
 
   return {
     content: output.join("\n"),
+    ...(options.truncated ? { sourceTruncated: true } : {}),
     matchTargetPaths: matches.flatMap((match) =>
       match.targetPath === undefined ? [] : [match.targetPath],
     ),

@@ -1,4 +1,17 @@
 import type { Message } from "../../llm/types.ts";
+import {
+  generatedToolOutputArtifactMarker,
+  isGeneratedSettledToolOutput,
+  sourceStatusFromToolOutputText,
+  TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY,
+  type ToolOutputArtifactNotice,
+  type ToolOutputArtifactPurpose,
+  type ToolOutputArtifactSourceStatus,
+  type ToolOutputArtifactStore,
+  type ToolOutputArtifactToolName,
+  toolOutputArtifactFailedMarker,
+  toolOutputArtifactStoredMarker,
+} from "../tool-output-artifacts.ts";
 import { currentToolRound } from "./current-tool-round.ts";
 import { estimateTextTokens } from "./token-accounting.ts";
 
@@ -6,7 +19,7 @@ const STALE_TOOL_OUTPUT_COMPACTED_PREFIX =
   "[stale tool output compacted: approximately omitted ";
 const STALE_TOOL_OUTPUT_COMPACTED_SUFFIX = " chars]";
 const STALE_TOOL_OUTPUT_COMPACTED_SUFFIX_PATTERN =
-  /\n\[stale tool output compacted: approximately omitted [0-9]+ chars\]$/;
+  /\n\[stale tool output compacted: approximately omitted [0-9]+ chars(?:; [^\]]+)?\]$/;
 const STALE_TOOL_OUTPUT_COMPACTED_OVERHEAD_CHARS =
   "\n".length +
   STALE_TOOL_OUTPUT_COMPACTED_PREFIX.length +
@@ -17,7 +30,7 @@ const CURRENT_TOOL_OUTPUT_COMPACTED_PREFIX =
 const CURRENT_TOOL_OUTPUT_COMPACTED_SUFFIX =
   " chars; rerun the tool with narrower parameters if needed]";
 const CURRENT_TOOL_OUTPUT_COMPACTED_SUFFIX_PATTERN =
-  /\n\[current tool output compacted after context overflow: approximately omitted [0-9]+ chars; rerun the tool with narrower parameters if needed\]$/;
+  /\n\[current tool output compacted after context overflow: approximately omitted [0-9]+ chars(?:; [^\]]+)?\]$/;
 const CURRENT_TOOL_OUTPUT_COMPACTED_OVERHEAD_CHARS =
   "\n".length +
   CURRENT_TOOL_OUTPUT_COMPACTED_PREFIX.length +
@@ -35,11 +48,13 @@ export interface StaleToolOutputCompactionStats {
 export interface StaleToolOutputCompactionResult {
   readonly messages: readonly Message[];
   readonly stats: StaleToolOutputCompactionStats;
+  readonly artifactNotices?: readonly ToolOutputArtifactNotice[];
 }
 
 interface StaleToolOutputCompactionEntry {
   readonly message: Message;
   readonly stats: StaleToolOutputCompactionStats;
+  readonly artifactNotice?: ToolOutputArtifactNotice;
 }
 
 export const EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS: StaleToolOutputCompactionStats =
@@ -84,11 +99,28 @@ export function mergeStaleToolOutputCompactionStats(
   };
 }
 
-function staleToolOutputCompactedMarker(omittedChars: number): string {
+function staleToolOutputCompactedMarker(
+  omittedChars: number,
+  artifactMarker?: string,
+): string {
+  if (artifactMarker !== undefined) {
+    return `${STALE_TOOL_OUTPUT_COMPACTED_PREFIX}${omittedChars} chars; ${artifactMarker}]`;
+  }
   return `${STALE_TOOL_OUTPUT_COMPACTED_PREFIX}${omittedChars}${STALE_TOOL_OUTPUT_COMPACTED_SUFFIX}`;
 }
 
-function currentToolOutputCompactedMarker(omittedChars: number): string {
+function currentToolOutputCompactedMarker(
+  omittedChars: number,
+  artifactMarker?: string,
+): string {
+  if (artifactMarker !== undefined) {
+    const markerWithRecovery = artifactMarker.includes(
+      TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY,
+    )
+      ? artifactMarker
+      : `${artifactMarker}; ${TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY}`;
+    return `${CURRENT_TOOL_OUTPUT_COMPACTED_PREFIX}${omittedChars} chars; ${markerWithRecovery}]`;
+  }
   return `${CURRENT_TOOL_OUTPUT_COMPACTED_PREFIX}${omittedChars}${CURRENT_TOOL_OUTPUT_COMPACTED_SUFFIX}`;
 }
 
@@ -116,15 +148,25 @@ function isAlreadyCompactedCurrentToolOutput(
   );
 }
 
-function compactStaleToolOutput(text: string, maxChars: number): string {
+function compactStaleToolOutput(
+  text: string,
+  maxChars: number,
+  artifactMarker?: string,
+): string {
   return `${text.slice(0, maxChars)}\n${staleToolOutputCompactedMarker(
     text.length - maxChars,
+    artifactMarker,
   )}`;
 }
 
-function compactCurrentToolOutput(text: string, maxChars: number): string {
+function compactCurrentToolOutput(
+  text: string,
+  maxChars: number,
+  artifactMarker?: string,
+): string {
   return `${text.slice(0, maxChars)}\n${currentToolOutputCompactedMarker(
     text.length - maxChars,
+    artifactMarker,
   )}`;
 }
 
@@ -138,6 +180,7 @@ function shouldCompactStaleToolOutput(
     message.role === "tool" &&
     messageIndex < lastAssistantIndex &&
     message.content.length > toolOutputMaxChars &&
+    !isGeneratedSettledToolOutput(message.content, toolOutputMaxChars) &&
     !isAlreadyCompactedStaleToolOutput(message.content, toolOutputMaxChars)
   );
 }
@@ -152,8 +195,112 @@ function shouldCompactCurrentToolOutput(
     message.role === "tool" &&
     currentToolOutputIndexes.has(messageIndex) &&
     message.content.length > toolOutputMaxChars &&
+    !isGeneratedSettledToolOutput(message.content, toolOutputMaxChars) &&
     !isAlreadyCompactedCurrentToolOutput(message.content, toolOutputMaxChars)
   );
+}
+
+function sourceStatusForCompaction(
+  message: Extract<Message, { readonly role: "tool" }>,
+): ToolOutputArtifactSourceStatus {
+  if (message.sourceTruncated !== undefined) {
+    return message.sourceTruncated ? "source-truncated" : "complete";
+  }
+  return sourceStatusFromToolOutputText(message.content);
+}
+
+function toolNameForToolOutput(
+  messages: readonly Message[],
+  toolCallId: string,
+): ToolOutputArtifactToolName {
+  for (const message of messages) {
+    if (message.role !== "assistant") {
+      continue;
+    }
+    const toolCall = message.toolCalls.find(
+      (candidate) => candidate.id === toolCallId,
+    );
+    /* v8 ignore next: valid tool-result ledgers preserve the matching assistant tool call; corrupted histories fall through below. */
+    if (toolCall !== undefined) {
+      return toolCall.tool;
+    }
+  }
+  /* v8 ignore next: valid tool-result ledgers preserve the matching assistant tool call; this labels corrupted current-schema histories. */
+  return "unknown";
+}
+
+async function artifactMarkerForCompactedToolOutput(options: {
+  readonly store: ToolOutputArtifactStore;
+  readonly message: Extract<Message, { readonly role: "tool" }>;
+  readonly toolCallId: string;
+  readonly toolName: ToolOutputArtifactToolName;
+  readonly content: string;
+  readonly omittedChars: number;
+  readonly purpose: ToolOutputArtifactPurpose;
+}): Promise<{
+  readonly marker: string;
+  readonly notice?: ToolOutputArtifactNotice;
+}> {
+  const existingArtifact = generatedToolOutputArtifactMarker(options.content);
+  if (existingArtifact !== null) {
+    try {
+      const verification = await options.store.verifyReusable({
+        ref: existingArtifact.ref,
+        toolCallId: options.toolCallId,
+        contentPrefix: options.content.slice(0, existingArtifact.markerIndex),
+        omittedChars: existingArtifact.omittedChars,
+        sourceStatus: existingArtifact.sourceStatus,
+        ...(existingArtifact.contentSha256 === undefined
+          ? {}
+          : { contentSha256: existingArtifact.contentSha256 }),
+      });
+      if (verification.status === "reusable") {
+        return {
+          marker: toolOutputArtifactStoredMarker(
+            existingArtifact.ref,
+            existingArtifact.sourceStatus,
+            verification.contentSha256,
+          ),
+        };
+      }
+    } catch {}
+  }
+
+  const sourceStatus = sourceStatusForCompaction(options.message);
+  const saveResult = await options.store.save({
+    toolCallId: options.toolCallId,
+    toolName: options.toolName,
+    content: options.content,
+    sourceStatus,
+    purpose: options.purpose,
+  });
+  if (saveResult.status === "stored") {
+    return {
+      marker: toolOutputArtifactStoredMarker(
+        saveResult.ref,
+        sourceStatus,
+        saveResult.contentSha256,
+      ),
+      notice: {
+        status: "stored",
+        ref: saveResult.ref,
+        toolCallId: options.toolCallId,
+        toolName: options.toolName,
+        sourceStatus,
+        omittedChars: options.omittedChars,
+      },
+    };
+  }
+  return {
+    marker: toolOutputArtifactFailedMarker(saveResult.reason),
+    notice: {
+      status: "failed",
+      reason: saveResult.reason,
+      toolCallId: options.toolCallId,
+      toolName: options.toolName,
+      omittedChars: options.omittedChars,
+    },
+  };
 }
 
 export function compactStaleToolOutputs(
@@ -180,6 +327,7 @@ export function compactStaleToolOutputs(
   const compactedEntries = messages.map(
     (message, index): StaleToolOutputCompactionEntry => {
       if (
+        message.role !== "tool" ||
         !shouldCompactStaleToolOutput(
           message,
           index,
@@ -219,6 +367,90 @@ export function compactStaleToolOutputs(
   };
 }
 
+export async function compactStaleToolOutputsWithArtifacts(
+  messages: readonly Message[],
+  toolOutputMaxChars: number,
+  store: ToolOutputArtifactStore,
+): Promise<StaleToolOutputCompactionResult> {
+  const lastAssistantIndex = messages.findLastIndex(
+    (message) => message.role === "assistant",
+  );
+  const needsCompaction = messages.some((message, index) =>
+    shouldCompactStaleToolOutput(
+      message,
+      index,
+      lastAssistantIndex,
+      toolOutputMaxChars,
+    ),
+  );
+  if (!needsCompaction) {
+    return {
+      messages,
+      stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+    };
+  }
+  const compactedEntries = await Promise.all(
+    messages.map(
+      async (message, index): Promise<StaleToolOutputCompactionEntry> => {
+        if (
+          message.role !== "tool" ||
+          !shouldCompactStaleToolOutput(
+            message,
+            index,
+            lastAssistantIndex,
+            toolOutputMaxChars,
+          )
+        ) {
+          return {
+            message,
+            stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+          };
+        }
+        const artifact = await artifactMarkerForCompactedToolOutput({
+          store,
+          message,
+          toolCallId: message.toolCallId,
+          toolName: toolNameForToolOutput(messages, message.toolCallId),
+          content: message.content,
+          omittedChars: message.content.length - toolOutputMaxChars,
+          purpose: "stale-compaction",
+        });
+        const compactedContent = compactStaleToolOutput(
+          message.content,
+          toolOutputMaxChars,
+          artifact.marker,
+        );
+        return {
+          message: {
+            ...message,
+            content: compactedContent,
+          },
+          stats: staleToolOutputCompactionStats(
+            message.content,
+            compactedContent,
+          ),
+          ...(artifact.notice === undefined
+            ? {}
+            : { artifactNotice: artifact.notice }),
+        };
+      },
+    ),
+  );
+  const stats = compactedEntries.reduce(
+    (total, entry) => mergeStaleToolOutputCompactionStats(total, entry.stats),
+    EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+  );
+  const compactedMessages = compactedEntries.map((entry) => entry.message);
+  const artifactNotices = compactedEntries.flatMap((entry) =>
+    entry.artifactNotice === undefined ? [] : [entry.artifactNotice],
+  );
+  return {
+    messages: compactedMessages,
+    stats,
+    ...(artifactNotices.length === 0 ? {} : { artifactNotices }),
+  };
+}
+
 export function compactCurrentToolOutputs(
   messages: readonly Message[],
   toolOutputMaxChars: number,
@@ -246,6 +478,7 @@ export function compactCurrentToolOutputs(
   const compactedEntries = messages.map(
     (message, index): StaleToolOutputCompactionEntry => {
       if (
+        message.role !== "tool" ||
         !shouldCompactCurrentToolOutput(
           message,
           index,
@@ -282,5 +515,92 @@ export function compactCurrentToolOutputs(
   return {
     messages: compactedMessages,
     stats,
+  };
+}
+
+export async function compactCurrentToolOutputsWithArtifacts(
+  messages: readonly Message[],
+  toolOutputMaxChars: number,
+  store: ToolOutputArtifactStore,
+): Promise<StaleToolOutputCompactionResult> {
+  const currentToolOutputIndexes = new Set(
+    currentToolRound(messages)?.toolOutputs.map(
+      (toolOutput) => toolOutput.messageIndex,
+    ) ?? [],
+  );
+  const needsCompaction = messages.some((message, index) =>
+    shouldCompactCurrentToolOutput(
+      message,
+      index,
+      currentToolOutputIndexes,
+      toolOutputMaxChars,
+    ),
+  );
+  if (!needsCompaction) {
+    return {
+      messages,
+      stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+    };
+  }
+
+  const compactedEntries = await Promise.all(
+    messages.map(
+      async (message, index): Promise<StaleToolOutputCompactionEntry> => {
+        if (
+          message.role !== "tool" ||
+          !shouldCompactCurrentToolOutput(
+            message,
+            index,
+            currentToolOutputIndexes,
+            toolOutputMaxChars,
+          )
+        ) {
+          return {
+            message,
+            stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+          };
+        }
+        const artifact = await artifactMarkerForCompactedToolOutput({
+          store,
+          message,
+          toolCallId: message.toolCallId,
+          toolName: toolNameForToolOutput(messages, message.toolCallId),
+          content: message.content,
+          omittedChars: message.content.length - toolOutputMaxChars,
+          purpose: "current-overflow-compaction",
+        });
+        const compactedContent = compactCurrentToolOutput(
+          message.content,
+          toolOutputMaxChars,
+          artifact.marker,
+        );
+        return {
+          message: {
+            ...message,
+            content: compactedContent,
+          },
+          stats: staleToolOutputCompactionStats(
+            message.content,
+            compactedContent,
+          ),
+          ...(artifact.notice === undefined
+            ? {}
+            : { artifactNotice: artifact.notice }),
+        };
+      },
+    ),
+  );
+  const stats = compactedEntries.reduce(
+    (total, entry) => mergeStaleToolOutputCompactionStats(total, entry.stats),
+    EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+  );
+  const compactedMessages = compactedEntries.map((entry) => entry.message);
+  const artifactNotices = compactedEntries.flatMap((entry) =>
+    entry.artifactNotice === undefined ? [] : [entry.artifactNotice],
+  );
+  return {
+    messages: compactedMessages,
+    stats,
+    ...(artifactNotices.length === 0 ? {} : { artifactNotices }),
   };
 }

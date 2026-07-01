@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import {
+  formatToolOutputArtifactNotice,
   formatUndoCheckpointList,
   printAgentEvents,
   printStableInteractiveAgentEvents,
@@ -189,6 +190,35 @@ describe("CLI Output", () => {
     expect(sanitized).toContain("summary\\n\\x1b[31m\\u{202e}text");
     expect(sanitized).toHaveLength(243);
     expect(sanitized.endsWith("...")).toBe(true);
+  });
+
+  test(`Given tool output artifact notices are formatted,
+    When the notice is stored or failed,
+    Then the user sees the inspection command or lossy recovery guidance`, () => {
+    // Given / When / Then
+    expect(
+      formatToolOutputArtifactNotice({
+        status: "stored",
+        ref: "tool-output:run/artifact",
+        toolCallId: "call_1",
+        toolName: "read",
+        sourceStatus: "complete",
+        omittedChars: 1200,
+      }),
+    ).toBe(
+      "Tool output artifact: tool-output:run/artifact (keel artifacts show tool-output:run/artifact)",
+    );
+    expect(
+      formatToolOutputArtifactNotice({
+        status: "failed",
+        reason: "disk\nfull",
+        toolCallId: "call_1",
+        toolName: "read",
+        omittedChars: 1200,
+      }),
+    ).toBe(
+      "Tool output artifact failed: disk\\nfull; output is lossy; rerun with narrower parameters if needed",
+    );
   });
 
   test(`Given context compaction happens during an agent run,
@@ -396,6 +426,15 @@ describe("CLI Output", () => {
           },
           ok: false,
         },
+        {
+          type: "tool_output_artifact",
+          status: "stored",
+          ref: "tool-output:interactive/artifact",
+          toolCallId: "read_1",
+          toolName: "read",
+          sourceStatus: "complete",
+          omittedChars: 1200,
+        },
         { type: "text", text: "Do" },
         { type: "text", text: "ne." },
         {
@@ -426,6 +465,7 @@ describe("CLI Output", () => {
         "status: Provider retry: deepseek rate limited (attempt 2/3 in 123ms)\n",
         "status: Tool: read note.txt\n",
         "status: Tool failed: edit note.txt\n",
+        "status: Tool output artifact: tool-output:interactive/artifact (keel artifacts show tool-output:interactive/artifact)\n",
         "assistant:\n",
       ].join(""),
     );

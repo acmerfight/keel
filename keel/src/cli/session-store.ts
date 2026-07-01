@@ -21,6 +21,7 @@ export type {
   SessionStoreRuntime,
   StoredMessage,
 } from "./session-store/model.ts";
+export { sessionHome } from "./session-store/paths.ts";
 export { sessionStoredMessages } from "./session-store/state.ts";
 export {
   consumeSessionQueuedInputs,

@@ -1,5 +1,9 @@
 import { KeelError } from "../../core/error.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
+import type {
+  ToolOutputArtifactNotice,
+  ToolOutputArtifactsOptions,
+} from "../tool-output-artifacts.ts";
 import {
   normalizeCheckpointSummary,
   renderConversationCheckpoint,
@@ -11,6 +15,7 @@ import {
 } from "./options.ts";
 import {
   compactStaleToolOutputs,
+  compactStaleToolOutputsWithArtifacts,
   type StaleToolOutputCompactionStats,
 } from "./stale-tool-output.ts";
 
@@ -24,6 +29,7 @@ interface TextOnlyTurn {
 export interface BuildCompactedMessagesResult {
   readonly messages: readonly Message[];
   readonly staleToolOutputStats: StaleToolOutputCompactionStats;
+  readonly artifactNotices?: readonly ToolOutputArtifactNotice[];
 }
 
 function truncateText(text: string, maxChars: number): string {
@@ -139,16 +145,22 @@ function buildSummaryPrompt(
   return promptParts.join("\n\n");
 }
 
-export function buildCompactedMessages(
+export async function buildCompactedMessages(
   messages: readonly Message[],
   firstRetainedIndex: number,
   summary: string,
   options: ResolvedContextCompactionOptions,
-): BuildCompactedMessagesResult {
-  const recent = compactStaleToolOutputs(
-    messages.slice(firstRetainedIndex),
-    options.toolOutputMaxChars,
-  );
+  toolOutputArtifacts?: ToolOutputArtifactsOptions,
+): Promise<BuildCompactedMessagesResult> {
+  const recentMessages = messages.slice(firstRetainedIndex);
+  const recent =
+    toolOutputArtifacts === undefined
+      ? compactStaleToolOutputs(recentMessages, options.toolOutputMaxChars)
+      : await compactStaleToolOutputsWithArtifacts(
+          recentMessages,
+          options.toolOutputMaxChars,
+          toolOutputArtifacts.store,
+        );
   const checkpoint = renderConversationCheckpoint({
     summary: normalizeCheckpointSummary(summary),
     noLaterMessages: recent.messages.length === 0,
@@ -162,6 +174,10 @@ export function buildCompactedMessages(
       ...recent.messages,
     ],
     staleToolOutputStats: recent.stats,
+    ...(recent.artifactNotices !== undefined &&
+    recent.artifactNotices.length > 0
+      ? { artifactNotices: recent.artifactNotices }
+      : {}),
   };
 }
 

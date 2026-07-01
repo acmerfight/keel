@@ -47,6 +47,12 @@ import {
   SessionStoreError,
   sessionStoredMessages,
 } from "./session-store.ts";
+import {
+  cleanupExpiredToolOutputArtifacts,
+  createToolOutputArtifactStore,
+  newToolOutputArtifactScope,
+  toolOutputArtifactScopeForSession,
+} from "./tool-output-artifacts.ts";
 import { loadWorkflowSkill, WorkflowSkillError } from "./workflow-skills.ts";
 
 type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
@@ -341,6 +347,17 @@ export async function runInteractiveCli(
       }
       const projectInstructions = loadProjectInstructions(workspace);
       const startedAt = runtime.now();
+      void cleanupExpiredToolOutputArtifacts({ runtime });
+      const toolOutputArtifactScope =
+        activeSessionId === undefined
+          ? newToolOutputArtifactScope("interactive")
+          : toolOutputArtifactScopeForSession(activeSessionId);
+      const toolOutputArtifacts = {
+        store: createToolOutputArtifactStore({
+          runtime,
+          scope: toolOutputArtifactScope,
+        }),
+      };
       const interactiveDisplay =
         runtime.input.isTTY === true
           ? createStableInteractiveDisplay(runtime, {
@@ -355,6 +372,7 @@ export async function runInteractiveCli(
         ...(projectInstructions !== undefined ? { projectInstructions } : {}),
         ...(workflowSkill !== undefined ? { workflowSkill } : {}),
         ...(sessionPersistence !== undefined ? sessionPersistence : {}),
+        toolOutputArtifacts,
         input: runtime.input,
         writeStdout: (text) => {
           (interactiveDisplay ?? runtime).writeStdout(text);

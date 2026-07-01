@@ -13,6 +13,7 @@ import {
 } from "./runtime.ts";
 import { runSessionsCommand } from "./sessions-command.ts";
 import {
+  runArtifactsCommand,
   runDoctorCommand,
   runEvalCommand,
   runSkillsCommand,
@@ -42,6 +43,10 @@ async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
 
   if (cliArgs.command === "undo") {
     return runUndoCommand(cliArgs, runtime);
+  }
+
+  if (cliArgs.command === "artifacts") {
+    return await runArtifactsCommand(cliArgs, runtime);
   }
 
   if (cliArgs.command === "skills") {

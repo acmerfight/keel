@@ -8,7 +8,10 @@ import type { ReadVisibilityState } from "../../agent/read-visibility.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { Message, Usage } from "../../llm/types.ts";
 import type { ProjectInstructionVisibilityState } from "../../tools/scoped-project-instructions.ts";
-import { formatContextCompactionReport } from "../output.ts";
+import {
+  formatContextCompactionReport,
+  formatToolOutputArtifactNotice,
+} from "../output.ts";
 import {
   formatManualCompactionFailure,
   type ManualCompactCommand,
@@ -69,6 +72,9 @@ export async function executeManualCompaction(
       ...(command.focusInstruction !== undefined
         ? { focusInstruction: command.focusInstruction }
         : {}),
+      ...(options.toolOutputArtifacts !== undefined
+        ? { toolOutputArtifacts: options.toolOutputArtifacts }
+        : {}),
     });
     if (signal.aborted) {
       messages.splice(0, messages.length, ...messagesBeforeCompact);
@@ -95,6 +101,9 @@ export async function executeManualCompaction(
           reasonLabel: "manual",
         }),
       );
+      for (const notice of result.artifactNotices ?? []) {
+        options.writeStderr(`${formatToolOutputArtifactNotice(notice)}\n`);
+      }
       if (manualCostModel !== undefined) {
         const cost = recordCompactionCost(result.usage, manualCostModel);
         if (options.cliArgs.maxCostUsd !== undefined) {

@@ -10,7 +10,10 @@ import type { CostModel } from "../../core/cost.ts";
 import type { Message, Usage } from "../../llm/types.ts";
 import { bashModeExposesTool } from "../../permissions/bash.ts";
 import type { ProjectInstructionVisibilityState } from "../../tools/scoped-project-instructions.ts";
-import { formatContextCompactionReport } from "../output.ts";
+import {
+  formatContextCompactionReport,
+  formatToolOutputArtifactNotice,
+} from "../output.ts";
 import { formatManualCompactionFailure } from "./commands.ts";
 import { shouldTrackInteractiveCost } from "./cost.ts";
 import type {
@@ -185,6 +188,9 @@ export async function executeModelSwitchCompaction(
       ...(target.contextCompaction !== undefined
         ? { contextCompaction: target.contextCompaction }
         : {}),
+      ...(options.toolOutputArtifacts !== undefined
+        ? { toolOutputArtifacts: options.toolOutputArtifacts }
+        : {}),
     });
     if (signal.aborted) {
       rollback();
@@ -241,6 +247,9 @@ export async function executeModelSwitchCompaction(
         reasonLabel: "model switch",
       }),
     );
+    for (const notice of result.artifactNotices ?? []) {
+      options.writeStderr(`${formatToolOutputArtifactNotice(notice)}\n`);
+    }
     if (compactionCostModel === undefined) {
       return { status: "accepted" };
     }

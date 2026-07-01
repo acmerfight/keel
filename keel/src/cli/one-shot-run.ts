@@ -22,6 +22,11 @@ import {
 import { assertEndEventHasCost, writeRunReport } from "./report.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { formatCliRuntimeError } from "./runtime-error.ts";
+import {
+  cleanupExpiredToolOutputArtifacts,
+  createToolOutputArtifactStore,
+  newToolOutputArtifactScope,
+} from "./tool-output-artifacts.ts";
 import { writeRunTranscript } from "./transcript.ts";
 import { loadWorkflowSkill, WorkflowSkillError } from "./workflow-skills.ts";
 
@@ -68,6 +73,13 @@ export async function runOneShotCli(
 
     const startedAt = runtime.now();
     const bashPermission = oneShotBashPermissionPolicy(cliArgs.bashMode);
+    await cleanupExpiredToolOutputArtifacts({ runtime });
+    const toolOutputArtifacts = {
+      store: createToolOutputArtifactStore({
+        runtime,
+        scope: newToolOutputArtifactScope("run"),
+      }),
+    };
     const systemPrompt = buildAgentSystemPrompt({
       workspace,
       platform: runtime.platform,
@@ -83,6 +95,7 @@ export async function runOneShotCli(
       signal: abortController.signal,
       allowBash: bashModeExposesTool(cliArgs.bashMode),
       stopPolicy: defaultStopPolicy(),
+      toolOutputArtifacts,
       ...(bashPermission !== undefined ? { bashPermission } : {}),
       ...(cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
         ? {

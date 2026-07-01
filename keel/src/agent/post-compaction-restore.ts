@@ -11,6 +11,7 @@ import {
   clearReadVisibilityState,
   type ReadVisibilityState,
 } from "./read-visibility.ts";
+import { toolMessageSourceTruncationMetadata } from "./tool-output-artifacts.ts";
 
 const POST_COMPACTION_MAX_RESTORED_FILES = 5;
 const POST_COMPACTION_MAX_FILE_CHARS = 20_000;
@@ -267,6 +268,10 @@ export async function restorePostCompactionReads(options: {
       role: "tool",
       toolCallId: instruction.toolCall.id,
       content: instruction.content,
+      ...toolMessageSourceTruncationMetadata({
+        content: instruction.content,
+        sourceTruncated: !instruction.complete,
+      }),
     });
   }
   for (const read of restored) {
@@ -274,6 +279,11 @@ export async function restorePostCompactionReads(options: {
       role: "tool",
       toolCallId: read.toolCall.id,
       content: read.content,
+      ...toolMessageSourceTruncationMetadata({
+        content: read.content,
+        sourceTruncated:
+          read.execution.sourceTruncated === true || !read.complete,
+      }),
     });
   }
   options.readVisibility.applyVisibleToolExecutions(

@@ -454,6 +454,14 @@ function appendProcessSection(
   if (output !== "") sections.push(`${label}:\n${output}`);
 }
 
+function gitDiffContentSourceTruncated(content: string): boolean {
+  return (
+    content.includes("[git_diff stdout truncated:") ||
+    content.includes("[git_diff stderr truncated:") ||
+    content.includes("[git_diff output truncated:")
+  );
+}
+
 async function runDiff(
   workspacePath: string,
   args: readonly string[],
@@ -699,8 +707,12 @@ export async function executeGitDiff(
     );
   }
 
+  const content =
+    sections.length === 0 ? "No git changes found." : sections.join("\n\n");
   return {
-    content:
-      sections.length === 0 ? "No git changes found." : sections.join("\n\n"),
+    content,
+    ...(gitDiffContentSourceTruncated(content)
+      ? { sourceTruncated: true }
+      : {}),
   };
 }

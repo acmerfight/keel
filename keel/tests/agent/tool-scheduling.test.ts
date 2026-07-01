@@ -5,6 +5,10 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
+import type {
+  ToolOutputArtifactSaveInput,
+  ToolOutputArtifactStore,
+} from "../../src/agent/tool-output-artifacts.ts";
 import { restoreLastEditCheckpoint } from "../../src/core/git.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 import { createGitWorkspace } from "../../src/testing/cli-harness.ts";
@@ -44,6 +48,19 @@ function toolEventTrace(events: readonly AgentEvent[]): readonly string[] {
         ? `${event.toolCall.id}:start`
         : `${event.toolCall.id}:end:${event.ok}`,
     );
+}
+
+function storedArtifactStore(
+  saved: ToolOutputArtifactSaveInput[],
+): ToolOutputArtifactStore {
+  return {
+    verifyReusable: async () => ({ status: "not_reusable" }),
+    save: async (input) => {
+      saved.push(input);
+      const ref = `tool-output:test/${saved.length}`;
+      return { status: "stored", ref, contentSha256: "0".repeat(64) };
+    },
+  };
 }
 
 async function createWorkspace(): Promise<string> {
@@ -626,15 +643,20 @@ describe("Tool Scheduling", () => {
 
   test(`Given a read-only batch has a source-earlier success before cancellation,
     When a later scheduled tool rejects with a terminal error,
-    Then the successful result is still recorded before the run fails`, async () => {
+    Then the artifact-backed successful result is still recorded before the run fails`, async () => {
     // Given
     const workspace = await createWorkspace();
-    await writeFile(join(workspace, "note.txt"), "visible\n", "utf8");
+    await writeFile(
+      join(workspace, "note.txt"),
+      ["VISIBLE_START", "visible ".repeat(120), "VISIBLE_END"].join("\n"),
+      "utf8",
+    );
     const abortController = new AbortController();
     abortController.abort();
     const messages: Message[] = [
       { role: "user", content: "inspect and search" },
     ];
+    const saved: ToolOutputArtifactSaveInput[] = [];
     const provider: LLMProvider = {
       id: "terminal-parallel-search-provider",
       async *stream() {
@@ -666,6 +688,10 @@ describe("Tool Scheduling", () => {
           signal: abortController.signal,
           allowBash: false,
           stopPolicy: defaultStopPolicy(),
+          toolOutputArtifacts: {
+            store: storedArtifactStore(saved),
+            maxInlineChars: 64,
+          },
         })) {
           events.push(event);
         }
@@ -679,16 +705,118 @@ describe("Tool Scheduling", () => {
         "cancelled_search:start",
         "read_note:end:true",
       ]);
+      expect(events).toContainEqual({
+        type: "tool_output_artifact",
+        status: "stored",
+        ref: "tool-output:test/1",
+        toolCallId: "read_note",
+        toolName: "read",
+        sourceStatus: "complete",
+        omittedChars: expect.any(Number),
+      });
+      expect(saved).toHaveLength(1);
       expect(messages).toContainEqual({
         role: "tool",
         toolCallId: "read_note",
-        content: expect.stringContaining("visible"),
+        content: expect.stringContaining(
+          "keel artifacts show tool-output:test/1",
+        ),
       });
       expect(
         messages.some(
           (message) =>
             message.role === "tool" &&
             message.toolCallId === "cancelled_search",
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a sequential tool throws after a source-earlier success,
+    When the pending success is artifact-backed,
+    Then the artifact notice is emitted before the run fails`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(
+      join(workspace, "note.txt"),
+      ["VISIBLE_START", "visible ".repeat(120), "VISIBLE_END"].join("\n"),
+      "utf8",
+    );
+    const abortController = new AbortController();
+    abortController.abort();
+    const messages: Message[] = [{ role: "user", content: "inspect then run" }];
+    const saved: ToolOutputArtifactSaveInput[] = [];
+    const provider: LLMProvider = {
+      id: "terminal-single-bash-provider",
+      async *stream() {
+        yield {
+          type: "tool_call",
+          id: "read_note",
+          tool: "read",
+          path: "note.txt",
+        };
+        yield {
+          type: "tool_call",
+          id: "cancelled_bash",
+          tool: "bash",
+          command: "printf done",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const events: AgentEvent[] = [];
+
+    try {
+      // When / Then
+      await expect(async () => {
+        for await (const event of runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are a helpful assistant.",
+          signal: abortController.signal,
+          allowBash: true,
+          stopPolicy: defaultStopPolicy(),
+          toolOutputArtifacts: {
+            store: storedArtifactStore(saved),
+            maxInlineChars: 64,
+          },
+        })) {
+          events.push(event);
+        }
+      }).rejects.toMatchObject({
+        name: "KeelError",
+        code: "tool_aborted",
+      });
+
+      expect(toolEventTrace(events)).toEqual([
+        "read_note:start",
+        "read_note:end:true",
+        "cancelled_bash:start",
+      ]);
+      expect(events).toContainEqual({
+        type: "tool_output_artifact",
+        status: "stored",
+        ref: "tool-output:test/1",
+        toolCallId: "read_note",
+        toolName: "read",
+        sourceStatus: "complete",
+        omittedChars: expect.any(Number),
+      });
+      expect(saved).toHaveLength(1);
+      expect(messages).toContainEqual({
+        role: "tool",
+        toolCallId: "read_note",
+        content: expect.stringContaining(
+          "keel artifacts show tool-output:test/1",
+        ),
+      });
+      expect(
+        messages.some(
+          (message) =>
+            message.role === "tool" && message.toolCallId === "cancelled_bash",
         ),
       ).toBe(false);
     } finally {
