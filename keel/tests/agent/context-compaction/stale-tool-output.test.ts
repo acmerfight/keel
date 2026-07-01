@@ -797,6 +797,104 @@ describe("Context Compaction Stale Tool Output", () => {
     });
   });
 
+  test.each([
+    {
+      label: "read byte-budget marker",
+      marker:
+        "[Read output truncated at 2000 lines or 50KB. Use offset=2001 to continue.]",
+    },
+    {
+      label: "read line-limit marker",
+      marker:
+        "[Read output stopped at requested limit of 100 lines. Use offset=101 to continue.]",
+    },
+  ])(`Given retained stale $label lacks typed source metadata,
+    When context compaction stores it as an artifact,
+    Then Keel falls back to the read marker source status`, async ({
+    marker,
+  }) => {
+    // Given
+    const body = [
+      "READ_MARKER_REPORT_START",
+      "read marker fallback line ".repeat(500),
+      marker,
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+      { role: "user", content: "Read the metadata report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_marker_report",
+            tool: "read",
+            path: "marker-report.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_marker_report",
+        content: body,
+      },
+      {
+        role: "assistant",
+        content: "The marker report was inspected.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue." },
+    ];
+    const artifacts = memoryArtifactStore();
+    const provider: LLMProvider = {
+      id: "read-marker-fallback-source-status-provider",
+      async *stream(options) {
+        expect(options.toolChoice).toBe("none");
+        yield { type: "text", text: "Earlier setup summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 100_000,
+        toolOutputMaxChars: 128,
+      },
+      toolOutputArtifacts: { store: artifacts.store },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    if (!result.compacted) {
+      throw new Error("Expected context compaction to retain the tool result");
+    }
+    expect(artifacts.saved).toHaveLength(1);
+    expect(artifacts.saved[0]?.input.sourceStatus).toBe("source-truncated");
+    expect(result.artifactNotices).toContainEqual({
+      status: "stored",
+      ref: "tool-output:test/1",
+      toolCallId: "read_marker_report",
+      toolName: "read",
+      sourceStatus: "source-truncated",
+      omittedChars: body.length - 128,
+    });
+    const compactedToolOutput =
+      messages.find(
+        (message) =>
+          message.role === "tool" &&
+          message.toolCallId === "read_marker_report",
+      )?.content ?? "";
+    expect(compactedToolOutput).toContain(
+      "source status: source-truncated/lossy before artifact capture",
+    );
+  });
+
   test(`Given a fresh complete read output contains truncation-looking text,
     When later context compaction stores it as an artifact,
     Then Keel keeps the artifact source status complete`, async () => {

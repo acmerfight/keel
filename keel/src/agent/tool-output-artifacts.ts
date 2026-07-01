@@ -17,6 +17,8 @@ export function sourceStatusFromToolOutputText(
   // legacy-format reader.
   return content.includes("source-truncated/lossy") ||
     content.includes(" output truncated:") ||
+    content.includes("[Read output truncated at ") ||
+    content.includes("[Read output stopped at ") ||
     content.includes("[bash stdout truncated:") ||
     content.includes("[bash stderr truncated:") ||
     content.includes("[git_diff stdout truncated:") ||
