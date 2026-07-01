@@ -61,7 +61,7 @@ export type ToolOutputArtifactNotice =
 
 export interface ToolOutputArtifactSettlementResult {
   readonly content: string;
-  readonly notice?: ToolOutputArtifactNotice;
+  readonly notice: ToolOutputArtifactNotice;
 }
 
 export interface GeneratedToolOutputArtifactMarker {
@@ -80,7 +80,7 @@ function oneLineReason(reason: string): string {
   return reason.trim().replace(/\s+/gu, " ") || "unknown storage error";
 }
 
-export function isGeneratedArtifactBackedToolOutput(
+function isGeneratedArtifactBackedToolOutput(
   text: string,
   maxInlineChars: number,
 ): boolean {
@@ -144,10 +144,6 @@ export async function settleOversizedToolOutput(options: {
   readonly sourceStatus: ToolOutputArtifactSourceStatus;
   readonly purpose: ToolOutputArtifactPurpose;
 }): Promise<ToolOutputArtifactSettlementResult> {
-  if (options.content.length <= options.maxInlineChars) {
-    return { content: options.content };
-  }
-
   const saveResult = await options.store.save({
     toolCallId: options.toolCallId,
     toolName: options.toolName,

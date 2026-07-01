@@ -31,11 +31,12 @@ interface SavedToolOutputArtifact {
 
 function failingArtifactStore(
   saved: SavedToolOutputArtifact[],
+  reason = "disk full",
 ): ToolOutputArtifactStore {
   return {
     save: async (input) => {
       saved.push({ input });
-      return { status: "failed", reason: "disk full" };
+      return { status: "failed", reason };
     },
   };
 }
@@ -258,7 +259,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
           keepRecentTokens: 1,
           toolOutputMaxChars: 128,
         },
-        toolOutputArtifacts: { store: failingArtifactStore(saved) },
+        toolOutputArtifacts: { store: failingArtifactStore(saved, " \n\t ") },
       }),
     );
 
@@ -277,7 +278,9 @@ describe("Context Compaction Overflow Edge Cases", () => {
         (message) =>
           message.role === "tool" && message.toolCallId === "run_noisy_command",
       )?.content ?? "";
-    expect(retriedToolOutput).toContain("artifact storage failed: disk full");
+    expect(retriedToolOutput).toContain(
+      "artifact storage failed: unknown storage error",
+    );
     expect(retriedToolOutput).toContain(
       "model recovery: rerun the tool with narrower parameters if needed",
     );

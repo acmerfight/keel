@@ -5,10 +5,9 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
-import {
-  settleOversizedToolOutput,
-  type ToolOutputArtifactSaveInput,
-  type ToolOutputArtifactStore,
+import type {
+  ToolOutputArtifactSaveInput,
+  ToolOutputArtifactStore,
 } from "../../src/agent/tool-output-artifacts.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 
@@ -34,34 +33,6 @@ function freshSignal(): AbortSignal {
 }
 
 describe("Agent Tool Output Artifacts", () => {
-  test(`Given a tool output fits the inline budget,
-    When Keel settles the output,
-    Then the content stays inline without saving an artifact`, async () => {
-    // Given
-    const saved: ToolOutputArtifactSaveInput[] = [];
-    const store: ToolOutputArtifactStore = {
-      save: async (input) => {
-        saved.push(input);
-        return { status: "stored", ref: "tool-output:test/1" };
-      },
-    };
-
-    // When
-    const result = await settleOversizedToolOutput({
-      store,
-      maxInlineChars: 128,
-      toolCallId: "read_small_file",
-      toolName: "read",
-      content: "small output",
-      sourceStatus: "complete",
-      purpose: "settlement",
-    });
-
-    // Then
-    expect(result).toEqual({ content: "small output" });
-    expect(saved).toEqual([]);
-  });
-
   test(`Given one turn has several medium outputs over the aggregate budget,
     When Keel settles the tool results,
     Then it artifacts the largest outputs until the turn is back under budget`, async () => {
