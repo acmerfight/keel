@@ -45,6 +45,7 @@ import {
   settleOversizedToolOutput,
   type ToolOutputArtifactNotice,
   type ToolOutputArtifactsOptions,
+  toolMessageSourceTruncationMetadata,
 } from "./tool-output-artifacts.ts";
 import {
   executeParallelToolCallsInSourceOrder,
@@ -600,6 +601,10 @@ export async function* runAgentTurn(
             role: "tool",
             toolCallId: settled.toolCall.id,
             content: settled.content,
+            ...toolMessageSourceTruncationMetadata({
+              content: settled.content,
+              sourceTruncated: settled.execution.sourceTruncated === true,
+            }),
           }),
         );
         if (settled.notice !== undefined) {

@@ -8,6 +8,32 @@ export const TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY =
 
 export type ToolOutputArtifactSourceStatus = "complete" | "source-truncated";
 
+export function sourceStatusFromToolOutputText(
+  content: string,
+): ToolOutputArtifactSourceStatus {
+  // Mirrors current tool truncation markers from bash, git_diff, read, glob, ls, and grep.
+  return content.includes("source-truncated/lossy") ||
+    content.includes(" output truncated:") ||
+    content.includes("[bash stdout truncated:") ||
+    content.includes("[bash stderr truncated:") ||
+    content.includes("[git_diff stdout truncated:") ||
+    content.includes("[git_diff stderr truncated:")
+    ? "source-truncated"
+    : "complete";
+}
+
+export function toolMessageSourceTruncationMetadata(input: {
+  readonly content: string;
+  readonly sourceTruncated: boolean;
+}): { readonly sourceTruncated?: boolean } {
+  if (input.sourceTruncated) {
+    return { sourceTruncated: true };
+  }
+  return sourceStatusFromToolOutputText(input.content) === "source-truncated"
+    ? { sourceTruncated: false }
+    : {};
+}
+
 export type ToolOutputArtifactPurpose =
   | "settlement"
   | "stale-compaction"

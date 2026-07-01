@@ -33,6 +33,7 @@ interface ToolMessage {
   readonly role: "tool";
   readonly toolCallId: string;
   readonly content: string;
+  readonly sourceTruncated?: boolean;
 }
 
 export type Message = UserMessage | AssistantMessage | ToolMessage;

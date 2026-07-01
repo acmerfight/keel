@@ -2,6 +2,7 @@ import type { Message } from "../../llm/types.ts";
 import {
   generatedToolOutputArtifactMarker,
   isGeneratedSettledToolOutput,
+  sourceStatusFromToolOutputText,
   TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY,
   type ToolOutputArtifactNotice,
   type ToolOutputArtifactPurpose,
@@ -199,17 +200,12 @@ function shouldCompactCurrentToolOutput(
 }
 
 function sourceStatusForCompaction(
-  content: string,
+  message: Extract<Message, { readonly role: "tool" }>,
 ): ToolOutputArtifactSourceStatus {
-  // Mirrors current tool truncation markers from bash, git_diff, read, glob, ls, and grep.
-  return content.includes("source-truncated/lossy") ||
-    content.includes(" output truncated:") ||
-    content.includes("[bash stdout truncated:") ||
-    content.includes("[bash stderr truncated:") ||
-    content.includes("[git_diff stdout truncated:") ||
-    content.includes("[git_diff stderr truncated:")
-    ? "source-truncated"
-    : "complete";
+  if (message.sourceTruncated !== undefined) {
+    return message.sourceTruncated ? "source-truncated" : "complete";
+  }
+  return sourceStatusFromToolOutputText(message.content);
 }
 
 function toolNameForToolOutput(
@@ -234,6 +230,7 @@ function toolNameForToolOutput(
 
 async function artifactMarkerForCompactedToolOutput(options: {
   readonly store: ToolOutputArtifactStore;
+  readonly message: Extract<Message, { readonly role: "tool" }>;
   readonly toolCallId: string;
   readonly toolName: string;
   readonly content: string;
@@ -268,7 +265,7 @@ async function artifactMarkerForCompactedToolOutput(options: {
     } catch {}
   }
 
-  const sourceStatus = sourceStatusForCompaction(options.content);
+  const sourceStatus = sourceStatusForCompaction(options.message);
   const saveResult = await options.store.save({
     toolCallId: options.toolCallId,
     toolName: options.toolName,
@@ -410,6 +407,7 @@ export async function compactStaleToolOutputsWithArtifacts(
         }
         const artifact = await artifactMarkerForCompactedToolOutput({
           store,
+          message,
           toolCallId: message.toolCallId,
           toolName: toolNameForToolOutput(messages, message.toolCallId),
           content: message.content,
@@ -563,6 +561,7 @@ export async function compactCurrentToolOutputsWithArtifacts(
         }
         const artifact = await artifactMarkerForCompactedToolOutput({
           store,
+          message,
           toolCallId: message.toolCallId,
           toolName: toolNameForToolOutput(messages, message.toolCallId),
           content: message.content,

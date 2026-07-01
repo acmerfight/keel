@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { compactMessages } from "../../../src/agent/context-compaction.ts";
+import {
+  compactMessages,
+  compactStaleToolOutputsWithArtifacts,
+} from "../../../src/agent/context-compaction.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
 import type {
@@ -712,6 +718,162 @@ describe("Context Compaction Stale Tool Output", () => {
     );
     expect(compactionIndex).toBeGreaterThan(-1);
     expect(artifactIndex).toBe(compactionIndex + 1);
+  });
+
+  test(`Given retained stale source-truncated output carries typed source metadata,
+    When context compaction stores it as an artifact,
+    Then Keel uses the typed source status instead of content sniffing`, async () => {
+    // Given
+    const body = [
+      "TRUNCATED_REPORT_START",
+      "source-truncated report line ".repeat(500),
+      "TRUNCATED_REPORT_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+      { role: "user", content: "Read the metadata report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_metadata_report",
+            tool: "read",
+            path: "metadata-report.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_metadata_report",
+        content: body,
+        sourceTruncated: true,
+      },
+      {
+        role: "assistant",
+        content: "The metadata report was inspected.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue." },
+    ];
+    const artifacts = memoryArtifactStore();
+    const provider: LLMProvider = {
+      id: "typed-source-status-source-truncated-provider",
+      async *stream(options) {
+        expect(options.toolChoice).toBe("none");
+        yield { type: "text", text: "Earlier setup summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 100_000,
+        toolOutputMaxChars: 128,
+      },
+      toolOutputArtifacts: { store: artifacts.store },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    if (!result.compacted) {
+      throw new Error("Expected context compaction to retain the tool result");
+    }
+    expect(artifacts.saved).toHaveLength(1);
+    expect(artifacts.saved[0]?.input.sourceStatus).toBe("source-truncated");
+    expect(result.artifactNotices).toContainEqual({
+      status: "stored",
+      ref: "tool-output:test/1",
+      toolCallId: "read_metadata_report",
+      toolName: "read",
+      sourceStatus: "source-truncated",
+      omittedChars: body.length - 128,
+    });
+  });
+
+  test(`Given a fresh complete read output contains truncation-looking text,
+    When later context compaction stores it as an artifact,
+    Then Keel keeps the artifact source status complete`, async () => {
+    // Given
+    const workspaceDir = await mkdtemp(join(tmpdir(), "keel-source-status-"));
+    const body = [
+      "COMPLETE_READ_START",
+      "literal fixture line: [bash stdout truncated: not a Keel marker]",
+      "complete read line ".repeat(500),
+      "COMPLETE_READ_END",
+    ].join("\n");
+    await writeFile(join(workspaceDir, "metadata-report.log"), body, "utf8");
+    const messages: Message[] = [
+      { role: "user", content: "Read the metadata report." },
+    ];
+    let turnRequests = 0;
+    const firstTurnProvider: LLMProvider = {
+      id: "fresh-complete-source-status-provider",
+      async *stream() {
+        turnRequests++;
+        if (turnRequests === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_metadata_report",
+            tool: "read",
+            path: "metadata-report.log",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "The metadata report was inspected." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const artifacts = memoryArtifactStore();
+
+    try {
+      await collect(
+        runAgentTurn({
+          workspace: workspaceDir,
+          provider: firstTurnProvider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+      messages.push({ role: "user", content: "Continue." });
+      const retainedToolMessage = messages.find(
+        (message): message is Extract<Message, { readonly role: "tool" }> =>
+          message.role === "tool" &&
+          message.toolCallId === "read_metadata_report",
+      );
+
+      // When
+      const result = await compactStaleToolOutputsWithArtifacts(
+        messages,
+        128,
+        artifacts.store,
+      );
+
+      // Then
+      expect(retainedToolMessage?.sourceTruncated).toBe(false);
+      expect(artifacts.saved).toHaveLength(1);
+      expect(artifacts.saved[0]?.input.sourceStatus).toBe("complete");
+      expect(result.artifactNotices).toContainEqual({
+        status: "stored",
+        ref: "tool-output:test/1",
+        toolCallId: "read_metadata_report",
+        toolName: "read",
+        sourceStatus: "complete",
+        omittedChars: body.length - 128,
+      });
+    } finally {
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   test(`Given retained recent context contains a stale large tool output,
