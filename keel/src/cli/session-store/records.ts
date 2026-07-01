@@ -40,11 +40,24 @@ const userMessageSchema = z
   })
   .strict();
 
+const openAICompatibleAssistantMetadataSchema = z
+  .object({
+    reasoningContent: z.string(),
+  })
+  .strict();
+
+const assistantProviderMetadataSchema = z
+  .object({
+    openaiCompatible: openAICompatibleAssistantMetadataSchema,
+  })
+  .strict();
+
 const assistantMessageSchema = z
   .object({
     role: z.literal("assistant"),
     content: z.string(),
     toolCalls: z.array(toolCallSchema),
+    providerMetadata: assistantProviderMetadataSchema.optional(),
   })
   .strict();
 
@@ -303,6 +316,9 @@ function toMessage(message: RawMessage): Message {
         role: "assistant",
         content: message.content,
         toolCalls: message.toolCalls,
+        ...(message.providerMetadata !== undefined
+          ? { providerMetadata: message.providerMetadata }
+          : {}),
       };
     case "tool":
       return {
@@ -325,6 +341,9 @@ function copyMessage(message: Message): Message {
         role: "assistant",
         content: message.content,
         toolCalls: [...message.toolCalls],
+        ...(message.providerMetadata !== undefined
+          ? { providerMetadata: message.providerMetadata }
+          : {}),
       };
     case "tool":
       return {

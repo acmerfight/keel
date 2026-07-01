@@ -21,6 +21,7 @@ interface OpenAICompatibleChoice {
   readonly delta?:
     | {
         readonly content?: string | null | undefined;
+        readonly reasoning_content?: string | null | undefined;
         readonly tool_calls?:
           | readonly OpenAICompatibleToolCallDelta[]
           | undefined;
@@ -58,6 +59,7 @@ export interface OpenAICompatibleStreamConfig<
   Chunk extends OpenAICompatibleChunk = OpenAICompatibleChunk,
 > {
   readonly providerName: string;
+  readonly emitReasoningContent?: boolean;
   readonly parseChunk: (data: string) => Chunk;
   readonly captureUsage: (
     state: OpenAICompatibleStreamState,
@@ -259,6 +261,11 @@ function* parseSseLine<Chunk extends OpenAICompatibleChunk>(
   const choice = chunk.choices?.[0];
 
   if (choice !== undefined) {
+    const reasoningContent = choice.delta?.reasoning_content;
+    if (config.emitReasoningContent === true && reasoningContent) {
+      yield { type: "reasoning", text: reasoningContent };
+    }
+
     const content = choice.delta?.content;
     if (content) {
       yield { type: "text", text: content };

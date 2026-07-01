@@ -1,4 +1,4 @@
-import type { Message } from "../llm/types.ts";
+import type { AssistantProviderMetadata, Message } from "../llm/types.ts";
 import {
   type ToolCall,
   toolCallCanonicalArguments,
@@ -67,6 +67,18 @@ function redactToolCallForPersistence(toolCall: ToolCall): ToolCall {
   return redacted;
 }
 
+function redactAssistantProviderMetadataForPersistence(
+  providerMetadata: AssistantProviderMetadata,
+): AssistantProviderMetadata {
+  return {
+    openaiCompatible: {
+      reasoningContent: redactTextForPersistence(
+        providerMetadata.openaiCompatible.reasoningContent,
+      ),
+    },
+  };
+}
+
 export function redactMessageForPersistence(message: Message): Message {
   switch (message.role) {
     case "user":
@@ -79,6 +91,13 @@ export function redactMessageForPersistence(message: Message): Message {
         role: "assistant",
         content: redactTextForPersistence(message.content),
         toolCalls: message.toolCalls.map(redactToolCallForPersistence),
+        ...(message.providerMetadata !== undefined
+          ? {
+              providerMetadata: redactAssistantProviderMetadataForPersistence(
+                message.providerMetadata,
+              ),
+            }
+          : {}),
       };
     case "tool":
       return {

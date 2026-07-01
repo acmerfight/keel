@@ -4,9 +4,14 @@ import {
 } from "../../tools/tool-call.ts";
 import type { Message, StreamOptions } from "../types.ts";
 
+export interface OpenAICompatibleMessageOptions {
+  readonly assistantReasoningContent?: "omit" | "require";
+}
+
 export function createChatCompletionsBody(
   model: string,
   options: StreamOptions,
+  messageOptions: OpenAICompatibleMessageOptions = {},
 ): string {
   const tools = openAICompatibleTools(options.allowBash === true);
 
@@ -17,12 +22,35 @@ export function createChatCompletionsBody(
     ...(options.toolChoice === "none" ? {} : { tools, tool_choice: "auto" }),
     messages: [
       { role: "system", content: options.systemPrompt },
-      ...options.messages.map(toOpenAICompatibleMessage),
+      ...options.messages.map((message) =>
+        toOpenAICompatibleMessage(message, messageOptions),
+      ),
     ],
   });
 }
 
-function toOpenAICompatibleMessage(message: Message): Record<string, unknown> {
+function assistantReasoningContent(
+  message: Extract<Message, { readonly role: "assistant" }>,
+  options: OpenAICompatibleMessageOptions,
+): string | undefined {
+  if (
+    options.assistantReasoningContent === undefined ||
+    options.assistantReasoningContent === "omit"
+  ) {
+    return undefined;
+  }
+  const reasoningContent =
+    message.providerMetadata?.openaiCompatible.reasoningContent;
+  if (reasoningContent !== undefined) {
+    return reasoningContent;
+  }
+  return "";
+}
+
+function toOpenAICompatibleMessage(
+  message: Message,
+  options: OpenAICompatibleMessageOptions,
+): Record<string, unknown> {
   switch (message.role) {
     case "user":
       return { role: "user", content: message.content };
@@ -35,6 +63,7 @@ function toOpenAICompatibleMessage(message: Message): Record<string, unknown> {
           arguments: JSON.stringify(toolCallArguments(toolCall)),
         },
       }));
+      const reasoningContent = assistantReasoningContent(message, options);
       return {
         role: "assistant",
         content:
@@ -42,6 +71,9 @@ function toOpenAICompatibleMessage(message: Message): Record<string, unknown> {
             ? null
             : message.content,
         ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        ...(reasoningContent !== undefined
+          ? { reasoning_content: reasoningContent }
+          : {}),
       };
     }
     case "tool":

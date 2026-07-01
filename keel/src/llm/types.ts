@@ -14,10 +14,19 @@ interface UserMessage {
 
 export type { ToolCall } from "../tools/tool-call.ts";
 
+interface OpenAICompatibleAssistantMetadata {
+  readonly reasoningContent: string;
+}
+
+export interface AssistantProviderMetadata {
+  readonly openaiCompatible: OpenAICompatibleAssistantMetadata;
+}
+
 interface AssistantMessage {
   readonly role: "assistant";
   readonly content: string;
   readonly toolCalls: readonly ToolCall[];
+  readonly providerMetadata?: AssistantProviderMetadata;
 }
 
 interface ToolMessage {
@@ -32,6 +41,7 @@ export type LLMStopReason = "stop" | "length";
 
 export type LLMEvent =
   | { readonly type: "text"; readonly text: string }
+  | { readonly type: "reasoning"; readonly text: string }
   | ({ readonly type: "tool_call" } & ToolCall)
   | {
       readonly type: "provider_retry";

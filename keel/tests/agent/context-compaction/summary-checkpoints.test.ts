@@ -650,6 +650,42 @@ describe("Context Compaction Summary Checkpoints", () => {
     });
   });
 
+  test(`Given the summary provider emits private reasoning,
+    When compaction creates the checkpoint,
+    Then only visible summary text is written into the transcript`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Earlier task." },
+      { role: "assistant", content: "Earlier progress.", toolCalls: [] },
+      { role: "user", content: "Continue." },
+    ];
+    const provider: LLMProvider = {
+      id: "reasoning-summary-provider",
+      async *stream() {
+        yield { type: "reasoning", text: "Private summary reasoning." };
+        yield { type: "text", text: "Provider visible summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: { keepRecentTokens: 1 },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    expect(messages[0]).toEqual({
+      role: "user",
+      content: generatedCheckpoint("Provider visible summary."),
+    });
+    expect(messages[0]?.content).not.toContain("Private summary reasoning.");
+  });
+
   test(`Given the summary model stream ends without usage,
     When context compaction runs,
     Then the missing stop error is surfaced`, async () => {

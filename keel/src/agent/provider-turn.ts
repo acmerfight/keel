@@ -20,6 +20,7 @@ export class ContextOverflowBeforeAssistantError extends Error {
 
 export interface AgentTurn {
   readonly text: string;
+  readonly reasoningContent: string | null;
   readonly toolCalls: readonly ToolCall[];
   readonly usage: Usage;
   readonly stopReason: LLMStopReason;
@@ -51,6 +52,7 @@ function isProviderContextOverflow(error: unknown): boolean {
 
 function finishAgentTurn(
   assistantText: readonly string[],
+  assistantReasoning: readonly string[],
   pendingToolCalls: readonly ToolCall[],
   stop: AgentTurnStop | null,
 ): AgentTurn {
@@ -69,6 +71,8 @@ function finishAgentTurn(
 
   return {
     text: assistantText.join(""),
+    reasoningContent:
+      assistantReasoning.length === 0 ? null : assistantReasoning.join(""),
     toolCalls: pendingToolCalls,
     usage: stop.usage,
     stopReason: stop.reason,
@@ -92,6 +96,7 @@ export async function* streamAgentTurn(
 
   let stop: AgentTurnStop | null = null;
   const assistantText: string[] = [];
+  const assistantReasoning: string[] = [];
   const pendingToolCalls: ToolCall[] = [];
   let assistantStarted = false;
 
@@ -111,6 +116,12 @@ export async function* streamAgentTurn(
           }
           assistantText.push(event.text);
           yield { type: "text", text: event.text };
+          break;
+        case "reasoning":
+          if (event.text !== "") {
+            assistantStarted = true;
+            assistantReasoning.push(event.text);
+          }
           break;
         case "tool_call": {
           assistantStarted = true;
@@ -133,5 +144,10 @@ export async function* streamAgentTurn(
     throw error;
   }
 
-  return finishAgentTurn(assistantText, pendingToolCalls, stop);
+  return finishAgentTurn(
+    assistantText,
+    assistantReasoning,
+    pendingToolCalls,
+    stop,
+  );
 }
