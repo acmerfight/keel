@@ -114,6 +114,84 @@ describe("Context Compaction Overflow Edge Cases", () => {
     ]);
   });
 
+  test(`Given artifact storage is enabled and current tool output is already small,
+    When current tool-output compaction runs with no history to summarize,
+    Then it leaves the messages unchanged without saving an artifact`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Read the note and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_note",
+        content: "small note output",
+      },
+    ];
+    const saved: SavedToolOutputArtifact[] = [];
+    const store: ToolOutputArtifactStore = {
+      save: async (input) => {
+        saved.push({ input });
+        return { status: "stored", ref: "tool-output:test/1" };
+      },
+    };
+    const provider: LLMProvider = {
+      id: "small-current-output-artifact-provider",
+      stream() {
+        return failingStream(new Error("No summary request should be needed"));
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 1,
+        toolOutputMaxChars: 128,
+      },
+      allowCurrentToolOutputCompaction: true,
+      toolOutputArtifacts: { store },
+    });
+
+    // Then
+    expect(result).toEqual({
+      compacted: false,
+      usage: ZERO_USAGE,
+    });
+    expect(saved).toEqual([]);
+    expect(messages).toEqual([
+      { role: "user", content: "Read the note and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_note",
+        content: "small note output",
+      },
+    ]);
+  });
+
   test(`Given current tool output overflows and artifact storage fails,
     When overflow recovery compacts the current tool output,
     Then the retry sees a lossy marker with rerun guidance`, async () => {

@@ -48,6 +48,7 @@ import {
   sessionStoredMessages,
 } from "./session-store.ts";
 import {
+  cleanupExpiredToolOutputArtifacts,
   createToolOutputArtifactStore,
   newToolOutputArtifactScope,
   toolOutputArtifactScopeForSession,
@@ -346,6 +347,7 @@ export async function runInteractiveCli(
       }
       const projectInstructions = loadProjectInstructions(workspace);
       const startedAt = runtime.now();
+      void cleanupExpiredToolOutputArtifacts({ runtime });
       const toolOutputArtifactScope =
         activeSessionId === undefined
           ? newToolOutputArtifactScope("interactive")

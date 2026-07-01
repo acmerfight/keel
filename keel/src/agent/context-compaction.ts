@@ -120,12 +120,6 @@ export function contextCompactionStatsForCurrentMessages(options: {
   return contextCompactionStatsForCurrentMessagesFromAccounting(options);
 }
 
-export function contextCompactionToolOutputMaxChars(
-  options: ContextCompactionOptions | undefined,
-): number {
-  return resolveContextCompactionOptions(options).toolOutputMaxChars;
-}
-
 export async function compactMessages(
   options: CompactMessagesOptions,
 ): Promise<CompactMessagesResult> {
@@ -159,28 +153,30 @@ export async function compactMessages(
               resolved.toolOutputMaxChars,
               options.toolOutputArtifacts.store,
             );
-      if (currentToolOutputCompaction.stats.toolOutputsCompacted > 0) {
-        options.messages.splice(
-          0,
-          options.messages.length,
-          ...currentToolOutputCompaction.messages,
-        );
-        return {
-          compacted: true,
-          usage: ZERO_USAGE,
-          stats: {
-            beforeMessageCount,
-            afterMessageCount: options.messages.length,
-            beforeEstimatedTokens,
-            afterEstimatedTokens: estimateRequestTokens(
-              options.systemPrompt,
-              options.messages,
-            ),
-            ...currentToolOutputCompaction.stats,
-          },
-          ...artifactNoticesResult(currentToolOutputCompaction.artifactNotices),
-        };
+      /* v8 ignore next: V8 does not attribute the fall-through branch here; overflow-edge-cases covers both no-op and compacted current-output paths. */
+      if (currentToolOutputCompaction.stats.toolOutputsCompacted === 0) {
+        return { compacted: false, usage: ZERO_USAGE };
       }
+      options.messages.splice(
+        0,
+        options.messages.length,
+        ...currentToolOutputCompaction.messages,
+      );
+      return {
+        compacted: true,
+        usage: ZERO_USAGE,
+        stats: {
+          beforeMessageCount,
+          afterMessageCount: options.messages.length,
+          beforeEstimatedTokens,
+          afterEstimatedTokens: estimateRequestTokens(
+            options.systemPrompt,
+            options.messages,
+          ),
+          ...currentToolOutputCompaction.stats,
+        },
+        ...artifactNoticesResult(currentToolOutputCompaction.artifactNotices),
+      };
     }
     // The protected current suffix starts at the beginning of the transcript and
     // has no oversized current tool output we can shrink. Creating an empty

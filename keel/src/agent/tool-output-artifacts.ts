@@ -1,5 +1,9 @@
 import type { ToolCall } from "../llm/types.ts";
 
+export const DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_INLINE_CHARS = 50_000;
+export const DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_AGGREGATE_INLINE_CHARS = 200_000;
+export const DEFAULT_TOOL_OUTPUT_ARTIFACT_AGGREGATE_PREVIEW_CHARS = 10_000;
+
 export type ToolOutputArtifactSourceStatus = "complete" | "source-truncated";
 
 export type ToolOutputArtifactPurpose =
@@ -34,6 +38,8 @@ export interface ToolOutputArtifactStore {
 export interface ToolOutputArtifactsOptions {
   readonly store: ToolOutputArtifactStore;
   readonly maxInlineChars?: number;
+  readonly maxAggregateInlineChars?: number;
+  readonly aggregatePreviewChars?: number;
 }
 
 export type ToolOutputArtifactNotice =

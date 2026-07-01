@@ -23,6 +23,7 @@ import { assertEndEventHasCost, writeRunReport } from "./report.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { formatCliRuntimeError } from "./runtime-error.ts";
 import {
+  cleanupExpiredToolOutputArtifacts,
   createToolOutputArtifactStore,
   newToolOutputArtifactScope,
 } from "./tool-output-artifacts.ts";
@@ -72,6 +73,7 @@ export async function runOneShotCli(
 
     const startedAt = runtime.now();
     const bashPermission = oneShotBashPermissionPolicy(cliArgs.bashMode);
+    await cleanupExpiredToolOutputArtifacts({ runtime });
     const toolOutputArtifacts = {
       store: createToolOutputArtifactStore({
         runtime,

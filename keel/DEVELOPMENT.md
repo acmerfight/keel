@@ -72,7 +72,7 @@ Live provider requests are not a secret boundary. User text, tool results, and a
 
 Transcript, eval transcript, and session-ledger redaction is best-effort at-rest hygiene. It reduces accidental durable storage of common secret-like values, but it is not complete secret detection and does not change live provider serialization.
 
-Tool output artifacts are a full-fidelity recovery store for oversized tool results. They are intentionally written as raw, unredacted tool output under `KEEL_HOME` with 0700/0600 filesystem modes, and callers must treat `KEEL_HOME` as sensitive at-rest data.
+Tool output artifacts are a full-fidelity recovery store for oversized tool results. They are intentionally written as raw, unredacted tool output under `KEEL_HOME` with 0700/0600 filesystem modes, retained for 30 days by default or until manual removal, and callers must treat `KEEL_HOME` as sensitive at-rest data.
 
 Do not add generic live regex redaction of tool output without a separate design decision. It can corrupt valid coding context and will miss transformed secrets.
 

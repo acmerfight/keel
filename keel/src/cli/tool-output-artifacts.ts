@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  rmdir,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import type {
   ToolOutputArtifactSaveInput,
@@ -12,6 +20,9 @@ const ARTIFACT_SCOPE_PATTERN = /^[A-Za-z0-9._-]+$/u;
 const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9._-]+$/u;
 const TOOL_OUTPUT_REF_PATTERN =
   /^tool-output:([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/u;
+const TOOL_OUTPUT_ARTIFACT_RETENTION_DAYS = 30;
+const TOOL_OUTPUT_ARTIFACT_RETENTION_MS =
+  TOOL_OUTPUT_ARTIFACT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
 interface ToolOutputArtifactStoreOptions {
   readonly runtime: SessionStoreRuntime;
@@ -23,15 +34,19 @@ interface ParsedToolOutputArtifactRef {
   readonly id: string;
 }
 
-function validateArtifactSegment(kind: string, value: string): void {
+function isValidArtifactSegment(kind: string, value: string): boolean {
   const pattern =
     kind === "scope" ? ARTIFACT_SCOPE_PATTERN : ARTIFACT_ID_PATTERN;
-  if (
-    !pattern.test(value) ||
-    value === "." ||
-    value === ".." ||
-    value.includes("..")
-  ) {
+  return (
+    pattern.test(value) &&
+    value !== "." &&
+    value !== ".." &&
+    !value.includes("..")
+  );
+}
+
+function validateArtifactSegment(kind: string, value: string): void {
+  if (!isValidArtifactSegment(kind, value)) {
     throw new Error(
       `invalid artifact ${kind} "${value}". Use letters, numbers, dots, dashes, or underscores.`,
     );
@@ -40,6 +55,21 @@ function validateArtifactSegment(kind: string, value: string): void {
 
 function artifactRoot(runtime: SessionStoreRuntime): string {
   return join(sessionHome(runtime), "artifacts", "tool-output");
+}
+
+function hasNodeErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && "code" in error && error.code === code;
+}
+
+async function listDirectoryEntries(path: string) {
+  try {
+    return await readdir(path, { withFileTypes: true });
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 function artifactDirectory(
@@ -106,11 +136,52 @@ function artifactContent(input: {
     `contentChars: ${input.saveInput.content.length}`,
     `sha256: ${hash}`,
     `savedAt: ${input.savedAt}`,
-    "retention: stored under KEEL_HOME artifacts until KEEL_HOME cleanup or manual removal",
+    `retention: stored under KEEL_HOME artifacts for ${TOOL_OUTPUT_ARTIFACT_RETENTION_DAYS} days by default or until manual removal`,
     "atRestPolicy: raw unredacted tool output; protect KEEL_HOME accordingly",
     "---",
     input.saveInput.content,
   ].join("\n");
+}
+
+export async function cleanupExpiredToolOutputArtifacts(options: {
+  readonly runtime: SessionStoreRuntime;
+}): Promise<void> {
+  const root = artifactRoot(options.runtime);
+  const cutoffMs = options.runtime.now() - TOOL_OUTPUT_ARTIFACT_RETENTION_MS;
+  try {
+    const scopes = await listDirectoryEntries(root);
+    for (const scopeEntry of scopes) {
+      if (
+        !scopeEntry.isDirectory() ||
+        !isValidArtifactSegment("scope", scopeEntry.name)
+      ) {
+        continue;
+      }
+      const scopeDirectory = join(root, scopeEntry.name);
+      const artifacts = await listDirectoryEntries(scopeDirectory);
+      for (const artifactEntry of artifacts) {
+        if (!artifactEntry.isFile() || !artifactEntry.name.endsWith(".txt")) {
+          continue;
+        }
+        const id = artifactEntry.name.slice(0, -".txt".length);
+        if (!isValidArtifactSegment("id", id)) {
+          continue;
+        }
+        const artifactFile = join(scopeDirectory, artifactEntry.name);
+        try {
+          const artifactStats = await stat(artifactFile);
+          if (artifactStats.mtimeMs < cutoffMs) {
+            await rm(artifactFile, { force: true });
+          }
+        } catch {}
+      }
+      try {
+        await rmdir(scopeDirectory);
+      } catch {}
+    }
+  } catch {
+    return;
+  }
 }
 
 export function newToolOutputArtifactScope(prefix: string): string {

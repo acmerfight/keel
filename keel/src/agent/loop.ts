@@ -21,10 +21,7 @@ import {
   type CostTrackingOptions,
   emptyRunAccounting,
 } from "./accounting.ts";
-import {
-  type ContextCompactionOptions,
-  contextCompactionToolOutputMaxChars,
-} from "./context-compaction.ts";
+import type { ContextCompactionOptions } from "./context-compaction.ts";
 import type { AgentEvent } from "./events.ts";
 import { restorePostCompactionReads } from "./post-compaction-restore.ts";
 import type { AgentTurn } from "./provider-turn.ts";
@@ -42,6 +39,9 @@ import {
 } from "./session-ledger.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
 import {
+  DEFAULT_TOOL_OUTPUT_ARTIFACT_AGGREGATE_PREVIEW_CHARS,
+  DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_AGGREGATE_INLINE_CHARS,
+  DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_INLINE_CHARS,
   settleOversizedToolOutput,
   type ToolOutputArtifactNotice,
   type ToolOutputArtifactsOptions,
@@ -58,9 +58,6 @@ import {
   streamTurnWithOverflowRecovery,
 } from "./turn-compaction.ts";
 
-// Aggregate settlement should still leave a useful preview and avoid replacing
-// small outputs with artifact markers larger than the omitted text.
-const MIN_AGGREGATE_TOOL_OUTPUT_ARTIFACT_PREVIEW_CHARS = 256;
 const MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS = 512;
 
 export interface RunAgentOptions {
@@ -178,6 +175,16 @@ function toolRequestMessage(turn: AgentTurn): Message {
   };
 }
 
+interface CompletedTurnToolExecution {
+  readonly toolCall: ToolCall;
+  readonly execution: ToolExecution;
+}
+
+interface SettledTurnToolExecution extends CompletedTurnToolExecution {
+  readonly content: string;
+  readonly notice?: ToolOutputArtifactNotice;
+}
+
 function scheduledToolCalls(
   workspace: string,
   toolCalls: readonly ToolCall[],
@@ -204,51 +211,140 @@ function finalReplyMessage(
       };
 }
 
-async function settleToolExecutionContent(options: {
-  readonly toolCall: ToolCall;
-  readonly execution: ToolExecution;
-  readonly artifacts: ToolOutputArtifactsOptions | undefined;
-  readonly contextCompaction: ContextCompactionOptions | undefined;
-  readonly inlineToolOutputCharsBefore: number;
-}): Promise<{
-  readonly content: string;
-  readonly notice?: ToolOutputArtifactNotice;
-}> {
-  if (options.artifacts === undefined) {
-    return { content: options.execution.content };
-  }
-  const maxInlineChars =
-    options.artifacts.maxInlineChars ??
-    contextCompactionToolOutputMaxChars(options.contextCompaction);
-  const remainingAggregateInlineChars = Math.max(
-    0,
-    maxInlineChars - options.inlineToolOutputCharsBefore,
+function resolvedMaxInlineChars(options: ToolOutputArtifactsOptions): number {
+  return (
+    options.maxInlineChars ?? DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_INLINE_CHARS
   );
-  const effectiveMaxInlineChars = Math.min(
+}
+
+function resolvedMaxAggregateInlineChars(
+  options: ToolOutputArtifactsOptions,
+): number {
+  return (
+    options.maxAggregateInlineChars ??
+    DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_AGGREGATE_INLINE_CHARS
+  );
+}
+
+function resolvedAggregatePreviewChars(
+  options: ToolOutputArtifactsOptions,
+  maxInlineChars: number,
+): number {
+  return Math.min(
     maxInlineChars,
-    Math.max(
-      remainingAggregateInlineChars,
-      MIN_AGGREGATE_TOOL_OUTPUT_ARTIFACT_PREVIEW_CHARS,
-    ),
+    options.aggregatePreviewChars ??
+      DEFAULT_TOOL_OUTPUT_ARTIFACT_AGGREGATE_PREVIEW_CHARS,
   );
-  if (
-    options.execution.content.length - effectiveMaxInlineChars <
-    MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS
-  ) {
-    return { content: options.execution.content };
-  }
-  return await settleOversizedToolOutput({
-    store: options.artifacts.store,
-    maxInlineChars: effectiveMaxInlineChars,
-    toolCallId: options.toolCall.id,
-    toolName: options.toolCall.tool,
-    content: options.execution.content,
-    sourceStatus:
-      options.execution.sourceTruncated === true
-        ? "source-truncated"
-        : "complete",
-    purpose: "settlement",
+}
+
+function settlementPlanByExecutionIndex(
+  executions: readonly CompletedTurnToolExecution[],
+  artifacts: ToolOutputArtifactsOptions,
+): ReadonlyMap<number, number> {
+  const maxInlineChars = resolvedMaxInlineChars(artifacts);
+  const maxAggregateInlineChars = resolvedMaxAggregateInlineChars(artifacts);
+  const aggregatePreviewChars = resolvedAggregatePreviewChars(
+    artifacts,
+    maxInlineChars,
+  );
+  const plan = new Map<number, number>();
+  let estimatedInlineChars = 0;
+
+  executions.forEach(({ execution }, index) => {
+    if (
+      execution.content.length - maxInlineChars >=
+      MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS
+    ) {
+      plan.set(index, maxInlineChars);
+      estimatedInlineChars += maxInlineChars;
+      return;
+    }
+    estimatedInlineChars += execution.content.length;
   });
+
+  if (estimatedInlineChars <= maxAggregateInlineChars) {
+    return plan;
+  }
+
+  const candidates = executions
+    .map(({ execution }, index) => ({
+      index,
+      length: execution.content.length,
+    }))
+    .filter(
+      ({ length }) =>
+        length - aggregatePreviewChars >=
+        MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS,
+    )
+    .sort((left, right) =>
+      right.length === left.length
+        ? left.index - right.index
+        : right.length - left.length,
+    );
+
+  for (const candidate of candidates) {
+    const currentInlineChars = plan.get(candidate.index) ?? candidate.length;
+    if (currentInlineChars <= aggregatePreviewChars) {
+      continue;
+    }
+    plan.set(candidate.index, aggregatePreviewChars);
+    estimatedInlineChars -= currentInlineChars - aggregatePreviewChars;
+    if (estimatedInlineChars <= maxAggregateInlineChars) {
+      break;
+    }
+  }
+
+  return plan;
+}
+
+async function settleToolExecutionContents(options: {
+  readonly executions: readonly CompletedTurnToolExecution[];
+  readonly artifacts: ToolOutputArtifactsOptions | undefined;
+}): Promise<readonly SettledTurnToolExecution[]> {
+  if (options.artifacts === undefined) {
+    return options.executions.map(({ toolCall, execution }) => ({
+      toolCall,
+      execution,
+      content: execution.content,
+    }));
+  }
+  const plan = settlementPlanByExecutionIndex(
+    options.executions,
+    options.artifacts,
+  );
+  const settledExecutions: SettledTurnToolExecution[] = [];
+  for (const [index, { toolCall, execution }] of options.executions.entries()) {
+    const maxInlineChars = plan.get(index);
+    if (maxInlineChars === undefined) {
+      settledExecutions.push({
+        toolCall,
+        execution,
+        content: execution.content,
+      });
+      continue;
+    }
+    const settled = await settleOversizedToolOutput({
+      store: options.artifacts.store,
+      maxInlineChars,
+      toolCallId: toolCall.id,
+      toolName: toolCall.tool,
+      content: execution.content,
+      sourceStatus:
+        execution.sourceTruncated === true ? "source-truncated" : "complete",
+      purpose: "settlement",
+    });
+    settledExecutions.push(
+      settled.notice === undefined
+        ? { toolCall, execution, content: settled.content }
+        : {
+            toolCall,
+            execution,
+            content: settled.content,
+            notice: settled.notice,
+          },
+    );
+  }
+  return settledExecutions;
 }
 
 function agentStopReasonFromProvider(reason: AgentTurn["stopReason"]): string {
@@ -477,11 +573,7 @@ export async function* runAgentTurn(
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
 
-    let inlineToolOutputCharsThisTurn = 0;
-    const recordToolExecution = async (
-      toolCall: ToolCall,
-      execution: ToolExecution,
-    ): Promise<ToolOutputArtifactNotice | undefined> => {
+    const recordCheckpointOperations = (execution: ToolExecution): void => {
       if (
         execution.ok &&
         execution.checkpointOperations !== undefined &&
@@ -489,26 +581,50 @@ export async function* runAgentTurn(
       ) {
         options.recordCheckpointOperations?.(execution.checkpointOperations);
       }
-      const settled = await settleToolExecutionContent({
-        toolCall,
-        execution,
-        artifacts: options.toolOutputArtifacts,
-        contextCompaction: options.contextCompaction,
-        inlineToolOutputCharsBefore: inlineToolOutputCharsThisTurn,
-      });
-      inlineToolOutputCharsThisTurn += settled.content.length;
-      applySessionLedger(
-        appendSessionLedgerMessage(sessionLedger, {
-          role: "tool",
-          toolCallId: toolCall.id,
-          content: settled.content,
-        }),
-      );
-      return settled.notice;
     };
 
     const scheduled = scheduledToolCalls(workspace, turnResult.toolCalls);
-    const completedToolExecutions: ToolExecution[] = [];
+    const completedToolExecutions: CompletedTurnToolExecution[] = [];
+    let pendingToolExecutions: CompletedTurnToolExecution[] = [];
+    const settlePendingToolExecutions = async (): Promise<
+      readonly ToolOutputArtifactNotice[]
+    > => {
+      if (pendingToolExecutions.length === 0) {
+        return [];
+      }
+      const pending = pendingToolExecutions;
+      pendingToolExecutions = [];
+      const settledToolExecutions = await settleToolExecutionContents({
+        executions: pending,
+        artifacts: options.toolOutputArtifacts,
+      });
+      const artifactNotices: ToolOutputArtifactNotice[] = [];
+      for (const settled of settledToolExecutions) {
+        applySessionLedger(
+          appendSessionLedgerMessage(sessionLedger, {
+            role: "tool",
+            toolCallId: settled.toolCall.id,
+            content: settled.content,
+          }),
+        );
+        if (settled.notice !== undefined) {
+          artifactNotices.push(settled.notice);
+        }
+      }
+      return artifactNotices;
+    };
+    const recordCompletedToolExecution = (
+      completed: CompletedTurnToolExecution,
+    ): void => {
+      recordCheckpointOperations(completed.execution);
+      readVisibility.applyImmediateMutation(completed.execution);
+      projectInstructionVisibility.applyMutationTargetPaths(
+        mutatedTargetPathsFromExecution(completed.execution),
+      );
+      completedToolExecutions.push(completed);
+      pendingToolExecutions.push(completed);
+    };
+
     for (const segment of planToolCallExecutionSegments(scheduled)) {
       if (segment.kind === "parallel") {
         for (const { toolCall } of segment.toolCalls) {
@@ -520,40 +636,40 @@ export async function* runAgentTurn(
         });
         for (const result of results) {
           if (result.status === "rejected") {
+            for (const notice of await settlePendingToolExecutions()) {
+              yield { type: "tool_output_artifact", ...notice };
+            }
             throw result.reason;
           }
           const { toolCall, result: execution } = result;
           yield { type: "tool_end", toolCall, ok: execution.ok };
-          const artifactNotice = await recordToolExecution(toolCall, execution);
-          if (artifactNotice !== undefined) {
-            yield { type: "tool_output_artifact", ...artifactNotice };
-          }
-          readVisibility.applyImmediateMutation(execution);
-          projectInstructionVisibility.applyMutationTargetPaths(
-            mutatedTargetPathsFromExecution(execution),
-          );
-          completedToolExecutions.push(execution);
+          recordCompletedToolExecution({ toolCall, execution });
         }
       } else {
         const { toolCall } = segment.toolCall;
         yield { type: "tool_start", toolCall };
-        const execution = await executeTurnToolCall(toolCall);
-        yield { type: "tool_end", toolCall, ok: execution.ok };
-        const artifactNotice = await recordToolExecution(toolCall, execution);
-        if (artifactNotice !== undefined) {
-          yield { type: "tool_output_artifact", ...artifactNotice };
+        let execution: ToolExecution;
+        try {
+          execution = await executeTurnToolCall(toolCall);
+        } catch (error) {
+          for (const notice of await settlePendingToolExecutions()) {
+            yield { type: "tool_output_artifact", ...notice };
+          }
+          throw error;
         }
-        readVisibility.applyImmediateMutation(execution);
-        projectInstructionVisibility.applyMutationTargetPaths(
-          mutatedTargetPathsFromExecution(execution),
-        );
-        completedToolExecutions.push(execution);
+        yield { type: "tool_end", toolCall, ok: execution.ok };
+        recordCompletedToolExecution({ toolCall, execution });
       }
     }
-    readVisibility.applyVisibleToolExecutions(completedToolExecutions);
+    for (const notice of await settlePendingToolExecutions()) {
+      yield { type: "tool_output_artifact", ...notice };
+    }
+    readVisibility.applyVisibleToolExecutions(
+      completedToolExecutions.map(({ execution }) => execution),
+    );
     publishVisibleProjectInstructions(
       projectInstructionVisibility,
-      completedToolExecutions,
+      completedToolExecutions.map(({ execution }) => execution),
     );
 
     if (drainInjectedUserMessages !== undefined && !signal.aborted) {

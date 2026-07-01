@@ -23,6 +23,7 @@ export function createRuntime(
     readonly onStderr?: (text: string) => void;
     readonly onSigint?: (handler: () => void) => void;
     readonly offSigint?: (handler: () => void) => void;
+    readonly now?: () => number;
   } = {},
 ): RuntimeFixture {
   let stdout = "";
@@ -48,7 +49,7 @@ export function createRuntime(
       input,
       platform: process.platform,
       stderrIsTTY,
-      now: () => 0,
+      now: options.now ?? (() => 0),
       writeStdout: (text) => {
         stdout += text;
       },

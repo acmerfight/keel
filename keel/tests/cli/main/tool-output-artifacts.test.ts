@@ -1,4 +1,11 @@
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +37,19 @@ function firstArtifactRef(text: string): string {
   return ref;
 }
 
+function oversizedReadFixture(options: {
+  readonly start: string;
+  readonly end: string;
+  readonly fill: string;
+}): string {
+  return [
+    options.start,
+    options.fill.repeat(51_000),
+    options.end,
+    "tail beyond the read tool byte budget ".repeat(200),
+  ].join("\n");
+}
+
 function sseData(payload: unknown): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
@@ -59,6 +79,90 @@ function sseReadToolCalls(
 }
 
 describe("CLI Main - Tool Output Artifacts", () => {
+  test(`Given CLI main reads a moderately sized workspace file,
+    When the provider receives the next request,
+    Then the default artifact policy keeps the full output inline`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-artifacts-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const mediumOutput = [
+      "MEDIUM_READ_START",
+      "medium output visible to the model prompt ".repeat(80),
+      "MEDIUM_READ_END",
+    ].join("\n");
+    await writeFile(join(workspace, "medium.log"), mediumOutput, "utf8");
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_read_medium", "read", { path: "medium.log" }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        const secondRequest = requestWithMessagesSchema.parse(
+          capturedBodies[1],
+        );
+        const toolMessage = secondRequest.messages?.find(
+          (message) =>
+            message.role === "tool" &&
+            message.tool_call_id === "call_read_medium",
+        );
+        const stayedInline =
+          toolMessage?.content === mediumOutput &&
+          toolMessage.content.includes("keel artifacts show") === false;
+        res.end(
+          sseTextReplyWithUsage(
+            stayedInline ? "medium output inline" : "medium output artifacted",
+          ),
+        );
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const run = createRuntime(["inspect medium.log"], {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_HOME: home,
+        },
+      });
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(run.stdout()).toBe("medium output inline\n");
+      expect(run.stderr()).not.toContain("Tool output artifact:");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the provider reads a large workspace file,
     When CLI main runs and the user opens the artifact ref,
     Then the model prompt is shortened and artifacts show prints the full output`, async () => {
@@ -67,12 +171,11 @@ describe("CLI Main - Tool Output Artifacts", () => {
     const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
     await writeFile(
       join(workspace, "large.log"),
-      [
-        "FULL_READ_START",
-        "large output hidden from the model prompt ".repeat(180),
-        "A log line can mention a fake ref such as tool-output:not-real/ref.",
-        "FULL_READ_END",
-      ].join("\n"),
+      oversizedReadFixture({
+        start: "FULL_READ_START",
+        fill: "x",
+        end: "FULL_READ_END",
+      }),
       "utf8",
     );
     const capturedBodies: unknown[] = [];
@@ -156,11 +259,10 @@ describe("CLI Main - Tool Output Artifacts", () => {
       expect(show.stderr()).toBe("");
       expect(show.stdout()).toContain(`ref: ${ref}`);
       expect(show.stdout()).toContain("tool: read");
-      expect(show.stdout()).toContain("sourceStatus: complete");
+      expect(show.stdout()).toContain("sourceStatus: source-truncated");
       expect(show.stdout()).toContain(
         "atRestPolicy: raw unredacted tool output",
       );
-      expect(show.stdout()).toContain("tool-output:not-real/ref");
       expect(show.stdout()).toContain("FULL_READ_END");
       expect(await readdir(workspace)).toEqual(["large.log"]);
     } finally {
@@ -170,22 +272,28 @@ describe("CLI Main - Tool Output Artifacts", () => {
     }
   });
 
-  test(`Given one model turn reads multiple medium workspace files,
-    When their combined output exceeds the inline budget,
-    Then CLI main saves the later output as an artifact the user can inspect`, async () => {
+  test(`Given one model turn reads many medium workspace files,
+    When their combined output exceeds the aggregate inline budget,
+    Then CLI main saves the largest output before smaller outputs`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-artifacts-"));
     const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
     await writeFile(
-      join(workspace, "first.log"),
-      ["FIRST_START", "a".repeat(1500), "FIRST_END"].join("\n"),
+      join(workspace, "largest.log"),
+      ["LARGEST_START", "a".repeat(49_000), "LARGEST_END"].join("\n"),
       "utf8",
     );
-    await writeFile(
-      join(workspace, "second.log"),
-      ["SECOND_START", "b".repeat(1500), "SECOND_END"].join("\n"),
-      "utf8",
-    );
+    for (const name of ["small-a", "small-b", "small-c", "small-d"]) {
+      await writeFile(
+        join(workspace, `${name}.log`),
+        [
+          `${name.toUpperCase()}_START`,
+          name.repeat(6_100),
+          `${name.toUpperCase()}_END`,
+        ].join("\n"),
+        "utf8",
+      );
+    }
     const capturedBodies: unknown[] = [];
     const server = createServer((req, res) => {
       if (req.url !== "/chat/completions") {
@@ -208,8 +316,11 @@ describe("CLI Main - Tool Output Artifacts", () => {
         if (capturedBodies.length === 1) {
           res.write(
             sseReadToolCalls([
-              { id: "call_read_first", path: "first.log" },
-              { id: "call_read_second", path: "second.log" },
+              { id: "call_read_largest", path: "largest.log" },
+              { id: "call_read_small_a", path: "small-a.log" },
+              { id: "call_read_small_b", path: "small-b.log" },
+              { id: "call_read_small_c", path: "small-c.log" },
+              { id: "call_read_small_d", path: "small-d.log" },
             ]),
           );
           res.write(sseToolFinish());
@@ -221,22 +332,24 @@ describe("CLI Main - Tool Output Artifacts", () => {
         const secondRequest = requestWithMessagesSchema.parse(
           capturedBodies[1],
         );
-        const firstToolMessage = secondRequest.messages?.find(
+        const largestToolMessage = secondRequest.messages?.find(
           (message) =>
             message.role === "tool" &&
-            message.tool_call_id === "call_read_first",
+            message.tool_call_id === "call_read_largest",
         );
-        const secondToolMessage = secondRequest.messages?.find(
+        const smallToolMessage = secondRequest.messages?.find(
           (message) =>
             message.role === "tool" &&
-            message.tool_call_id === "call_read_second",
+            message.tool_call_id === "call_read_small_d",
         );
-        const ref = firstArtifactRef(secondToolMessage?.content ?? "");
+        const ref = firstArtifactRef(largestToolMessage?.content ?? "");
         const aggregateHandled =
-          firstToolMessage?.content?.includes("FIRST_END") === true &&
-          secondToolMessage?.content?.includes("SECOND_START") === true &&
-          secondToolMessage.content.includes("SECOND_END") === false &&
-          secondToolMessage.content.includes("keel artifacts show") === true;
+          largestToolMessage?.content?.includes("LARGEST_START") === true &&
+          largestToolMessage.content.includes("LARGEST_END") === false &&
+          largestToolMessage.content.includes("keel artifacts show") === true &&
+          smallToolMessage?.content?.includes("SMALL-D_START") === true &&
+          smallToolMessage.content.includes("SMALL-D_END") === true &&
+          smallToolMessage.content.includes("keel artifacts show") === false;
         res.end(
           sseTextReplyWithUsage(
             aggregateHandled
@@ -272,8 +385,8 @@ describe("CLI Main - Tool Output Artifacts", () => {
       });
       const showExitCode = await runCliMain(show.runtime);
       expect(showExitCode).toBe(0);
-      expect(show.stdout()).toContain("SECOND_START");
-      expect(show.stdout()).toContain("SECOND_END");
+      expect(show.stdout()).toContain("LARGEST_START");
+      expect(show.stdout()).toContain("LARGEST_END");
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -290,7 +403,11 @@ describe("CLI Main - Tool Output Artifacts", () => {
     const smallOutput = ["SMALL_START", "ok", "SMALL_END"].join("\n");
     await writeFile(
       join(workspace, "large.log"),
-      ["LARGE_START", "a".repeat(3000), "LARGE_END"].join("\n"),
+      oversizedReadFixture({
+        start: "LARGE_START",
+        fill: "a",
+        end: "LARGE_END",
+      }),
       "utf8",
     );
     await writeFile(join(workspace, "small.log"), smallOutput, "utf8");
@@ -383,12 +500,21 @@ describe("CLI Main - Tool Output Artifacts", () => {
     }
   });
 
-  test(`Given a bash command output was capped before Keel could persist it,
+  test(`Given a file read was capped before Keel could persist it,
     When CLI main stores the shortened result,
     Then the artifact shown to the user is marked source-truncated`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-artifacts-"));
     const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    await writeFile(
+      join(workspace, "source-truncated.log"),
+      oversizedReadFixture({
+        start: "SOURCE_START",
+        fill: "s",
+        end: "SOURCE_END",
+      }),
+      "utf8",
+    );
     const capturedBodies: unknown[] = [];
     const server = createServer((req, res) => {
       if (req.url !== "/chat/completions") {
@@ -410,9 +536,8 @@ describe("CLI Main - Tool Output Artifacts", () => {
         });
         if (capturedBodies.length === 1) {
           res.write(
-            sseToolCall("call_noisy_bash", "bash", {
-              command:
-                "node -e \"process.stdout.write('SOURCE_START\\n' + 'x'.repeat(25000) + '\\nSOURCE_END')\"",
+            sseToolCall("call_read_source_truncated", "read", {
+              path: "source-truncated.log",
             }),
           );
           res.write(sseToolFinish());
@@ -427,7 +552,7 @@ describe("CLI Main - Tool Output Artifacts", () => {
         const toolMessage = secondRequest.messages?.find(
           (message) =>
             message.role === "tool" &&
-            message.tool_call_id === "call_noisy_bash",
+            message.tool_call_id === "call_read_source_truncated",
         );
         const ref = firstArtifactRef(toolMessage?.content ?? "");
         const lossy =
@@ -445,7 +570,7 @@ describe("CLI Main - Tool Output Artifacts", () => {
 
     try {
       // When
-      const run = createRuntime(["--allow-bash", "run noisy command"], {
+      const run = createRuntime(["inspect source-truncated.log"], {
         cwd: workspace,
         env: {
           DEEPSEEK_API_KEY: "test-key",
@@ -467,7 +592,7 @@ describe("CLI Main - Tool Output Artifacts", () => {
       const showExitCode = await runCliMain(show.runtime);
       expect(showExitCode).toBe(0);
       expect(show.stdout()).toContain("sourceStatus: source-truncated");
-      expect(show.stdout()).toContain("[bash stdout truncated:");
+      expect(show.stdout()).toContain("[Read output truncated");
       expect(show.stdout()).toContain("SOURCE_END");
     } finally {
       await close(server);
@@ -486,11 +611,11 @@ describe("CLI Main - Tool Output Artifacts", () => {
     await writeFile(blockedHome, "not a directory", "utf8");
     await writeFile(
       join(workspace, "large.log"),
-      [
-        "FAILED_STORE_START",
-        "storage failure ".repeat(250),
-        "FAILED_STORE_END",
-      ].join("\n"),
+      oversizedReadFixture({
+        start: "FAILED_STORE_START",
+        fill: "f",
+        end: "FAILED_STORE_END",
+      }),
       "utf8",
     );
     const capturedBodies: unknown[] = [];
@@ -564,6 +689,115 @@ describe("CLI Main - Tool Output Artifacts", () => {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
       await rm(homeParent, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given expired tool output artifacts exist under KEEL_HOME,
+    When CLI main starts an agent run,
+    Then artifact cleanup removes expired files and keeps recent files`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-artifacts-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const scopeDirectory = join(
+      home,
+      "artifacts",
+      "tool-output",
+      "session-cleanup",
+    );
+    const artifactRoot = join(home, "artifacts", "tool-output");
+    await mkdir(scopeDirectory, { recursive: true });
+    await writeFile(join(artifactRoot, "not-a-scope-file"), "ignored", "utf8");
+    await mkdir(join(artifactRoot, "bad..scope"));
+    const expiredArtifact = join(scopeDirectory, "expired.txt");
+    const recentArtifact = join(scopeDirectory, "recent.txt");
+    const ignoredExtensionArtifact = join(scopeDirectory, "ignored.md");
+    const invalidIdArtifact = join(scopeDirectory, "bad..id.txt");
+    await writeFile(expiredArtifact, "expired artifact", "utf8");
+    await writeFile(recentArtifact, "recent artifact", "utf8");
+    await writeFile(ignoredExtensionArtifact, "ignored extension", "utf8");
+    await writeFile(invalidIdArtifact, "invalid id", "utf8");
+    await mkdir(join(scopeDirectory, "nested.txt"));
+    const dayMs = 24 * 60 * 60 * 1000;
+    const now = Date.UTC(2026, 0, 31);
+    await utimes(
+      expiredArtifact,
+      new Date(now - 31 * dayMs),
+      new Date(now - 31 * dayMs),
+    );
+    await utimes(recentArtifact, new Date(now - dayMs), new Date(now - dayMs));
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      res.end(sseTextReplyWithUsage("cleanup complete"));
+    });
+    await listen(server);
+
+    try {
+      // When
+      const run = createRuntime(["hello"], {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_HOME: home,
+        },
+        now: () => now,
+      });
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(run.stdout()).toBe("cleanup complete\n");
+      expect((await readdir(scopeDirectory)).sort()).toEqual([
+        "bad..id.txt",
+        "ignored.md",
+        "nested.txt",
+        "recent.txt",
+      ]);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a stored artifact already ends with a newline,
+    When CLI main shows the artifact,
+    Then the output is not padded with an extra blank line`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const scopeDirectory = join(
+      home,
+      "artifacts",
+      "tool-output",
+      "show-newline",
+    );
+    await mkdir(scopeDirectory, { recursive: true });
+    await writeFile(join(scopeDirectory, "artifact.txt"), "already newline\n");
+
+    try {
+      // When
+      const show = createRuntime(
+        ["artifacts", "show", "tool-output:show-newline/artifact"],
+        {
+          env: { KEEL_HOME: home },
+        },
+      );
+      const exitCode = await runCliMain(show.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(show.stdout()).toBe("already newline\n");
+    } finally {
+      await rm(home, { recursive: true, force: true });
     }
   });
 
