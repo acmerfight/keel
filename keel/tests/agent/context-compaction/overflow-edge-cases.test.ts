@@ -61,14 +61,20 @@ function failingArtifactStore(
         return { status: "not_reusable" };
       }
       const contentSha256 = sha256(artifact.content);
+      const contentLengthMatches =
+        artifact.content.length ===
+        input.previewContent.length + input.omittedChars;
+      const previewMatches =
+        input.previewKind === "prefix"
+          ? artifact.content.startsWith(input.previewContent)
+          : input.contentSha256 === contentSha256;
       if (
         artifact.toolCallId !== input.toolCallId ||
         artifact.sourceStatus !== input.sourceStatus ||
-        artifact.content.length !==
-          input.contentPrefix.length + input.omittedChars ||
-        !artifact.content.startsWith(input.contentPrefix) ||
+        !contentLengthMatches ||
         (input.contentSha256 !== undefined &&
-          input.contentSha256 !== contentSha256)
+          input.contentSha256 !== contentSha256) ||
+        !previewMatches
       ) {
         return { status: "not_reusable" };
       }
@@ -332,7 +338,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       "model recovery: rerun the tool with narrower parameters if needed",
     );
     expect(retriedToolOutput.match(/model recovery:/gu)).toHaveLength(1);
-    expect(retriedToolOutput).not.toContain("CURRENT_END");
+    expect(retriedToolOutput).toContain("CURRENT_END");
     expect(onlyContextCompactedEvent(events)).toMatchObject({
       reason: "overflow_recovery",
       toolOutputsCompacted: 1,
