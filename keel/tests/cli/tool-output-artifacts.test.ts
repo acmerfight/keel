@@ -184,6 +184,11 @@ describe("CLI Tool Output Artifacts", () => {
       expect(compactedToolOutput).toContain(`keel artifacts show ${saved.ref}`);
       expect(compactedToolOutput).toContain(`sha256: ${saved.contentSha256}`);
       expect(compactedToolOutput).not.toContain("REUSABLE_REPORT_PREVIEW_END");
+      const shown = await runCli(["artifacts", "show", saved.ref], {
+        env: { KEEL_HOME: home },
+      });
+      expect(shown.exitCode).toBe(0);
+      expect(shown.stdout).toContain("savedAt: 1970-01-01T00:00:00.000Z");
     } finally {
       await rm(home, { recursive: true, force: true });
     }

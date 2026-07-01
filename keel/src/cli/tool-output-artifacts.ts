@@ -288,7 +288,7 @@ export function createToolOutputArtifactStore(
           artifactContent({
             ref,
             id,
-            savedAt: new Date().toISOString(),
+            savedAt: new Date(options.runtime.now()).toISOString(),
             saveInput: input,
           }),
           { encoding: "utf8", flag: "wx", mode: 0o600 },
