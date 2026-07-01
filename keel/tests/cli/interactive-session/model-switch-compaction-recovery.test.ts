@@ -5,6 +5,10 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { createReadVisibilityState } from "../../../src/agent/read-visibility.ts";
+import type {
+  ToolOutputArtifactSaveInput,
+  ToolOutputArtifactStore,
+} from "../../../src/agent/tool-output-artifacts.ts";
 import { executeModelSwitchCompaction } from "../../../src/cli/interactive-session/model-switch-compact.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
@@ -356,6 +360,132 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       { role: "user", content: "second prompt" },
     ]);
     expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given model-switch compaction artifact-backs retained stale tool output,
+    When the compaction helper accepts the switch,
+    Then stderr includes the artifact inspection command`, async () => {
+    // Given
+    const largeToolOutput = [
+      "MODEL_SWITCH_LOG_START",
+      "model switch log line ".repeat(500),
+      "MODEL_SWITCH_LOG_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+      { role: "user", content: "Read the old report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_model_switch_report",
+            tool: "read",
+            path: "model-switch-report.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_model_switch_report",
+        content: largeToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The model switch report was inspected.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue later." },
+    ];
+    const saved: ToolOutputArtifactSaveInput[] = [];
+    const store: ToolOutputArtifactStore = {
+      save: async (input) => {
+        const ref = `tool-output:test/${saved.length + 1}`;
+        saved.push(input);
+        return { status: "stored", ref };
+      },
+    };
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(process.cwd());
+    let stdout = "";
+    let stderr = "";
+    const currentProvider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        expect(options.toolChoice).toBe("none");
+        yield { type: "text", text: "Model switch artifact summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await executeModelSwitchCompaction({
+      current: resolvedProvider("fake", "fake", currentProvider),
+      target: resolvedProvider(
+        "qwen",
+        "tiny",
+        textProvider("unexpected target"),
+        ZERO_COST_MODEL,
+        {
+          contextWindowTokens: 20_000,
+          reserveTokens: 0,
+          keepRecentTokens: 20_000,
+          toolOutputMaxChars: 128,
+        },
+      ),
+      workspace: process.cwd(),
+      messages,
+      systemPrompt: "system",
+      signal: new AbortController().signal,
+      readVisibility,
+      projectInstructionVisibility,
+      nextPostCompactionReadToolCallId: () => "post_compaction_read",
+      options: {
+        cliArgs: { bashMode: "disabled" },
+        workspace: process.cwd(),
+        platform: process.platform,
+        toolOutputArtifacts: { store },
+        input: new PassThrough(),
+        writeStdout: (text) => {
+          stdout += text;
+        },
+        writeStderr: (text) => {
+          stderr += text;
+        },
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => {
+          throw new Error("provider resolution is not used");
+        },
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async () => undefined,
+        formatCostReport: () => "",
+      },
+      recordCompactionCost: () => {
+        throw new Error("cost is not tracked");
+      },
+    });
+
+    // Then
+    expect(result).toEqual({ status: "accepted" });
+    expect(stdout).toBe("");
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      toolCallId: "read_model_switch_report",
+      toolName: "read",
+      purpose: "stale-compaction",
+      content: largeToolOutput,
+    });
+    expect(stderr).toContain("Context compacted: model switch");
+    expect(stderr).toContain(
+      "Tool output artifact: tool-output:test/1 (keel artifacts show tool-output:test/1)",
+    );
   });
 
   test(`Given model-switch compaction is aborted while restoring reads,

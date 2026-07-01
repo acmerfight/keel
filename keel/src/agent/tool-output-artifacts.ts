@@ -58,15 +58,33 @@ export interface ToolOutputArtifactSettlementResult {
   readonly notice?: ToolOutputArtifactNotice;
 }
 
-const TOOL_OUTPUT_ARTIFACT_MARKER_PATTERN =
-  /\[(?:tool output shortened|stale tool output compacted|current tool output compacted after context overflow): [^\]]*full output artifact: (tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+); inspect with: keel artifacts show \1; source status: (?:complete|source-truncated\/lossy before artifact capture)(?:; model recovery: rerun the tool with narrower parameters if needed)?\]/u;
+const TOOL_OUTPUT_ARTIFACT_MARKER_SUFFIX_PATTERN =
+  /\n\[(?:tool output shortened|stale tool output compacted|current tool output compacted after context overflow): [^\]]*full output artifact: (tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+); inspect with: keel artifacts show \1; source status: (?:complete|source-truncated\/lossy before artifact capture)(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
+const TOOL_OUTPUT_ARTIFACT_FAILED_MARKER_SUFFIX_PATTERN =
+  /\n\[(?:tool output shortened|stale tool output compacted|current tool output compacted after context overflow): [^\]]*artifact storage failed: .*; lossy; rerun the tool with narrower parameters if needed(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
 
 function oneLineReason(reason: string): string {
   return reason.trim().replace(/\s+/gu, " ") || "unknown storage error";
 }
 
-export function isArtifactBackedToolOutput(text: string): boolean {
-  return TOOL_OUTPUT_ARTIFACT_MARKER_PATTERN.test(text);
+export function isGeneratedArtifactBackedToolOutput(
+  text: string,
+  maxInlineChars: number,
+): boolean {
+  const marker = TOOL_OUTPUT_ARTIFACT_MARKER_SUFFIX_PATTERN.exec(text);
+  return marker !== null && marker.index <= maxInlineChars;
+}
+
+export function isGeneratedSettledToolOutput(
+  text: string,
+  maxInlineChars: number,
+): boolean {
+  if (isGeneratedArtifactBackedToolOutput(text, maxInlineChars)) {
+    return true;
+  }
+  const failedMarker =
+    TOOL_OUTPUT_ARTIFACT_FAILED_MARKER_SUFFIX_PATTERN.exec(text);
+  return failedMarker !== null && failedMarker.index <= maxInlineChars;
 }
 
 export function toolOutputArtifactStoredMarker(
@@ -95,10 +113,7 @@ export async function settleOversizedToolOutput(options: {
   readonly sourceStatus: ToolOutputArtifactSourceStatus;
   readonly purpose: ToolOutputArtifactPurpose;
 }): Promise<ToolOutputArtifactSettlementResult> {
-  if (
-    options.content.length <= options.maxInlineChars ||
-    isArtifactBackedToolOutput(options.content)
-  ) {
+  if (options.content.length <= options.maxInlineChars) {
     return { content: options.content };
   }
 

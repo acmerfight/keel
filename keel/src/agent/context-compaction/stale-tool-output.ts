@@ -1,6 +1,6 @@
 import type { Message } from "../../llm/types.ts";
 import {
-  isArtifactBackedToolOutput,
+  isGeneratedSettledToolOutput,
   type ToolOutputArtifactNotice,
   type ToolOutputArtifactPurpose,
   type ToolOutputArtifactSourceStatus,
@@ -161,7 +161,7 @@ function shouldCompactStaleToolOutput(
     message.role === "tool" &&
     messageIndex < lastAssistantIndex &&
     message.content.length > toolOutputMaxChars &&
-    !isArtifactBackedToolOutput(message.content) &&
+    !isGeneratedSettledToolOutput(message.content, toolOutputMaxChars) &&
     !isAlreadyCompactedStaleToolOutput(message.content, toolOutputMaxChars)
   );
 }
@@ -176,7 +176,7 @@ function shouldCompactCurrentToolOutput(
     message.role === "tool" &&
     currentToolOutputIndexes.has(messageIndex) &&
     message.content.length > toolOutputMaxChars &&
-    !isArtifactBackedToolOutput(message.content) &&
+    !isGeneratedSettledToolOutput(message.content, toolOutputMaxChars) &&
     !isAlreadyCompactedCurrentToolOutput(message.content, toolOutputMaxChars)
   );
 }
@@ -184,6 +184,7 @@ function shouldCompactCurrentToolOutput(
 function sourceStatusForCompaction(
   content: string,
 ): ToolOutputArtifactSourceStatus {
+  // Mirrors current tool truncation markers from bash, git_diff, read, glob, ls, and grep.
   return content.includes("source-truncated/lossy") ||
     content.includes(" output truncated:") ||
     content.includes("[bash stdout truncated:") ||
@@ -205,6 +206,7 @@ function toolNameForToolOutput(
     const toolCall = message.toolCalls.find(
       (candidate) => candidate.id === toolCallId,
     );
+    /* v8 ignore next: valid tool-result ledgers preserve the matching assistant tool call; corrupted histories fall through below. */
     if (toolCall !== undefined) {
       return toolCall.tool;
     }

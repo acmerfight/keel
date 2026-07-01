@@ -58,6 +58,11 @@ import {
   streamTurnWithOverflowRecovery,
 } from "./turn-compaction.ts";
 
+// Aggregate settlement should still leave a useful preview and avoid replacing
+// small outputs with artifact markers larger than the omitted text.
+const MIN_AGGREGATE_TOOL_OUTPUT_ARTIFACT_PREVIEW_CHARS = 256;
+const MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS = 512;
+
 export interface RunAgentOptions {
   readonly workspace: string;
   readonly provider: LLMProvider;
@@ -219,9 +224,22 @@ async function settleToolExecutionContent(options: {
     0,
     maxInlineChars - options.inlineToolOutputCharsBefore,
   );
+  const effectiveMaxInlineChars = Math.min(
+    maxInlineChars,
+    Math.max(
+      remainingAggregateInlineChars,
+      MIN_AGGREGATE_TOOL_OUTPUT_ARTIFACT_PREVIEW_CHARS,
+    ),
+  );
+  if (
+    options.execution.content.length - effectiveMaxInlineChars <
+    MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS
+  ) {
+    return { content: options.execution.content };
+  }
   return await settleOversizedToolOutput({
     store: options.artifacts.store,
-    maxInlineChars: Math.min(maxInlineChars, remainingAggregateInlineChars),
+    maxInlineChars: effectiveMaxInlineChars,
     toolCallId: options.toolCall.id,
     toolName: options.toolCall.tool,
     content: options.execution.content,

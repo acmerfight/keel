@@ -22,7 +22,7 @@ export const USAGE = [
   "--fork-points lists restored user message ids for sessions fork --before-message; it requires --resume.",
   "--fork-before-message cuts a fork before the restored message id; it requires --resume and --fork.",
   "--before-message cuts a sessions fork before the restored message id.",
-  "Tool output artifacts are managed under KEEL_HOME and retained until KEEL_HOME cleanup or manual removal; use keel artifacts show <ref> to inspect full saved output.",
+  "Tool output artifacts are raw, unredacted tool output managed under KEEL_HOME and retained until KEEL_HOME cleanup or manual removal; use keel artifacts show <ref> to inspect full saved output.",
   "--transcript-dir writes one best-effort redacted provider-visible transcript JSONL file per eval trial.",
   "--provider and --model override provider env for the current run.",
   "Provider env: KEEL_PROVIDER=deepseek|kimi|qwen, DEEPSEEK_API_KEY, KIMI_API_KEY, DASHSCOPE_API_KEY or QWEN_API_KEY, optional *_BASE_URL, DEEPSEEK_MODEL, KIMI_MODEL, QWEN_MODEL, and KEEL_CONTEXT_WINDOW_TOKENS.",

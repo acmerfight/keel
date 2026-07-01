@@ -157,6 +157,9 @@ describe("CLI Main - Tool Output Artifacts", () => {
       expect(show.stdout()).toContain(`ref: ${ref}`);
       expect(show.stdout()).toContain("tool: read");
       expect(show.stdout()).toContain("sourceStatus: complete");
+      expect(show.stdout()).toContain(
+        "atRestPolicy: raw unredacted tool output",
+      );
       expect(show.stdout()).toContain("tool-output:not-real/ref");
       expect(show.stdout()).toContain("FULL_READ_END");
       expect(await readdir(workspace)).toEqual(["large.log"]);
@@ -271,6 +274,108 @@ describe("CLI Main - Tool Output Artifacts", () => {
       expect(showExitCode).toBe(0);
       expect(show.stdout()).toContain("SECOND_START");
       expect(show.stdout()).toContain("SECOND_END");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a small tool output follows a large artifact-backed output,
+    When CLI main sends the next provider request,
+    Then the small output stays inline instead of becoming an empty-preview artifact`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-artifacts-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const smallOutput = ["SMALL_START", "ok", "SMALL_END"].join("\n");
+    await writeFile(
+      join(workspace, "large.log"),
+      ["LARGE_START", "a".repeat(3000), "LARGE_END"].join("\n"),
+      "utf8",
+    );
+    await writeFile(join(workspace, "small.log"), smallOutput, "utf8");
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseReadToolCalls([
+              { id: "call_read_large", path: "large.log" },
+              { id: "call_read_small", path: "small.log" },
+            ]),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        const secondRequest = requestWithMessagesSchema.parse(
+          capturedBodies[1],
+        );
+        const largeToolMessage = secondRequest.messages?.find(
+          (message) =>
+            message.role === "tool" &&
+            message.tool_call_id === "call_read_large",
+        );
+        const smallToolMessage = secondRequest.messages?.find(
+          (message) =>
+            message.role === "tool" &&
+            message.tool_call_id === "call_read_small",
+        );
+        const smallStayedInline =
+          largeToolMessage?.content?.includes("keel artifacts show") === true &&
+          largeToolMessage.content.includes("LARGE_END") === false &&
+          smallToolMessage?.content === smallOutput;
+        res.end(
+          sseTextReplyWithUsage(
+            smallStayedInline ? "small output inline" : "small output lost",
+          ),
+        );
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const run = createRuntime(["inspect large and small logs"], {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_HOME: home,
+        },
+      });
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(run.stdout()).toBe("small output inline\n");
+      expect(run.stderr().match(/Tool output artifact:/gu)).toHaveLength(1);
+      const ref = firstArtifactRef(run.stderr());
+      const show = createRuntime(["artifacts", "show", ref], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      const showExitCode = await runCliMain(show.runtime);
+      expect(showExitCode).toBe(0);
+      expect(show.stdout()).toContain("LARGE_END");
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -483,6 +588,10 @@ describe("CLI Main - Tool Output Artifacts", () => {
     const missingExitCode = await runCliMain(missing.runtime);
     const noSubcommand = createRuntime(["artifacts"]);
     const noSubcommandExitCode = await runCliMain(noSubcommand.runtime);
+    const unknownSubcommand = createRuntime(["artifacts", "list"]);
+    const unknownSubcommandExitCode = await runCliMain(
+      unknownSubcommand.runtime,
+    );
     const missingRef = createRuntime(["artifacts", "show"]);
     const missingRefExitCode = await runCliMain(missingRef.runtime);
     const extra = createRuntime([
@@ -509,6 +618,10 @@ describe("CLI Main - Tool Output Artifacts", () => {
     expect(noSubcommandExitCode).toBe(1);
     expect(noSubcommand.stderr()).toBe(
       "Error: artifacts requires a subcommand: show.\n",
+    );
+    expect(unknownSubcommandExitCode).toBe(1);
+    expect(unknownSubcommand.stderr()).toBe(
+      'Error: unknown artifacts subcommand "list"\n',
     );
     expect(missingRefExitCode).toBe(1);
     expect(missingRef.stderr()).toBe("Error: artifacts show requires <ref>.\n");

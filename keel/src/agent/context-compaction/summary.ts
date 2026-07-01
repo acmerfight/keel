@@ -1,6 +1,9 @@
 import { KeelError } from "../../core/error.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
-import type { ToolOutputArtifactsOptions } from "../tool-output-artifacts.ts";
+import type {
+  ToolOutputArtifactNotice,
+  ToolOutputArtifactsOptions,
+} from "../tool-output-artifacts.ts";
 import {
   normalizeCheckpointSummary,
   renderConversationCheckpoint,
@@ -26,6 +29,7 @@ interface TextOnlyTurn {
 export interface BuildCompactedMessagesResult {
   readonly messages: readonly Message[];
   readonly staleToolOutputStats: StaleToolOutputCompactionStats;
+  readonly artifactNotices?: readonly ToolOutputArtifactNotice[];
 }
 
 function truncateText(text: string, maxChars: number): string {
@@ -170,6 +174,10 @@ export async function buildCompactedMessages(
       ...recent.messages,
     ],
     staleToolOutputStats: recent.stats,
+    ...(recent.artifactNotices !== undefined &&
+    recent.artifactNotices.length > 0
+      ? { artifactNotices: recent.artifactNotices }
+      : {}),
   };
 }
 

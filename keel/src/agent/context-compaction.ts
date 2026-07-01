@@ -30,7 +30,10 @@ import {
   type ContextCompactionStats as InternalContextCompactionStats,
   shouldCompactBeforeRequest as shouldCompactBeforeRequestFromAccounting,
 } from "./context-compaction/token-accounting.ts";
-import type { ToolOutputArtifactsOptions } from "./tool-output-artifacts.ts";
+import type {
+  ToolOutputArtifactNotice,
+  ToolOutputArtifactsOptions,
+} from "./tool-output-artifacts.ts";
 
 export type ContextCompactionOptions = InternalContextCompactionOptions;
 export type ContextCompactionRequestMetadata =
@@ -73,7 +76,15 @@ export type CompactMessagesResult =
       readonly compacted: true;
       readonly usage: Usage;
       readonly stats: ContextCompactionStats;
+      readonly artifactNotices?: readonly ToolOutputArtifactNotice[];
     };
+
+function artifactNoticesResult(
+  ...sources: readonly (readonly ToolOutputArtifactNotice[] | undefined)[]
+): { readonly artifactNotices?: readonly ToolOutputArtifactNotice[] } {
+  const artifactNotices = sources.flatMap((source) => source ?? []);
+  return artifactNotices.length > 0 ? { artifactNotices } : {};
+}
 
 export function captureContextCompactionAccountingSnapshot(options: {
   readonly systemPrompt: string;
@@ -167,6 +178,7 @@ export async function compactMessages(
             ),
             ...currentToolOutputCompaction.stats,
           },
+          ...artifactNoticesResult(currentToolOutputCompaction.artifactNotices),
         };
       }
     }
@@ -231,5 +243,9 @@ export async function compactMessages(
       ),
       ...toolOutputStats,
     },
+    ...artifactNoticesResult(
+      compacted.artifactNotices,
+      currentToolOutputCompaction.artifactNotices,
+    ),
   };
 }

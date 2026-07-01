@@ -153,6 +153,9 @@ export async function* streamTurnWithOverflowRecovery(
           reason: "proactive",
           ...compaction.stats,
         };
+        for (const notice of compaction.artifactNotices ?? []) {
+          yield { type: "tool_output_artifact", ...notice };
+        }
       }
     }
     try {
@@ -198,6 +201,9 @@ export async function* streamTurnWithOverflowRecovery(
               reason: "overflow_recovery",
               ...compaction.stats,
             };
+            for (const notice of compaction.artifactNotices ?? []) {
+              yield { type: "tool_output_artifact", ...notice };
+            }
             compactedBeforeRequest = true;
             continue;
           }
