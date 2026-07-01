@@ -60,6 +60,14 @@ export type SessionsCliArgs =
   | SessionsForkCliArgs
   | SessionsShowCliArgs;
 
+interface ArtifactsShowCliArgs {
+  readonly command: "artifacts";
+  readonly mode: "show";
+  readonly ref: string;
+}
+
+type ArtifactsCliArgs = ArtifactsShowCliArgs;
+
 export interface RunCliArgs {
   readonly command: "run";
   readonly bashMode: BashMode;
@@ -82,6 +90,7 @@ export type CliArgs =
   | DoctorCliArgs
   | UndoCliArgs
   | { readonly command: "skills" }
+  | ArtifactsCliArgs
   | SessionsCliArgs
   | EvalCliArgs
   | RunCliArgs;

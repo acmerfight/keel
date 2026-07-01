@@ -106,7 +106,10 @@ function formatResult(result: BashProcessResult): ToolResult {
   if (stderr !== "") sections.push(stderr);
   if (stdout === "" && stderr === "") sections.push("(no output)");
 
-  return { content: sections.join("\n\n") };
+  return {
+    content: sections.join("\n\n"),
+    sourceTruncated: result.stdout.truncated || result.stderr.truncated,
+  };
 }
 
 function runBashProcess(

@@ -1,5 +1,6 @@
 import type { ContextCompactionStats } from "../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
+import type { ToolOutputArtifactNotice } from "../agent/tool-output-artifacts.ts";
 import { toolCallLabel } from "../tools/registry.ts";
 
 interface CliOutputRuntime {
@@ -144,6 +145,19 @@ export function formatContextCompactionReport(
   return `Context compacted: ${report.reasonLabel} (${report.beforeMessageCount} -> ${report.afterMessageCount} messages, ~${report.beforeEstimatedTokens} -> ~${report.afterEstimatedTokens} tokens${formatToolOutputCompactionDetails(report)})\n`;
 }
 
+export function formatToolOutputArtifactNotice(
+  notice: ToolOutputArtifactNotice,
+): string {
+  if (notice.status === "stored") {
+    return `Tool output artifact: ${sanitizeToolLabel(
+      notice.ref,
+    )} (keel artifacts show ${sanitizeToolLabel(notice.ref)})`;
+  }
+  return `Tool output artifact failed: ${sanitizeToolLabel(
+    notice.reason,
+  )}; output is lossy; rerun with narrower parameters if needed`;
+}
+
 export function formatCostReport(cost: CostReport, maxUsd: number): string {
   const spent = `$${formatUsd(cost.spentUsd)}`;
   const budget = `$${formatUsd(maxUsd)}`;
@@ -183,6 +197,8 @@ export async function printAgentEvents(
           `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}\n`,
         );
       }
+    } else if (event.type === "tool_output_artifact") {
+      runtime.writeStderr(`${formatToolOutputArtifactNotice(event)}\n`);
     } else if (event.type === "end") {
       finalEnd = event;
     }
@@ -229,6 +245,9 @@ export async function printStableInteractiveAgentEvents(
             `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}`,
           );
         }
+        break;
+      case "tool_output_artifact":
+        runtime.writeStatusLine(formatToolOutputArtifactNotice(event));
         break;
       case "end":
         finalEnd = event;

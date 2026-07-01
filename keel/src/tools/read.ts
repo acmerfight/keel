@@ -36,6 +36,11 @@ interface ReadToolResult extends ToolResult {
   readonly targetPath: string;
 }
 
+interface ReadTextWindowResult {
+  readonly content: string;
+  readonly truncated: boolean;
+}
+
 interface NormalizedReadOptions {
   readonly offset: number;
   readonly limit: number;
@@ -220,7 +225,7 @@ function readTextWindow(
   fd: number,
   filePath: string,
   options: NormalizedReadOptions,
-): string {
+): ReadTextWindowResult {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
   const acc = createLineWindowAccumulator();
@@ -256,9 +261,12 @@ function readTextWindow(
   }
 
   if (acc.firstLineExceedsLimit) {
-    return `[Read output truncated: line ${options.offset} exceeds ${formatSize(
-      MAX_READ_BYTES,
-    )}. Use grep to find a smaller target before reading this file.]`;
+    return {
+      content: `[Read output truncated: line ${options.offset} exceeds ${formatSize(
+        MAX_READ_BYTES,
+      )}. Use grep to find a smaller target before reading this file.]`,
+      truncated: true,
+    };
   }
 
   if (
@@ -273,14 +281,17 @@ function readTextWindow(
     );
   }
 
-  return acc.truncated
-    ? appendTruncationNotice(
-        acc.content,
-        options,
-        acc.outputLines,
-        acc.truncatedReason,
-      )
-    : acc.content;
+  return {
+    content: acc.truncated
+      ? appendTruncationNotice(
+          acc.content,
+          options,
+          acc.outputLines,
+          acc.truncatedReason,
+        )
+      : acc.content,
+    truncated: acc.truncated,
+  };
 }
 
 export function executeRead(
@@ -347,8 +358,10 @@ export function executeRead(
       throw binaryFileError("read", filePath);
     }
 
+    const textWindow = readTextWindow(fd, filePath, normalizedOptions);
     return {
-      content: readTextWindow(fd, filePath, normalizedOptions),
+      content: textWindow.content,
+      sourceTruncated: textWindow.truncated,
       targetPath: openedTargetPath,
     };
   } finally {

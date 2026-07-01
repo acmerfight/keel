@@ -2,6 +2,7 @@ import { listUndoCheckpoints, restoreLastEditCheckpoint } from "../core/git.ts";
 import type { CliArgs } from "./args.ts";
 import { formatUndoCheckpointList } from "./output.ts";
 import type { CliRuntime } from "./runtime.ts";
+import { showToolOutputArtifact } from "./tool-output-artifacts.ts";
 import {
   formatWorkflowSkillList,
   formatWorkflowSkillListWarnings,
@@ -12,6 +13,7 @@ import {
 type DoctorCliArgs = Extract<CliArgs, { readonly command: "doctor" }>;
 type EvalCliArgs = Extract<CliArgs, { readonly command: "eval" }>;
 type UndoCliArgs = Extract<CliArgs, { readonly command: "undo" }>;
+type ArtifactsCliArgs = Extract<CliArgs, { readonly command: "artifacts" }>;
 
 export async function runDoctorCommand(
   cliArgs: DoctorCliArgs,
@@ -111,4 +113,22 @@ export function runSkillsCommand(runtime: CliRuntime): number {
     runtime.writeStderr(`${error.message}\n`);
     return 1;
   }
+}
+
+export async function runArtifactsCommand(
+  cliArgs: ArtifactsCliArgs,
+  runtime: CliRuntime,
+): Promise<number> {
+  const result = await showToolOutputArtifact({
+    runtime,
+    ref: cliArgs.ref,
+  });
+  if (!result.ok) {
+    runtime.writeStderr(`${result.message}\n`);
+    return 1;
+  }
+  runtime.writeStdout(
+    result.content.endsWith("\n") ? result.content : `${result.content}\n`,
+  );
+  return 0;
 }

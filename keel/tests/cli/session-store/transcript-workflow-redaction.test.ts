@@ -285,6 +285,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
         role: "tool",
         toolCallId: "read_secret",
         content: `before sk-secret-213 after ${githubToken}\nAPI_KEY=env-secret-213\n`,
+        sourceTruncated: true,
       },
       {
         role: "assistant",
@@ -367,6 +368,11 @@ describe("Session Store Transcript Workflow Redaction", () => {
       expect(
         JSON.stringify(resumed.messages).includes("[REDACTED_SECRET]"),
       ).toBe(true);
+      const resumedToolMessage = resumed.messages.find(
+        (message): message is Extract<Message, { readonly role: "tool" }> =>
+          message.role === "tool" && message.toolCallId === "read_secret",
+      );
+      expect(resumedToolMessage?.sourceTruncated).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

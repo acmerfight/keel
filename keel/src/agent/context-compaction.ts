@@ -10,6 +10,7 @@ import {
 } from "./context-compaction/planning.ts";
 import {
   compactCurrentToolOutputs,
+  compactCurrentToolOutputsWithArtifacts,
   EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
   isCompactedCurrentToolOutput as isCompactedCurrentToolOutputFromContent,
   mergeStaleToolOutputCompactionStats,
@@ -20,6 +21,7 @@ import {
 } from "./context-compaction/summary.ts";
 
 export { currentToolRound } from "./context-compaction/current-tool-round.ts";
+export { compactStaleToolOutputsWithArtifacts } from "./context-compaction/stale-tool-output.ts";
 
 import {
   captureContextCompactionAccountingSnapshot as captureContextCompactionAccountingSnapshotFromAccounting,
@@ -29,6 +31,10 @@ import {
   type ContextCompactionStats as InternalContextCompactionStats,
   shouldCompactBeforeRequest as shouldCompactBeforeRequestFromAccounting,
 } from "./context-compaction/token-accounting.ts";
+import type {
+  ToolOutputArtifactNotice,
+  ToolOutputArtifactsOptions,
+} from "./tool-output-artifacts.ts";
 
 export type ContextCompactionOptions = InternalContextCompactionOptions;
 export type ContextCompactionRequestMetadata =
@@ -58,6 +64,7 @@ interface CompactMessagesOptions {
   readonly requestMetadata?: ContextCompactionRequestMetadata;
   readonly focusInstruction?: string;
   readonly allowCurrentToolOutputCompaction?: boolean;
+  readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
 }
 
 export type CompactMessagesResult =
@@ -70,7 +77,15 @@ export type CompactMessagesResult =
       readonly compacted: true;
       readonly usage: Usage;
       readonly stats: ContextCompactionStats;
+      readonly artifactNotices?: readonly ToolOutputArtifactNotice[];
     };
+
+function artifactNoticesResult(
+  ...sources: readonly (readonly ToolOutputArtifactNotice[] | undefined)[]
+): { readonly artifactNotices?: readonly ToolOutputArtifactNotice[] } {
+  const artifactNotices = sources.flatMap((source) => source ?? []);
+  return artifactNotices.length > 0 ? { artifactNotices } : {};
+}
 
 export function captureContextCompactionAccountingSnapshot(options: {
   readonly systemPrompt: string;
@@ -128,31 +143,41 @@ export async function compactMessages(
   const plan = planCompaction(options.messages, split, resolved);
   if (plan.messagesToSummarize.length === 0) {
     if (options.allowCurrentToolOutputCompaction === true) {
-      const currentToolOutputCompaction = compactCurrentToolOutputs(
-        options.messages,
-        resolved.toolOutputMaxChars,
-      );
-      if (currentToolOutputCompaction.stats.toolOutputsCompacted > 0) {
-        options.messages.splice(
-          0,
-          options.messages.length,
-          ...currentToolOutputCompaction.messages,
-        );
-        return {
-          compacted: true,
-          usage: ZERO_USAGE,
-          stats: {
-            beforeMessageCount,
-            afterMessageCount: options.messages.length,
-            beforeEstimatedTokens,
-            afterEstimatedTokens: estimateRequestTokens(
-              options.systemPrompt,
+      const currentToolOutputCompaction =
+        options.toolOutputArtifacts === undefined
+          ? compactCurrentToolOutputs(
               options.messages,
-            ),
-            ...currentToolOutputCompaction.stats,
-          },
-        };
+              resolved.toolOutputMaxChars,
+            )
+          : await compactCurrentToolOutputsWithArtifacts(
+              options.messages,
+              resolved.toolOutputMaxChars,
+              options.toolOutputArtifacts.store,
+            );
+      /* v8 ignore next: V8 does not attribute the fall-through branch here; overflow-edge-cases covers both no-op and compacted current-output paths. */
+      if (currentToolOutputCompaction.stats.toolOutputsCompacted === 0) {
+        return { compacted: false, usage: ZERO_USAGE };
       }
+      options.messages.splice(
+        0,
+        options.messages.length,
+        ...currentToolOutputCompaction.messages,
+      );
+      return {
+        compacted: true,
+        usage: ZERO_USAGE,
+        stats: {
+          beforeMessageCount,
+          afterMessageCount: options.messages.length,
+          beforeEstimatedTokens,
+          afterEstimatedTokens: estimateRequestTokens(
+            options.systemPrompt,
+            options.messages,
+          ),
+          ...currentToolOutputCompaction.stats,
+        },
+        ...artifactNoticesResult(currentToolOutputCompaction.artifactNotices),
+      };
     }
     // The protected current suffix starts at the beginning of the transcript and
     // has no oversized current tool output we can shrink. Creating an empty
@@ -170,18 +195,25 @@ export async function compactMessages(
       ? { focusInstruction: options.focusInstruction }
       : {}),
   });
-  const compacted = buildCompactedMessages(
+  const compacted = await buildCompactedMessages(
     options.messages,
     plan.firstRetainedIndex,
     summaryTurn.text,
     resolved,
+    options.toolOutputArtifacts,
   );
   const currentToolOutputCompaction =
     options.allowCurrentToolOutputCompaction === true
-      ? compactCurrentToolOutputs(
-          compacted.messages,
-          resolved.toolOutputMaxChars,
-        )
+      ? options.toolOutputArtifacts === undefined
+        ? compactCurrentToolOutputs(
+            compacted.messages,
+            resolved.toolOutputMaxChars,
+          )
+        : await compactCurrentToolOutputsWithArtifacts(
+            compacted.messages,
+            resolved.toolOutputMaxChars,
+            options.toolOutputArtifacts.store,
+          )
       : {
           messages: compacted.messages,
           stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
@@ -208,5 +240,9 @@ export async function compactMessages(
       ),
       ...toolOutputStats,
     },
+    ...artifactNoticesResult(
+      compacted.artifactNotices,
+      currentToolOutputCompaction.artifactNotices,
+    ),
   };
 }

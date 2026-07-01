@@ -66,6 +66,7 @@ const toolMessageSchema = z
     role: z.literal("tool"),
     toolCallId: z.string(),
     content: z.string(),
+    sourceTruncated: z.boolean().optional(),
   })
   .strict();
 
@@ -325,6 +326,9 @@ function toMessage(message: RawMessage): Message {
         role: "tool",
         toolCallId: message.toolCallId,
         content: message.content,
+        ...(message.sourceTruncated !== undefined
+          ? { sourceTruncated: message.sourceTruncated }
+          : {}),
       };
   }
 }
@@ -350,6 +354,9 @@ function copyMessage(message: Message): Message {
         role: "tool",
         toolCallId: message.toolCallId,
         content: message.content,
+        ...(message.sourceTruncated !== undefined
+          ? { sourceTruncated: message.sourceTruncated }
+          : {}),
       };
   }
 }

@@ -37,6 +37,24 @@ export function parseCliArgs(args: readonly string[]): CliArgsParseResult {
     return parseSessionsArgs(args.slice(1));
   }
 
+  if (args[0] === "artifacts") {
+    if (args[1] !== "show") {
+      const command = args[1] ?? "";
+      return parseError(
+        command === ""
+          ? "Error: artifacts requires a subcommand: show."
+          : `Error: unknown artifacts subcommand "${command}"`,
+      );
+    }
+    if (args[2] === undefined) {
+      return parseError("Error: artifacts show requires <ref>.");
+    }
+    if (args.length > 3) {
+      return parseError(`Error: unknown artifacts show option "${args[3]}"`);
+    }
+    return parseOk({ command: "artifacts", mode: "show", ref: args[2] });
+  }
+
   if (args[0] === "skills") {
     if (args.length > 1) {
       return parseError(`Error: unknown skills option "${args[1]}"`);

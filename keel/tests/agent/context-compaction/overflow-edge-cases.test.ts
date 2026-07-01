@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -7,6 +8,10 @@ import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
 } from "../../../src/agent/stop-policy.ts";
+import type {
+  ToolOutputArtifactSaveInput,
+  ToolOutputArtifactStore,
+} from "../../../src/agent/tool-output-artifacts.ts";
 import { KeelError } from "../../../src/core/error.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
@@ -20,6 +25,61 @@ import {
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
 import { createWorkspace } from "../../../src/testing/file-editing-fixtures.ts";
+
+interface SavedToolOutputArtifact {
+  readonly input: ToolOutputArtifactSaveInput;
+}
+
+interface ExistingToolOutputArtifact {
+  readonly ref: string;
+  readonly toolCallId: string;
+  readonly sourceStatus: "complete" | "source-truncated";
+  readonly content: string;
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function failingArtifactStore(
+  saved: SavedToolOutputArtifact[],
+  options?: {
+    readonly reason?: string;
+    readonly existingArtifacts?: readonly ExistingToolOutputArtifact[];
+  },
+): ToolOutputArtifactStore {
+  const existingArtifacts = new Map(
+    (options?.existingArtifacts ?? []).map((artifact) => [
+      artifact.ref,
+      artifact,
+    ]),
+  );
+  return {
+    verifyReusable: async (input) => {
+      const artifact = existingArtifacts.get(input.ref);
+      if (artifact === undefined) {
+        return { status: "not_reusable" };
+      }
+      const contentSha256 = sha256(artifact.content);
+      if (
+        artifact.toolCallId !== input.toolCallId ||
+        artifact.sourceStatus !== input.sourceStatus ||
+        artifact.content.length !==
+          input.contentPrefix.length + input.omittedChars ||
+        !artifact.content.startsWith(input.contentPrefix) ||
+        (input.contentSha256 !== undefined &&
+          input.contentSha256 !== contentSha256)
+      ) {
+        return { status: "not_reusable" };
+      }
+      return { status: "reusable", contentSha256 };
+    },
+    save: async (input) => {
+      saved.push({ input });
+      return { status: "failed", reason: options?.reason ?? "disk full" };
+    },
+  };
+}
 
 describe("Context Compaction Overflow Edge Cases", () => {
   test(`Given the current tool output was already compacted by overflow recovery,
@@ -93,6 +153,303 @@ describe("Context Compaction Overflow Edge Cases", () => {
         content: alreadyCompactedOutput,
       },
     ]);
+  });
+
+  test(`Given artifact storage is enabled and current tool output is already small,
+    When current tool-output compaction runs with no history to summarize,
+    Then it leaves the messages unchanged without saving an artifact`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Read the note and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_note",
+        content: "small note output",
+      },
+    ];
+    const saved: SavedToolOutputArtifact[] = [];
+    const store: ToolOutputArtifactStore = {
+      verifyReusable: async () => ({ status: "not_reusable" }),
+      save: async (input) => {
+        saved.push({ input });
+        return {
+          status: "stored",
+          ref: "tool-output:test/1",
+          contentSha256: "0".repeat(64),
+        };
+      },
+    };
+    const provider: LLMProvider = {
+      id: "small-current-output-artifact-provider",
+      stream() {
+        return failingStream(new Error("No summary request should be needed"));
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 1,
+        toolOutputMaxChars: 128,
+      },
+      allowCurrentToolOutputCompaction: true,
+      toolOutputArtifacts: { store },
+    });
+
+    // Then
+    expect(result).toEqual({
+      compacted: false,
+      usage: ZERO_USAGE,
+    });
+    expect(saved).toEqual([]);
+    expect(messages).toEqual([
+      { role: "user", content: "Read the note and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_note",
+            tool: "read",
+            path: "note.txt",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_note",
+        content: "small note output",
+      },
+    ]);
+  });
+
+  test(`Given current tool output overflows and artifact storage fails,
+    When overflow recovery compacts the current tool output,
+    Then the retry sees a lossy marker with rerun guidance`, async () => {
+    // Given
+    const currentToolOutput = [
+      "CURRENT_START",
+      "[bash stdout truncated: showing last 20000 bytes]",
+      "current output line ".repeat(500),
+      "CURRENT_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Run the noisy command and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "run_noisy_command",
+            tool: "bash",
+            command: "node noisy.js",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "run_noisy_command",
+        content: currentToolOutput,
+      },
+    ];
+    const saved: SavedToolOutputArtifact[] = [];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "current-output-artifact-failure-provider",
+      async *stream(options) {
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before current output compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        yield {
+          type: "text",
+          text: "Continued after lossy current output compaction.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 1,
+          toolOutputMaxChars: 128,
+        },
+        toolOutputArtifacts: {
+          store: failingArtifactStore(saved, { reason: " \n\t " }),
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.input).toMatchObject({
+      toolCallId: "run_noisy_command",
+      toolName: "bash",
+      purpose: "current-overflow-compaction",
+      sourceStatus: "source-truncated",
+      content: currentToolOutput,
+    });
+    const retriedToolOutput =
+      retriedMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "run_noisy_command",
+      )?.content ?? "";
+    expect(retriedToolOutput).toContain(
+      "artifact storage failed: unknown storage error",
+    );
+    expect(retriedToolOutput).toContain(
+      "model recovery: rerun the tool with narrower parameters if needed",
+    );
+    expect(retriedToolOutput.match(/model recovery:/gu)).toHaveLength(1);
+    expect(retriedToolOutput).not.toContain("CURRENT_END");
+    expect(onlyContextCompactedEvent(events)).toMatchObject({
+      reason: "overflow_recovery",
+      toolOutputsCompacted: 1,
+    });
+  });
+
+  test(`Given current tool output already has an artifact-backed settlement marker,
+    When overflow recovery compacts the current tool output,
+    Then the retry reuses the original artifact ref without saving another artifact`, async () => {
+    // Given
+    const currentPreview = [
+      "CURRENT_SETTLED_START",
+      "settled current output line ".repeat(500),
+      "CURRENT_SETTLED_PREVIEW_END",
+    ].join("\n");
+    const currentFullOutput = `${currentPreview}\n${"hidden settled output ".repeat(
+      500,
+    )}`;
+    const currentOmittedChars =
+      currentFullOutput.length - currentPreview.length;
+    const currentToolOutput = `${currentPreview}\n[tool output shortened: omitted ${currentOmittedChars} chars; full output artifact: tool-output:run/current-first; inspect with: keel artifacts show tool-output:run/current-first; source status: source-truncated/lossy before artifact capture]`;
+    const messages: Message[] = [
+      { role: "user", content: "Read the large log and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_large_log",
+            tool: "read",
+            path: "large.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_large_log",
+        content: currentToolOutput,
+      },
+    ];
+    const saved: SavedToolOutputArtifact[] = [];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "current-output-reuses-existing-artifact-provider",
+      async *stream(options) {
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Settled current output made request too large",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        yield {
+          type: "text",
+          text: "Continued after reusing the current output artifact.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 1,
+          toolOutputMaxChars: 128,
+        },
+        toolOutputArtifacts: {
+          store: failingArtifactStore(saved, {
+            existingArtifacts: [
+              {
+                ref: "tool-output:run/current-first",
+                toolCallId: "read_large_log",
+                sourceStatus: "source-truncated",
+                content: currentFullOutput,
+              },
+            ],
+          }),
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(saved).toHaveLength(0);
+    const retriedToolOutput =
+      retriedMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "read_large_log",
+      )?.content ?? "";
+    expect(retriedToolOutput).toContain(
+      "[current tool output compacted after context overflow:",
+    );
+    expect(retriedToolOutput).toContain(
+      "inspect with: keel artifacts show tool-output:run/current-first",
+    );
+    expect(retriedToolOutput).toContain(
+      "source status: source-truncated/lossy before artifact capture",
+    );
+    expect(retriedToolOutput).not.toContain("CURRENT_SETTLED_PREVIEW_END");
+    expect(events.some((event) => event.type === "tool_output_artifact")).toBe(
+      false,
+    );
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued after reusing the current output artifact.",
+    });
   });
 
   test(`Given a real current read result overflows before assistant output,

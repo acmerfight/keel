@@ -64,7 +64,10 @@ function formatGlobResult(
       `[glob output truncated: showing first ${matches.length} files. Narrow the pattern or path to see more.]`,
     );
   }
-  return { content: output.join("\n") };
+  return {
+    content: output.join("\n"),
+    ...(options.truncated ? { sourceTruncated: true } : {}),
+  };
 }
 
 async function runGlob(

@@ -39,6 +39,15 @@ import {
 } from "./session-ledger.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
 import {
+  DEFAULT_TOOL_OUTPUT_ARTIFACT_AGGREGATE_PREVIEW_CHARS,
+  DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_AGGREGATE_INLINE_CHARS,
+  DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_INLINE_CHARS,
+  settleOversizedToolOutput,
+  type ToolOutputArtifactNotice,
+  type ToolOutputArtifactsOptions,
+  toolMessageSourceTruncationMetadata,
+} from "./tool-output-artifacts.ts";
+import {
   executeParallelToolCallsInSourceOrder,
   planToolCallExecutionSegments,
   type ScheduledToolCall,
@@ -49,6 +58,8 @@ import {
   type LedgerTurnOptions,
   streamTurnWithOverflowRecovery,
 } from "./turn-compaction.ts";
+
+const MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS = 512;
 
 export interface RunAgentOptions {
   readonly workspace: string;
@@ -61,6 +72,7 @@ export interface RunAgentOptions {
   readonly costTracking?: CostTrackingOptions;
   readonly bashPermission?: BashPermissionPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
+  readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly onTranscriptReady?: (messages: readonly Message[]) => void;
 }
 
@@ -79,6 +91,7 @@ export interface RunAgentTurnOptions {
   readonly costTracking?: CostTrackingOptions;
   readonly bashPermission?: BashPermissionPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
+  readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly readVisibility?: ReadVisibilityState;
   readonly projectInstructionVisibility?: ProjectInstructionVisibilityState;
   readonly recordCheckpointOperations?: (
@@ -163,6 +176,16 @@ function toolRequestMessage(turn: AgentTurn): Message {
   };
 }
 
+interface CompletedTurnToolExecution {
+  readonly toolCall: ToolCall;
+  readonly execution: ToolExecution;
+}
+
+interface SettledTurnToolExecution extends CompletedTurnToolExecution {
+  readonly content: string;
+  readonly notice: ToolOutputArtifactNotice | undefined;
+}
+
 function scheduledToolCalls(
   workspace: string,
   toolCalls: readonly ToolCall[],
@@ -187,6 +210,137 @@ function finalReplyMessage(
         toolCalls: [],
         ...(providerMetadata !== undefined ? { providerMetadata } : {}),
       };
+}
+
+function resolvedMaxInlineChars(options: ToolOutputArtifactsOptions): number {
+  return (
+    options.maxInlineChars ?? DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_INLINE_CHARS
+  );
+}
+
+function resolvedMaxAggregateInlineChars(
+  options: ToolOutputArtifactsOptions,
+): number {
+  return (
+    options.maxAggregateInlineChars ??
+    DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_AGGREGATE_INLINE_CHARS
+  );
+}
+
+function resolvedAggregatePreviewChars(
+  options: ToolOutputArtifactsOptions,
+  maxInlineChars: number,
+): number {
+  return Math.min(
+    maxInlineChars,
+    options.aggregatePreviewChars ??
+      DEFAULT_TOOL_OUTPUT_ARTIFACT_AGGREGATE_PREVIEW_CHARS,
+  );
+}
+
+function settlementPlanByExecutionIndex(
+  executions: readonly CompletedTurnToolExecution[],
+  artifacts: ToolOutputArtifactsOptions,
+): ReadonlyMap<number, number> {
+  const maxInlineChars = resolvedMaxInlineChars(artifacts);
+  const maxAggregateInlineChars = resolvedMaxAggregateInlineChars(artifacts);
+  const aggregatePreviewChars = resolvedAggregatePreviewChars(
+    artifacts,
+    maxInlineChars,
+  );
+  const plan = new Map<number, number>();
+  let estimatedInlineChars = 0;
+
+  executions.forEach(({ execution }, index) => {
+    if (
+      execution.content.length - maxInlineChars >=
+      MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS
+    ) {
+      plan.set(index, maxInlineChars);
+      estimatedInlineChars += maxInlineChars;
+      return;
+    }
+    estimatedInlineChars += execution.content.length;
+  });
+
+  if (estimatedInlineChars <= maxAggregateInlineChars) {
+    return plan;
+  }
+
+  const candidates = executions
+    .map(({ execution }, index) => ({
+      index,
+      length: execution.content.length,
+    }))
+    .filter(
+      ({ length }) =>
+        length - aggregatePreviewChars >=
+        MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS,
+    )
+    .sort((left, right) =>
+      right.length === left.length
+        ? left.index - right.index
+        : right.length - left.length,
+    );
+
+  for (const candidate of candidates) {
+    const currentInlineChars = plan.get(candidate.index) ?? candidate.length;
+    plan.set(candidate.index, aggregatePreviewChars);
+    estimatedInlineChars -= currentInlineChars - aggregatePreviewChars;
+    if (estimatedInlineChars <= maxAggregateInlineChars) {
+      break;
+    }
+  }
+
+  return plan;
+}
+
+async function settleToolExecutionContents(options: {
+  readonly executions: readonly CompletedTurnToolExecution[];
+  readonly artifacts: ToolOutputArtifactsOptions | undefined;
+}): Promise<readonly SettledTurnToolExecution[]> {
+  if (options.artifacts === undefined) {
+    return options.executions.map(({ toolCall, execution }) => ({
+      toolCall,
+      execution,
+      content: execution.content,
+      notice: undefined,
+    }));
+  }
+  const plan = settlementPlanByExecutionIndex(
+    options.executions,
+    options.artifacts,
+  );
+  const settledExecutions: SettledTurnToolExecution[] = [];
+  for (const [index, { toolCall, execution }] of options.executions.entries()) {
+    const maxInlineChars = plan.get(index);
+    if (maxInlineChars === undefined) {
+      settledExecutions.push({
+        toolCall,
+        execution,
+        content: execution.content,
+        notice: undefined,
+      });
+      continue;
+    }
+    const settled = await settleOversizedToolOutput({
+      store: options.artifacts.store,
+      maxInlineChars,
+      toolCallId: toolCall.id,
+      toolName: toolCall.tool,
+      content: execution.content,
+      sourceStatus:
+        execution.sourceTruncated === true ? "source-truncated" : "complete",
+      purpose: "settlement",
+    });
+    settledExecutions.push({
+      toolCall,
+      execution,
+      content: settled.content,
+      notice: settled.notice,
+    });
+  }
+  return settledExecutions;
 }
 
 function agentStopReasonFromProvider(reason: AgentTurn["stopReason"]): string {
@@ -269,6 +423,9 @@ export async function* runAgentTurn(
     systemPrompt,
     signal,
     contextCompaction: options.contextCompaction,
+    ...(options.toolOutputArtifacts !== undefined
+      ? { toolOutputArtifacts: options.toolOutputArtifacts }
+      : {}),
     costTracking,
     onContextCompacted: async (targetMessages) => {
       await restorePostCompactionReads({
@@ -412,10 +569,7 @@ export async function* runAgentTurn(
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
 
-    const recordToolExecution = (
-      toolCall: ToolCall,
-      execution: ToolExecution,
-    ): void => {
+    const recordCheckpointOperations = (execution: ToolExecution): void => {
       if (
         execution.ok &&
         execution.checkpointOperations !== undefined &&
@@ -423,17 +577,54 @@ export async function* runAgentTurn(
       ) {
         options.recordCheckpointOperations?.(execution.checkpointOperations);
       }
-      applySessionLedger(
-        appendSessionLedgerMessage(sessionLedger, {
-          role: "tool",
-          toolCallId: toolCall.id,
-          content: execution.content,
-        }),
-      );
     };
 
     const scheduled = scheduledToolCalls(workspace, turnResult.toolCalls);
-    const completedToolExecutions: ToolExecution[] = [];
+    const completedToolExecutions: CompletedTurnToolExecution[] = [];
+    let pendingToolExecutions: CompletedTurnToolExecution[] = [];
+    const settlePendingToolExecutions = async (): Promise<
+      readonly ToolOutputArtifactNotice[]
+    > => {
+      if (pendingToolExecutions.length === 0) {
+        return [];
+      }
+      const pending = pendingToolExecutions;
+      pendingToolExecutions = [];
+      const settledToolExecutions = await settleToolExecutionContents({
+        executions: pending,
+        artifacts: options.toolOutputArtifacts,
+      });
+      const artifactNotices: ToolOutputArtifactNotice[] = [];
+      for (const settled of settledToolExecutions) {
+        applySessionLedger(
+          appendSessionLedgerMessage(sessionLedger, {
+            role: "tool",
+            toolCallId: settled.toolCall.id,
+            content: settled.content,
+            ...toolMessageSourceTruncationMetadata({
+              content: settled.content,
+              sourceTruncated: settled.execution.sourceTruncated === true,
+            }),
+          }),
+        );
+        if (settled.notice !== undefined) {
+          artifactNotices.push(settled.notice);
+        }
+      }
+      return artifactNotices;
+    };
+    const recordCompletedToolExecution = (
+      completed: CompletedTurnToolExecution,
+    ): void => {
+      recordCheckpointOperations(completed.execution);
+      readVisibility.applyImmediateMutation(completed.execution);
+      projectInstructionVisibility.applyMutationTargetPaths(
+        mutatedTargetPathsFromExecution(completed.execution),
+      );
+      completedToolExecutions.push(completed);
+      pendingToolExecutions.push(completed);
+    };
+
     for (const segment of planToolCallExecutionSegments(scheduled)) {
       if (segment.kind === "parallel") {
         for (const { toolCall } of segment.toolCalls) {
@@ -445,34 +636,40 @@ export async function* runAgentTurn(
         });
         for (const result of results) {
           if (result.status === "rejected") {
+            for (const notice of await settlePendingToolExecutions()) {
+              yield { type: "tool_output_artifact", ...notice };
+            }
             throw result.reason;
           }
           const { toolCall, result: execution } = result;
           yield { type: "tool_end", toolCall, ok: execution.ok };
-          recordToolExecution(toolCall, execution);
-          readVisibility.applyImmediateMutation(execution);
-          projectInstructionVisibility.applyMutationTargetPaths(
-            mutatedTargetPathsFromExecution(execution),
-          );
-          completedToolExecutions.push(execution);
+          recordCompletedToolExecution({ toolCall, execution });
         }
       } else {
         const { toolCall } = segment.toolCall;
         yield { type: "tool_start", toolCall };
-        const execution = await executeTurnToolCall(toolCall);
+        let execution: ToolExecution;
+        try {
+          execution = await executeTurnToolCall(toolCall);
+        } catch (error) {
+          for (const notice of await settlePendingToolExecutions()) {
+            yield { type: "tool_output_artifact", ...notice };
+          }
+          throw error;
+        }
         yield { type: "tool_end", toolCall, ok: execution.ok };
-        recordToolExecution(toolCall, execution);
-        readVisibility.applyImmediateMutation(execution);
-        projectInstructionVisibility.applyMutationTargetPaths(
-          mutatedTargetPathsFromExecution(execution),
-        );
-        completedToolExecutions.push(execution);
+        recordCompletedToolExecution({ toolCall, execution });
       }
     }
-    readVisibility.applyVisibleToolExecutions(completedToolExecutions);
+    for (const notice of await settlePendingToolExecutions()) {
+      yield { type: "tool_output_artifact", ...notice };
+    }
+    readVisibility.applyVisibleToolExecutions(
+      completedToolExecutions.map(({ execution }) => execution),
+    );
     publishVisibleProjectInstructions(
       projectInstructionVisibility,
-      completedToolExecutions,
+      completedToolExecutions.map(({ execution }) => execution),
     );
 
     if (drainInjectedUserMessages !== undefined && !signal.aborted) {
@@ -517,6 +714,9 @@ export async function* runAgent(
         : {}),
       ...(options.contextCompaction !== undefined
         ? { contextCompaction: options.contextCompaction }
+        : {}),
+      ...(options.toolOutputArtifacts !== undefined
+        ? { toolOutputArtifacts: options.toolOutputArtifacts }
         : {}),
     });
     options.onTranscriptReady?.(messages);

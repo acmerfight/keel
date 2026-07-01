@@ -118,7 +118,8 @@ function messagesEqual(left: Message, right: Message): boolean {
       return (
         right.role === "tool" &&
         left.toolCallId === right.toolCallId &&
-        left.content === right.content
+        left.content === right.content &&
+        left.sourceTruncated === right.sourceTruncated
       );
   }
 }
