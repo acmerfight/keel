@@ -2,6 +2,10 @@ import { describe, expect, test } from "vitest";
 import { compactMessages } from "../../../src/agent/context-compaction.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
+import type {
+  ToolOutputArtifactSaveInput,
+  ToolOutputArtifactStore,
+} from "../../../src/agent/tool-output-artifacts.ts";
 import { KeelError } from "../../../src/core/error.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
@@ -13,6 +17,28 @@ import {
   workspace,
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
+
+interface SavedToolOutputArtifact {
+  readonly ref: string;
+  readonly input: ToolOutputArtifactSaveInput;
+}
+
+function memoryArtifactStore(): {
+  readonly store: ToolOutputArtifactStore;
+  readonly saved: SavedToolOutputArtifact[];
+} {
+  const saved: SavedToolOutputArtifact[] = [];
+  return {
+    saved,
+    store: {
+      save: async (input) => {
+        const ref = `tool-output:test/${saved.length + 1}`;
+        saved.push({ ref, input });
+        return { status: "stored", ref };
+      },
+    },
+  };
+}
 
 describe("Context Compaction Stale Tool Output", () => {
   test(`Given retained recent context contains a stale large tool output,
@@ -179,6 +205,117 @@ describe("Context Compaction Stale Tool Output", () => {
       cachedInputTokens: 0,
       uncachedInputTokens: 40,
       outputTokens: 9,
+    });
+  });
+
+  test(`Given retained recent context contains a stale large tool output and artifact storage,
+    When overflow recovery compacts the conversation,
+    Then the retry sees an artifact-backed marker while the store keeps the full output`, async () => {
+    // Given
+    const largeToolOutput = [
+      "REPORT_START",
+      "old report line ".repeat(500),
+      "REPORT_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+      { role: "user", content: "Read the old report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_old_report",
+            tool: "read",
+            path: "old-report.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_old_report",
+        content: largeToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The old report was inspected; alpha is the key finding.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue with the latest instruction." },
+    ];
+    const artifacts = memoryArtifactStore();
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "stale-tool-output-artifact-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Earlier setup summary." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        yield {
+          type: "text",
+          text: "Continued with artifact-backed stale output.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 20_000,
+          toolOutputMaxChars: 128,
+        },
+        toolOutputArtifacts: { store: artifacts.store },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(artifacts.saved).toHaveLength(1);
+    expect(artifacts.saved[0]?.input).toMatchObject({
+      toolCallId: "read_old_report",
+      toolName: "read",
+      purpose: "stale-compaction",
+      sourceStatus: "complete",
+      content: largeToolOutput,
+    });
+    const retainedToolOutput =
+      retriedMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "read_old_report",
+      )?.content ?? "";
+    expect(retainedToolOutput).toContain(
+      "full output artifact: tool-output:test/1",
+    );
+    expect(retainedToolOutput).toContain(
+      "inspect with: keel artifacts show tool-output:test/1",
+    );
+    expect(retainedToolOutput).not.toContain("REPORT_END");
+    expect(onlyContextCompactedEvent(events)).toMatchObject({
+      reason: "overflow_recovery",
+      toolOutputsCompacted: 1,
     });
   });
 

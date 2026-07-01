@@ -10,6 +10,7 @@ import {
 } from "./context-compaction/planning.ts";
 import {
   compactCurrentToolOutputs,
+  compactCurrentToolOutputsWithArtifacts,
   EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
   isCompactedCurrentToolOutput as isCompactedCurrentToolOutputFromContent,
   mergeStaleToolOutputCompactionStats,
@@ -29,6 +30,7 @@ import {
   type ContextCompactionStats as InternalContextCompactionStats,
   shouldCompactBeforeRequest as shouldCompactBeforeRequestFromAccounting,
 } from "./context-compaction/token-accounting.ts";
+import type { ToolOutputArtifactsOptions } from "./tool-output-artifacts.ts";
 
 export type ContextCompactionOptions = InternalContextCompactionOptions;
 export type ContextCompactionRequestMetadata =
@@ -58,6 +60,7 @@ interface CompactMessagesOptions {
   readonly requestMetadata?: ContextCompactionRequestMetadata;
   readonly focusInstruction?: string;
   readonly allowCurrentToolOutputCompaction?: boolean;
+  readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
 }
 
 export type CompactMessagesResult =
@@ -106,6 +109,12 @@ export function contextCompactionStatsForCurrentMessages(options: {
   return contextCompactionStatsForCurrentMessagesFromAccounting(options);
 }
 
+export function contextCompactionToolOutputMaxChars(
+  options: ContextCompactionOptions | undefined,
+): number {
+  return resolveContextCompactionOptions(options).toolOutputMaxChars;
+}
+
 export async function compactMessages(
   options: CompactMessagesOptions,
 ): Promise<CompactMessagesResult> {
@@ -128,10 +137,17 @@ export async function compactMessages(
   const plan = planCompaction(options.messages, split, resolved);
   if (plan.messagesToSummarize.length === 0) {
     if (options.allowCurrentToolOutputCompaction === true) {
-      const currentToolOutputCompaction = compactCurrentToolOutputs(
-        options.messages,
-        resolved.toolOutputMaxChars,
-      );
+      const currentToolOutputCompaction =
+        options.toolOutputArtifacts === undefined
+          ? compactCurrentToolOutputs(
+              options.messages,
+              resolved.toolOutputMaxChars,
+            )
+          : await compactCurrentToolOutputsWithArtifacts(
+              options.messages,
+              resolved.toolOutputMaxChars,
+              options.toolOutputArtifacts.store,
+            );
       if (currentToolOutputCompaction.stats.toolOutputsCompacted > 0) {
         options.messages.splice(
           0,
@@ -170,18 +186,25 @@ export async function compactMessages(
       ? { focusInstruction: options.focusInstruction }
       : {}),
   });
-  const compacted = buildCompactedMessages(
+  const compacted = await buildCompactedMessages(
     options.messages,
     plan.firstRetainedIndex,
     summaryTurn.text,
     resolved,
+    options.toolOutputArtifacts,
   );
   const currentToolOutputCompaction =
     options.allowCurrentToolOutputCompaction === true
-      ? compactCurrentToolOutputs(
-          compacted.messages,
-          resolved.toolOutputMaxChars,
-        )
+      ? options.toolOutputArtifacts === undefined
+        ? compactCurrentToolOutputs(
+            compacted.messages,
+            resolved.toolOutputMaxChars,
+          )
+        : await compactCurrentToolOutputsWithArtifacts(
+            compacted.messages,
+            resolved.toolOutputMaxChars,
+            options.toolOutputArtifacts.store,
+          )
       : {
           messages: compacted.messages,
           stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,

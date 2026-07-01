@@ -21,7 +21,10 @@ import {
   type CostTrackingOptions,
   emptyRunAccounting,
 } from "./accounting.ts";
-import type { ContextCompactionOptions } from "./context-compaction.ts";
+import {
+  type ContextCompactionOptions,
+  contextCompactionToolOutputMaxChars,
+} from "./context-compaction.ts";
 import type { AgentEvent } from "./events.ts";
 import { restorePostCompactionReads } from "./post-compaction-restore.ts";
 import type { AgentTurn } from "./provider-turn.ts";
@@ -38,6 +41,11 @@ import {
   syncMessagesFromSessionLedger,
 } from "./session-ledger.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
+import {
+  settleOversizedToolOutput,
+  type ToolOutputArtifactNotice,
+  type ToolOutputArtifactsOptions,
+} from "./tool-output-artifacts.ts";
 import {
   executeParallelToolCallsInSourceOrder,
   planToolCallExecutionSegments,
@@ -61,6 +69,7 @@ export interface RunAgentOptions {
   readonly costTracking?: CostTrackingOptions;
   readonly bashPermission?: BashPermissionPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
+  readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly onTranscriptReady?: (messages: readonly Message[]) => void;
 }
 
@@ -79,6 +88,7 @@ export interface RunAgentTurnOptions {
   readonly costTracking?: CostTrackingOptions;
   readonly bashPermission?: BashPermissionPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
+  readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly readVisibility?: ReadVisibilityState;
   readonly projectInstructionVisibility?: ProjectInstructionVisibilityState;
   readonly recordCheckpointOperations?: (
@@ -189,6 +199,40 @@ function finalReplyMessage(
       };
 }
 
+async function settleToolExecutionContent(options: {
+  readonly toolCall: ToolCall;
+  readonly execution: ToolExecution;
+  readonly artifacts: ToolOutputArtifactsOptions | undefined;
+  readonly contextCompaction: ContextCompactionOptions | undefined;
+  readonly inlineToolOutputCharsBefore: number;
+}): Promise<{
+  readonly content: string;
+  readonly notice?: ToolOutputArtifactNotice;
+}> {
+  if (options.artifacts === undefined) {
+    return { content: options.execution.content };
+  }
+  const maxInlineChars =
+    options.artifacts.maxInlineChars ??
+    contextCompactionToolOutputMaxChars(options.contextCompaction);
+  const remainingAggregateInlineChars = Math.max(
+    0,
+    maxInlineChars - options.inlineToolOutputCharsBefore,
+  );
+  return await settleOversizedToolOutput({
+    store: options.artifacts.store,
+    maxInlineChars: Math.min(maxInlineChars, remainingAggregateInlineChars),
+    toolCallId: options.toolCall.id,
+    toolName: options.toolCall.tool,
+    content: options.execution.content,
+    sourceStatus:
+      options.execution.sourceTruncated === true
+        ? "source-truncated"
+        : "complete",
+    purpose: "settlement",
+  });
+}
+
 function agentStopReasonFromProvider(reason: AgentTurn["stopReason"]): string {
   return reason === "length" ? "provider_length" : "completed";
 }
@@ -269,6 +313,9 @@ export async function* runAgentTurn(
     systemPrompt,
     signal,
     contextCompaction: options.contextCompaction,
+    ...(options.toolOutputArtifacts !== undefined
+      ? { toolOutputArtifacts: options.toolOutputArtifacts }
+      : {}),
     costTracking,
     onContextCompacted: async (targetMessages) => {
       await restorePostCompactionReads({
@@ -412,10 +459,11 @@ export async function* runAgentTurn(
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
 
-    const recordToolExecution = (
+    let inlineToolOutputCharsThisTurn = 0;
+    const recordToolExecution = async (
       toolCall: ToolCall,
       execution: ToolExecution,
-    ): void => {
+    ): Promise<ToolOutputArtifactNotice | undefined> => {
       if (
         execution.ok &&
         execution.checkpointOperations !== undefined &&
@@ -423,13 +471,22 @@ export async function* runAgentTurn(
       ) {
         options.recordCheckpointOperations?.(execution.checkpointOperations);
       }
+      const settled = await settleToolExecutionContent({
+        toolCall,
+        execution,
+        artifacts: options.toolOutputArtifacts,
+        contextCompaction: options.contextCompaction,
+        inlineToolOutputCharsBefore: inlineToolOutputCharsThisTurn,
+      });
+      inlineToolOutputCharsThisTurn += settled.content.length;
       applySessionLedger(
         appendSessionLedgerMessage(sessionLedger, {
           role: "tool",
           toolCallId: toolCall.id,
-          content: execution.content,
+          content: settled.content,
         }),
       );
+      return settled.notice;
     };
 
     const scheduled = scheduledToolCalls(workspace, turnResult.toolCalls);
@@ -449,7 +506,10 @@ export async function* runAgentTurn(
           }
           const { toolCall, result: execution } = result;
           yield { type: "tool_end", toolCall, ok: execution.ok };
-          recordToolExecution(toolCall, execution);
+          const artifactNotice = await recordToolExecution(toolCall, execution);
+          if (artifactNotice !== undefined) {
+            yield { type: "tool_output_artifact", ...artifactNotice };
+          }
           readVisibility.applyImmediateMutation(execution);
           projectInstructionVisibility.applyMutationTargetPaths(
             mutatedTargetPathsFromExecution(execution),
@@ -461,7 +521,10 @@ export async function* runAgentTurn(
         yield { type: "tool_start", toolCall };
         const execution = await executeTurnToolCall(toolCall);
         yield { type: "tool_end", toolCall, ok: execution.ok };
-        recordToolExecution(toolCall, execution);
+        const artifactNotice = await recordToolExecution(toolCall, execution);
+        if (artifactNotice !== undefined) {
+          yield { type: "tool_output_artifact", ...artifactNotice };
+        }
         readVisibility.applyImmediateMutation(execution);
         projectInstructionVisibility.applyMutationTargetPaths(
           mutatedTargetPathsFromExecution(execution),
@@ -517,6 +580,9 @@ export async function* runAgent(
         : {}),
       ...(options.contextCompaction !== undefined
         ? { contextCompaction: options.contextCompaction }
+        : {}),
+      ...(options.toolOutputArtifacts !== undefined
+        ? { toolOutputArtifacts: options.toolOutputArtifacts }
         : {}),
     });
     options.onTranscriptReady?.(messages);

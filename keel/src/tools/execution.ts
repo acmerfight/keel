@@ -19,6 +19,7 @@ import type { ProjectInstructionVisibilityState } from "./scoped-project-instruc
 import { ScopedProjectInstructionsNotVisibleError } from "./scoped-project-instructions.ts";
 import { builtinToolCallSchema, type ToolCall } from "./tool-call.ts";
 import { invalidBuiltinToolCallError } from "./tool-error.ts";
+import type { ToolResult } from "./types.ts";
 import {
   resolveWorkspaceCreateTarget,
   resolveWorkspaceTarget,
@@ -50,6 +51,7 @@ interface BuiltinToolExecutionContext {
 export interface ToolExecution {
   readonly content: string;
   readonly ok: boolean;
+  readonly sourceTruncated?: boolean;
   readonly readTargetPath?: string;
   readonly readTargetOffset?: number;
   readonly readTargetLimit?: number;
@@ -61,6 +63,12 @@ export interface ToolExecution {
 
 export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
   readonly toolCall: ToolCall;
+}
+
+function sourceTruncation(result: ToolResult): {
+  readonly sourceTruncated?: true;
+} {
+  return result.sourceTruncated === true ? { sourceTruncated: true } : {};
 }
 
 interface RecoverableToolError extends KeelError {
@@ -121,6 +129,7 @@ function executeReadTool(
   return {
     content: scopedOutput?.content ?? result.content,
     ok: true,
+    ...sourceTruncation(result),
     readTargetPath: result.targetPath,
     ...(scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0
       ? { visibleProjectInstructionPaths: scopedOutput.instructionPaths }
@@ -142,7 +151,11 @@ function executeLsTool(
     ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
     ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
   });
-  return { content: result.content, ok: true };
+  return {
+    content: result.content,
+    ok: true,
+    ...sourceTruncation(result),
+  };
 }
 
 async function executeGlobTool(
@@ -153,7 +166,11 @@ async function executeGlobTool(
     ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
     signal,
   });
-  return { content: result.content, ok: true };
+  return {
+    content: result.content,
+    ok: true,
+    ...sourceTruncation(result),
+  };
 }
 
 async function executeGrepTool(
@@ -171,6 +188,7 @@ async function executeGrepTool(
   return {
     content: scopedOutput?.content ?? result.content,
     ok: true,
+    ...sourceTruncation(result),
     ...(scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0
       ? { visibleProjectInstructionPaths: scopedOutput.instructionPaths }
       : {}),
@@ -186,7 +204,11 @@ async function executeGitDiffTool(
     ...(toolCall.paths !== undefined ? { paths: toolCall.paths } : {}),
     signal,
   });
-  return { content: result.content, ok: true };
+  return {
+    content: result.content,
+    ok: true,
+    ...sourceTruncation(result),
+  };
 }
 
 function executeEditTool(
@@ -300,7 +322,11 @@ async function executeBashTool(
       ? { timeoutMs: toolCall.timeoutMs }
       : {}),
   });
-  return { content: result.content, ok: true };
+  return {
+    content: result.content,
+    ok: true,
+    ...sourceTruncation(result),
+  };
 }
 
 function executeBuiltinToolCall(

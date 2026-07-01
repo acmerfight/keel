@@ -185,6 +185,9 @@ export async function executeModelSwitchCompaction(
       ...(target.contextCompaction !== undefined
         ? { contextCompaction: target.contextCompaction }
         : {}),
+      ...(options.toolOutputArtifacts !== undefined
+        ? { toolOutputArtifacts: options.toolOutputArtifacts }
+        : {}),
     });
     if (signal.aborted) {
       rollback();

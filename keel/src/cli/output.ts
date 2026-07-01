@@ -183,6 +183,20 @@ export async function printAgentEvents(
           `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}\n`,
         );
       }
+    } else if (event.type === "tool_output_artifact") {
+      if (event.status === "stored") {
+        runtime.writeStderr(
+          `Tool output artifact: ${sanitizeToolLabel(
+            event.ref,
+          )} (keel artifacts show ${sanitizeToolLabel(event.ref)})\n`,
+        );
+      } else {
+        runtime.writeStderr(
+          `Tool output artifact failed: ${sanitizeToolLabel(
+            event.reason,
+          )}; output is lossy; rerun with narrower parameters if needed\n`,
+        );
+      }
     } else if (event.type === "end") {
       finalEnd = event;
     }
@@ -227,6 +241,21 @@ export async function printStableInteractiveAgentEvents(
         if (!event.ok) {
           runtime.writeStatusLine(
             `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}`,
+          );
+        }
+        break;
+      case "tool_output_artifact":
+        if (event.status === "stored") {
+          runtime.writeStatusLine(
+            `Tool output artifact: ${sanitizeToolLabel(
+              event.ref,
+            )} (keel artifacts show ${sanitizeToolLabel(event.ref)})`,
+          );
+        } else {
+          runtime.writeStatusLine(
+            `Tool output artifact failed: ${sanitizeToolLabel(
+              event.reason,
+            )}; output is lossy; rerun with narrower parameters if needed`,
           );
         }
         break;

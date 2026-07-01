@@ -69,6 +69,9 @@ export async function executeManualCompaction(
       ...(command.focusInstruction !== undefined
         ? { focusInstruction: command.focusInstruction }
         : {}),
+      ...(options.toolOutputArtifacts !== undefined
+        ? { toolOutputArtifacts: options.toolOutputArtifacts }
+        : {}),
     });
     if (signal.aborted) {
       messages.splice(0, messages.length, ...messagesBeforeCompact);

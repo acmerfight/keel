@@ -641,6 +641,9 @@ export async function runInteractiveSession(
           ...(resolved.contextCompaction !== undefined
             ? { contextCompaction: resolved.contextCompaction }
             : {}),
+          ...(options.toolOutputArtifacts !== undefined
+            ? { toolOutputArtifacts: options.toolOutputArtifacts }
+            : {}),
           readVisibility,
           projectInstructionVisibility,
           recordCheckpointOperations: (operations) => {

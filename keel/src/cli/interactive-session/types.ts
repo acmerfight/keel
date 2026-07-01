@@ -1,6 +1,7 @@
 import type { ContextCompactionOptions } from "../../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../../agent/events.ts";
 import type { ProjectInstructions, WorkflowSkill } from "../../agent/prompt.ts";
+import type { ToolOutputArtifactsOptions } from "../../agent/tool-output-artifacts.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
@@ -84,6 +85,7 @@ export interface InteractiveSessionOptions {
   readonly forkSession?: (request: InteractiveForkSessionRequest) => string;
   readonly listForkPoints?: () => SessionForkPoints;
   readonly persistBashApprovalGrant?: (grant: BashApprovalGrant) => void;
+  readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly input: NodeJS.ReadableStream;
   readonly writeStdout: (text: string) => void;
   readonly writeStderr: (text: string) => void;

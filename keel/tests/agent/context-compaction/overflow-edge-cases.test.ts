@@ -7,6 +7,10 @@ import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
 } from "../../../src/agent/stop-policy.ts";
+import type {
+  ToolOutputArtifactSaveInput,
+  ToolOutputArtifactStore,
+} from "../../../src/agent/tool-output-artifacts.ts";
 import { KeelError } from "../../../src/core/error.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
@@ -20,6 +24,21 @@ import {
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
 import { createWorkspace } from "../../../src/testing/file-editing-fixtures.ts";
+
+interface SavedToolOutputArtifact {
+  readonly input: ToolOutputArtifactSaveInput;
+}
+
+function failingArtifactStore(
+  saved: SavedToolOutputArtifact[],
+): ToolOutputArtifactStore {
+  return {
+    save: async (input) => {
+      saved.push({ input });
+      return { status: "failed", reason: "disk full" };
+    },
+  };
+}
 
 describe("Context Compaction Overflow Edge Cases", () => {
   test(`Given the current tool output was already compacted by overflow recovery,
@@ -93,6 +112,102 @@ describe("Context Compaction Overflow Edge Cases", () => {
         content: alreadyCompactedOutput,
       },
     ]);
+  });
+
+  test(`Given current tool output overflows and artifact storage fails,
+    When overflow recovery compacts the current tool output,
+    Then the retry sees a lossy marker with rerun guidance`, async () => {
+    // Given
+    const currentToolOutput = [
+      "CURRENT_START",
+      "[bash stdout truncated: showing last 20000 bytes]",
+      "current output line ".repeat(500),
+      "CURRENT_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Run the noisy command and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "run_noisy_command",
+            tool: "bash",
+            command: "node noisy.js",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "run_noisy_command",
+        content: currentToolOutput,
+      },
+    ];
+    const saved: SavedToolOutputArtifact[] = [];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "current-output-artifact-failure-provider",
+      async *stream(options) {
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before current output compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        yield {
+          type: "text",
+          text: "Continued after lossy current output compaction.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 1,
+          toolOutputMaxChars: 128,
+        },
+        toolOutputArtifacts: { store: failingArtifactStore(saved) },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.input).toMatchObject({
+      toolCallId: "run_noisy_command",
+      toolName: "bash",
+      purpose: "current-overflow-compaction",
+      sourceStatus: "source-truncated",
+      content: currentToolOutput,
+    });
+    const retriedToolOutput =
+      retriedMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "run_noisy_command",
+      )?.content ?? "";
+    expect(retriedToolOutput).toContain("artifact storage failed: disk full");
+    expect(retriedToolOutput).toContain(
+      "model recovery: rerun the tool with narrower parameters if needed",
+    );
+    expect(retriedToolOutput).not.toContain("CURRENT_END");
+    expect(onlyContextCompactedEvent(events)).toMatchObject({
+      reason: "overflow_recovery",
+      toolOutputsCompacted: 1,
+    });
   });
 
   test(`Given a real current read result overflows before assistant output,

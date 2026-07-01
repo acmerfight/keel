@@ -54,7 +54,10 @@ function formatLsOutput(
       `[ls output truncated: showing first ${limitedEntries.items.length} entries. ${guidance}]`,
     );
   }
-  return { content: lines.join("\n") };
+  return {
+    content: lines.join("\n"),
+    ...(limitedEntries.truncated ? { sourceTruncated: true } : {}),
+  };
 }
 
 function formatLsEntry(entry: LsEntry): string {

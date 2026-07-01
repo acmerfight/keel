@@ -1,5 +1,6 @@
 import { KeelError } from "../../core/error.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
+import type { ToolOutputArtifactsOptions } from "../tool-output-artifacts.ts";
 import {
   normalizeCheckpointSummary,
   renderConversationCheckpoint,
@@ -11,6 +12,7 @@ import {
 } from "./options.ts";
 import {
   compactStaleToolOutputs,
+  compactStaleToolOutputsWithArtifacts,
   type StaleToolOutputCompactionStats,
 } from "./stale-tool-output.ts";
 
@@ -139,16 +141,22 @@ function buildSummaryPrompt(
   return promptParts.join("\n\n");
 }
 
-export function buildCompactedMessages(
+export async function buildCompactedMessages(
   messages: readonly Message[],
   firstRetainedIndex: number,
   summary: string,
   options: ResolvedContextCompactionOptions,
-): BuildCompactedMessagesResult {
-  const recent = compactStaleToolOutputs(
-    messages.slice(firstRetainedIndex),
-    options.toolOutputMaxChars,
-  );
+  toolOutputArtifacts?: ToolOutputArtifactsOptions,
+): Promise<BuildCompactedMessagesResult> {
+  const recentMessages = messages.slice(firstRetainedIndex);
+  const recent =
+    toolOutputArtifacts === undefined
+      ? compactStaleToolOutputs(recentMessages, options.toolOutputMaxChars)
+      : await compactStaleToolOutputsWithArtifacts(
+          recentMessages,
+          options.toolOutputMaxChars,
+          toolOutputArtifacts.store,
+        );
   const checkpoint = renderConversationCheckpoint({
     summary: normalizeCheckpointSummary(summary),
     noLaterMessages: recent.messages.length === 0,
