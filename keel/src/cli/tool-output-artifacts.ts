@@ -197,6 +197,18 @@ export function createToolOutputArtifactStore(
 ): ToolOutputArtifactStore {
   validateArtifactSegment("scope", options.scope);
   return {
+    exists: async (ref: string): Promise<boolean> => {
+      const parsed = parseToolOutputArtifactRef(ref);
+      if (parsed === null) {
+        return false;
+      }
+      try {
+        const artifactStats = await stat(artifactPath(options.runtime, parsed));
+        return artifactStats.isFile();
+      } catch {
+        return false;
+      }
+    },
     save: async (
       input: ToolOutputArtifactSaveInput,
     ): Promise<ToolOutputArtifactSaveResult> => {

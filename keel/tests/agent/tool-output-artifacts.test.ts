@@ -55,6 +55,7 @@ describe("Agent Tool Output Artifacts", () => {
     );
     const saved: ToolOutputArtifactSaveInput[] = [];
     const store: ToolOutputArtifactStore = {
+      exists: async () => false,
       save: async (input) => {
         saved.push(input);
         return { status: "stored", ref: `tool-output:test/${saved.length}` };

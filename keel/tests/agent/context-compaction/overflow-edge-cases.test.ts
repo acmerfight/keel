@@ -31,12 +31,17 @@ interface SavedToolOutputArtifact {
 
 function failingArtifactStore(
   saved: SavedToolOutputArtifact[],
-  reason = "disk full",
+  options?: {
+    readonly reason?: string;
+    readonly existingRefs?: readonly string[];
+  },
 ): ToolOutputArtifactStore {
+  const existingRefs = new Set(options?.existingRefs ?? []);
   return {
+    exists: async (ref) => existingRefs.has(ref),
     save: async (input) => {
       saved.push({ input });
-      return { status: "failed", reason };
+      return { status: "failed", reason: options?.reason ?? "disk full" };
     },
   };
 }
@@ -140,6 +145,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     ];
     const saved: SavedToolOutputArtifact[] = [];
     const store: ToolOutputArtifactStore = {
+      exists: async () => false,
       save: async (input) => {
         saved.push({ input });
         return { status: "stored", ref: "tool-output:test/1" };
@@ -259,7 +265,9 @@ describe("Context Compaction Overflow Edge Cases", () => {
           keepRecentTokens: 1,
           toolOutputMaxChars: 128,
         },
-        toolOutputArtifacts: { store: failingArtifactStore(saved, " \n\t ") },
+        toolOutputArtifacts: {
+          store: failingArtifactStore(saved, { reason: " \n\t " }),
+        },
       }),
     );
 
@@ -357,7 +365,11 @@ describe("Context Compaction Overflow Edge Cases", () => {
           keepRecentTokens: 1,
           toolOutputMaxChars: 128,
         },
-        toolOutputArtifacts: { store: failingArtifactStore(saved) },
+        toolOutputArtifacts: {
+          store: failingArtifactStore(saved, {
+            existingRefs: ["tool-output:run/current-first"],
+          }),
+        },
       }),
     );
 

@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { createToolOutputArtifactStore } from "../../src/cli/tool-output-artifacts.ts";
 import { runCli } from "../../src/testing/cli-harness.ts";
 import { requestWithMessagesSchema } from "../../src/testing/cli-main-schemas.ts";
 import {
@@ -71,6 +72,42 @@ function sseReadToolCalls(
 }
 
 describe("CLI Tool Output Artifacts", () => {
+  test(`Given the CLI artifact store saved a tool output,
+    When compaction checks artifact refs,
+    Then only existing managed refs are reusable`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const store = createToolOutputArtifactStore({
+      runtime: {
+        env: (key) => (key === "KEEL_HOME" ? home : undefined),
+        now: () => 0,
+      },
+      scope: "run-test",
+    });
+
+    try {
+      const saved = await store.save({
+        toolCallId: "read_large",
+        toolName: "read",
+        content: "FULL_OUTPUT",
+        sourceStatus: "complete",
+        purpose: "settlement",
+      });
+      if (saved.status !== "stored") {
+        throw new Error(
+          `Expected artifact storage to succeed: ${saved.reason}`,
+        );
+      }
+
+      // When / Then
+      expect(await store.exists(saved.ref)).toBe(true);
+      expect(await store.exists("tool-output:run-test/missing")).toBe(false);
+      expect(await store.exists("not-a-tool-output-ref")).toBe(false);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the provider reads a moderately sized workspace file,
     When the user runs Keel,
     Then the default artifact policy keeps the full output inline`, async () => {

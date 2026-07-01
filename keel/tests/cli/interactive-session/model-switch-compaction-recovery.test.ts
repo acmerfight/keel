@@ -399,10 +399,13 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       { role: "user", content: "Continue later." },
     ];
     const saved: ToolOutputArtifactSaveInput[] = [];
+    const existingRefs = new Set<string>();
     const store: ToolOutputArtifactStore = {
+      exists: async (ref) => existingRefs.has(ref),
       save: async (input) => {
         const ref = `tool-output:test/${saved.length + 1}`;
         saved.push(input);
+        existingRefs.add(ref);
         return { status: "stored", ref };
       },
     };

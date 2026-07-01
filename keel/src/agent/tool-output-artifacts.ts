@@ -30,6 +30,7 @@ export type ToolOutputArtifactSaveResult =
     };
 
 export interface ToolOutputArtifactStore {
+  readonly exists: (ref: string) => Promise<boolean>;
   readonly save: (
     input: ToolOutputArtifactSaveInput,
   ) => Promise<ToolOutputArtifactSaveResult>;

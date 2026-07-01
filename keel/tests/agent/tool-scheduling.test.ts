@@ -53,10 +53,14 @@ function toolEventTrace(events: readonly AgentEvent[]): readonly string[] {
 function storedArtifactStore(
   saved: ToolOutputArtifactSaveInput[],
 ): ToolOutputArtifactStore {
+  const existingRefs = new Set<string>();
   return {
+    exists: async (ref) => existingRefs.has(ref),
     save: async (input) => {
       saved.push(input);
-      return { status: "stored", ref: `tool-output:test/${saved.length}` };
+      const ref = `tool-output:test/${saved.length}`;
+      existingRefs.add(ref);
+      return { status: "stored", ref };
     },
   };
 }
