@@ -98,6 +98,7 @@ describe("CLI Tool Output Artifacts", () => {
       const preview = [
         "REUSABLE_REPORT_START",
         "reusable report line ".repeat(500),
+        "surrogate checkpoint \uD800",
         "REUSABLE_REPORT_PREVIEW_END",
       ].join("\n");
       const fullOutput = `${preview}\n${"hidden reusable report ".repeat(500)}`;

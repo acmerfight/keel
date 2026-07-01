@@ -106,6 +106,10 @@ function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
+function utf8RoundTrip(content: string): string {
+  return Buffer.from(content, "utf8").toString("utf8");
+}
+
 function parseToolOutputArtifactRef(
   ref: string,
 ): ParsedToolOutputArtifactRef | null {
@@ -189,7 +193,7 @@ function artifactMatchesReuseInput(
     sha256(parsed.body) !== contentSha256 ||
     (input.contentSha256 !== undefined &&
       input.contentSha256 !== contentSha256) ||
-    !parsed.body.startsWith(input.contentPrefix)
+    !parsed.body.startsWith(utf8RoundTrip(input.contentPrefix))
   ) {
     return { status: "not_reusable" };
   }
