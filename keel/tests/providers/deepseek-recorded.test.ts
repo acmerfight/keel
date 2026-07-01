@@ -96,6 +96,12 @@ describe("DeepSeek Recorded Fixtures", () => {
       );
 
       // Then
+      const reasoningEvents = events.filter(
+        (event) => event.type === "reasoning",
+      );
+      expect(reasoningEvents.map((event) => event.text).join("")).toContain(
+        "Recorded DeepSeek text fixture",
+      );
       const textEvents = events.filter((event) => event.type === "text");
       expect(textEvents.map((event) => event.text).join("")).toBe(
         "Recorded DeepSeek text fixture.",
@@ -134,7 +140,13 @@ describe("DeepSeek Recorded Fixtures", () => {
       );
 
       // Then
-      expect(events).toEqual([
+      const reasoningEvents = events.filter(
+        (event) => event.type === "reasoning",
+      );
+      expect(reasoningEvents.map((event) => event.text).join("")).toContain(
+        "edit note.txt",
+      );
+      expect(events.filter((event) => event.type !== "reasoning")).toEqual([
         {
           type: "tool_call",
           id: "call_00_stPO5gzpBGYPHQ4hSeAI6685",

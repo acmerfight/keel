@@ -1,11 +1,15 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
+import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
+import { z } from "zod";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { CostModel } from "../../../src/core/cost.ts";
+import { createDeepseekProvider } from "../../../src/llm/providers/deepseek.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   ForcedExit,
@@ -13,6 +17,145 @@ import {
   ZERO_COST_MODEL,
   ZERO_USAGE,
 } from "../../../src/testing/interactive-session-fixtures.ts";
+
+const deepseekRequestMessageSchema = z
+  .object({
+    role: z.string(),
+    content: z.unknown().optional(),
+    reasoning_content: z.unknown().optional(),
+    tool_calls: z
+      .array(
+        z
+          .object({
+            id: z.string().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
+const deepseekRequestSchema = z
+  .object({
+    messages: z.array(deepseekRequestMessageSchema),
+  })
+  .passthrough();
+
+type DeepseekRequest = z.infer<typeof deepseekRequestSchema>;
+type DeepseekRequestMessage = z.infer<typeof deepseekRequestMessageSchema>;
+
+function getPort(server: Server): number {
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("Server not listening on a TCP port");
+  }
+  return address.port;
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function sseData(payload: unknown): string {
+  return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
+function sseFinish(finishReason: "stop" | "tool_calls"): string {
+  return `${sseData({
+    choices: [{ delta: {}, finish_reason: finishReason }],
+    usage: {
+      prompt_tokens: 1,
+      prompt_cache_hit_tokens: 0,
+      prompt_cache_miss_tokens: 1,
+      completion_tokens: 1,
+    },
+  })}data: [DONE]\n\n`;
+}
+
+function sseText(text: string): readonly string[] {
+  return [
+    sseData({ choices: [{ delta: { content: text }, finish_reason: null }] }),
+    sseFinish("stop"),
+  ];
+}
+
+function sseToolCall(
+  id: string,
+  name: string,
+  argumentsValue: Record<string, unknown>,
+): readonly string[] {
+  return [
+    sseData({
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id,
+                type: "function",
+                function: {
+                  name,
+                  arguments: JSON.stringify(argumentsValue),
+                },
+              },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    }),
+    sseFinish("tool_calls"),
+  ];
+}
+
+function writeSseResponse(
+  response: ServerResponse,
+  chunks: readonly string[],
+): void {
+  response.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  for (const chunk of chunks) {
+    response.write(chunk);
+  }
+  response.end();
+}
+
+function parseDeepseekRequestBody(body: string): DeepseekRequest {
+  return deepseekRequestSchema.parse(JSON.parse(body));
+}
+
+function hasPostCompactionReadToolCall(
+  message: DeepseekRequestMessage,
+): boolean {
+  return (
+    message.tool_calls?.some(
+      (toolCall) => toolCall.id?.startsWith("post_compaction_read_") === true,
+    ) === true
+  );
+}
+
+function missingReasoningContentForToolReplay(
+  message: DeepseekRequestMessage,
+): boolean {
+  return (
+    message.role === "assistant" &&
+    message.tool_calls !== undefined &&
+    message.tool_calls.length > 0 &&
+    typeof message.reasoning_content !== "string"
+  );
+}
 
 describe("Interactive Session - Manual Compact Success", () => {
   test(`Given an interactive session has prior history,
@@ -358,6 +501,159 @@ describe("Interactive Session - Manual Compact Success", () => {
       expect(stderr).toContain("Context compacted: manual");
       expect(sigintHandlers.size).toBe(0);
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given DeepSeek thinking mode restores a read after manual compaction,
+    When user asks for an edit after /compact,
+    Then the restored tool-call replay is accepted by the provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-interactive-deepseek-compact-"),
+    );
+    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    let requestCount = 0;
+    let sawPostCompactionReadReplay = false;
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const parsed = parseDeepseekRequestBody(body);
+        requestCount++;
+
+        if (parsed.messages.some(hasPostCompactionReadToolCall)) {
+          sawPostCompactionReadReplay = true;
+          if (parsed.messages.some(missingReasoningContentForToolReplay)) {
+            response.writeHead(400, { "Content-Type": "application/json" });
+            response.end(
+              JSON.stringify({
+                error: {
+                  message:
+                    "The `reasoning_content` in the thinking mode must be passed back to the API.",
+                },
+              }),
+            );
+            return;
+          }
+        }
+
+        if (requestCount === 1) {
+          writeSseResponse(
+            response,
+            sseToolCall("read_note", "read", { path: "note.txt" }),
+          );
+          return;
+        }
+        if (requestCount === 2) {
+          writeSseResponse(response, sseText("Read note.txt."));
+          return;
+        }
+        if (requestCount === 3) {
+          writeSseResponse(response, sseText("Manual checkpoint summary."));
+          return;
+        }
+        if (requestCount === 4) {
+          writeSseResponse(
+            response,
+            sseToolCall("edit_note", "edit", {
+              path: "note.txt",
+              edits: [{ oldText: "current", newText: "fresh" }],
+            }),
+          );
+          return;
+        }
+        writeSseResponse(response, sseText("Updated note.txt."));
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl: `http://127.0.0.1:${getPort(server)}`,
+      model: "deepseek-v4-flash",
+    });
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "deepseek",
+        model: "deepseek-v4-flash",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+            if (stdout.includes("Read note.txt.")) {
+              receiveFirstEnd();
+            }
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("read note.txt\n");
+      await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+      await writeFile(
+        join(workspace, "note.txt"),
+        "hello current world\n",
+        "utf8",
+      );
+      input.write("/compact\n");
+      input.write("replace the word\n");
+      input.end();
+
+      // Then
+      await session;
+      expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
+        "hello fresh world\n",
+      );
+      expect(sawPostCompactionReadReplay).toBe(true);
+      expect(stdout).toBe("Read note.txt.\nUpdated note.txt.\n");
+      expect(stderr).toContain("Context compacted: manual");
+      expect(sigintHandlers.size).toBe(0);
+    } finally {
+      await closeServer(server);
       await rm(workspace, { recursive: true, force: true });
     }
   });

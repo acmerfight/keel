@@ -101,6 +101,10 @@ function messagesEqual(left: Message, right: Message): boolean {
       return (
         right.role === "assistant" &&
         left.content === right.content &&
+        stableValuesEqual(
+          left.providerMetadata ?? null,
+          right.providerMetadata ?? null,
+        ) &&
         left.toolCalls.length === right.toolCalls.length &&
         left.toolCalls.every((toolCall, index) => {
           const rightToolCall = right.toolCalls[index];

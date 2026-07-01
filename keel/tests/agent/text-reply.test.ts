@@ -112,6 +112,350 @@ describe("Text Reply", () => {
     ]);
   });
 
+  test(`Given a provider emits reasoning before a tool call,
+    When the agent continues after the tool result,
+    Then the assistant tool replay preserves provider reasoning metadata`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "inspect package" }];
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "reasoning-tool-replay",
+      async *stream(options) {
+        turn++;
+        if (turn === 1) {
+          yield { type: "reasoning", text: "I should inspect package.json." };
+          yield {
+            type: "tool_call",
+            id: "read_package",
+            tool: "read",
+            path: "package.json",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        secondTurnMessages = [...options.messages];
+        yield { type: "text", text: "Read package.json." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+      }),
+    );
+
+    // Then
+    const replayedToolRequest = secondTurnMessages.find(
+      (message): message is Extract<Message, { readonly role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.toolCalls.some((toolCall) => toolCall.id === "read_package"),
+    );
+    expect(replayedToolRequest?.providerMetadata).toEqual({
+      openaiCompatible: {
+        reasoningContent: "I should inspect package.json.",
+      },
+    });
+  });
+
+  test(`Given a provider emits reasoning before a final reply,
+    When the turn completes without tools,
+    Then the assistant reply preserves provider reasoning metadata`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "answer directly" }];
+    const provider: LLMProvider = {
+      id: "reasoning-final-reply",
+      async *stream() {
+        yield { type: "reasoning", text: "I can answer directly." };
+        yield { type: "text", text: "Direct answer." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+      }),
+    );
+
+    // Then
+    expect(messages).toEqual([
+      { role: "user", content: "answer directly" },
+      {
+        role: "assistant",
+        content: "Direct answer.",
+        toolCalls: [],
+        providerMetadata: {
+          openaiCompatible: {
+            reasoningContent: "I can answer directly.",
+          },
+        },
+      },
+    ]);
+  });
+
+  test(`Given a provider emits reasoning with no visible reply,
+    When the user sends a follow-up message,
+    Then the reasoning-only assistant turn remains provider-visible`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "think silently" }];
+    let turn = 0;
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "reasoning-only-final-reply",
+      async *stream(options) {
+        turn++;
+        if (turn === 1) {
+          yield { type: "reasoning", text: "I should preserve this." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        secondTurnMessages = [...options.messages];
+        yield { type: "text", text: "Continued." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+      }),
+    );
+    messages.push({ role: "user", content: "continue" });
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+      }),
+    );
+
+    // Then
+    expect(secondTurnMessages).toEqual([
+      { role: "user", content: "think silently" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [],
+        providerMetadata: {
+          openaiCompatible: {
+            reasoningContent: "I should preserve this.",
+          },
+        },
+      },
+      { role: "user", content: "continue" },
+    ]);
+  });
+
+  test(`Given a provider emits an empty reasoning delta before a final reply,
+    When the turn completes without tools,
+    Then the empty delta does not create provider reasoning metadata`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "answer directly" }];
+    const provider: LLMProvider = {
+      id: "empty-reasoning-final-reply",
+      async *stream() {
+        yield { type: "reasoning", text: "" };
+        yield { type: "text", text: "Direct answer." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+      }),
+    );
+
+    // Then
+    expect(messages).toEqual([
+      { role: "user", content: "answer directly" },
+      {
+        role: "assistant",
+        content: "Direct answer.",
+        toolCalls: [],
+      },
+    ]);
+  });
+
+  test(`Given a reasoning provider hits the turn limit on a tool request,
+    When the agent asks for a wrap-up summary,
+    Then the final assistant reply preserves both reasoning segments`, async () => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "inspect package" }];
+    let turn = 0;
+    const provider: LLMProvider = {
+      id: "reasoning-wrap-up",
+      async *stream() {
+        turn++;
+        if (turn === 1) {
+          yield { type: "reasoning", text: "Need package context." };
+          yield {
+            type: "tool_call",
+            id: "read_package",
+            tool: "read",
+            path: "package.json",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        yield { type: "reasoning", text: "Summarize without the tool." };
+        yield { type: "text", text: "Reached the turn limit." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: {
+          shouldStopAfterTurn: ({ toolCalls }) =>
+            toolCalls.length > 0
+              ? { type: "summarize", reason: "turn_limit" }
+              : { type: "continue" },
+        },
+      }),
+    );
+
+    // Then
+    expect(messages).toEqual([
+      { role: "user", content: "inspect package" },
+      {
+        role: "assistant",
+        content: "Reached the turn limit.",
+        toolCalls: [],
+        providerMetadata: {
+          openaiCompatible: {
+            reasoningContent:
+              "Need package context.Summarize without the tool.",
+          },
+        },
+      },
+    ]);
+  });
+
+  test.each([
+    {
+      label: "initial tool turn only",
+      initialReasoning: "Need package context.",
+      wrapUpReasoning: null,
+      expectedReasoning: "Need package context.",
+    },
+    {
+      label: "wrap-up turn only",
+      initialReasoning: null,
+      wrapUpReasoning: "Summarize without the tool.",
+      expectedReasoning: "Summarize without the tool.",
+    },
+  ])(`Given reasoning appears on the $label during turn-limit wrap-up,
+    When the agent stores the final summary reply,
+    Then the assistant reply keeps the available reasoning segment`, async ({
+    initialReasoning,
+    wrapUpReasoning,
+    expectedReasoning,
+  }) => {
+    // Given
+    const messages: Message[] = [{ role: "user", content: "inspect package" }];
+    let turn = 0;
+    const provider: LLMProvider = {
+      id: "single-sided-reasoning-wrap-up",
+      async *stream() {
+        turn++;
+        if (turn === 1) {
+          if (initialReasoning !== null) {
+            yield { type: "reasoning", text: initialReasoning };
+          }
+          yield {
+            type: "tool_call",
+            id: "read_package",
+            tool: "read",
+            path: "package.json",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (wrapUpReasoning !== null) {
+          yield { type: "reasoning", text: wrapUpReasoning };
+        }
+        yield { type: "text", text: "Reached the turn limit." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: {
+          shouldStopAfterTurn: ({ toolCalls }) =>
+            toolCalls.length > 0
+              ? { type: "summarize", reason: "turn_limit" }
+              : { type: "continue" },
+        },
+      }),
+    );
+
+    // Then
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "Reached the turn limit.",
+      toolCalls: [],
+      providerMetadata: {
+        openaiCompatible: {
+          reasoningContent: expectedReasoning,
+        },
+      },
+    });
+  });
+
   test(`Given an in-process turn produces no visible text,
     When user sends a follow-up message,
     Then the empty turn adds no assistant message to the transcript`, async () => {

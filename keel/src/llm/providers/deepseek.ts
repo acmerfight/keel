@@ -27,6 +27,7 @@ const deepseekChoiceSchema = z
       .object({
         // DeepSeek emits content: null while streaming reasoning_content.
         content: z.string().nullable().optional(),
+        reasoning_content: z.string().nullable().optional(),
         tool_calls: z.array(deepseekToolCallSchema).optional(),
       })
       .passthrough()
@@ -115,6 +116,8 @@ export function createDeepseekProvider(config: DeepseekConfig) {
     id: "deepseek",
     providerName: "DeepSeek",
     config,
+    messageOptions: { assistantReasoningContent: "require" },
+    emitReasoningContent: true,
     parseChunk: parseDeepseekChunk,
     captureUsage: captureDeepseekUsage,
   });

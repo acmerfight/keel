@@ -2,7 +2,12 @@ import {
   type RecordLastBatchCheckpointOperation,
   recordLastTaskCheckpoint,
 } from "../core/git.ts";
-import type { LLMProvider, Message, ToolCall } from "../llm/types.ts";
+import type {
+  AssistantProviderMetadata,
+  LLMProvider,
+  Message,
+  ToolCall,
+} from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
 import {
@@ -123,11 +128,38 @@ function priorToolCallsFromMessages(messages: readonly Message[]): ToolCall[] {
   );
 }
 
+function providerMetadataFromReasoningContent(
+  reasoningContent: string | null,
+): AssistantProviderMetadata | undefined {
+  if (reasoningContent === null) {
+    return undefined;
+  }
+  return {
+    openaiCompatible: {
+      reasoningContent,
+    },
+  };
+}
+
+function combinedReasoningContent(
+  left: string | null,
+  right: string | null,
+): string | null {
+  if (left === null && right === null) {
+    return null;
+  }
+  return `${left ?? ""}${right ?? ""}`;
+}
+
 function toolRequestMessage(turn: AgentTurn): Message {
+  const providerMetadata = providerMetadataFromReasoningContent(
+    turn.reasoningContent,
+  );
   return {
     role: "assistant",
     content: turn.text,
     toolCalls: turn.toolCalls,
+    ...(providerMetadata !== undefined ? { providerMetadata } : {}),
   };
 }
 
@@ -141,10 +173,20 @@ function scheduledToolCalls(
   }));
 }
 
-function finalReplyMessage(text: string): Message | null {
-  return text === ""
+function finalReplyMessage(
+  text: string,
+  reasoningContent: string | null,
+): Message | null {
+  const providerMetadata =
+    providerMetadataFromReasoningContent(reasoningContent);
+  return text === "" && reasoningContent === null
     ? null
-    : { role: "assistant", content: text, toolCalls: [] };
+    : {
+        role: "assistant",
+        content: text,
+        toolCalls: [],
+        ...(providerMetadata !== undefined ? { providerMetadata } : {}),
+      };
 }
 
 function agentStopReasonFromProvider(reason: AgentTurn["stopReason"]): string {
@@ -162,6 +204,7 @@ interface WrapUpSummarizeOptions {
   readonly state: CompactionState;
   readonly streamOptions: Omit<LedgerTurnOptions, "getLedger" | "setLedger">;
   readonly turnText: string;
+  readonly turnReasoningContent: string | null;
   readonly sessionLedger: SessionLedger;
 }
 
@@ -169,7 +212,10 @@ async function* streamWrapUpSummary(
   options: WrapUpSummarizeOptions,
 ): AsyncGenerator<AgentEvent, AgentTurn> {
   const { config, state, streamOptions, turnText, sessionLedger } = options;
-  const interimReply = finalReplyMessage(turnText);
+  const interimReply = finalReplyMessage(
+    turnText,
+    options.turnReasoningContent,
+  );
   let wrapUpLedger =
     interimReply !== null
       ? appendSessionLedgerMessage(sessionLedger, interimReply)
@@ -265,7 +311,10 @@ export async function* runAgentTurn(
     });
 
     if (decision.type === "stop") {
-      const reply = finalReplyMessage(turnResult.text);
+      const reply = finalReplyMessage(
+        turnResult.text,
+        turnResult.reasoningContent,
+      );
       if (reply !== null) {
         applySessionLedger(appendSessionLedgerMessage(sessionLedger, reply));
       }
@@ -285,6 +334,7 @@ export async function* runAgentTurn(
         state,
         streamOptions: { provider, systemPrompt, signal, allowBash },
         turnText: turnResult.text,
+        turnReasoningContent: turnResult.reasoningContent,
         sessionLedger,
       });
       const summary =
@@ -292,7 +342,13 @@ export async function* runAgentTurn(
       if (wrapUpTurn.text === "") {
         yield { type: "text", text: MISSING_SUMMARY_NOTICE };
       }
-      const combinedReply = finalReplyMessage(`${turnResult.text}${summary}`);
+      const combinedReply = finalReplyMessage(
+        `${turnResult.text}${summary}`,
+        combinedReasoningContent(
+          turnResult.reasoningContent,
+          wrapUpTurn.reasoningContent,
+        ),
+      );
       if (combinedReply !== null) {
         applySessionLedger(
           appendSessionLedgerMessage(sessionLedger, combinedReply),
@@ -318,7 +374,10 @@ export async function* runAgentTurn(
     }
 
     if (turnResult.toolCalls.length === 0) {
-      const reply = finalReplyMessage(turnResult.text);
+      const reply = finalReplyMessage(
+        turnResult.text,
+        turnResult.reasoningContent,
+      );
       if (reply !== null) {
         applySessionLedger(appendSessionLedgerMessage(sessionLedger, reply));
       }

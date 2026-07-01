@@ -466,6 +466,97 @@ describe("Context Compaction Accounting", () => {
     expect(shouldCompact).toBe(false);
   });
 
+  test(`Given assistant reasoning metadata is provider-visible replay content,
+    When proactive compaction estimates the request,
+    Then reasoning metadata contributes to the context budget`, () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Continue." },
+      {
+        role: "assistant",
+        content: "I inspected the file.",
+        providerMetadata: {
+          openaiCompatible: {
+            reasoningContent: "large reasoning ".repeat(200),
+          },
+        },
+        toolCalls: [],
+      },
+    ];
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      messages,
+      {
+        contextWindowTokens: 200,
+        reserveTokens: 0,
+      },
+    );
+
+    // Then
+    expect(shouldCompact).toBe(true);
+  });
+
+  test(`Given cached accounting was captured before assistant reasoning metadata changed,
+    When proactive compaction checks the updated request,
+    Then it ignores the stale cache and re-estimates the reasoning metadata`, () => {
+    // Given
+    const previousMessages: Message[] = [
+      { role: "user", content: "Continue." },
+      {
+        role: "assistant",
+        content: "I inspected the file.",
+        providerMetadata: {
+          openaiCompatible: {
+            reasoningContent: "short reasoning",
+          },
+        },
+        toolCalls: [],
+      },
+    ];
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages: previousMessages,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+    });
+    if (accounting === undefined) {
+      throw new Error("test setup expected accounting");
+    }
+    const updatedMessages: Message[] = [
+      { role: "user", content: "Continue." },
+      {
+        role: "assistant",
+        content: "I inspected the file.",
+        providerMetadata: {
+          openaiCompatible: {
+            reasoningContent: "large reasoning ".repeat(200),
+          },
+        },
+        toolCalls: [],
+      },
+    ];
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      updatedMessages,
+      {
+        contextWindowTokens: 200,
+        reserveTokens: 0,
+      },
+      accounting,
+    );
+
+    // Then
+    expect(shouldCompact).toBe(true);
+  });
+
   test.each([
     {
       label: "user message",
@@ -473,6 +564,7 @@ describe("Context Compaction Accounting", () => {
       mismatchedCache: {
         role: "assistant",
         content: "stale",
+        providerMetadata: null,
         toolCalls: [],
         fingerprint: "stale",
       },
