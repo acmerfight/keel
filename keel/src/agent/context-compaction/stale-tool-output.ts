@@ -146,15 +146,25 @@ function isAlreadyCompactedCurrentToolOutput(
   );
 }
 
-function compactStaleToolOutput(text: string, maxChars: number): string {
+function compactStaleToolOutput(
+  text: string,
+  maxChars: number,
+  artifactMarker?: string,
+): string {
   return `${text.slice(0, maxChars)}\n${staleToolOutputCompactedMarker(
     text.length - maxChars,
+    artifactMarker,
   )}`;
 }
 
-function compactCurrentToolOutput(text: string, maxChars: number): string {
+function compactCurrentToolOutput(
+  text: string,
+  maxChars: number,
+  artifactMarker?: string,
+): string {
   return `${text.slice(0, maxChars)}\n${currentToolOutputCompactedMarker(
     text.length - maxChars,
+    artifactMarker,
   )}`;
 }
 
@@ -406,13 +416,11 @@ export async function compactStaleToolOutputsWithArtifacts(
           omittedChars: message.content.length - toolOutputMaxChars,
           purpose: "stale-compaction",
         });
-        const compactedContent = `${message.content.slice(
-          0,
+        const compactedContent = compactStaleToolOutput(
+          message.content,
           toolOutputMaxChars,
-        )}\n${staleToolOutputCompactedMarker(
-          message.content.length - toolOutputMaxChars,
           artifact.marker,
-        )}`;
+        );
         return {
           message: {
             ...message,
@@ -561,13 +569,11 @@ export async function compactCurrentToolOutputsWithArtifacts(
           omittedChars: message.content.length - toolOutputMaxChars,
           purpose: "current-overflow-compaction",
         });
-        const compactedContent = `${message.content.slice(
-          0,
+        const compactedContent = compactCurrentToolOutput(
+          message.content,
           toolOutputMaxChars,
-        )}\n${currentToolOutputCompactedMarker(
-          message.content.length - toolOutputMaxChars,
           artifact.marker,
-        )}`;
+        );
         return {
           message: {
             ...message,
