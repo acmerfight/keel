@@ -8,6 +8,7 @@ import {
   type ToolOutputArtifactPurpose,
   type ToolOutputArtifactSourceStatus,
   type ToolOutputArtifactStore,
+  type ToolOutputArtifactToolName,
   toolOutputArtifactFailedMarker,
   toolOutputArtifactStoredMarker,
 } from "../tool-output-artifacts.ts";
@@ -211,7 +212,7 @@ function sourceStatusForCompaction(
 function toolNameForToolOutput(
   messages: readonly Message[],
   toolCallId: string,
-): string {
+): ToolOutputArtifactToolName {
   for (const message of messages) {
     if (message.role !== "assistant") {
       continue;
@@ -232,7 +233,7 @@ async function artifactMarkerForCompactedToolOutput(options: {
   readonly store: ToolOutputArtifactStore;
   readonly message: Extract<Message, { readonly role: "tool" }>;
   readonly toolCallId: string;
-  readonly toolName: string;
+  readonly toolName: ToolOutputArtifactToolName;
   readonly content: string;
   readonly omittedChars: number;
   readonly purpose: ToolOutputArtifactPurpose;

@@ -7,11 +7,14 @@ export const TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY =
   "model recovery: rerun the tool with narrower parameters if needed";
 
 export type ToolOutputArtifactSourceStatus = "complete" | "source-truncated";
+export type ToolOutputArtifactToolName = ToolCall["tool"] | "unknown";
 
 export function sourceStatusFromToolOutputText(
   content: string,
 ): ToolOutputArtifactSourceStatus {
-  // Mirrors current tool truncation markers from bash, git_diff, read, glob, ls, and grep.
+  // Current-schema fallback for tool messages without structured sourceTruncated
+  // metadata. Keep in sync with active truncation markers; this is not a
+  // legacy-format reader.
   return content.includes("source-truncated/lossy") ||
     content.includes(" output truncated:") ||
     content.includes("[bash stdout truncated:") ||
@@ -41,7 +44,7 @@ export type ToolOutputArtifactPurpose =
 
 export interface ToolOutputArtifactSaveInput {
   readonly toolCallId: string;
-  readonly toolName: ToolCall["tool"] | string;
+  readonly toolName: ToolOutputArtifactToolName;
   readonly content: string;
   readonly sourceStatus: ToolOutputArtifactSourceStatus;
   readonly purpose: ToolOutputArtifactPurpose;
@@ -97,7 +100,7 @@ export type ToolOutputArtifactNotice =
       readonly status: "stored";
       readonly ref: string;
       readonly toolCallId: string;
-      readonly toolName: string;
+      readonly toolName: ToolOutputArtifactToolName;
       readonly sourceStatus: ToolOutputArtifactSourceStatus;
       readonly omittedChars: number;
     }
@@ -105,7 +108,7 @@ export type ToolOutputArtifactNotice =
       readonly status: "failed";
       readonly reason: string;
       readonly toolCallId: string;
-      readonly toolName: string;
+      readonly toolName: ToolOutputArtifactToolName;
       readonly omittedChars: number;
     };
 
@@ -201,7 +204,7 @@ export async function settleOversizedToolOutput(options: {
   readonly store: ToolOutputArtifactStore;
   readonly maxInlineChars: number;
   readonly toolCallId: string;
-  readonly toolName: ToolCall["tool"] | string;
+  readonly toolName: ToolOutputArtifactToolName;
   readonly content: string;
   readonly sourceStatus: ToolOutputArtifactSourceStatus;
   readonly purpose: ToolOutputArtifactPurpose;

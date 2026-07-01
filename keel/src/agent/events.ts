@@ -1,6 +1,9 @@
 import type { ToolCall, Usage } from "../llm/types.ts";
 import type { ContextCompactionStats } from "./context-compaction.ts";
-import type { ToolOutputArtifactSourceStatus } from "./tool-output-artifacts.ts";
+import type {
+  ToolOutputArtifactSourceStatus,
+  ToolOutputArtifactToolName,
+} from "./tool-output-artifacts.ts";
 
 export interface CostReport {
   readonly spentUsd: number;
@@ -38,7 +41,7 @@ export type AgentEvent =
       readonly status: "stored";
       readonly ref: string;
       readonly toolCallId: string;
-      readonly toolName: string;
+      readonly toolName: ToolOutputArtifactToolName;
       readonly sourceStatus: ToolOutputArtifactSourceStatus;
       readonly omittedChars: number;
     }
@@ -47,7 +50,7 @@ export type AgentEvent =
       readonly status: "failed";
       readonly reason: string;
       readonly toolCallId: string;
-      readonly toolName: string;
+      readonly toolName: ToolOutputArtifactToolName;
       readonly omittedChars: number;
     }
   | {
