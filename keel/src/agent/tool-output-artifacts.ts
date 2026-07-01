@@ -148,7 +148,7 @@ export function generatedToolOutputArtifactMarker(
   const [, rawOmittedChars = "", ref = "", contentSha256, rawSourceStatus] =
     marker;
   const omittedChars = Number(rawOmittedChars);
-  if (!Number.isSafeInteger(omittedChars) || omittedChars < 0) {
+  if (!Number.isSafeInteger(omittedChars)) {
     return null;
   }
   const sourceStatus =

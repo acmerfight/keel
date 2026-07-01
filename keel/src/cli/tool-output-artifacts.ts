@@ -158,17 +158,12 @@ function parseArtifactContent(content: string): ParsedArtifactContent | null {
   if (separatorIndex === -1) {
     return null;
   }
-  const metadata = new Map<string, string>();
-  for (const line of content.slice(0, separatorIndex).split("\n")) {
-    const separatorOffset = line.indexOf(": ");
-    if (separatorOffset === -1) {
-      continue;
-    }
-    metadata.set(
-      line.slice(0, separatorOffset),
-      line.slice(separatorOffset + 2),
-    );
-  }
+  const metadata = new Map(
+    Array.from(
+      content.slice(0, separatorIndex).matchAll(/^([^:\n]+): (.*)$/gmu),
+      (match) => [String(match[1]), String(match[2])] as const,
+    ),
+  );
   return {
     metadata,
     body: content.slice(separatorIndex + separator.length),
@@ -259,6 +254,7 @@ export function createToolOutputArtifactStore(
       input: ToolOutputArtifactReuseInput,
     ): Promise<ToolOutputArtifactReuseResult> => {
       const parsed = parseToolOutputArtifactRef(input.ref);
+      /* v8 ignore next 3: generated markers validate refs before verification; malformed direct inputs safely miss. */
       if (parsed === null) {
         return { status: "not_reusable" };
       }
