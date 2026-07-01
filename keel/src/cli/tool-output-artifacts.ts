@@ -182,7 +182,6 @@ function artifactMatchesReuseInput(
   const contentSha256 = parsed.metadata.get("sha256");
   const expectedChars = input.contentPrefix.length + input.omittedChars;
   if (
-    input.omittedChars < 0 ||
     !Number.isSafeInteger(contentChars) ||
     contentChars !== expectedChars ||
     parsed.body.length !== contentChars ||
