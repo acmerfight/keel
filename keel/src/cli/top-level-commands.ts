@@ -2,6 +2,7 @@ import { listUndoCheckpoints, restoreLastEditCheckpoint } from "../core/git.ts";
 import type { CliArgs } from "./args.ts";
 import { formatUndoCheckpointList } from "./output.ts";
 import type { CliRuntime } from "./runtime.ts";
+import { showToolOutputArtifact } from "./tool-output-artifacts.ts";
 import {
   formatWorkflowSkillList,
   formatWorkflowSkillListWarnings,
@@ -118,7 +119,6 @@ export async function runArtifactsCommand(
   cliArgs: ArtifactsCliArgs,
   runtime: CliRuntime,
 ): Promise<number> {
-  const { showToolOutputArtifact } = await import("./tool-output-artifacts.ts");
   const result = await showToolOutputArtifact({
     runtime,
     ref: cliArgs.ref,

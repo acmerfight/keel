@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +37,24 @@ function firstArtifactRef(text: string): string {
     throw new Error(`No artifact ref found in:\n${text}`);
   }
   return ref;
+}
+
+function artifactPaths(
+  home: string,
+  ref: string,
+): {
+  readonly directory: string;
+  readonly file: string;
+} {
+  const match = /^tool-output:([^/]+)\/([^/]+)$/u.exec(ref);
+  if (match === null || match[1] === undefined || match[2] === undefined) {
+    throw new Error(`Invalid artifact ref in test: ${ref}`);
+  }
+  const directory = join(home, "artifacts", "tool-output", match[1]);
+  return {
+    directory,
+    file: join(directory, `${match[2]}.txt`),
+  };
 }
 
 function oversizedReadFixture(options: {
@@ -541,10 +559,11 @@ describe("CLI Tool Output Artifacts", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-artifacts-"));
     const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const rawSecretPastPreview = "API_KEY=sk-artifact-secret-213";
     const largeOutput = oversizedReadFixture({
       start: "FULL_READ_START",
       fill: "x",
-      end: "FULL_READ_END",
+      end: ["FULL_READ_END", rawSecretPastPreview].join("\n"),
     });
     await writeFile(join(workspace, "large.log"), largeOutput, "utf8");
     const capturedBodies: unknown[] = [];
@@ -588,6 +607,7 @@ describe("CLI Tool Output Artifacts", () => {
         const visibleToModel =
           toolMessage?.content?.includes("FULL_READ_START") === true &&
           toolMessage.content.includes("FULL_READ_END") === false &&
+          toolMessage.content.includes(rawSecretPastPreview) === false &&
           toolMessage.content.includes("keel artifacts show") === true;
         res.end(
           sseTextReplyWithUsage(
@@ -634,6 +654,11 @@ describe("CLI Tool Output Artifacts", () => {
       );
       expect(shown.stdout).toContain("FULL_READ_START");
       expect(shown.stdout).toContain("FULL_READ_END");
+      expect(shown.stdout).toContain(rawSecretPastPreview);
+      expect(shown.stdout).not.toContain("[REDACTED_SECRET]");
+      const paths = artifactPaths(home, ref);
+      expect((await stat(paths.directory)).mode & 0o777).toBe(0o700);
+      expect((await stat(paths.file)).mode & 0o777).toBe(0o600);
       expect(await readdir(workspace)).toEqual(["large.log"]);
     } finally {
       await close(server);
