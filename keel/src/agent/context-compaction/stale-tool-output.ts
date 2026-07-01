@@ -2,6 +2,7 @@ import type { Message } from "../../llm/types.ts";
 import {
   generatedToolOutputArtifactMarker,
   isGeneratedSettledToolOutput,
+  TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY,
   type ToolOutputArtifactNotice,
   type ToolOutputArtifactPurpose,
   type ToolOutputArtifactSourceStatus,
@@ -111,7 +112,12 @@ function currentToolOutputCompactedMarker(
   artifactMarker?: string,
 ): string {
   if (artifactMarker !== undefined) {
-    return `${CURRENT_TOOL_OUTPUT_COMPACTED_PREFIX}${omittedChars} chars; ${artifactMarker}; model recovery: rerun the tool with narrower parameters if needed]`;
+    const markerWithRecovery = artifactMarker.includes(
+      TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY,
+    )
+      ? artifactMarker
+      : `${artifactMarker}; ${TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY}`;
+    return `${CURRENT_TOOL_OUTPUT_COMPACTED_PREFIX}${omittedChars} chars; ${markerWithRecovery}]`;
   }
   return `${CURRENT_TOOL_OUTPUT_COMPACTED_PREFIX}${omittedChars}${CURRENT_TOOL_OUTPUT_COMPACTED_SUFFIX}`;
 }

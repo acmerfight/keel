@@ -331,6 +331,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     expect(retriedToolOutput).toContain(
       "model recovery: rerun the tool with narrower parameters if needed",
     );
+    expect(retriedToolOutput.match(/model recovery:/gu)).toHaveLength(1);
     expect(retriedToolOutput).not.toContain("CURRENT_END");
     expect(onlyContextCompactedEvent(events)).toMatchObject({
       reason: "overflow_recovery",

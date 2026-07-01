@@ -608,7 +608,10 @@ describe("CLI Tool Output Artifacts", () => {
           toolMessage?.content?.includes("FULL_READ_START") === true &&
           toolMessage.content.includes("FULL_READ_END") === false &&
           toolMessage.content.includes(rawSecretPastPreview) === false &&
-          toolMessage.content.includes("keel artifacts show") === true;
+          toolMessage.content.includes("keel artifacts show") === true &&
+          toolMessage.content.includes(
+            "model recovery: rerun the tool with narrower parameters if needed",
+          ) === true;
         res.end(
           sseTextReplyWithUsage(
             visibleToModel

@@ -3,6 +3,8 @@ import type { ToolCall } from "../llm/types.ts";
 export const DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_INLINE_CHARS = 50_000;
 export const DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_AGGREGATE_INLINE_CHARS = 200_000;
 export const DEFAULT_TOOL_OUTPUT_ARTIFACT_AGGREGATE_PREVIEW_CHARS = 10_000;
+export const TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY =
+  "model recovery: rerun the tool with narrower parameters if needed";
 
 export type ToolOutputArtifactSourceStatus = "complete" | "source-truncated";
 
@@ -135,7 +137,7 @@ export function toolOutputArtifactStoredMarker(
       : "source status: source-truncated/lossy before artifact capture";
   const sha256Text =
     contentSha256 === undefined ? "" : `; sha256: ${contentSha256}`;
-  return `full output artifact: ${ref}; inspect with: keel artifacts show ${ref}${sha256Text}; ${sourceStatusText}`;
+  return `full output artifact: ${ref}; inspect with: keel artifacts show ${ref}${sha256Text}; ${sourceStatusText}; ${TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY}`;
 }
 
 export function generatedToolOutputArtifactMarker(
