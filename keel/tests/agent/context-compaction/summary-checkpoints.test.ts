@@ -789,6 +789,304 @@ describe("Context Compaction Summary Checkpoints", () => {
     expect(summaryPrompt).not.toContain("abcdefghijklmnopqrstuvwxyz".repeat(2));
   });
 
+  test(`Given summarized history contains an unmatched large tool output,
+    When compaction asks for a summary,
+    Then the summary prompt falls back to a bounded generic preview`, async () => {
+    // Given
+    const unmatchedOutput = [
+      "UNMATCHED_TOOL_PREFIX",
+      ...Array.from(
+        { length: 20 },
+        (_, index) =>
+          `unmatched output ${String(index + 1).padStart(3, "0")} ${"x".repeat(
+            20,
+          )}`,
+      ),
+      "UNMATCHED_TOOL_TAIL_SHOULD_NOT_APPEAR",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Inspect the unmatched tool output." },
+      {
+        role: "tool",
+        toolCallId: "missing_summary_tool_call",
+        content: unmatchedOutput,
+      },
+      {
+        role: "assistant",
+        content: "I inspected the output.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue." },
+    ];
+    let summaryPrompt = "";
+    const provider: LLMProvider = {
+      id: "summary-unmatched-tool-provider",
+      async *stream(options) {
+        summaryPrompt = options.messages[0]?.content ?? "";
+        yield { type: "text", text: "Unmatched tool context summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 1,
+        toolOutputMaxChars: 96,
+      },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    expect(summaryPrompt).toContain('tool_call_id="missing_summary_tool_call"');
+    expect(summaryPrompt).toContain("UNMATCHED_TOOL_PREFIX");
+    expect(summaryPrompt).toContain("[truncated ");
+    expect(summaryPrompt).toContain("from summary input preview");
+    expect(summaryPrompt).not.toContain(
+      "UNMATCHED_TOOL_TAIL_SHOULD_NOT_APPEAR",
+    );
+  });
+
+  test(`Given summarized history contains a large git diff tool output,
+    When compaction asks for a summary,
+    Then the summary prompt uses a structured tool-aware preview without artifact wording`, async () => {
+    // Given
+    const diffOutput = [
+      "Unstaged changes:",
+      "diff --git a/src/alpha.ts b/src/alpha.ts",
+      "index 0000000..1111111 100644",
+      "--- a/src/alpha.ts",
+      "+++ b/src/alpha.ts",
+      "@@ -1,2 +1,2 @@",
+      "-alpha old value",
+      "+alpha new value",
+      "diff --git a/src/beta.ts b/src/beta.ts",
+      "index 2222222..3333333 100644",
+      "--- a/src/beta.ts",
+      "+++ b/src/beta.ts",
+      "@@ -4,2 +4,2 @@",
+      "-beta old value",
+      "+beta new value",
+      ...Array.from(
+        { length: 20 },
+        (_, index) => `diff context ${String(index + 1).padStart(3, "0")}`,
+      ),
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Review the diff." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "git_diff_summary",
+            tool: "git_diff",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "git_diff_summary",
+        content: diffOutput,
+      },
+      {
+        role: "assistant",
+        content: "I reviewed the diff.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue." },
+    ];
+    let summaryPrompt = "";
+    const provider: LLMProvider = {
+      id: "summary-git-diff-preview-provider",
+      async *stream(options) {
+        summaryPrompt = options.messages[0]?.content ?? "";
+        yield { type: "text", text: "Diff context summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 1,
+        toolOutputMaxChars: 430,
+      },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    expect(summaryPrompt).toContain('tool_call_id="git_diff_summary"');
+    expect(summaryPrompt).toContain("git_diff source: all changes");
+    expect(summaryPrompt).toContain(
+      "git_diff summary input preview: 2 files, 2 hunks, +2/-2; full output omitted from summary input",
+    );
+    expect(summaryPrompt).toContain("Files:");
+    expect(summaryPrompt).toContain("- src/alpha.ts: modified, 1 hunk, +1/-1");
+    expect(summaryPrompt).toContain("- src/beta.ts: modified, 1 hunk, +1/-1");
+    expect(summaryPrompt).not.toContain("diff --git a/src/alpha.ts");
+    expect(summaryPrompt).not.toContain(
+      "full output artifact is referenced below",
+    );
+  });
+
+  test(`Given summarized history contains a large bash output,
+    When compaction asks for a summary,
+    Then the summary prompt uses the stream-aware bash preview`, async () => {
+    // Given
+    const bashOutput = [
+      "Exit code: 1",
+      "",
+      "stdout:",
+      ...Array.from(
+        { length: 20 },
+        (_, index) =>
+          `setup output ${String(index + 1).padStart(3, "0")} ${"x".repeat(
+            20,
+          )}`,
+      ),
+      "MIDDLE_ONLY_FAILURE: hidden in omitted stdout",
+      "",
+      "stderr:",
+      "tail summary: test command failed",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Run tests." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "bash_summary",
+            tool: "bash",
+            command: "pnpm test",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "bash_summary",
+        content: bashOutput,
+      },
+      {
+        role: "assistant",
+        content: "The tests failed.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue." },
+    ];
+    let summaryPrompt = "";
+    const provider: LLMProvider = {
+      id: "summary-bash-preview-provider",
+      async *stream(options) {
+        summaryPrompt = options.messages[0]?.content ?? "";
+        yield { type: "text", text: "Bash context summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 1,
+        toolOutputMaxChars: 220,
+      },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    expect(summaryPrompt).toContain("bash command: pnpm test");
+    expect(summaryPrompt).toContain("Exit code: 1");
+    expect(summaryPrompt).toContain("stdout: 21 lines");
+    expect(summaryPrompt).toContain("stderr: 1 line");
+    expect(summaryPrompt).toContain("stderr tail:");
+    expect(summaryPrompt).toContain("tail summary: test command failed");
+    expect(summaryPrompt).toContain("... omitted from stdout preview:");
+    expect(summaryPrompt).not.toContain("MIDDLE_ONLY_FAILURE");
+  });
+
+  test(`Given summarized history contains a git diff hunk too large for summary input,
+    When compaction asks for a summary,
+    Then the hunk omission marker does not tell the model to inspect an artifact`, async () => {
+    // Given
+    const oldLine = `-SUMMARY_OLD_VALUE ${"o".repeat(180)}`;
+    const newLine = `+SUMMARY_NEW_VALUE ${"n".repeat(180)}`;
+    const messages: Message[] = [
+      { role: "user", content: "Review the large hunk." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "git_diff_summary_omitted_hunk",
+            tool: "git_diff",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "git_diff_summary_omitted_hunk",
+        content: [
+          "diff --git a/src/large-hunk.ts b/src/large-hunk.ts",
+          "index 0000000..1111111 100644",
+          "--- a/src/large-hunk.ts",
+          "+++ b/src/large-hunk.ts",
+          "@@ -1,1 +1,1 @@",
+          oldLine,
+          newLine,
+        ].join("\n"),
+      },
+      {
+        role: "assistant",
+        content: "I saw the large hunk.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue." },
+    ];
+    let summaryPrompt = "";
+    const provider: LLMProvider = {
+      id: "summary-git-diff-omitted-hunk-provider",
+      async *stream(options) {
+        summaryPrompt = options.messages[0]?.content ?? "";
+        yield { type: "text", text: "Large hunk summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 1,
+        toolOutputMaxChars: 330,
+      },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    expect(summaryPrompt).toContain(
+      "Snippet omitted: src/large-hunk.ts @@ -1,1 +1,1 @@ replacement hunk omitted from preview; +1/-1; full old/new lines omitted from summary input",
+    );
+    expect(summaryPrompt).not.toContain("inspect artifact");
+    expect(summaryPrompt).not.toContain(oldLine);
+    expect(summaryPrompt).not.toContain(newLine);
+  });
+
   test(`Given the summary input budget is too small for even one message,
     When compaction asks for a summary,
     Then the summary prompt records that older messages were omitted`, async () => {
