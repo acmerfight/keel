@@ -15,6 +15,7 @@ import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { CostModel } from "../../../src/core/cost.ts";
 import { createDeepseekProvider } from "../../../src/llm/providers/deepseek.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
   ForcedExit,
   withTimeout,
@@ -383,6 +384,130 @@ describe("Interactive Session - Manual Compact Success", () => {
     expect(stderr).toContain(
       "Tool output artifact: tool-output:test/1 (keel artifacts show tool-output:test/1)",
     );
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given manual compaction summarizes artifact-backed tool output,
+    When user enters /compact,
+    Then the next prompt sees a checkpoint with the evidence handle`, async () => {
+    // Given
+    const artifactRef = "tool-output:manual/report";
+    const previewContent = "manual report line\n".repeat(120).trimEnd();
+    const artifact = verifiedToolOutputArtifactFixture({
+      ref: artifactRef,
+      toolCallId: "read_manual_report",
+      previewContent,
+      omittedChars: 90_000,
+      sourceStatus: "source-truncated",
+    });
+    const initialMessages: readonly Message[] = [
+      { role: "user", content: "Read the manual report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_manual_report",
+            tool: "read",
+            path: "manual-report.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_manual_report",
+        content: `${previewContent}\n${artifact.marker}`,
+      },
+      {
+        role: "assistant",
+        content: "The manual report was inspected.",
+        toolCalls: [],
+      },
+    ];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield {
+            type: "text",
+            text: "Manual summary that omits the artifact ref.",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        const context = JSON.stringify(options.messages);
+        const evidenceSurvived =
+          context.includes(artifactRef) &&
+          context.includes(`inspect: keel artifacts show ${artifactRef}`) &&
+          context.includes("source-truncated/lossy");
+        yield {
+          type: "text",
+          text: evidenceSurvived
+            ? "Manual evidence survived."
+            : "Manual evidence missing.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialMessages,
+      toolOutputArtifacts: { store: artifact.store },
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: {
+          keepRecentTokens: 1,
+          toolOutputMaxChars: 128,
+        },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("/compact\nsecond prompt\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe("Manual evidence survived.\n");
+    expect(stderr).toContain("Context compacted: manual");
     expect(sigintHandlers.size).toBe(0);
   });
 

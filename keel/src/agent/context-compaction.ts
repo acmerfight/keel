@@ -192,6 +192,9 @@ export async function compactMessages(
     messagesToSummarize: plan.messagesToSummarize,
     signal: options.signal,
     contextCompaction: resolved,
+    ...(options.toolOutputArtifacts !== undefined
+      ? { toolOutputArtifacts: options.toolOutputArtifacts }
+      : {}),
     ...(options.focusInstruction !== undefined
       ? { focusInstruction: options.focusInstruction }
       : {}),
@@ -202,6 +205,7 @@ export async function compactMessages(
     summaryTurn.text,
     resolved,
     options.toolOutputArtifacts,
+    summaryTurn.summaryInputMaxChars,
   );
   const currentToolOutputCompaction =
     options.allowCurrentToolOutputCompaction === true

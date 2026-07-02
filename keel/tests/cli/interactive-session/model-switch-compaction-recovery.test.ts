@@ -13,6 +13,7 @@ import { executeModelSwitchCompaction } from "../../../src/cli/interactive-sessi
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
   ForcedExit,
   resolvedProvider,
@@ -487,6 +488,154 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     expect(stderr).toContain(
       "Tool output artifact: tool-output:test/1 (keel artifacts show tool-output:test/1)",
     );
+  });
+
+  test(`Given model-switch compaction summarizes artifact-backed tool output,
+    When user switches model and continues,
+    Then the target model response is based on the retained evidence handle`, async () => {
+    // Given
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    const artifactRef = "tool-output:model-switch/report";
+    const previewContent = "model switch report line\n".repeat(300).trimEnd();
+    const artifact = verifiedToolOutputArtifactFixture({
+      ref: artifactRef,
+      toolCallId: "read_model_switch_report",
+      previewContent,
+      omittedChars: 90_000,
+      sourceStatus: "complete",
+    });
+    const initialMessages: readonly Message[] = [
+      { role: "user", content: "Read the old report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_model_switch_report",
+            tool: "read",
+            path: "model-switch-report.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_model_switch_report",
+        content: `${previewContent}\n${artifact.marker}`,
+      },
+      {
+        role: "assistant",
+        content: "The model switch report was inspected.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue later." },
+    ];
+    let stdout = "";
+    let stderr = "";
+    let currentSummaryRequests = 0;
+    let targetTurns = 0;
+    const currentProvider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        expect(options.toolChoice).toBe("none");
+        currentSummaryRequests++;
+        yield {
+          type: "text",
+          text: "Model switch summary that omits the artifact ref.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const targetProvider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "unexpected target summary" };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        targetTurns++;
+        const context = JSON.stringify(options.messages);
+        const evidenceSurvived =
+          context.includes("<conversation-checkpoint>") &&
+          context.includes("Evidence retained:") &&
+          context.includes(artifactRef) &&
+          context.includes(`inspect: keel artifacts show ${artifactRef}`);
+        yield {
+          type: "text",
+          text: evidenceSurvived
+            ? "Target evidence survived."
+            : "Target evidence missing.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialMessages,
+      toolOutputArtifacts: { store: artifact.store },
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) => {
+        if (selection?.providerId === "qwen") {
+          return resolvedProvider(
+            "qwen",
+            selection.model ?? "tiny",
+            targetProvider,
+            ZERO_COST_MODEL,
+            {
+              contextWindowTokens: 1_000,
+              reserveTokens: 0,
+              keepRecentTokens: 1,
+              toolOutputMaxChars: 128,
+            },
+          );
+        }
+        return resolvedProvider("fake", "fake", currentProvider);
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("/model qwen/tiny\ncontinue on target\n");
+
+    // Then
+    await session;
+    expect(stderr).toContain("Context compacted: model switch");
+    expect(stdout).toContain("Model switched to qwen/tiny");
+    expect(stdout).toContain("Target evidence survived.");
+    expect(currentSummaryRequests).toBe(1);
+    expect(targetTurns).toBe(1);
+    expect(sigintHandlers.size).toBe(0);
   });
 
   test(`Given model-switch compaction is aborted while restoring reads,
