@@ -2,12 +2,22 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { loadProjectInstructions } from "../../src/cli/project-instructions.ts";
+import { runCliMain } from "../../src/cli/index.ts";
+import { createRuntime } from "../../src/testing/cli-runtime-fixtures.ts";
+
+async function runOneShot(workspace: string) {
+  const fixture = createRuntime(["hello"], {
+    cwd: workspace,
+    env: { KEEL_PROVIDER: "fake" },
+  });
+  const exitCode = await runCliMain(fixture.runtime);
+  return { exitCode, stdout: fixture.stdout(), stderr: fixture.stderr() };
+}
 
 describe("Project Instructions", () => {
   test(`Given root AGENTS is a symlink escaping the workspace,
-    When project instructions are loaded,
-    Then the outside file is rejected before any content can be injected`, async () => {
+    When the user starts a one-shot run,
+    Then startup rejects the outside file before provider output is printed`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agents-workspace-"));
     const outside = await mkdtemp(join(tmpdir(), "keel-agents-outside-"));
@@ -15,10 +25,15 @@ describe("Project Instructions", () => {
     await symlink(join(outside, "secret.txt"), join(workspace, "AGENTS.md"));
 
     try {
-      // When / Then
-      expect(() => loadProjectInstructions(workspace)).toThrow(
-        /outside the workspace/i,
-      );
+      // When
+      const result = await runOneShot(workspace);
+
+      // Then
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("cannot load AGENTS.md");
+      expect(result.stderr).toContain("outside the workspace");
+      expect(result.stderr).not.toContain("SECRET_OUTSIDE_WORKSPACE");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(outside, { recursive: true, force: true });
@@ -26,8 +41,8 @@ describe("Project Instructions", () => {
   });
 
   test(`Given root AGENTS is a symlink to an ignored workspace file,
-    When project instructions are loaded,
-    Then the ignored file is rejected before any content can be injected`, async () => {
+    When the user starts a one-shot run,
+    Then startup rejects the ignored file before provider output is printed`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-ignored-agents-"));
     await writeFile(join(workspace, ".gitignore"), "secret.env\n", "utf8");
@@ -35,123 +50,121 @@ describe("Project Instructions", () => {
     await symlink(join(workspace, "secret.env"), join(workspace, "AGENTS.md"));
 
     try {
-      // When / Then
-      expect(() => loadProjectInstructions(workspace)).toThrow(/ignored path/i);
+      // When
+      const result = await runOneShot(workspace);
+
+      // Then
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("cannot load AGENTS.md");
+      expect(result.stderr).toContain("ignored path");
+      expect(result.stderr).not.toContain("SECRET_FROM_GITIGNORE");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
   });
 
-  test(`Given root AGENTS is a dangling symlink,
-    When project instructions are loaded,
-    Then startup reports the broken project instructions path`, async () => {
+  test.each([
+    {
+      name: "a dangling symlink",
+      prefix: "keel-dangling-agents-",
+      setup: async (workspace: string) => {
+        await symlink(
+          join(workspace, "missing.md"),
+          join(workspace, "AGENTS.md"),
+        );
+      },
+      expected: "cannot load AGENTS.md",
+    },
+    {
+      name: "a symlink loop",
+      prefix: "keel-loop-agents-",
+      setup: async (workspace: string) => {
+        await symlink("AGENTS.md", join(workspace, "AGENTS.md"));
+      },
+      expected: "cannot load AGENTS.md",
+    },
+    {
+      name: "too large",
+      prefix: "keel-large-agents-",
+      setup: async (workspace: string) => {
+        await writeFile(
+          join(workspace, "AGENTS.md"),
+          "x".repeat(50 * 1024 + 1),
+        );
+      },
+      expected: "too large",
+    },
+    {
+      name: "binary data",
+      prefix: "keel-binary-agents-",
+      setup: async (workspace: string) => {
+        await writeFile(
+          join(workspace, "AGENTS.md"),
+          Buffer.from([0x00, 0x01, 0x02, 0x03]),
+        );
+      },
+      expected: "binary or not valid UTF-8",
+    },
+    {
+      name: "a directory",
+      prefix: "keel-directory-agents-",
+      setup: async (workspace: string) => {
+        await mkdir(join(workspace, "AGENTS.md"));
+      },
+      expected: "regular file",
+    },
+    {
+      name: "invalid UTF-8 text",
+      prefix: "keel-invalid-agents-",
+      setup: async (workspace: string) => {
+        await writeFile(
+          join(workspace, "AGENTS.md"),
+          Buffer.from([0xc3, 0x28]),
+        );
+      },
+      expected: "binary or not valid UTF-8",
+    },
+  ])(`Given root AGENTS is $name,
+    When the user starts a one-shot run,
+    Then startup reports the project instructions error before provider output is printed`, async ({
+    prefix,
+    setup,
+    expected,
+  }) => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-dangling-agents-"));
-    await symlink(join(workspace, "missing.md"), join(workspace, "AGENTS.md"));
+    const workspace = await mkdtemp(join(tmpdir(), prefix));
+    await setup(workspace);
 
     try {
-      // When / Then
-      expect(() => loadProjectInstructions(workspace)).toThrow(
-        /cannot load AGENTS\.md/i,
-      );
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+      // When
+      const result = await runOneShot(workspace);
 
-  test(`Given root AGENTS is a symlink loop,
-    When project instructions are loaded,
-    Then startup reports the broken project instructions path`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-loop-agents-"));
-    await symlink("AGENTS.md", join(workspace, "AGENTS.md"));
-
-    try {
-      // When / Then
-      expect(() => loadProjectInstructions(workspace)).toThrow(
-        /cannot load AGENTS\.md/i,
-      );
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given root AGENTS is too large for automatic prompt injection,
-    When project instructions are loaded,
-    Then startup rejects the file instead of reading it into context`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-large-agents-"));
-    await writeFile(join(workspace, "AGENTS.md"), "x".repeat(50 * 1024 + 1));
-
-    try {
-      // When / Then
-      expect(() => loadProjectInstructions(workspace)).toThrow(/too large/i);
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given root AGENTS is binary data,
-    When project instructions are loaded,
-    Then startup rejects it instead of sending binary content to the provider`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-binary-agents-"));
-    await writeFile(
-      join(workspace, "AGENTS.md"),
-      Buffer.from([0x00, 0x01, 0x02, 0x03]),
-    );
-
-    try {
-      // When / Then
-      expect(() => loadProjectInstructions(workspace)).toThrow(/binary/i);
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given root AGENTS is a directory,
-    When project instructions are loaded,
-    Then startup rejects it as non-file project guidance`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-directory-agents-"));
-    await mkdir(join(workspace, "AGENTS.md"));
-
-    try {
-      // When / Then
-      expect(() => loadProjectInstructions(workspace)).toThrow(/regular file/i);
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given root AGENTS is not valid UTF-8 text,
-    When project instructions are loaded,
-    Then startup rejects it instead of sending corrupted text to the provider`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-invalid-agents-"));
-    await writeFile(join(workspace, "AGENTS.md"), Buffer.from([0xc3, 0x28]));
-
-    try {
-      // When / Then
-      expect(() => loadProjectInstructions(workspace)).toThrow(/UTF-8/i);
+      // Then
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(expected);
+      expect(result.stderr).not.toContain("Hello from fake provider");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
   });
 
   test(`Given root AGENTS instructions are empty,
-    When project instructions are loaded,
-    Then the workspace has no project guidance to inject`, async () => {
+    When the user starts a one-shot run,
+    Then the empty file is ignored and the provider reply is printed`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-empty-agents-"));
     await writeFile(join(workspace, "AGENTS.md"), "\n\n", "utf8");
 
     try {
       // When
-      const projectInstructions = loadProjectInstructions(workspace);
+      const result = await runOneShot(workspace);
 
       // Then
-      expect(projectInstructions).toBeUndefined();
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Hello from fake provider.\n");
+      expect(result.stderr).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
