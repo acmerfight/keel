@@ -3,10 +3,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import {
-  formatPatchCoverageReport,
-  runPatchCoverageCheck,
-} from "../../src/core/coverage-patch.ts";
 import { runGit } from "../../src/testing/cli-harness.ts";
 
 const COVERAGE_PATCH_SCRIPT = join(process.cwd(), "scripts/coverage-patch.ts");
@@ -35,20 +31,6 @@ function runCoveragePatch(
       },
     );
   });
-}
-
-function checkPatchCoverage(workspace: string): CommandResult {
-  const report = runPatchCoverageCheck({
-    cwd: workspace,
-    compareBranch: "origin/main",
-    coveragePath: "coverage/lcov.info",
-    failUnder: 100,
-  });
-  return {
-    stdout: formatPatchCoverageReport(report),
-    stderr: "",
-    exitCode: report.passed ? 0 : 1,
-  };
 }
 
 async function createPatchCoverageWorkspace(
@@ -156,7 +138,7 @@ end_of_record
 
     try {
       // When
-      const result = checkPatchCoverage(workspace);
+      const result = await runCoveragePatch(workspace);
 
       // Then
       expect(result.exitCode).toBe(1);
@@ -171,9 +153,8 @@ end_of_record
     When patch coverage is checked,
     Then the command reports the partial branch and fails`, async () => {
     // Given
-    const workspace = await createPatchCoverageWorkspace(
-      (workspace) => `TN:
-SF:${join(workspace, "src", "feature.ts")}
+    const workspace = await createPatchCoverageWorkspace(`TN:
+SF:src/feature.ts
 DA:1,1
 DA:3,1
 DA:4,1
@@ -181,12 +162,11 @@ DA:5,1
 BRDA:2,0,0,1
 BRDA:2,0,1,-
 end_of_record
-`,
-    );
+`);
 
     try {
       // When
-      const result = checkPatchCoverage(workspace);
+      const result = await runCoveragePatch(workspace);
 
       // Then
       expect(result.exitCode).toBe(1);
@@ -218,7 +198,7 @@ end_of_record
 
     try {
       // When
-      const result = checkPatchCoverage(workspace);
+      const result = await runCoveragePatch(workspace);
 
       // Then
       expect(result.exitCode).toBe(0);
@@ -241,7 +221,7 @@ end_of_record
 
     try {
       // When
-      const result = checkPatchCoverage(workspace);
+      const result = await runCoveragePatch(workspace);
 
       // Then
       expect(result.exitCode).toBe(0);
@@ -266,7 +246,7 @@ end_of_record
 
     try {
       // When
-      const result = checkPatchCoverage(workspace);
+      const result = await runCoveragePatch(workspace);
 
       // Then
       expect(result.exitCode).toBe(0);
@@ -290,7 +270,7 @@ end_of_record
 
     try {
       // When
-      const result = checkPatchCoverage(workspace);
+      const result = await runCoveragePatch(workspace);
 
       // Then
       expect(result.exitCode).toBe(0);
@@ -312,7 +292,7 @@ end_of_record
 
     try {
       // When
-      const result = checkPatchCoverage(workspace);
+      const result = await runCoveragePatch(workspace);
 
       // Then
       expect(result.exitCode).toBe(1);
@@ -350,7 +330,7 @@ end_of_record
 
     try {
       // When
-      const result = checkPatchCoverage(workspace);
+      const result = await runCoveragePatch(workspace);
 
       // Then
       expect(result.exitCode).toBe(0);
