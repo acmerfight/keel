@@ -52,6 +52,8 @@ export interface ToolExecution {
   readonly content: string;
   readonly ok: boolean;
   readonly sourceTruncated?: boolean;
+  readonly artifactContent?: string;
+  readonly artifactSourceTruncated?: boolean;
   readonly readTargetPath?: string;
   readonly readTargetOffset?: number;
   readonly readTargetLimit?: number;
@@ -67,8 +69,18 @@ export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
 
 function sourceTruncation(result: ToolResult): {
   readonly sourceTruncated?: true;
+  readonly artifactContent?: string;
+  readonly artifactSourceTruncated?: boolean;
 } {
-  return result.sourceTruncated === true ? { sourceTruncated: true } : {};
+  return {
+    ...(result.sourceTruncated === true ? { sourceTruncated: true } : {}),
+    ...(result.artifactContent !== undefined
+      ? { artifactContent: result.artifactContent }
+      : {}),
+    ...(result.artifactSourceTruncated !== undefined
+      ? { artifactSourceTruncated: result.artifactSourceTruncated }
+      : {}),
+  };
 }
 
 interface RecoverableToolError extends KeelError {
