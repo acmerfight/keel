@@ -14,6 +14,11 @@ import {
 } from "../tool-output-artifacts.ts";
 import { currentToolRound } from "./current-tool-round.ts";
 import { estimateTextTokens } from "./token-accounting.ts";
+import {
+  type ProjectedToolOutput,
+  projectCompactedToolOutput,
+  type ToolOutputProjectionContext,
+} from "./tool-output-preview.ts";
 
 const STALE_TOOL_OUTPUT_COMPACTED_PREFIX =
   "[stale tool output compacted: approximately omitted ";
@@ -149,23 +154,21 @@ function isAlreadyCompactedCurrentToolOutput(
 }
 
 function compactStaleToolOutput(
-  text: string,
-  maxChars: number,
+  projection: ProjectedToolOutput,
   artifactMarker?: string,
 ): string {
-  return `${text.slice(0, maxChars)}\n${staleToolOutputCompactedMarker(
-    text.length - maxChars,
+  return `${projection.preview}\n${staleToolOutputCompactedMarker(
+    projection.omittedChars,
     artifactMarker,
   )}`;
 }
 
 function compactCurrentToolOutput(
-  text: string,
-  maxChars: number,
+  projection: ProjectedToolOutput,
   artifactMarker?: string,
 ): string {
-  return `${text.slice(0, maxChars)}\n${currentToolOutputCompactedMarker(
-    text.length - maxChars,
+  return `${projection.preview}\n${currentToolOutputCompactedMarker(
+    projection.omittedChars,
     artifactMarker,
   )}`;
 }
@@ -209,10 +212,10 @@ function sourceStatusForCompaction(
   return sourceStatusFromToolOutputText(message.content);
 }
 
-function toolNameForToolOutput(
+function toolContextForToolOutput(
   messages: readonly Message[],
   toolCallId: string,
-): ToolOutputArtifactToolName {
+): ToolOutputProjectionContext {
   for (const message of messages) {
     if (message.role !== "assistant") {
       continue;
@@ -222,11 +225,11 @@ function toolNameForToolOutput(
     );
     /* v8 ignore next: valid tool-result ledgers preserve the matching assistant tool call; corrupted histories fall through below. */
     if (toolCall !== undefined) {
-      return toolCall.tool;
+      return { toolName: toolCall.tool, toolCall };
     }
   }
   /* v8 ignore next: valid tool-result ledgers preserve the matching assistant tool call; this labels corrupted current-schema histories. */
-  return "unknown";
+  return { toolName: "unknown" };
 }
 
 async function artifactMarkerForCompactedToolOutput(options: {
@@ -247,8 +250,9 @@ async function artifactMarkerForCompactedToolOutput(options: {
       const verification = await options.store.verifyReusable({
         ref: existingArtifact.ref,
         toolCallId: options.toolCallId,
-        contentPrefix: options.content.slice(0, existingArtifact.markerIndex),
+        previewContent: options.content.slice(0, existingArtifact.markerIndex),
         omittedChars: existingArtifact.omittedChars,
+        previewKind: existingArtifact.previewKind,
         sourceStatus: existingArtifact.sourceStatus,
         ...(existingArtifact.contentSha256 === undefined
           ? {}
@@ -340,10 +344,12 @@ export function compactStaleToolOutputs(
           stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
         };
       }
-      const compactedContent = compactStaleToolOutput(
-        message.content,
-        toolOutputMaxChars,
-      );
+      const projection = projectCompactedToolOutput({
+        text: message.content,
+        maxChars: toolOutputMaxChars,
+        context: toolContextForToolOutput(messages, message.toolCallId),
+      });
+      const compactedContent = compactStaleToolOutput(projection);
       return {
         message: {
           ...message,
@@ -406,18 +412,23 @@ export async function compactStaleToolOutputsWithArtifacts(
             stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
           };
         }
+        const context = toolContextForToolOutput(messages, message.toolCallId);
+        const projection = projectCompactedToolOutput({
+          text: message.content,
+          maxChars: toolOutputMaxChars,
+          context,
+        });
         const artifact = await artifactMarkerForCompactedToolOutput({
           store,
           message,
           toolCallId: message.toolCallId,
-          toolName: toolNameForToolOutput(messages, message.toolCallId),
+          toolName: context.toolName,
           content: message.content,
-          omittedChars: message.content.length - toolOutputMaxChars,
+          omittedChars: projection.omittedChars,
           purpose: "stale-compaction",
         });
         const compactedContent = compactStaleToolOutput(
-          message.content,
-          toolOutputMaxChars,
+          projection,
           artifact.marker,
         );
         return {
@@ -491,10 +502,12 @@ export function compactCurrentToolOutputs(
           stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
         };
       }
-      const compactedContent = compactCurrentToolOutput(
-        message.content,
-        toolOutputMaxChars,
-      );
+      const projection = projectCompactedToolOutput({
+        text: message.content,
+        maxChars: toolOutputMaxChars,
+        context: toolContextForToolOutput(messages, message.toolCallId),
+      });
+      const compactedContent = compactCurrentToolOutput(projection);
       return {
         message: {
           ...message,
@@ -560,18 +573,23 @@ export async function compactCurrentToolOutputsWithArtifacts(
             stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
           };
         }
+        const context = toolContextForToolOutput(messages, message.toolCallId);
+        const projection = projectCompactedToolOutput({
+          text: message.content,
+          maxChars: toolOutputMaxChars,
+          context,
+        });
         const artifact = await artifactMarkerForCompactedToolOutput({
           store,
           message,
           toolCallId: message.toolCallId,
-          toolName: toolNameForToolOutput(messages, message.toolCallId),
+          toolName: context.toolName,
           content: message.content,
-          omittedChars: message.content.length - toolOutputMaxChars,
+          omittedChars: projection.omittedChars,
           purpose: "current-overflow-compaction",
         });
         const compactedContent = compactCurrentToolOutput(
-          message.content,
-          toolOutputMaxChars,
+          projection,
           artifact.marker,
         );
         return {

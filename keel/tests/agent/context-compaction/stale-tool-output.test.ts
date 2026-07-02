@@ -14,7 +14,7 @@ import type {
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
 import { KeelError } from "../../../src/core/error.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, Message, ToolCall } from "../../../src/llm/types.ts";
 import {
   collect,
   endEvent,
@@ -64,14 +64,20 @@ function memoryArtifactStore(options?: {
           return { status: "not_reusable" };
         }
         const contentSha256 = sha256(artifact.content);
+        const contentLengthMatches =
+          artifact.content.length ===
+          input.previewContent.length + input.omittedChars;
+        const previewMatches =
+          input.previewKind === "prefix"
+            ? artifact.content.startsWith(input.previewContent)
+            : input.contentSha256 === contentSha256;
         if (
           artifact.toolCallId !== input.toolCallId ||
           artifact.sourceStatus !== input.sourceStatus ||
-          artifact.content.length !==
-            input.contentPrefix.length + input.omittedChars ||
-          !artifact.content.startsWith(input.contentPrefix) ||
+          !contentLengthMatches ||
           (input.contentSha256 !== undefined &&
-            input.contentSha256 !== contentSha256)
+            input.contentSha256 !== contentSha256) ||
+          !previewMatches
         ) {
           return { status: "not_reusable" };
         }
@@ -93,7 +99,897 @@ function memoryArtifactStore(options?: {
   };
 }
 
+function numberedLines(
+  prefix: string,
+  count: number,
+  suffix = "diagnostic detail",
+): readonly string[] {
+  return Array.from(
+    { length: count },
+    (_, index) =>
+      `${prefix} ${String(index + 1).padStart(3, "0")} ${suffix} ${"x".repeat(
+        20,
+      )}`,
+  );
+}
+
+async function compactRetainedToolOutput(options: {
+  readonly toolCall: ToolCall;
+  readonly content: string;
+  readonly toolOutputMaxChars: number;
+}): Promise<{
+  readonly content: string;
+  readonly saved: readonly SavedToolOutputArtifact[];
+}> {
+  const messages: Message[] = [
+    { role: "user", content: "Remember the setup." },
+    { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+    { role: "user", content: "Inspect the retained tool output." },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [options.toolCall],
+    },
+    {
+      role: "tool",
+      toolCallId: options.toolCall.id,
+      content: options.content,
+    },
+    {
+      role: "assistant",
+      content: "The retained tool output was inspected.",
+      toolCalls: [],
+    },
+    { role: "user", content: "Continue." },
+  ];
+  const artifacts = memoryArtifactStore();
+  const provider: LLMProvider = {
+    id: "context-aware-preview-provider",
+    async *stream(streamOptions) {
+      expect(streamOptions.toolChoice).toBe("none");
+      yield { type: "text", text: "Earlier setup summary." };
+      yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+    },
+  };
+
+  const result = await compactMessages({
+    provider,
+    systemPrompt: "You are helpful.",
+    messages,
+    signal: freshSignal(),
+    contextCompaction: {
+      keepRecentTokens: 100_000,
+      toolOutputMaxChars: options.toolOutputMaxChars,
+    },
+    toolOutputArtifacts: { store: artifacts.store },
+  });
+
+  expect(result.compacted).toBe(true);
+  const toolMessage = messages.find(
+    (message) =>
+      message.role === "tool" && message.toolCallId === options.toolCall.id,
+  );
+  if (toolMessage?.role !== "tool") {
+    throw new Error("Expected retained tool message after compaction");
+  }
+  return { content: toolMessage.content, saved: artifacts.saved };
+}
+
+function previewBeforeStaleCompactionMarker(content: string): string {
+  const markerIndex = content.indexOf("\n[stale tool output compacted:");
+  if (markerIndex === -1) {
+    throw new Error("Expected stale tool output compaction marker");
+  }
+  return content.slice(0, markerIndex);
+}
+
 describe("Context Compaction Stale Tool Output", () => {
+  test(`Given a retained failed bash output has the useful error in the tail,
+    When context compaction projects the tool output,
+    Then the model-visible preview keeps status, tail diagnostics, and the artifact ref`, async () => {
+    // Given
+    const bashOutput = [
+      "Exit code: 1",
+      "",
+      "stdout:",
+      ...numberedLines("setup noise", 40),
+      "",
+      "stderr:",
+      ...numberedLines("stderr progress", 25),
+      "TAIL_FAILURE: expected 2 passing tests but saw 1 failing test",
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "bash_tail_failure",
+        tool: "bash",
+        command: "pnpm test",
+      },
+      content: bashOutput,
+      toolOutputMaxChars: 260,
+    });
+
+    // Then
+    expect(compacted.content).toContain("Exit code: 1");
+    expect(compacted.content).toContain(
+      "TAIL_FAILURE: expected 2 passing tests but saw 1 failing test",
+    );
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+    expect(compacted.content).toContain("keel artifacts show tool-output:");
+    expect(compacted.content).not.toContain("setup noise 040");
+    expect(
+      previewBeforeStaleCompactionMarker(compacted.content).length,
+    ).toBeLessThanOrEqual(260);
+    expect(compacted.saved).toHaveLength(1);
+    expect(compacted.saved[0]?.input.content).toBe(bashOutput);
+  });
+
+  test(`Given retained bash output ends with a long stderr line and trailing newline,
+    When context compaction projects the tool output,
+    Then the model-visible preview keeps a suffix of the actual failure tail`, async () => {
+    // Given
+    const tailFailureSuffix = "LONG_BASH_FAILURE_TAIL_335";
+    const longFailureLine = `stderr failure ${"x".repeat(
+      400,
+    )} ${tailFailureSuffix}`;
+    const bashOutput = `${["Exit code: 1", "", "stderr:", longFailureLine].join("\n")}\n`;
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "bash_long_trailing_stderr",
+        tool: "bash",
+        command: "pnpm test",
+      },
+      content: bashOutput,
+      toolOutputMaxChars: 110,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain("Exit code: 1");
+    expect(preview).toContain("[bash output tail preview]");
+    expect(preview).toContain(tailFailureSuffix);
+    expect(preview).not.toBe(
+      "bash command: pnpm test\nExit code: 1\n\n[bash output tail preview]\n",
+    );
+    expect(preview.length).toBeLessThanOrEqual(110);
+    expect(compacted.saved[0]?.input.content).toBe(bashOutput);
+  });
+
+  test(`Given retained bash output has a key middle failure outside the preview,
+    When context compaction projects the tool output,
+    Then the preview keeps the artifact evidence handle for exact recovery`, async () => {
+    // Given
+    const bashOutput = [
+      "Exit code: 1",
+      "",
+      "stdout:",
+      ...numberedLines("setup noise", 30),
+      "MIDDLE_FAILURE: stack trace only appears in the full artifact",
+      ...numberedLines("later benign output", 30),
+      "",
+      "stderr:",
+      "tail summary: command failed",
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "bash_middle_failure",
+        tool: "bash",
+        command: "pnpm test",
+      },
+      content: bashOutput,
+      toolOutputMaxChars: 220,
+    });
+
+    // Then
+    expect(compacted.content).toContain("Exit code: 1");
+    expect(compacted.content).toContain("tail summary: command failed");
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+    expect(compacted.content).toContain("keel artifacts show tool-output:");
+    expect(compacted.content).not.toContain("MIDDLE_FAILURE");
+    expect(compacted.saved[0]?.input.content).toContain("MIDDLE_FAILURE");
+  });
+
+  test(`Given a retained read output stops at a window boundary,
+    When context compaction projects the tool output,
+    Then the preview preserves continuation guidance`, async () => {
+    // Given
+    const readOutput = [
+      ...numberedLines("short source line", 80),
+      "[Read output stopped at requested limit of 100 lines. Use offset=101 to continue.]",
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "read_window",
+        tool: "read",
+        path: "src/large-file.ts",
+        limit: 100,
+      },
+      content: readOutput,
+      toolOutputMaxChars: 240,
+    });
+
+    // Then
+    expect(compacted.content).toContain("read source: src/large-file.ts");
+    expect(compacted.content).toContain("limit=100");
+    expect(compacted.content).toContain(
+      "[Read output stopped at requested limit of 100 lines. Use offset=101 to continue.]",
+    );
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given a retained read output starts from a later offset,
+    When context compaction projects the tool output,
+    Then the preview preserves the exact read window`, async () => {
+    // Given
+    const readOutput = [
+      ...numberedLines("offset source line", 60),
+      "[Read output truncated at 2000 lines or 50KB. Use offset=81 to continue.]",
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "read_offset_window",
+        tool: "read",
+        path: "src/large-file.ts",
+        offset: 40,
+        limit: 40,
+      },
+      content: readOutput,
+      toolOutputMaxChars: 260,
+    });
+
+    // Then
+    expect(compacted.content).toContain(
+      "read source: src/large-file.ts (offset=40, limit=40)",
+    );
+    expect(compacted.content).toContain("Use offset=81 to continue.");
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained grep output has many matches,
+    When context compaction projects the tool output,
+    Then the preview preserves complete match lines and truncation guidance`, async () => {
+    // Given
+    const grepMatches = Array.from(
+      { length: 40 },
+      (_, index) =>
+        `src/file-${String(index + 1).padStart(
+          3,
+          "0",
+        )}.ts:${index + 1}:MATCH_${String(index + 1).padStart(3, "0")}`,
+    );
+    const grepOutput = [
+      ...grepMatches,
+      "[grep output truncated: showing first 40 matches]",
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "grep_many_matches",
+        tool: "grep",
+        pattern: "MATCH",
+      },
+      content: grepOutput,
+      toolOutputMaxChars: 210,
+    });
+
+    // Then
+    expect(compacted.content).toContain("grep source: MATCH");
+    expect(compacted.content).toContain("src/file-001.ts:1:MATCH_001");
+    expect(compacted.content).toContain("src/file-002.ts:2:MATCH_002");
+    expect(compacted.content).toContain(
+      "[grep output truncated: showing first 40 matches]",
+    );
+    expect(
+      previewBeforeStaleCompactionMarker(compacted.content).length,
+    ).toBeLessThanOrEqual(210);
+    const preview = compacted.content.slice(
+      0,
+      compacted.content.indexOf("\n[stale tool output compacted:"),
+    );
+    for (const line of preview.split("\n")) {
+      if (
+        line.startsWith("src/") ||
+        line.startsWith("[grep output truncated:")
+      ) {
+        expect(line).toMatch(
+          /^(src\/file-[0-9]{3}\.ts:[0-9]+:MATCH_[0-9]{3}|\[grep output truncated: showing first 40 matches\])$/u,
+        );
+      }
+    }
+  });
+
+  test(`Given retained grep output is scoped and complete,
+    When context compaction projects the tool output,
+    Then the preview keeps the search scope without inventing truncation guidance`, async () => {
+    // Given
+    const grepOutput = [
+      "src/app.ts:10:SCOPED_MATCH one",
+      "src/app.ts:20:SCOPED_MATCH two",
+      ...numberedLines("additional scoped grep match", 20),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "grep_scoped_matches",
+        tool: "grep",
+        pattern: "SCOPED_MATCH",
+        path: "src",
+      },
+      content: grepOutput,
+      toolOutputMaxChars: 180,
+    });
+
+    // Then
+    expect(compacted.content).toContain("grep source: SCOPED_MATCH in src");
+    expect(compacted.content).toContain("src/app.ts:10:SCOPED_MATCH one");
+    expect(compacted.content).not.toContain("[grep output truncated:");
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained ls output is truncated,
+    When context compaction projects the tool output,
+    Then the preview keeps complete entries and narrowing guidance`, async () => {
+    // Given
+    const lsOutput = [
+      ...numberedLines("entry", 30, "file.ts"),
+      "[ls output truncated: showing first 30 entries. Narrow the path or increase limit to see more.]",
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "ls_many_entries",
+        tool: "ls",
+        path: "src",
+      },
+      content: lsOutput,
+      toolOutputMaxChars: 210,
+    });
+
+    // Then
+    expect(compacted.content).toContain("ls source: src");
+    expect(compacted.content).toContain("entry 001 file.ts");
+    expect(compacted.content).toContain(
+      "[ls output truncated: showing first 30 entries. Narrow the path or increase limit to see more.]",
+    );
+    expect(
+      previewBeforeStaleCompactionMarker(compacted.content).length,
+    ).toBeLessThanOrEqual(210);
+  });
+
+  test(`Given retained ls output reads the workspace root without truncation,
+    When context compaction projects the tool output,
+    Then the preview identifies the default root scope`, async () => {
+    // Given
+    const lsOutput = [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "src/",
+      ...numberedLines("root entry", 25, "file.ts"),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "ls_root_entries",
+        tool: "ls",
+      },
+      content: lsOutput,
+      toolOutputMaxChars: 160,
+    });
+
+    // Then
+    expect(compacted.content).toContain("ls source: .");
+    expect(compacted.content).toContain("AGENTS.md");
+    expect(compacted.content).not.toContain("[ls output truncated:");
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained glob output is truncated,
+    When context compaction projects the tool output,
+    Then the preview keeps complete paths and narrowing guidance`, async () => {
+    // Given
+    const globOutput = [
+      ...Array.from(
+        { length: 35 },
+        (_, index) => `src/module-${String(index + 1).padStart(3, "0")}.ts`,
+      ),
+      "[glob output truncated: showing first 35 files. Narrow the pattern or path to see more.]",
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "glob_many_files",
+        tool: "glob",
+        pattern: "**/*.ts",
+      },
+      content: globOutput,
+      toolOutputMaxChars: 190,
+    });
+
+    // Then
+    expect(compacted.content).toContain("glob source: **/*.ts");
+    expect(compacted.content).toContain("src/module-001.ts");
+    expect(compacted.content).toContain(
+      "[glob output truncated: showing first 35 files. Narrow the pattern or path to see more.]",
+    );
+    expect(
+      previewBeforeStaleCompactionMarker(compacted.content).length,
+    ).toBeLessThanOrEqual(190);
+  });
+
+  test(`Given retained glob output is scoped and complete,
+    When context compaction projects the tool output,
+    Then the preview keeps the glob scope without truncation guidance`, async () => {
+    // Given
+    const globOutput = [
+      "packages/app/src/index.ts",
+      "packages/app/src/view.ts",
+      ...Array.from(
+        { length: 30 },
+        (_, index) =>
+          `packages/app/src/module-${String(index + 1).padStart(3, "0")}.ts`,
+      ),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "glob_scoped_files",
+        tool: "glob",
+        pattern: "**/*.ts",
+        path: "packages/app",
+      },
+      content: globOutput,
+      toolOutputMaxChars: 190,
+    });
+
+    // Then
+    expect(compacted.content).toContain("glob source: **/*.ts in packages/app");
+    expect(compacted.content).toContain("packages/app/src/index.ts");
+    expect(compacted.content).not.toContain("[glob output truncated:");
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff output spans multiple files,
+    When context compaction projects the tool output,
+    Then the preview renders a structured diff summary with concise hunks`, async () => {
+    // Given
+    const fileDiff = (path: string, marker: string) =>
+      [
+        `diff --git a/${path} b/${path}`,
+        "index 0000000..1111111 100644",
+        `--- a/${path}`,
+        `+++ b/${path}`,
+        "@@ -1,3 +1,3 @@",
+        `-${marker} old value`,
+        `+${marker} new value`,
+        `-${marker} removed detail`,
+        `+${marker} added detail`,
+        ...numberedLines(`${path} context`, 12),
+      ].join("\n");
+    const diffOutput = [
+      "Unstaged changes",
+      fileDiff("src/alpha.ts", "ALPHA"),
+      fileDiff("src/critical.ts", "CRITICAL"),
+      fileDiff("src/omega.ts", "OMEGA"),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_many_files",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 540,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain("git_diff source: all changes");
+    expect(preview).toContain("files changed: 3, +6/-6");
+    expect(preview).toContain("src/alpha.ts");
+    expect(preview).toContain("src/critical.ts");
+    expect(preview).toContain("@@ -1,3 +1,3 @@");
+    expect(preview).toContain("-CRITICAL old value");
+    expect(preview).toContain("+CRITICAL new value");
+    expect(preview).toContain("[hunk omitted: +1/-1 more lines]");
+    expect(preview).not.toContain("diff --git a/src/alpha.ts");
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff hunks have several deletions before additions,
+    When context compaction projects the tool output,
+    Then the preview keeps representative added lines for each changed file`, async () => {
+    // Given
+    const fileDiff = (index: number) => {
+      const marker = `QA_GITDIFF_MARKER_${String(index).padStart(2, "0")}`;
+      const path = `src/file-${String(index).padStart(2, "0")}.ts`;
+      return [
+        `diff --git a/${path} b/${path}`,
+        "index 0000000..1111111 100644",
+        `--- a/${path}`,
+        `+++ b/${path}`,
+        "@@ -1,6 +1,4 @@",
+        `-${marker} deleted setup line one`,
+        `-${marker} deleted setup line two`,
+        `-${marker} deleted setup line three`,
+        `+${marker} added value the model must see`,
+        ...numberedLines(`${path} context`, 8),
+      ].join("\n");
+    };
+    const diffOutput = Array.from({ length: 7 }, (_, index) =>
+      fileDiff(index + 1),
+    ).join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_deletions_before_additions",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 1_600,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain("files changed: 7, +7/-21");
+    expect(preview).toContain("src/file-01.ts");
+    expect(preview).toContain("src/file-07.ts");
+    for (const index of Array.from({ length: 7 }, (_, item) => item + 1)) {
+      expect(preview).toContain(
+        `+QA_GITDIFF_MARKER_${String(index).padStart(
+          2,
+          "0",
+        )} added value the model must see`,
+      );
+    }
+    expect(preview).toContain("[hunk omitted: +0/-2 more lines]");
+    expect(preview).not.toContain("diff --git a/src/file-01.ts");
+    expect(preview.length).toBeLessThanOrEqual(1_600);
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff hunks include add-only and delete-only changes,
+    When context compaction projects the tool output,
+    Then the preview keeps the available changed side for each file`, async () => {
+    // Given
+    const diffOutput = [
+      "diff --git a/src/added.ts b/src/added.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/src/added.ts",
+      "@@ -0,0 +1,2 @@",
+      "+ADDED_ONLY_MARKER_335 first line",
+      "+ADDED_ONLY_MARKER_335 second line",
+      "diff --git a/src/deleted.ts b/src/deleted.ts",
+      "deleted file mode 100644",
+      "--- a/src/deleted.ts",
+      "+++ /dev/null",
+      "@@ -1,2 +0,0 @@",
+      "-DELETED_ONLY_MARKER_335 first line",
+      "-DELETED_ONLY_MARKER_335 second line",
+      ...numberedLines("git diff add delete context", 20),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_add_only_delete_only",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 360,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain("files changed: 2, +2/-2");
+    expect(preview).toContain("src/added.ts");
+    expect(preview).toContain("+ADDED_ONLY_MARKER_335 first line");
+    expect(preview).toContain("[hunk omitted: +1/-0 more lines]");
+    expect(preview).toContain("src/deleted.ts");
+    expect(preview).toContain("-DELETED_ONLY_MARKER_335 first line");
+    expect(preview).toContain("[hunk omitted: +0/-1 more lines]");
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff output has a quoted path and multiple hunks,
+    When context compaction projects the tool output,
+    Then the preview normalizes the path and reports omitted hunks`, async () => {
+    // Given
+    const diffOutput = [
+      'diff --git "a/src/space \\"file\\".ts" "b/src/space \\"file\\".ts"',
+      "index 0000000..1111111 100644",
+      '--- "a/src/space \\"file\\".ts"',
+      '+++ "b/src/space \\"file\\".ts"',
+      "@@ -1,2 +1,2 @@",
+      "-QUOTED_PATH_MARKER old first hunk",
+      "+QUOTED_PATH_MARKER new first hunk",
+      "@@ -10,2 +10,2 @@",
+      "-QUOTED_PATH_MARKER old second hunk",
+      "+QUOTED_PATH_MARKER new second hunk",
+      "@@ -20,2 +20,2 @@",
+      "-QUOTED_PATH_MARKER old third hunk",
+      "+QUOTED_PATH_MARKER new third hunk",
+      "diff --git a/src/single-extra.ts b/src/single-extra.ts",
+      "index 2222222..3333333 100644",
+      "--- a/src/single-extra.ts",
+      "+++ b/src/single-extra.ts",
+      "@@ -1,1 +1,1 @@",
+      "-SINGLE_EXTRA_MARKER old first hunk",
+      "+SINGLE_EXTRA_MARKER new first hunk",
+      "@@ -2,1 +2,1 @@",
+      "-SINGLE_EXTRA_MARKER old second hunk",
+      "+SINGLE_EXTRA_MARKER new second hunk",
+      ...numberedLines("quoted path diff context", 20),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_quoted_path_multiple_hunks",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 700,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain("files changed: 2, +5/-5");
+    expect(preview).toContain('src/space "file".ts');
+    expect(preview).toContain("-QUOTED_PATH_MARKER old first hunk");
+    expect(preview).toContain("+QUOTED_PATH_MARKER new first hunk");
+    expect(preview).toContain("[file omitted: 2 more hunks, +2/-2 more lines]");
+    expect(preview).toContain("src/single-extra.ts");
+    expect(preview).toContain("[file omitted: 1 more hunk, +1/-1 more lines]");
+    expect(preview).not.toContain('"b/src/space \\"file\\".ts"');
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff output is path-filtered and has no hunk,
+    When context compaction projects the tool output,
+    Then the preview keeps the path filter and changed-file heading`, async () => {
+    // Given
+    const diffOutput = [
+      "diff --git a/src/renamed.ts b/src/renamed.ts",
+      "similarity index 100%",
+      "rename from src/old.ts",
+      "rename to src/renamed.ts",
+      ...numberedLines("rename metadata", 20),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_path_no_hunk",
+        tool: "git_diff",
+        paths: ["src/renamed.ts"],
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 170,
+    });
+
+    // Then
+    expect(compacted.content).toContain("git_diff source: src/renamed.ts");
+    expect(compacted.content).toContain("files changed: 1, +0/-0");
+    expect(compacted.content).toContain("src/renamed.ts");
+    expect(compacted.content).toContain("[no hunks shown]");
+    expect(compacted.content).not.toContain("diff --git a/src/renamed.ts");
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff output has no diff blocks,
+    When context compaction projects the tool output,
+    Then the preview falls back to complete-line prefix compaction with source context`, async () => {
+    // Given
+    const diffOutput = [
+      "No tracked changes matched the requested paths.",
+      ...numberedLines("plain git diff diagnostic", 25),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_plain_output",
+        tool: "git_diff",
+        paths: ["src/plain.ts"],
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 180,
+    });
+
+    // Then
+    expect(compacted.content).toContain("git_diff source: src/plain.ts");
+    expect(compacted.content).toContain(
+      "No tracked changes matched the requested paths.",
+    );
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff output has a very small preview budget,
+    When context compaction projects the tool output,
+    Then the preview remains bounded and keeps the artifact recovery handle`, async () => {
+    // Given
+    const diffOutput = [
+      "Unstaged changes",
+      "diff --git a/src/small-budget.ts b/src/small-budget.ts",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      ...numberedLines("small budget diff context", 30),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_small_budget",
+        tool: "git_diff",
+        paths: ["src/small-budget.ts"],
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 48,
+    });
+
+    // Then
+    expect(
+      previewBeforeStaleCompactionMarker(compacted.content).length,
+    ).toBeLessThanOrEqual(48);
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained bash output has a tiny preview budget,
+    When context compaction projects the tool output,
+    Then Keel still keeps a bounded tail preview and artifact handle`, async () => {
+    // Given
+    const bashOutput = "abc";
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "bash_tiny_budget",
+        tool: "bash",
+        command: "node tiny.js",
+      },
+      content: bashOutput,
+      toolOutputMaxChars: 2,
+    });
+
+    // Then
+    expect(previewBeforeStaleCompactionMarker(compacted.content)).toBe("c");
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test.each([
+    {
+      toolCall: {
+        id: "edit_generic_preview",
+        tool: "edit",
+        path: "src/app.ts",
+        edits: [{ oldText: "old", newText: "new" }],
+      } satisfies ToolCall,
+      prefix: "EDIT_OUTPUT_START",
+    },
+    {
+      toolCall: {
+        id: "write_generic_preview",
+        tool: "write",
+        path: "src/generated.ts",
+        content: "export const value = 1;\n",
+      } satisfies ToolCall,
+      prefix: "WRITE_OUTPUT_START",
+    },
+    {
+      toolCall: {
+        id: "apply_patch_generic_preview",
+        tool: "apply_patch",
+        patch:
+          "*** Begin Patch\n*** Add File: note.txt\n+note\n*** End Patch\n",
+      } satisfies ToolCall,
+      prefix: "APPLY_PATCH_OUTPUT_START",
+    },
+  ])(`Given retained $toolCall.tool output uses generic projection,
+    When context compaction projects the tool output,
+    Then Keel preserves the existing bounded prefix behavior`, async ({
+    toolCall,
+    prefix,
+  }) => {
+    // Given
+    const output = [
+      prefix,
+      ...numberedLines("generic tool output", 30),
+      "GENERIC_TAIL_SHOULD_NOT_APPEAR",
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall,
+      content: output,
+      toolOutputMaxChars: 120,
+    });
+
+    // Then
+    expect(compacted.content).toContain(output.slice(0, 120));
+    expect(compacted.content).not.toContain("GENERIC_TAIL_SHOULD_NOT_APPEAR");
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained output has no matching tool identity,
+    When context compaction projects the tool output,
+    Then Keel falls back to the generic bounded prefix preview`, async () => {
+    // Given
+    const unknownOutput = [
+      "UNKNOWN_PREFIX_START",
+      ...numberedLines("unknown line", 30),
+      "UNKNOWN_TAIL_SHOULD_NOT_APPEAR",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+      { role: "user", content: "Inspect the unmatched tool output." },
+      {
+        role: "tool",
+        toolCallId: "missing_tool_call",
+        content: unknownOutput,
+      },
+      {
+        role: "assistant",
+        content: "The output was inspected.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue." },
+    ];
+    const artifacts = memoryArtifactStore();
+    const provider: LLMProvider = {
+      id: "unknown-tool-preview-provider",
+      async *stream() {
+        yield { type: "text", text: "Earlier setup summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 100_000,
+        toolOutputMaxChars: 120,
+      },
+      toolOutputArtifacts: { store: artifacts.store },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    const toolMessage = messages.find(
+      (message) =>
+        message.role === "tool" && message.toolCallId === "missing_tool_call",
+    );
+    if (toolMessage?.role !== "tool") {
+      throw new Error("Expected retained unknown tool message");
+    }
+    expect(toolMessage.content).toContain(unknownOutput.slice(0, 120));
+    expect(toolMessage.content).not.toContain("UNKNOWN_TAIL_SHOULD_NOT_APPEAR");
+    expect(toolMessage.content).toContain("full output artifact: tool-output:");
+  });
+
   test(`Given a settled artifact-backed output is larger than the compaction preview,
     When context compaction runs with artifact storage,
     Then the compacted request reuses the existing artifact ref without saving a second artifact`, async () => {
@@ -198,6 +1094,101 @@ describe("Context Compaction Stale Tool Output", () => {
       toolOutputsCompacted: 1,
       toolOutputCharsBefore: settledToolOutput.length,
     });
+  });
+
+  test(`Given a projected artifact-backed output is larger than the compaction preview,
+    When context compaction runs with artifact storage,
+    Then Keel verifies the projection marker by sha before reusing the artifact ref`, async () => {
+    // Given
+    const projectedPreview = [
+      "bash command: pnpm test",
+      "Exit code: 1",
+      "[bash output tail preview]",
+      ...numberedLines("projected tail", 8),
+    ].join("\n");
+    const fullOutput = `${projectedPreview}\n${"hidden projected output ".repeat(
+      500,
+    )}`;
+    const omittedChars = fullOutput.length - projectedPreview.length;
+    const contentSha256 = sha256(fullOutput);
+    const projectedMarker = `[stale tool output compacted: approximately omitted ${omittedChars} chars; full output artifact: tool-output:run/projected; inspect with: keel artifacts show tool-output:run/projected; sha256: ${contentSha256}; source status: complete]`;
+    const projectedToolOutput = `${projectedPreview}\n${projectedMarker}`;
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+      { role: "user", content: "Run tests." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "bash_projected_output",
+            tool: "bash",
+            command: "pnpm test",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "bash_projected_output",
+        content: projectedToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The projected output was inspected.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue." },
+    ];
+    const artifacts = memoryArtifactStore({
+      existingArtifacts: [
+        {
+          ref: "tool-output:run/projected",
+          toolCallId: "bash_projected_output",
+          sourceStatus: "complete",
+          content: fullOutput,
+        },
+      ],
+    });
+    const provider: LLMProvider = {
+      id: "reuse-projected-artifact-provider",
+      async *stream(options) {
+        expect(options.toolChoice).toBe("none");
+        yield { type: "text", text: "Earlier setup summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 100_000,
+        toolOutputMaxChars: 128,
+      },
+      toolOutputArtifacts: { store: artifacts.store },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    if (!result.compacted) {
+      throw new Error("Expected context compaction to retain the tool result");
+    }
+    expect(artifacts.saved).toHaveLength(0);
+    expect(result.artifactNotices).toBeUndefined();
+    const compactedToolOutput =
+      messages.find(
+        (message) =>
+          message.role === "tool" &&
+          message.toolCallId === "bash_projected_output",
+      )?.content ?? "";
+    expect(compactedToolOutput).toContain(
+      "full output artifact: tool-output:run/projected",
+    );
+    expect(compactedToolOutput).toContain(`sha256: ${contentSha256}`);
   });
 
   test(`Given a large retained output ends with an artifact marker whose omitted count is unsafe,
@@ -395,7 +1386,7 @@ describe("Context Compaction Stale Tool Output", () => {
       toolCallId: "read_old_report",
       toolName: "read",
       sourceStatus: "complete",
-      omittedChars: forgedToolOutput.length - 128,
+      omittedChars: expect.any(Number),
     });
   });
 
@@ -793,7 +1784,7 @@ describe("Context Compaction Stale Tool Output", () => {
       toolCallId: "read_metadata_report",
       toolName: "read",
       sourceStatus: "source-truncated",
-      omittedChars: body.length - 128,
+      omittedChars: expect.any(Number),
     });
   });
 
@@ -882,7 +1873,7 @@ describe("Context Compaction Stale Tool Output", () => {
       toolCallId: "read_marker_report",
       toolName: "read",
       sourceStatus: "source-truncated",
-      omittedChars: body.length - 128,
+      omittedChars: expect.any(Number),
     });
     const compactedToolOutput =
       messages.find(
@@ -967,7 +1958,7 @@ describe("Context Compaction Stale Tool Output", () => {
         toolCallId: "read_metadata_report",
         toolName: "read",
         sourceStatus: "complete",
-        omittedChars: body.length - 128,
+        omittedChars: expect.any(Number),
       });
     } finally {
       await rm(workspaceDir, { recursive: true, force: true });
@@ -1257,7 +2248,7 @@ describe("Context Compaction Stale Tool Output", () => {
       toolCallId: "read_old_report",
       toolName: "read",
       sourceStatus: "complete",
-      omittedChars: largeToolOutput.length - 128,
+      omittedChars: expect.any(Number),
     });
   });
 

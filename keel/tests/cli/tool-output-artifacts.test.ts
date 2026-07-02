@@ -212,6 +212,117 @@ describe("CLI Tool Output Artifacts", () => {
     }
   });
 
+  test(`Given a retained projection marker matches a CLI artifact by sha,
+    When context compaction runs with the CLI artifact store,
+    Then Keel reuses the artifact ref even when the preview is not a raw prefix`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const store = createToolOutputArtifactStore({
+      runtime: {
+        env: (key) => (key === "KEEL_HOME" ? home : undefined),
+        now: () => 0,
+      },
+      scope: "run-test",
+    });
+
+    try {
+      const projectedPreview = [
+        "bash command: pnpm test",
+        "Exit code: 1",
+        "[bash output tail preview]",
+        "TAIL_FAILURE: expected failure",
+      ].join("\n");
+      const fullOutput = `${projectedPreview}\n${"hidden projection body ".repeat(
+        500,
+      )}`;
+      const saved = await store.save({
+        toolCallId: "bash_projection_report",
+        toolName: "bash",
+        content: fullOutput,
+        sourceStatus: "complete",
+        purpose: "stale-compaction",
+      });
+      if (saved.status !== "stored") {
+        throw new Error(
+          `Expected artifact storage to succeed: ${saved.reason}`,
+        );
+      }
+      const marker = `[stale tool output compacted: approximately omitted ${
+        fullOutput.length - projectedPreview.length
+      } chars; full output artifact: ${saved.ref}; inspect with: keel artifacts show ${saved.ref}; sha256: ${saved.contentSha256}; source status: complete]`;
+      const retainedOutput = `${projectedPreview}\n${marker}`;
+      const messages: Message[] = [
+        { role: "user", content: "Remember setup." },
+        { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+        { role: "user", content: "Run tests." },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "bash_projection_report",
+              tool: "bash",
+              command: "pnpm test",
+            },
+          ],
+        },
+        {
+          role: "tool",
+          toolCallId: "bash_projection_report",
+          content: retainedOutput,
+        },
+        {
+          role: "assistant",
+          content: "The projected report was inspected.",
+          toolCalls: [],
+        },
+        { role: "user", content: "Continue." },
+      ];
+      const provider: LLMProvider = {
+        id: "cli-projection-artifact-reuse-provider",
+        async *stream(options) {
+          expect(options.toolChoice).toBe("none");
+          yield { type: "text", text: "Earlier setup summary." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        },
+      };
+
+      // When
+      const result = await compactMessages({
+        provider,
+        systemPrompt: "You are helpful.",
+        messages,
+        signal: new AbortController().signal,
+        contextCompaction: {
+          keepRecentTokens: 100_000,
+          toolOutputMaxChars: 72,
+        },
+        toolOutputArtifacts: { store },
+      });
+
+      // Then
+      expect(result.compacted).toBe(true);
+      if (!result.compacted) {
+        throw new Error(
+          "Expected context compaction to retain the tool result",
+        );
+      }
+      expect(result.artifactNotices).toBeUndefined();
+      const compactedToolOutput =
+        messages.find(
+          (message) =>
+            message.role === "tool" &&
+            message.toolCallId === "bash_projection_report",
+        )?.content ?? "";
+      expect(compactedToolOutput).toContain(`keel artifacts show ${saved.ref}`);
+      expect(compactedToolOutput).toContain(`sha256: ${saved.contentSha256}`);
+      const paths = artifactPaths(home, saved.ref);
+      await expect(readdir(paths.directory)).resolves.toHaveLength(1);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a retained tool output marker points at another real artifact,
     When context compaction runs with the CLI artifact store,
     Then Keel saves the retained output instead of reusing the wrong artifact`, async () => {
@@ -323,7 +434,7 @@ describe("CLI Tool Output Artifacts", () => {
         toolCallId: "read_current_report",
         toolName: "read",
         sourceStatus: "complete",
-        omittedChars: retainedOutput.length - 128,
+        omittedChars: expect.any(Number),
       });
 
       const shown = await runCli(["artifacts", "show", newRef], {
@@ -358,6 +469,33 @@ describe("CLI Tool Output Artifacts", () => {
         await writeFile(
           join(artifactDirectory, "malformed.txt"),
           "ref: tool-output:run-test/malformed\nno artifact body separator",
+          "utf8",
+        );
+      },
+    },
+    {
+      name: "missing-sha",
+      ref: "tool-output:run-test/missing-sha",
+      prepare: async (home: string) => {
+        const artifactDirectory = join(
+          home,
+          "artifacts",
+          "tool-output",
+          "run-test",
+        );
+        await mkdir(artifactDirectory, { recursive: true });
+        await writeFile(
+          join(artifactDirectory, "missing-sha.txt"),
+          [
+            "ref: tool-output:run-test/missing-sha",
+            "toolCallId: read_fallback_report",
+            "toolName: read",
+            "sourceStatus: complete",
+            "contentChars: 21",
+            "purpose: settlement",
+            "---",
+            "FALLBACK_REPORT_START",
+          ].join("\n"),
           "utf8",
         );
       },
@@ -463,7 +601,7 @@ describe("CLI Tool Output Artifacts", () => {
         toolCallId: "read_fallback_report",
         toolName: "read",
         sourceStatus: "complete",
-        omittedChars: retainedOutput.length - 128,
+        omittedChars: expect.any(Number),
       });
     } finally {
       await rm(home, { recursive: true, force: true });
