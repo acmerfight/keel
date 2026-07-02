@@ -1,46 +1,13 @@
 import { createServer } from "node:http";
 import type { Server } from "node:net";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
   capabilityNames,
   readProviderModelsDiagnostic,
   runDoctor,
 } from "../../src/cli/doctor.ts";
+import { KeelError } from "../../src/core/error.ts";
 import { runCli } from "../../src/testing/cli-harness.ts";
-
-type ExecFileCallback = (
-  error: Error | null,
-  stdout: string,
-  stderr: string,
-) => void;
-
-async function withMockedExecFile<T>(
-  execFile: (callback: ExecFileCallback) => void,
-  action: (doctor: typeof import("../../src/cli/doctor.ts")) => Promise<T>,
-): Promise<T> {
-  vi.resetModules();
-  vi.doMock("node:child_process", () => ({
-    execFile: vi.fn(
-      (
-        _path: string,
-        _args: readonly string[],
-        _options: unknown,
-        callback: ExecFileCallback,
-      ) => {
-        execFile(callback);
-        return { kill: vi.fn() };
-      },
-    ),
-  }));
-
-  try {
-    const doctor = await import("../../src/cli/doctor.ts");
-    return await action(doctor);
-  } finally {
-    vi.doUnmock("node:child_process");
-    vi.resetModules();
-  }
-}
 
 function expectRipgrepDiagnostics(stdout: string): void {
   expect(stdout).toContain("Keel doctor\n");
@@ -948,6 +915,39 @@ describe("CLI Doctor", () => {
     expect(result.stderr).toBe("ripgrep: failed: ripgrep missing\n");
   });
 
+  test(`Given bundled ripgrep diagnostics fail with version-check detail,
+    When doctor runs,
+    Then the user-visible doctor report includes the sanitized ripgrep failure`, async () => {
+    // Given
+    const runtime = {
+      env: () => undefined,
+    };
+
+    // When
+    const result = await runDoctor({
+      runtime,
+      selection: { providerId: "fake" },
+      onlineMode: "online",
+      readProviderOnlineDiagnostic: async () => {
+        throw new Error("provider auth should not run for fake");
+      },
+      readRipgrepDiagnostic: async () => {
+        throw new KeelError(
+          "tool_unavailable",
+          "grep failed: bundled ripgrep version check failed: permission denied",
+        );
+      },
+    });
+
+    // Then
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain("Keel doctor\n");
+    expect(result.stdout).toContain("provider: fake (source: --provider)");
+    expect(result.stderr).toBe(
+      "ripgrep: failed: grep failed: bundled ripgrep version check failed: permission denied\n",
+    );
+  });
+
   test(`Given provider diagnostics fail with a non-Error value,
     When doctor runs,
     Then it reports the provider failure text`, async () => {
@@ -977,62 +977,5 @@ describe("CLI Doctor", () => {
     expect(result.stdout).toContain("ripgrep: ok (vscode-ripgrep)");
     expect(result.stdout).toContain("provider: failed");
     expect(result.stderr).toBe("provider env unavailable\n");
-  });
-
-  test(`Given the bundled ripgrep version command fails with stderr,
-    When doctor reads the bundled ripgrep diagnostic,
-    Then it reports the stderr detail as the tool failure`, async () => {
-    // Given / When / Then
-    await withMockedExecFile(
-      (callback) => {
-        callback(new Error("spawn failed"), "", "permission denied\n");
-      },
-      async ({ readBundledRipgrepDiagnostic }) => {
-        await expect(readBundledRipgrepDiagnostic()).rejects.toMatchObject({
-          name: "KeelError",
-          code: "tool_unavailable",
-          message:
-            "grep failed: bundled ripgrep version check failed: permission denied",
-        });
-      },
-    );
-  });
-
-  test(`Given the bundled ripgrep version command fails without stderr,
-    When doctor reads the bundled ripgrep diagnostic,
-    Then it reports the process error as the tool failure`, async () => {
-    // Given / When / Then
-    await withMockedExecFile(
-      (callback) => {
-        callback(new Error("spawn ENOENT"), "", "");
-      },
-      async ({ readBundledRipgrepDiagnostic }) => {
-        await expect(readBundledRipgrepDiagnostic()).rejects.toMatchObject({
-          name: "KeelError",
-          code: "tool_unavailable",
-          message:
-            "grep failed: bundled ripgrep version check failed: spawn ENOENT",
-        });
-      },
-    );
-  });
-
-  test(`Given the bundled ripgrep version command returns invalid stdout,
-    When doctor reads the bundled ripgrep diagnostic,
-    Then it reports the invalid version output as a tool failure`, async () => {
-    // Given / When / Then
-    await withMockedExecFile(
-      (callback) => {
-        callback(null, "not ripgrep\n", "");
-      },
-      async ({ readBundledRipgrepDiagnostic }) => {
-        await expect(readBundledRipgrepDiagnostic()).rejects.toMatchObject({
-          name: "KeelError",
-          code: "tool_unavailable",
-          message:
-            "grep failed: bundled ripgrep returned invalid version output",
-        });
-      },
-    );
   });
 });

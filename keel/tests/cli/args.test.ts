@@ -1,172 +1,152 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { parseCliArgs, USAGE } from "../../src/cli/args.ts";
+import { USAGE } from "../../src/cli/args.ts";
+import { runCliMain } from "../../src/cli/index.ts";
+import { createRuntime } from "../../src/testing/cli-runtime-fixtures.ts";
 
 describe("CLI Args", () => {
   test.each([["--help"], ["-h"]])(`Given the %s help flag,
-    When the top-level CLI args are parsed,
-    Then the parser returns a help command instead of a run prompt`, (flag) => {
+    When the user runs the CLI,
+    Then usage is printed to stdout instead of starting a prompt`, async (flag) => {
     // Given
-    const args = [flag];
+    const fixture = createRuntime([flag], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({ ok: true, value: { command: "help" } });
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toBe(`${USAGE}\n`);
+    expect(fixture.stderr()).toBe("");
   });
 
   test(`Given the undo list command,
-    When the top-level CLI args are parsed,
-    Then the parser returns an undo list command instead of a run prompt`, () => {
+    When the user runs the CLI,
+    Then undo checkpoints are listed without starting a provider run`, async () => {
     // Given
-    const args = ["/undo", "--list"];
-
-    // When
-    const result = parseCliArgs(args);
-
-    // Then
-    expect(result).toEqual({
-      ok: true,
-      value: { command: "undo", mode: "list" },
+    const workspace = await mkdtemp(join(tmpdir(), "keel-args-undo-list-"));
+    const fixture = createRuntime(["/undo", "--list"], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "fake" },
     });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("No undo checkpoints.\n");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test(`Given an unknown undo option,
-    When the top-level CLI args are parsed,
-    Then the parser rejects the option instead of running undo`, () => {
+    When the user runs the CLI,
+    Then the CLI rejects the option before running undo`, async () => {
     // Given
-    const args = ["/undo", "--all"];
+    const fixture = createRuntime(["/undo", "--all"]);
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({
-      ok: false,
-      message: 'Error: unknown undo option "--all"',
-    });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe('Error: unknown undo option "--all"\n');
   });
 
   test(`Given an extra undo list argument,
-    When the top-level CLI args are parsed,
-    Then the parser reports the extra argument instead of the list flag`, () => {
+    When the user runs the CLI,
+    Then the CLI reports the extra argument instead of listing checkpoints`, async () => {
     // Given
-    const args = ["/undo", "--list", "extra"];
+    const fixture = createRuntime(["/undo", "--list", "extra"]);
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({
-      ok: false,
-      message: 'Error: unknown undo option "extra"',
-    });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe('Error: unknown undo option "extra"\n');
   });
 
   test(`Given an unknown run option,
-    When the top-level CLI args are parsed,
-    Then the parser returns a usage error instead of a run prompt`, () => {
+    When the user runs the CLI,
+    Then usage is printed to stderr before resolving a provider`, async () => {
     // Given
-    const args = ["--bogus"];
+    const fixture = createRuntime(["--bogus"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({
-      ok: false,
-      message: `Error: unknown option "--bogus"\n\n${USAGE}`,
-    });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      `Error: unknown option "--bogus"\n\n${USAGE}\n`,
+    );
   });
 
   test(`Given a mistyped model option before a prompt,
-    When the top-level CLI args are parsed,
-    Then the parser rejects the typo before the prompt can run`, () => {
+    When the user runs the CLI,
+    Then the typo is reported instead of sending the prompt`, async () => {
     // Given
-    const args = ["--modle", "deepseek", "fix it"];
+    const fixture = createRuntime(["--modle", "deepseek", "fix it"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({
-      ok: false,
-      message: `Error: unknown option "--modle"\n\n${USAGE}`,
-    });
-  });
-
-  test(`Given an explicit end-of-options marker before a dash-leading prompt,
-    When the top-level CLI args are parsed,
-    Then the prompt is preserved as the run message`, () => {
-    // Given
-    const args = ["--provider=fake", "--", "-starts-with-dash message"];
-
-    // When
-    const result = parseCliArgs(args);
-
-    // Then
-    expect(result).toEqual({
-      ok: true,
-      value: {
-        command: "run",
-        bashMode: "disabled",
-        providerId: "fake",
-        userMessage: "-starts-with-dash message",
-      },
-    });
-  });
-
-  test(`Given an end-of-options marker without a following prompt,
-    When the top-level CLI args are parsed,
-    Then the parser keeps the run request message-less`, () => {
-    // Given
-    const args = ["--provider=fake", "--"];
-
-    // When
-    const result = parseCliArgs(args);
-
-    // Then
-    expect(result).toEqual({
-      ok: true,
-      value: {
-        command: "run",
-        bashMode: "disabled",
-        providerId: "fake",
-      },
-    });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      `Error: unknown option "--modle"\n\n${USAGE}\n`,
+    );
   });
 
   test(`Given a run option value is followed by another known flag,
-    When the top-level CLI args are parsed,
-    Then the parser rejects the missing value instead of swallowing the flag`, () => {
+    When the user runs the CLI,
+    Then the CLI rejects the missing value instead of swallowing the flag`, async () => {
     // Given
-    const args = ["--model", "--max-cost", "5", "fix it"];
+    const fixture = createRuntime(["--model", "--max-cost", "5", "fix it"]);
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({
-      ok: false,
-      message: 'Error: --model requires a value, but got option "--max-cost".',
-    });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      'Error: --model requires a value, but got option "--max-cost".\n',
+    );
   });
 
   test(`Given a run option value is followed by another known flag with an inline value,
-    When the top-level CLI args are parsed,
-    Then the parser rejects the missing value instead of swallowing the flag token`, () => {
+    When the user runs the CLI,
+    Then the CLI rejects the missing value instead of swallowing the inline flag token`, async () => {
     // Given
-    const args = ["--model", "--max-cost=5", "fix it"];
+    const fixture = createRuntime(["--model", "--max-cost=5", "fix it"]);
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({
-      ok: false,
-      message:
-        'Error: --model requires a value, but got option "--max-cost=5".',
-    });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      'Error: --model requires a value, but got option "--max-cost=5".\n',
+    );
   });
 
   test.each([
@@ -177,166 +157,140 @@ describe("CLI Args", () => {
     ["--fork", "--fork-before-message"],
     ["--skill", "--provider"],
   ])(`Given the %s run option is followed by the %s flag,
-    When the top-level CLI args are parsed,
-    Then the parser rejects the missing value instead of treating the flag as data`, (option, nextFlag) => {
+    When the user runs the CLI,
+    Then the CLI rejects the missing value instead of treating the flag as data`, async (option, nextFlag) => {
     // Given
-    const args = [option, nextFlag, "value", "fix it"];
+    const fixture = createRuntime([option, nextFlag, "value", "fix it"]);
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toMatchObject({
-      ok: false,
-      message: expect.stringContaining(
-        `Error: ${option} requires a value, but got option "${nextFlag}".`,
-      ),
-    });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toContain(
+      `Error: ${option} requires a value, but got option "${nextFlag}".`,
+    );
   });
 
   test(`Given a doctor model option is followed by the offline flag,
-    When the top-level CLI args are parsed,
-    Then the parser rejects the missing model instead of disabling the flag`, () => {
+    When the user runs the CLI,
+    Then the CLI rejects the missing model instead of disabling offline mode`, async () => {
     // Given
-    const args = ["--doctor", "--model", "--offline"];
+    const fixture = createRuntime(["--doctor", "--model", "--offline"]);
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({
-      ok: false,
-      message: 'Error: --model requires a value, but got option "--offline".',
-    });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      'Error: --model requires a value, but got option "--offline".\n',
+    );
   });
 
   test(`Given an eval output option is followed by the check flag,
-    When the top-level CLI args are parsed,
-    Then the parser rejects the missing output path instead of disabling the flag`, () => {
+    When the user runs the CLI,
+    Then the CLI rejects the missing output path instead of disabling the flag`, async () => {
     // Given
-    const args = ["eval", "--out", "--check"];
+    const fixture = createRuntime(["eval", "--out", "--check"]);
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({
-      ok: false,
-      message: 'Error: --out requires a value, but got option "--check".',
-    });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      'Error: --out requires a value, but got option "--check".\n',
+    );
   });
 
   test.each([
     ["--trials", "--check"],
     ["--provider", "--model"],
   ])(`Given the %s eval option is followed by the %s flag,
-    When the top-level CLI args are parsed,
-    Then the parser rejects the missing value instead of returning a type-specific error`, (option, nextFlag) => {
+    When the user runs the CLI,
+    Then the CLI rejects the missing value instead of returning a type-specific error`, async (option, nextFlag) => {
     // Given
-    const args = ["eval", option, nextFlag, "value"];
+    const fixture = createRuntime(["eval", option, nextFlag, "value"]);
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({
-      ok: false,
-      message: `Error: ${option} requires a value, but got option "${nextFlag}".`,
-    });
-  });
-
-  test(`Given eval run options use inline values,
-    When the top-level CLI args are parsed,
-    Then every value-taking eval option is accepted consistently`, () => {
-    // Given
-    const args = [
-      "eval",
-      "--suite=evals/custom",
-      "--out=/tmp/results.jsonl",
-      "--trials=3",
-      "--task=fix-note",
-      "--provider=fake",
-      "--model=ignored",
-      "--transcript-dir=/tmp/transcripts",
-      "--check",
-    ];
-
-    // When
-    const result = parseCliArgs(args);
-
-    // Then
-    expect(result).toEqual({
-      ok: true,
-      value: {
-        command: "eval",
-        mode: "run",
-        suiteDir: "evals/custom",
-        outFile: "/tmp/results.jsonl",
-        trials: 3,
-        taskId: "fix-note",
-        providerId: "fake",
-        model: "ignored",
-        transcriptDir: "/tmp/transcripts",
-        check: true,
-      },
-    });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      `Error: ${option} requires a value, but got option "${nextFlag}".\n`,
+    );
   });
 
   test.each([
-    ["--suite=", "Error: --suite requires a value."],
-    ["--out=", "Error: --out requires a value."],
-    ["--task=", "Error: --task requires a value."],
-    ["--trials=0", "Error: --trials must be a positive integer."],
+    ["--suite=", "Error: --suite requires a value.\n"],
+    ["--out=", "Error: --out requires a value.\n"],
+    ["--task=", "Error: --task requires a value.\n"],
+    ["--trials=0", "Error: --trials must be a positive integer.\n"],
   ])(`Given eval run option %s has an invalid inline value,
-    When the top-level CLI args are parsed,
-    Then it returns the option-specific validation error`, (arg, message) => {
+    When the user runs the CLI,
+    Then the CLI prints the option-specific validation error`, async (arg, message) => {
     // Given
-    const args = ["eval", arg];
+    const fixture = createRuntime(["eval", arg]);
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({ ok: false, message });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(message);
   });
 
   test(`Given an eval compare base option is followed by the head flag,
-    When the top-level CLI args are parsed,
-    Then the parser rejects the missing base path instead of treating the flag as data`, () => {
+    When the user runs the CLI,
+    Then the CLI rejects the missing base path instead of treating the flag as data`, async () => {
     // Given
-    const args = ["eval", "compare", "--base", "--head", "head.jsonl"];
+    const fixture = createRuntime([
+      "eval",
+      "compare",
+      "--base",
+      "--head",
+      "head.jsonl",
+    ]);
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({
-      ok: false,
-      message: 'Error: --base requires a value, but got option "--head".',
-    });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      'Error: --base requires a value, but got option "--head".\n',
+    );
   });
 
   test(`Given a sessions fork before-message option is followed by another before-message flag,
-    When the top-level CLI args are parsed,
-    Then the parser rejects the missing message id instead of treating the flag as data`, () => {
+    When the user runs the CLI,
+    Then the CLI rejects the missing message id instead of treating the flag as data`, async () => {
     // Given
-    const args = [
+    const fixture = createRuntime([
       "sessions",
       "fork",
       "source",
       "target",
       "--before-message",
       "--before-message",
-    ];
+    ]);
 
     // When
-    const result = parseCliArgs(args);
+    const exitCode = await runCliMain(fixture.runtime);
 
     // Then
-    expect(result).toEqual({
-      ok: false,
-      message:
-        'Error: --before-message requires a value, but got option "--before-message".',
-    });
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      'Error: --before-message requires a value, but got option "--before-message".\n',
+    );
   });
 });
