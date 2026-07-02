@@ -18,6 +18,10 @@ import {
   compactStaleToolOutputsWithArtifacts,
   type StaleToolOutputCompactionStats,
 } from "./stale-tool-output.ts";
+import {
+  projectCompactedToolOutput,
+  type ToolOutputProjectionContext,
+} from "./tool-output-preview.ts";
 
 const MAX_SUMMARY_OVERFLOW_RETRIES = 3;
 
@@ -32,14 +36,46 @@ export interface BuildCompactedMessagesResult {
   readonly artifactNotices?: readonly ToolOutputArtifactNotice[];
 }
 
-function truncateText(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
+function toolContextForSummaryInput(
+  messages: readonly Message[],
+  toolCallId: string,
+): ToolOutputProjectionContext {
+  for (const message of messages) {
+    if (message.role !== "assistant") {
+      continue;
+    }
+    const toolCall = message.toolCalls.find(
+      (candidate) => candidate.id === toolCallId,
+    );
+    if (toolCall !== undefined) {
+      return { toolName: toolCall.tool, toolCall };
+    }
   }
-  return `${text.slice(0, maxChars)}\n[truncated ${text.length - maxChars} chars]`;
+  return { toolName: "unknown" };
+}
+
+function summaryToolOutputPreview(options: {
+  readonly messages: readonly Message[];
+  readonly message: Extract<Message, { readonly role: "tool" }>;
+  readonly toolOutputMaxChars: number;
+}): string {
+  if (options.message.content.length <= options.toolOutputMaxChars) {
+    return options.message.content;
+  }
+  const projection = projectCompactedToolOutput({
+    text: options.message.content,
+    maxChars: options.toolOutputMaxChars,
+    context: toolContextForSummaryInput(
+      options.messages,
+      options.message.toolCallId,
+    ),
+    purpose: "summary-input",
+  });
+  return `${projection.preview}\n[truncated ${projection.omittedChars} chars from summary input preview]`;
 }
 
 function serializeMessage(
+  messages: readonly Message[],
   message: Message,
   toolOutputMaxChars: number,
 ): string {
@@ -60,9 +96,12 @@ function serializeMessage(
       return `<message role="assistant">\n${message.content}${toolCallText}\n</message>`;
     }
     case "tool":
-      return `<message role="tool" tool_call_id="${message.toolCallId}">\n${truncateText(
-        message.content,
-        toolOutputMaxChars,
+      return `<message role="tool" tool_call_id="${message.toolCallId}">\n${summaryToolOutputPreview(
+        {
+          messages,
+          message,
+          toolOutputMaxChars,
+        },
       )}\n</message>`;
   }
 }
@@ -118,7 +157,7 @@ function buildSummaryPrompt(
     normalizeFocusInstruction(focusInstruction);
   const selected = selectSummaryInput(
     messages.map((message) =>
-      serializeMessage(message, options.toolOutputMaxChars),
+      serializeMessage(messages, message, options.toolOutputMaxChars),
     ),
     summaryInputMaxChars,
   );

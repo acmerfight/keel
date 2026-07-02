@@ -198,7 +198,7 @@ function lineIndex(lines: readonly string[], needle: string): number {
 describe("Context Compaction Stale Tool Output", () => {
   test(`Given a retained failed bash output has the useful error in the tail,
     When context compaction projects the tool output,
-    Then the model-visible preview keeps status, tail diagnostics, and the artifact ref`, async () => {
+    Then the model-visible preview keeps stream summaries, tail diagnostics, and the artifact ref`, async () => {
     // Given
     const bashOutput = [
       "Exit code: 1",
@@ -224,6 +224,9 @@ describe("Context Compaction Stale Tool Output", () => {
 
     // Then
     expect(compacted.content).toContain("Exit code: 1");
+    expect(compacted.content).toContain("stdout: 40 lines");
+    expect(compacted.content).toContain("stderr: 26 lines");
+    expect(compacted.content).toContain("stderr tail:");
     expect(compacted.content).toContain(
       "TAIL_FAILURE: expected 2 passing tests but saw 1 failing test",
     );
@@ -261,10 +264,11 @@ describe("Context Compaction Stale Tool Output", () => {
     // Then
     const preview = previewBeforeStaleCompactionMarker(compacted.content);
     expect(preview).toContain("Exit code: 1");
-    expect(preview).toContain("[bash output tail preview]");
+    expect(preview).toContain("stderr: 1 line");
+    expect(preview).toContain("stderr tail:");
     expect(preview).toContain(tailFailureSuffix);
     expect(preview).not.toBe(
-      "bash command: pnpm test\nExit code: 1\n\n[bash output tail preview]\n",
+      "bash command: pnpm test\nExit code: 1\nstderr: 1 line\nstderr tail:",
     );
     expect(preview.length).toBeLessThanOrEqual(110);
     expect(compacted.saved[0]?.input.content).toBe(bashOutput);
@@ -272,7 +276,7 @@ describe("Context Compaction Stale Tool Output", () => {
 
   test(`Given retained bash output has a key middle failure outside the preview,
     When context compaction projects the tool output,
-    Then the preview keeps the artifact evidence handle for exact recovery`, async () => {
+    Then the preview marks omitted stream content and keeps the artifact evidence handle for exact recovery`, async () => {
     // Given
     const bashOutput = [
       "Exit code: 1",
@@ -299,11 +303,55 @@ describe("Context Compaction Stale Tool Output", () => {
 
     // Then
     expect(compacted.content).toContain("Exit code: 1");
+    expect(compacted.content).toContain("stdout: 61 lines");
+    expect(compacted.content).toContain("stderr: 1 line");
+    expect(compacted.content).toContain("... omitted from stdout preview:");
     expect(compacted.content).toContain("tail summary: command failed");
     expect(compacted.content).toContain("full output artifact: tool-output:");
     expect(compacted.content).toContain("keel artifacts show tool-output:");
     expect(compacted.content).not.toContain("MIDDLE_FAILURE");
     expect(compacted.saved[0]?.input.content).toContain("MIDDLE_FAILURE");
+  });
+
+  test(`Given retained bash output only has room for stream summaries,
+    When context compaction projects the tool output,
+    Then the preview drops the tail section instead of cutting a tail header`, async () => {
+    // Given
+    const bashOutput = [
+      "Exit code: 1",
+      "",
+      "stdout:",
+      `setup passed ${"x".repeat(80)}`,
+      "stderr:",
+      `tail failure details ${"y".repeat(80)}`,
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "bash_summaries_only",
+        tool: "bash",
+        command: "pnpm test",
+      },
+      content: bashOutput,
+      toolOutputMaxChars: 67,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toBe(
+      [
+        "bash command: pnpm test",
+        "Exit code: 1",
+        "",
+        "stdout: 1 line",
+        "stderr: 1 line",
+      ].join("\n"),
+    );
+    expect(preview).not.toContain("stderr tail:");
+    expect(preview).not.toContain("tail failure details");
+    expect(preview.length).toBeLessThanOrEqual(67);
+    expect(compacted.content).toContain("full output artifact: tool-output:");
   });
 
   test(`Given a retained read output stops at a window boundary,
@@ -418,6 +466,76 @@ describe("Context Compaction Stale Tool Output", () => {
         );
       }
     }
+  });
+
+  test(`Given retained grep output carries an inaccessible-path warning after many matches,
+    When context compaction projects the tool output,
+    Then the preview preserves the warning with the visible match entries`, async () => {
+    // Given
+    const grepMatches = Array.from(
+      { length: 30 },
+      (_, index) =>
+        `src/file-${String(index + 1).padStart(
+          3,
+          "0",
+        )}.ts:${index + 1}:MATCH_${String(index + 1).padStart(3, "0")}`,
+    );
+    const warning = "[grep warning: some paths were inaccessible and skipped]";
+    const grepOutput = [...grepMatches, warning].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "grep_partial_matches",
+        tool: "grep",
+        pattern: "MATCH",
+      },
+      content: grepOutput,
+      toolOutputMaxChars: 190,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain("grep source: MATCH");
+    expect(preview).toContain("src/file-001.ts:1:MATCH_001");
+    expect(preview).toContain(warning);
+    expect(preview).not.toContain("src/file-030.ts:30:MATCH_030");
+    expect(preview.length).toBeLessThanOrEqual(190);
+  });
+
+  test(`Given retained grep output is both match-truncated and partially inaccessible,
+    When context compaction projects the tool output under a tight budget,
+    Then the inaccessible-path warning is prioritized over truncation guidance`, async () => {
+    // Given
+    const warning = "[grep warning: some paths were inaccessible and skipped]";
+    const grepOutput = [
+      "src/file-001.ts:1:MATCH_001",
+      "src/file-002.ts:2:MATCH_002",
+      "src/file-003.ts:3:MATCH_003",
+      "[grep output truncated: showing first 30 matches]",
+      warning,
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "grep_truncated_partial_matches",
+        tool: "grep",
+        pattern: "MATCH",
+      },
+      content: grepOutput,
+      toolOutputMaxChars: 150,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain("grep source: MATCH");
+    expect(preview).toContain("src/file-001.ts:1:MATCH_001");
+    expect(preview).toContain(warning);
+    expect(preview).not.toContain(
+      "[grep output truncated: showing first 30 matches]",
+    );
+    expect(preview.length).toBeLessThanOrEqual(150);
   });
 
   test(`Given retained grep output is scoped and complete,
@@ -1306,7 +1424,10 @@ describe("Context Compaction Stale Tool Output", () => {
     expect(lineIndex(previewLines, "- src/file-06.ts:")).toBeLessThan(
       lineIndex(previewLines, "Snippet"),
     );
-    expect(preview).toContain("details omitted from preview:");
+    expect(preview).toContain(
+      "... details omitted from preview: 6 hunks, +6/-6 changed lines",
+    );
+    expect(preview).not.toMatch(/details omitted from preview: [0-9]+ files/u);
     expect(preview.length).toBeLessThanOrEqual(720);
     expect(compacted.content).toContain("full output artifact: tool-output:");
   });

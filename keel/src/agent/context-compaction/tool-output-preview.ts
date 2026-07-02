@@ -6,6 +6,10 @@ export interface ToolOutputProjectionContext {
   readonly toolCall?: ToolCall;
 }
 
+type ToolOutputProjectionPurpose =
+  | "artifact-backed-compaction"
+  | "summary-input";
+
 export interface ProjectedToolOutput {
   readonly preview: string;
   readonly omittedChars: number;
@@ -213,29 +217,174 @@ function projectBashOutput(
   context: ToolOutputProjectionContext,
 ): string {
   const lines = text.split("\n");
+  const parsed = parseBashOutput(lines);
   const selected: string[] = [];
   appendSourceLine(selected, context, maxChars);
-  for (const line of lines) {
-    if (
-      line === "" ||
-      line.startsWith("Command timed out after ") ||
-      line.startsWith("Exit code: ") ||
-      line.startsWith("Signal: ")
-    ) {
-      appendLineWithinBudget(selected, line, maxChars);
-      continue;
-    }
-    break;
+  for (const line of parsed.statusLines) {
+    appendLineWithinBudget(selected, line, maxChars);
   }
-  appendLineWithinBudget(selected, "[bash output tail preview]", maxChars);
-  const remaining = Math.max(0, maxChars - joinedLines(selected).length - 1);
-  for (const line of tailLinesWithinBudget(lines, remaining)) {
-    /* v8 ignore next 3: tail lines are preselected against the exact remaining budget. */
-    if (!appendLineWithinBudget(selected, line, maxChars)) {
-      break;
+  const streamSummaries = bashStreamSummaries(parsed);
+  for (const line of streamSummaries) {
+    appendLineWithinBudget(selected, line, maxChars);
+  }
+  for (const stream of bashDetailStreams(parsed)) {
+    appendBashStreamTail({
+      lines: selected,
+      label: stream.label,
+      streamLines: stream.lines,
+      maxChars,
+    });
+  }
+  if (
+    parsed.stdout.length === 0 &&
+    parsed.stderr.length === 0 &&
+    parsed.otherLines.length > 0
+  ) {
+    appendLineWithinBudget(selected, "[bash output tail preview]", maxChars);
+    const remaining = Math.max(0, maxChars - joinedLines(selected).length - 1);
+    for (const line of tailLinesWithinBudget(parsed.otherLines, remaining)) {
+      /* v8 ignore next 3: tail lines are preselected against the exact remaining budget. */
+      if (!appendLineWithinBudget(selected, line, maxChars)) {
+        break;
+      }
     }
   }
   return boundedText(joinedLines(selected), maxChars);
+}
+
+interface BashOutputSections {
+  readonly statusLines: readonly string[];
+  readonly stdout: readonly string[];
+  readonly stderr: readonly string[];
+  readonly otherLines: readonly string[];
+}
+
+interface BashStream {
+  readonly label: "stdout" | "stderr";
+  readonly lines: readonly string[];
+}
+
+function trimTrailingEmptyLines(lines: readonly string[]): readonly string[] {
+  const trimmed = [...lines];
+  while (trimmed.at(-1) === "") {
+    trimmed.pop();
+  }
+  return trimmed;
+}
+
+function parseBashOutput(lines: readonly string[]): BashOutputSections {
+  const statusLines: string[] = [];
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const otherLines: string[] = [];
+  let stream: "stdout" | "stderr" | null = null;
+  let inStatusPrelude = true;
+  for (const line of lines) {
+    if (inStatusPrelude) {
+      if (
+        line === "" ||
+        line.startsWith("Command timed out after ") ||
+        line.startsWith("Exit code: ") ||
+        line.startsWith("Signal: ")
+      ) {
+        statusLines.push(line);
+        continue;
+      }
+      inStatusPrelude = false;
+    }
+    if (line === "stdout:") {
+      stream = "stdout";
+      continue;
+    }
+    if (line === "stderr:") {
+      stream = "stderr";
+      continue;
+    }
+    if (stream === "stdout") {
+      stdout.push(line);
+      continue;
+    }
+    if (stream === "stderr") {
+      stderr.push(line);
+      continue;
+    }
+    otherLines.push(line);
+  }
+  return {
+    statusLines,
+    stdout: trimTrailingEmptyLines(stdout),
+    stderr: trimTrailingEmptyLines(stderr),
+    otherLines: trimTrailingEmptyLines(otherLines),
+  };
+}
+
+function bashStreamSummaries(parsed: BashOutputSections): readonly string[] {
+  const lines: string[] = [];
+  if (parsed.stdout.length > 0) {
+    lines.push(`stdout: ${unitLabel(parsed.stdout.length, "line", "lines")}`);
+  }
+  if (parsed.stderr.length > 0) {
+    lines.push(`stderr: ${unitLabel(parsed.stderr.length, "line", "lines")}`);
+  }
+  return lines;
+}
+
+function bashDetailStreams(parsed: BashOutputSections): readonly BashStream[] {
+  const streams: BashStream[] = [];
+  if (parsed.stderr.length > 0) {
+    streams.push({ label: "stderr", lines: parsed.stderr });
+  }
+  if (parsed.stdout.length > 0) {
+    streams.push({ label: "stdout", lines: parsed.stdout });
+  }
+  return streams;
+}
+
+function appendBashStreamTail(options: {
+  readonly lines: string[];
+  readonly label: "stdout" | "stderr";
+  readonly streamLines: readonly string[];
+  readonly maxChars: number;
+}): void {
+  const beforeStream = [...options.lines];
+  if (
+    !appendLineWithinBudget(
+      options.lines,
+      `${options.label} tail:`,
+      options.maxChars,
+    )
+  ) {
+    return;
+  }
+  const remaining = Math.max(
+    0,
+    options.maxChars - joinedLines(options.lines).length - 1,
+  );
+  const tailLines = tailLinesWithinBudget(options.streamLines, remaining);
+  if (tailLines.length === 0) {
+    options.lines.splice(0, options.lines.length, ...beforeStream);
+    return;
+  }
+  const omittedLines = Math.max(
+    0,
+    options.streamLines.length - tailLines.length,
+  );
+  if (omittedLines > 0) {
+    appendLineWithinBudget(
+      options.lines,
+      `... omitted from ${options.label} preview: ${unitLabel(
+        omittedLines,
+        "line",
+        "lines",
+      )}`,
+      options.maxChars,
+    );
+  }
+  for (const line of tailLines) {
+    if (!appendLineWithinBudget(options.lines, line, options.maxChars)) {
+      break;
+    }
+  }
 }
 
 function readContinuationNotice(lines: readonly string[]): string | undefined {
@@ -287,35 +436,66 @@ function projectReadOutput(
   return boundedText(joinedLines(selected), maxChars);
 }
 
-function truncationGuidanceLine(
+function listedOutputNoticeLines(
   lines: readonly string[],
-  prefix: string,
-): string | undefined {
-  return lines.findLast((line) => line.startsWith(prefix));
+  prefixes: readonly string[],
+): {
+  readonly required: readonly string[];
+  readonly optional: readonly string[];
+} {
+  const notices: { readonly line: string; readonly priority: number }[] = [];
+  for (const line of lines) {
+    const priority = prefixes.findIndex((prefix) => line.startsWith(prefix));
+    if (priority !== -1) {
+      notices.push({ line, priority });
+    }
+  }
+  if (notices.length === 0) {
+    return { required: [], optional: [] };
+  }
+  const requiredPriority = notices.reduce(
+    (lowest, notice) => Math.min(lowest, notice.priority),
+    Number.POSITIVE_INFINITY,
+  );
+  const required = notices
+    .filter((notice) => notice.priority === requiredPriority)
+    .map((notice) => notice.line);
+  const optional = notices
+    .filter((notice) => notice.priority !== requiredPriority)
+    .map((notice) => notice.line);
+  return { required, optional };
 }
 
 function projectListedOutput(options: {
   readonly text: string;
   readonly maxChars: number;
   readonly context: ToolOutputProjectionContext;
-  readonly guidancePrefix: string;
+  readonly noticePrefixes: readonly string[];
 }): string {
   const lines = options.text.split("\n");
-  const guidance = truncationGuidanceLine(lines, options.guidancePrefix);
-  const entryLines =
-    guidance === undefined ? lines : lines.filter((line) => line !== guidance);
+  const noticeLines = listedOutputNoticeLines(lines, options.noticePrefixes);
+  const noticeLineSet = new Set([
+    ...noticeLines.required,
+    ...noticeLines.optional,
+  ]);
+  const entryLines = lines.filter((line) => !noticeLineSet.has(line));
   const selected: string[] = [];
   appendSourceLine(selected, options.context, options.maxChars);
-  const reservedGuidanceLength =
-    guidance === undefined ? 0 : guidance.length + 1;
-  const entryBudget = Math.max(0, options.maxChars - reservedGuidanceLength);
+  const reservedNoticeLength =
+    noticeLines.required.length === 0
+      ? 0
+      : joinedLines(noticeLines.required).length + 1;
+  const entryBudget = Math.max(0, options.maxChars - reservedNoticeLength);
   for (const line of headLinesWithinBudget(entryLines, entryBudget)) {
     if (!appendLineWithinBudget(selected, line, entryBudget)) {
       break;
     }
   }
-  if (guidance !== undefined) {
-    appendLineWithinBudget(selected, guidance, options.maxChars);
+  for (const line of noticeLines.required) {
+    appendLineWithinBudget(selected, line, options.maxChars);
+  }
+  for (const line of noticeLines.optional) {
+    appendLineWithinBudget(selected, line, options.maxChars);
   }
   return boundedText(joinedLines(selected), options.maxChars);
 }
@@ -655,23 +835,32 @@ function gitDiffHunkSnippetLines(
 function gitDiffHunkBodyOmissionLine(
   file: GitDiffFile,
   hunk: GitDiffHunk,
+  purpose: ToolOutputProjectionPurpose,
 ): readonly string[] {
+  const replacementGuidance =
+    purpose === "summary-input"
+      ? "full old/new lines omitted from summary input"
+      : "inspect artifact for full old/new lines";
+  const changedGuidance =
+    purpose === "summary-input"
+      ? "full changed lines omitted from summary input"
+      : "inspect artifact for full changed lines";
   if (hunk.additions > 0 && hunk.deletions > 0) {
     return [
-      `Snippet omitted: ${file.path} ${hunk.header} replacement hunk omitted from preview; +${hunk.additions}/-${hunk.deletions}; inspect artifact for full old/new lines`,
+      `Snippet omitted: ${file.path} ${hunk.header} replacement hunk omitted from preview; +${hunk.additions}/-${hunk.deletions}; ${replacementGuidance}`,
       `Snippet omitted: ${file.path} ${hunk.header}; +${hunk.additions}/-${hunk.deletions}`,
       `Snippet omitted: +${hunk.additions}/-${hunk.deletions}`,
     ];
   }
   if (hunk.additions > 0) {
     return [
-      `Snippet omitted: ${file.path} ${hunk.header} add-only hunk omitted from preview; +${hunk.additions}/-${hunk.deletions}; inspect artifact for full changed lines`,
+      `Snippet omitted: ${file.path} ${hunk.header} add-only hunk omitted from preview; +${hunk.additions}/-${hunk.deletions}; ${changedGuidance}`,
       `Snippet omitted: ${file.path} ${hunk.header}; +${hunk.additions}/-${hunk.deletions}`,
       `Snippet omitted: +${hunk.additions}/-${hunk.deletions}`,
     ];
   }
   return [
-    `Snippet omitted: ${file.path} ${hunk.header} delete-only hunk omitted from preview; +${hunk.additions}/-${hunk.deletions}; inspect artifact for full changed lines`,
+    `Snippet omitted: ${file.path} ${hunk.header} delete-only hunk omitted from preview; +${hunk.additions}/-${hunk.deletions}; ${changedGuidance}`,
     `Snippet omitted: ${file.path} ${hunk.header}; +${hunk.additions}/-${hunk.deletions}`,
     `Snippet omitted: +${hunk.additions}/-${hunk.deletions}`,
   ];
@@ -700,6 +889,17 @@ function mergeGitDiffOmittedDetails(
 function omittedDetailsForFile(file: GitDiffFile): GitDiffOmittedDetails {
   return {
     files: 1,
+    hunks: file.hunks.length,
+    additions: file.additions,
+    deletions: file.deletions,
+  };
+}
+
+function omittedDetailsForSummarizedFile(
+  file: GitDiffFile,
+): GitDiffOmittedDetails {
+  return {
+    files: 0,
     hunks: file.hunks.length,
     additions: file.additions,
     deletions: file.deletions,
@@ -758,6 +958,7 @@ function appendGitDiffHunkPreview(options: {
   readonly file: GitDiffFile;
   readonly hunk: GitDiffHunk;
   readonly maxChars: number;
+  readonly purpose: ToolOutputProjectionPurpose;
 }): GitDiffOmittedDetails {
   const snippetLines = gitDiffHunkSnippetLines(options.file, options.hunk);
   if (appendLinesWithinBudget(options.lines, snippetLines, options.maxChars)) {
@@ -765,7 +966,7 @@ function appendGitDiffHunkPreview(options: {
   }
   appendFirstFittingLine(
     options.lines,
-    gitDiffHunkBodyOmissionLine(options.file, options.hunk),
+    gitDiffHunkBodyOmissionLine(options.file, options.hunk, options.purpose),
     options.maxChars,
   );
   return omittedDetailsForHunk(options.hunk);
@@ -775,6 +976,7 @@ function projectGitDiffOutput(
   text: string,
   maxChars: number,
   context: ToolOutputProjectionContext,
+  purpose: ToolOutputProjectionPurpose,
 ): string {
   const lines = text.split("\n");
   const parsed = parseGitDiffOutput(lines);
@@ -798,7 +1000,9 @@ function projectGitDiffOutput(
   appendFirstFittingLine(
     previewLines,
     [
-      `git_diff compacted preview: ${unitLabel(
+      `git_diff ${
+        purpose === "summary-input" ? "summary input" : "compacted"
+      } preview: ${unitLabel(
         parsed.files.length,
         "file",
         "files",
@@ -806,7 +1010,18 @@ function projectGitDiffOutput(
         hunkCount,
         "hunk",
         "hunks",
-      )}, +${additions}/-${deletions}; full output artifact is referenced below`,
+      )}, +${additions}/-${deletions}; ${
+        purpose === "summary-input"
+          ? "full output omitted from summary input"
+          : "full output artifact is referenced below"
+      }`,
+      `git_diff ${
+        purpose === "summary-input" ? "summary input" : "compacted"
+      } preview: ${unitLabel(
+        parsed.files.length,
+        "file",
+        "files",
+      )}, ${unitLabel(hunkCount, "hunk", "hunks")}, +${additions}/-${deletions}`,
       `git_diff compacted preview: ${unitLabel(
         parsed.files.length,
         "file",
@@ -864,7 +1079,7 @@ function projectGitDiffOutput(
     if (detailsClosed) {
       omittedDetails = mergeGitDiffOmittedDetails(
         omittedDetails,
-        omittedDetailsForFile(file),
+        omittedDetailsForSummarizedFile(file),
       );
       continue;
     }
@@ -874,6 +1089,7 @@ function projectGitDiffOutput(
         file,
         hunk,
         maxChars,
+        purpose,
       });
       omittedDetails = mergeGitDiffOmittedDetails(
         omittedDetails,
@@ -903,13 +1119,14 @@ function projectGitDiffOutput(
   if (sourceLine !== null) {
     insertLineWithinBudget(previewLines, 1, sourceLine, maxChars);
   }
-  return joinedLines(previewLines);
+  return boundedText(joinedLines(previewLines), maxChars);
 }
 
 function projectToolOutputPreview(
   text: string,
   maxChars: number,
   context: ToolOutputProjectionContext,
+  purpose: ToolOutputProjectionPurpose,
 ): string {
   switch (context.toolName) {
     case "bash":
@@ -921,24 +1138,27 @@ function projectToolOutputPreview(
         text,
         maxChars,
         context,
-        guidancePrefix: "[grep output truncated:",
+        noticePrefixes: [
+          "[grep warning: some paths were inaccessible",
+          "[grep output truncated:",
+        ],
       });
     case "glob":
       return projectListedOutput({
         text,
         maxChars,
         context,
-        guidancePrefix: "[glob output truncated:",
+        noticePrefixes: ["[glob output truncated:"],
       });
     case "ls":
       return projectListedOutput({
         text,
         maxChars,
         context,
-        guidancePrefix: "[ls output truncated:",
+        noticePrefixes: ["[ls output truncated:"],
       });
     case "git_diff":
-      return projectGitDiffOutput(text, maxChars, context);
+      return projectGitDiffOutput(text, maxChars, context, purpose);
     case "edit":
     case "write":
     case "apply_patch":
@@ -951,11 +1171,13 @@ export function projectCompactedToolOutput(options: {
   readonly text: string;
   readonly maxChars: number;
   readonly context: ToolOutputProjectionContext;
+  readonly purpose?: ToolOutputProjectionPurpose;
 }): ProjectedToolOutput {
   const preview = projectToolOutputPreview(
     options.text,
     options.maxChars,
     options.context,
+    options.purpose ?? "artifact-backed-compaction",
   );
   return {
     preview,
