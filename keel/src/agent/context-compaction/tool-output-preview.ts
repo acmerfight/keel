@@ -52,6 +52,50 @@ function prependLineWithinBudget(
   return false;
 }
 
+function appendLinesWithinBudget(
+  lines: string[],
+  candidateLines: readonly string[],
+  maxChars: number,
+): boolean {
+  const candidate = joinedLines([...lines, ...candidateLines]);
+  if (candidate.length <= maxChars) {
+    lines.push(...candidateLines);
+    return true;
+  }
+  return false;
+}
+
+function appendFirstFittingLine(
+  lines: string[],
+  candidateLines: readonly string[],
+  maxChars: number,
+): boolean {
+  for (const line of candidateLines) {
+    if (appendLineWithinBudget(lines, line, maxChars)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function insertLineWithinBudget(
+  lines: string[],
+  index: number,
+  line: string,
+  maxChars: number,
+): boolean {
+  const candidate = joinedLines([
+    ...lines.slice(0, index),
+    line,
+    ...lines.slice(index),
+  ]);
+  if (candidate.length <= maxChars) {
+    lines.splice(index, 0, line);
+    return true;
+  }
+  return false;
+}
+
 function headLinesWithinBudget(
   lines: readonly string[],
   maxChars: number,
@@ -276,28 +320,13 @@ function projectListedOutput(options: {
   return boundedText(joinedLines(selected), options.maxChars);
 }
 
-function gitDiffBlocks(
-  lines: readonly string[],
-): readonly (readonly string[])[] {
-  const blocks: string[][] = [];
-  let current: string[] = [];
-  for (const line of lines) {
-    if (line.startsWith("diff --git ")) {
-      if (current.length > 0) {
-        blocks.push(current);
-      }
-      current = [line];
-      continue;
-    }
-    if (current.length > 0) {
-      current.push(line);
-    }
-  }
-  if (current.length > 0) {
-    blocks.push(current);
-  }
-  return blocks;
-}
+type GitDiffFileStatus =
+  | "modified"
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "binary"
+  | "mode-only";
 
 interface GitDiffHunk {
   readonly header: string;
@@ -306,17 +335,87 @@ interface GitDiffHunk {
   readonly deletions: number;
 }
 
+interface GitDiffBlock {
+  readonly section: string | null;
+  readonly lines: readonly string[];
+}
+
 interface GitDiffFile {
   readonly path: string;
+  readonly section: string | null;
+  readonly status: GitDiffFileStatus;
   readonly hunks: readonly GitDiffHunk[];
   readonly additions: number;
   readonly deletions: number;
 }
 
-interface GitDiffHunkPreview {
-  readonly lines: readonly string[];
-  readonly omittedAdditions: number;
-  readonly omittedDeletions: number;
+interface GitDiffParseResult {
+  readonly preludeLines: readonly string[];
+  readonly files: readonly GitDiffFile[];
+}
+
+interface GitDiffOmittedDetails {
+  readonly files: number;
+  readonly hunks: number;
+  readonly additions: number;
+  readonly deletions: number;
+}
+
+const EMPTY_GIT_DIFF_OMITTED_DETAILS: GitDiffOmittedDetails = {
+  files: 0,
+  hunks: 0,
+  additions: 0,
+  deletions: 0,
+};
+
+function unitLabel(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function isGitDiffSectionLine(line: string): boolean {
+  return (
+    line === "Unstaged changes:" ||
+    line === "Staged changes:" ||
+    line.startsWith("Untracked changes (")
+  );
+}
+
+function gitDiffBlocksWithPrelude(lines: readonly string[]): {
+  readonly preludeLines: readonly string[];
+  readonly blocks: readonly GitDiffBlock[];
+} {
+  const preludeLines: string[] = [];
+  const blocks: GitDiffBlock[] = [];
+  let currentSection: string | null = null;
+  let current: string[] = [];
+  for (const line of lines) {
+    if (isGitDiffSectionLine(line)) {
+      if (current.length > 0) {
+        blocks.push({ section: currentSection, lines: current });
+        current = [];
+      }
+      currentSection = line;
+      continue;
+    }
+    if (line.startsWith("diff --git ")) {
+      if (current.length > 0) {
+        blocks.push({ section: currentSection, lines: current });
+      }
+      current = [line];
+      continue;
+    }
+    if (current.length > 0) {
+      current.push(line);
+      continue;
+    }
+    if (line !== "") {
+      preludeLines.push(line);
+    }
+  }
+  if (current.length > 0) {
+    blocks.push({ section: currentSection, lines: current });
+  }
+  return { preludeLines, blocks };
 }
 
 function unquoteGitDiffPath(rawPath: string): string {
@@ -375,7 +474,7 @@ function skipSpaces(input: string, startIndex: number): number {
 
 function gitDiffDisplayPath(heading: string): string {
   const prefix = "diff --git ";
-  /* v8 ignore next 3: gitDiffBlocks only passes headings with this prefix. */
+  /* v8 ignore next 3: gitDiffBlocksWithPrelude only passes headings with this prefix. */
   if (!heading.startsWith(prefix)) {
     return heading;
   }
@@ -393,7 +492,7 @@ function gitDiffDisplayPath(heading: string): string {
   return normalizedGitDiffPath(newPath.token);
 }
 
-function isGitDiffChangedLine(line: string): boolean {
+function isGitDiffChangedBodyLine(line: string): boolean {
   return line.startsWith("+") || line.startsWith("-");
 }
 
@@ -402,6 +501,50 @@ function gitDiffChangedLineCount(
   prefix: "+" | "-",
 ): number {
   return lines.filter((line) => line.startsWith(prefix)).length;
+}
+
+function gitDiffFileStatus(
+  block: readonly string[],
+  hunks: readonly GitDiffHunk[],
+): GitDiffFileStatus {
+  const firstHunkIndex = block.findIndex((line) => line.startsWith("@@ "));
+  const metadataLines =
+    firstHunkIndex === -1 ? block : block.slice(0, firstHunkIndex);
+  const hasBinary = metadataLines.some(
+    (line) =>
+      line.startsWith("Binary files ") ||
+      line === "GIT binary patch" ||
+      line.startsWith("literal ") ||
+      line.startsWith("delta "),
+  );
+  if (hasBinary) {
+    return "binary";
+  }
+  const hasRename = metadataLines.some(
+    (line) => line.startsWith("rename from ") || line.startsWith("rename to "),
+  );
+  if (hasRename) {
+    return "renamed";
+  }
+  const hasNewFile = metadataLines.some(
+    (line) => line.startsWith("new file mode ") || line === "--- /dev/null",
+  );
+  if (hasNewFile) {
+    return "added";
+  }
+  const hasDeletedFile = metadataLines.some(
+    (line) => line.startsWith("deleted file mode ") || line === "+++ /dev/null",
+  );
+  if (hasDeletedFile) {
+    return "deleted";
+  }
+  const hasModeChange = metadataLines.some(
+    (line) => line.startsWith("old mode ") || line.startsWith("new mode "),
+  );
+  if (hasModeChange && hunks.length === 0) {
+    return "mode-only";
+  }
+  return "modified";
 }
 
 function gitDiffHunks(block: readonly string[]): readonly GitDiffHunk[] {
@@ -419,7 +562,7 @@ function gitDiffHunks(block: readonly string[]): readonly GitDiffHunk[] {
       }
       body.push(line);
     }
-    const changedLines = body.filter(isGitDiffChangedLine);
+    const changedLines = body.filter(isGitDiffChangedBodyLine);
     hunks.push({
       header,
       changedLines,
@@ -430,27 +573,35 @@ function gitDiffHunks(block: readonly string[]): readonly GitDiffHunk[] {
   return hunks;
 }
 
-function gitDiffFiles(
-  blocks: readonly (readonly string[])[],
-): readonly GitDiffFile[] {
+function gitDiffFiles(blocks: readonly GitDiffBlock[]): readonly GitDiffFile[] {
   const files: GitDiffFile[] = [];
   for (const block of blocks) {
-    const heading = block[0];
-    /* v8 ignore next 3: gitDiffBlocks only yields non-empty blocks that begin with a diff heading. */
+    const heading = block.lines[0];
+    /* v8 ignore next 3: gitDiffBlocksWithPrelude only yields non-empty blocks that begin with a diff heading. */
     if (heading === undefined) {
       continue;
     }
-    const hunks = gitDiffHunks(block);
+    const hunks = gitDiffHunks(block.lines);
     const additions = hunks.reduce((total, hunk) => total + hunk.additions, 0);
     const deletions = hunks.reduce((total, hunk) => total + hunk.deletions, 0);
     files.push({
       path: gitDiffDisplayPath(heading),
+      section: block.section,
+      status: gitDiffFileStatus(block.lines, hunks),
       hunks,
       additions,
       deletions,
     });
   }
   return files;
+}
+
+function parseGitDiffOutput(lines: readonly string[]): GitDiffParseResult {
+  const parsed = gitDiffBlocksWithPrelude(lines);
+  return {
+    preludeLines: parsed.preludeLines,
+    files: gitDiffFiles(parsed.blocks),
+  };
 }
 
 function firstChangedLine(
@@ -465,68 +616,159 @@ function firstChangedLine(
   return null;
 }
 
-function gitDiffHunkPreview(hunk: GitDiffHunk): GitDiffHunkPreview {
-  const selectedLines: string[] = [];
+function gitDiffChangedLineOmissionLine(
+  additions: number,
+  deletions: number,
+): string | null {
+  if (additions === 0 && deletions === 0) {
+    return null;
+  }
+  return `... omitted within hunk: +${additions}/-${deletions} changed lines`;
+}
+
+function gitDiffHunkSnippetLines(
+  file: GitDiffFile,
+  hunk: GitDiffHunk,
+): readonly string[] {
+  const lines = [`Snippet: ${file.path} ${hunk.header}`];
   const deletion = firstChangedLine(hunk.changedLines, "-");
   if (deletion !== null) {
-    selectedLines.push(deletion);
+    lines.push(deletion);
   }
   const addition = firstChangedLine(hunk.changedLines, "+");
   if (addition !== null) {
-    selectedLines.push(addition);
+    lines.push(addition);
   }
 
-  const selectedAdditions = selectedLines.filter((line) =>
-    line.startsWith("+"),
-  ).length;
-  const selectedDeletions = selectedLines.filter((line) =>
-    line.startsWith("-"),
-  ).length;
+  const selectedAdditions = lines.filter((line) => line.startsWith("+")).length;
+  const selectedDeletions = lines.filter((line) => line.startsWith("-")).length;
+  const omissionLine = gitDiffChangedLineOmissionLine(
+    hunk.additions - selectedAdditions,
+    hunk.deletions - selectedDeletions,
+  );
+  if (omissionLine !== null) {
+    lines.push(omissionLine);
+  }
+  return lines;
+}
+
+function gitDiffHunkBodyOmissionLine(
+  file: GitDiffFile,
+  hunk: GitDiffHunk,
+): readonly string[] {
+  if (hunk.additions > 0 && hunk.deletions > 0) {
+    return [
+      `Snippet omitted: ${file.path} ${hunk.header} replacement hunk omitted from preview; +${hunk.additions}/-${hunk.deletions}; inspect artifact for full old/new lines`,
+      `Snippet omitted: ${file.path} ${hunk.header}; +${hunk.additions}/-${hunk.deletions}`,
+      `Snippet omitted: +${hunk.additions}/-${hunk.deletions}`,
+    ];
+  }
+  if (hunk.additions > 0) {
+    return [
+      `Snippet omitted: ${file.path} ${hunk.header} add-only hunk omitted from preview; +${hunk.additions}/-${hunk.deletions}; inspect artifact for full changed lines`,
+      `Snippet omitted: ${file.path} ${hunk.header}; +${hunk.additions}/-${hunk.deletions}`,
+      `Snippet omitted: +${hunk.additions}/-${hunk.deletions}`,
+    ];
+  }
+  return [
+    `Snippet omitted: ${file.path} ${hunk.header} delete-only hunk omitted from preview; +${hunk.additions}/-${hunk.deletions}; inspect artifact for full changed lines`,
+    `Snippet omitted: ${file.path} ${hunk.header}; +${hunk.additions}/-${hunk.deletions}`,
+    `Snippet omitted: +${hunk.additions}/-${hunk.deletions}`,
+  ];
+}
+
+function gitDiffFileSummaryLine(file: GitDiffFile): string {
+  return `- ${file.path}: ${file.status}, ${unitLabel(
+    file.hunks.length,
+    "hunk",
+    "hunks",
+  )}, +${file.additions}/-${file.deletions}`;
+}
+
+function mergeGitDiffOmittedDetails(
+  left: GitDiffOmittedDetails,
+  right: GitDiffOmittedDetails,
+): GitDiffOmittedDetails {
   return {
-    lines: selectedLines,
-    omittedAdditions: hunk.additions - selectedAdditions,
-    omittedDeletions: hunk.deletions - selectedDeletions,
+    files: left.files + right.files,
+    hunks: left.hunks + right.hunks,
+    additions: left.additions + right.additions,
+    deletions: left.deletions + right.deletions,
   };
 }
 
-function hunkOmittedLine(preview: GitDiffHunkPreview): string | null {
-  if (preview.omittedAdditions === 0 && preview.omittedDeletions === 0) {
-    return null;
-  }
-  return `[hunk omitted: +${preview.omittedAdditions}/-${preview.omittedDeletions} more lines]`;
+function omittedDetailsForFile(file: GitDiffFile): GitDiffOmittedDetails {
+  return {
+    files: 1,
+    hunks: file.hunks.length,
+    additions: file.additions,
+    deletions: file.deletions,
+  };
 }
 
-function omittedHunksLine(hunks: readonly GitDiffHunk[]): string | null {
-  if (hunks.length === 0) {
-    return null;
-  }
-  const additions = hunks.reduce((total, hunk) => total + hunk.additions, 0);
-  const deletions = hunks.reduce((total, hunk) => total + hunk.deletions, 0);
-  const hunkLabel = hunks.length === 1 ? "hunk" : "hunks";
-  return `[file omitted: ${hunks.length} more ${hunkLabel}, +${additions}/-${deletions} more lines]`;
+function omittedDetailsForHunk(hunk: GitDiffHunk): GitDiffOmittedDetails {
+  return {
+    files: 0,
+    hunks: 1,
+    additions: hunk.additions,
+    deletions: hunk.deletions,
+  };
 }
 
-function gitDiffFilePreviewLines(file: GitDiffFile): readonly string[] {
-  const lines = [file.path];
-  const firstHunk = file.hunks[0];
-  if (firstHunk === undefined) {
-    lines.push("[no hunks shown]");
-    return lines;
+function omittedDetailsLines(
+  details: GitDiffOmittedDetails,
+): readonly string[] {
+  if (
+    details.files === 0 &&
+    details.hunks === 0 &&
+    details.additions === 0 &&
+    details.deletions === 0
+  ) {
+    return [];
   }
-  lines.push(firstHunk.header);
-  const preview = gitDiffHunkPreview(firstHunk);
-  for (const line of preview.lines) {
-    lines.push(line);
+  const parts: string[] = [];
+  if (details.files > 0) {
+    parts.push(unitLabel(details.files, "file", "files"));
   }
-  const omittedLine = hunkOmittedLine(preview);
-  if (omittedLine !== null) {
-    lines.push(omittedLine);
+  if (details.hunks > 0) {
+    parts.push(unitLabel(details.hunks, "hunk", "hunks"));
   }
-  const fileOmittedLine = omittedHunksLine(file.hunks.slice(1));
-  if (fileOmittedLine !== null) {
-    lines.push(fileOmittedLine);
+  if (details.additions > 0 || details.deletions > 0) {
+    parts.push(`+${details.additions}/-${details.deletions} changed lines`);
   }
-  return lines;
+  const summary = parts.join(", ");
+  return [
+    `... details omitted from preview: ${summary}`,
+    `... details omitted: ${summary}`,
+    `... omitted: ${summary}`,
+  ];
+}
+
+function hasGitDiffOmittedDetails(details: GitDiffOmittedDetails): boolean {
+  return (
+    details.files > 0 ||
+    details.hunks > 0 ||
+    details.additions > 0 ||
+    details.deletions > 0
+  );
+}
+
+function appendGitDiffHunkPreview(options: {
+  readonly lines: string[];
+  readonly file: GitDiffFile;
+  readonly hunk: GitDiffHunk;
+  readonly maxChars: number;
+}): GitDiffOmittedDetails {
+  const snippetLines = gitDiffHunkSnippetLines(options.file, options.hunk);
+  if (appendLinesWithinBudget(options.lines, snippetLines, options.maxChars)) {
+    return EMPTY_GIT_DIFF_OMITTED_DETAILS;
+  }
+  appendFirstFittingLine(
+    options.lines,
+    gitDiffHunkBodyOmissionLine(options.file, options.hunk),
+    options.maxChars,
+  );
+  return omittedDetailsForHunk(options.hunk);
 }
 
 function projectGitDiffOutput(
@@ -535,30 +777,133 @@ function projectGitDiffOutput(
   context: ToolOutputProjectionContext,
 ): string {
   const lines = text.split("\n");
-  const blocks = gitDiffBlocks(lines);
-  if (blocks.length === 0) {
+  const parsed = parseGitDiffOutput(lines);
+  if (parsed.files.length === 0) {
     return compactLineAware(text, maxChars, context);
   }
 
-  const files = gitDiffFiles(blocks);
-  const additions = files.reduce((total, file) => total + file.additions, 0);
-  const deletions = files.reduce((total, file) => total + file.deletions, 0);
+  const additions = parsed.files.reduce(
+    (total, file) => total + file.additions,
+    0,
+  );
+  const deletions = parsed.files.reduce(
+    (total, file) => total + file.deletions,
+    0,
+  );
+  const hunkCount = parsed.files.reduce(
+    (total, file) => total + file.hunks.length,
+    0,
+  );
   const previewLines: string[] = [];
+  appendFirstFittingLine(
+    previewLines,
+    [
+      `git_diff compacted preview: ${unitLabel(
+        parsed.files.length,
+        "file",
+        "files",
+      )}, ${unitLabel(
+        hunkCount,
+        "hunk",
+        "hunks",
+      )}, +${additions}/-${deletions}; full output artifact is referenced below`,
+      `git_diff compacted preview: ${unitLabel(
+        parsed.files.length,
+        "file",
+        "files",
+      )}, ${unitLabel(hunkCount, "hunk", "hunks")}, +${additions}/-${deletions}`,
+      `git_diff: ${unitLabel(parsed.files.length, "file", "files")}, ${unitLabel(
+        hunkCount,
+        "hunk",
+        "hunks",
+      )}, +${additions}/-${deletions}`,
+    ],
+    maxChars,
+  );
+  for (const line of parsed.preludeLines) {
+    appendLineWithinBudget(previewLines, line, maxChars);
+  }
+
+  const summarizedFiles: GitDiffFile[] = [];
+  let omittedDetails = EMPTY_GIT_DIFF_OMITTED_DETAILS;
+  if (appendLineWithinBudget(previewLines, "Files:", maxChars)) {
+    let currentSection: string | null = null;
+    let sectionPrintedForCurrentGroup = false;
+    for (const file of parsed.files) {
+      if (file.section !== currentSection) {
+        currentSection = file.section;
+        sectionPrintedForCurrentGroup = false;
+      }
+      const summaryLines =
+        currentSection === null || sectionPrintedForCurrentGroup
+          ? [gitDiffFileSummaryLine(file)]
+          : [currentSection, gitDiffFileSummaryLine(file)];
+      if (appendLinesWithinBudget(previewLines, summaryLines, maxChars)) {
+        sectionPrintedForCurrentGroup = currentSection !== null;
+        summarizedFiles.push(file);
+        continue;
+      }
+      omittedDetails = mergeGitDiffOmittedDetails(
+        omittedDetails,
+        omittedDetailsForFile(file),
+      );
+    }
+  } else {
+    omittedDetails = parsed.files.reduce(
+      (total, file) =>
+        mergeGitDiffOmittedDetails(total, omittedDetailsForFile(file)),
+      EMPTY_GIT_DIFF_OMITTED_DETAILS,
+    );
+  }
+
+  if (summarizedFiles.length > 0) {
+    appendLineWithinBudget(previewLines, "", maxChars);
+  }
+  let detailsClosed = false;
+  for (const file of summarizedFiles) {
+    if (detailsClosed) {
+      omittedDetails = mergeGitDiffOmittedDetails(
+        omittedDetails,
+        omittedDetailsForFile(file),
+      );
+      continue;
+    }
+    for (const hunk of file.hunks) {
+      const hunkOmittedDetails = appendGitDiffHunkPreview({
+        lines: previewLines,
+        file,
+        hunk,
+        maxChars,
+      });
+      omittedDetails = mergeGitDiffOmittedDetails(
+        omittedDetails,
+        hunkOmittedDetails,
+      );
+      if (hasGitDiffOmittedDetails(hunkOmittedDetails)) {
+        detailsClosed = true;
+        const hunkIndex = file.hunks.indexOf(hunk);
+        for (const remainingHunk of file.hunks.slice(hunkIndex + 1)) {
+          omittedDetails = mergeGitDiffOmittedDetails(
+            omittedDetails,
+            omittedDetailsForHunk(remainingHunk),
+          );
+        }
+        break;
+      }
+    }
+  }
+
+  appendFirstFittingLine(
+    previewLines,
+    omittedDetailsLines(omittedDetails),
+    maxChars,
+  );
   const sourceLine = sourceLineForToolCall(context);
   /* v8 ignore next 3: valid git_diff tool-result ledgers preserve a matching tool call. */
   if (sourceLine !== null) {
-    previewLines.push(sourceLine);
+    insertLineWithinBudget(previewLines, 1, sourceLine, maxChars);
   }
-  previewLines.push(
-    `files changed: ${files.length}, +${additions}/-${deletions}`,
-  );
-  for (const file of files) {
-    previewLines.push("", ...gitDiffFilePreviewLines(file));
-  }
-  return boundedText(
-    joinedLines(headLinesWithinBudget(previewLines, maxChars)),
-    maxChars,
-  );
+  return joinedLines(previewLines);
 }
 
 function projectToolOutputPreview(
