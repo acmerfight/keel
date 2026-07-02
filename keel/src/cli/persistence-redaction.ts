@@ -1,4 +1,8 @@
-import type { AssistantProviderMetadata, Message } from "../llm/types.ts";
+import type {
+  AssistantProviderMetadata,
+  Message,
+  UserMessageContextCompactionMetadata,
+} from "../llm/types.ts";
 import {
   type ToolCall,
   toolCallCanonicalArguments,
@@ -79,12 +83,38 @@ function redactAssistantProviderMetadataForPersistence(
   };
 }
 
+function redactUserContextCompactionMetadataForPersistence(
+  metadata: UserMessageContextCompactionMetadata,
+): UserMessageContextCompactionMetadata {
+  return {
+    evidence: metadata.evidence.map((evidence) => ({
+      handle: redactTextForPersistence(evidence.handle),
+      label: redactTextForPersistence(evidence.label),
+      source: redactTextForPersistence(evidence.source),
+      why: redactTextForPersistence(evidence.why),
+      ...(evidence.inspectCommand === undefined
+        ? {}
+        : {
+            inspectCommand: redactTextForPersistence(evidence.inspectCommand),
+          }),
+    })),
+  };
+}
+
 export function redactMessageForPersistence(message: Message): Message {
   switch (message.role) {
     case "user":
       return {
         role: "user",
         content: redactTextForPersistence(message.content),
+        ...(message.contextCompaction === undefined
+          ? {}
+          : {
+              contextCompaction:
+                redactUserContextCompactionMetadataForPersistence(
+                  message.contextCompaction,
+                ),
+            }),
       };
     case "assistant":
       return {

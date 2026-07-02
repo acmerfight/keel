@@ -1,4 +1,9 @@
 import type { Message } from "../../llm/types.ts";
+import type { CompactionEvidence } from "./evidence.ts";
+import {
+  parseCompactionEvidenceSection,
+  renderCompactionEvidenceSection,
+} from "./evidence.ts";
 
 const CONVERSATION_CHECKPOINT_OPEN = "<conversation-checkpoint>";
 const CONVERSATION_CHECKPOINT_SUMMARY_PROMPT_OPEN =
@@ -16,6 +21,8 @@ const SUMMARY_CLOSE = "</summary>";
 interface ConversationCheckpoint {
   readonly summary: string;
   readonly noLaterMessages: boolean;
+  readonly evidence: readonly CompactionEvidence[];
+  readonly evidenceMaxChars?: number;
 }
 
 function escapeCheckpointStructuralTags(text: string): string {
@@ -40,6 +47,7 @@ function renderConversationCheckpointBlock(options: {
   readonly instruction: string;
   readonly checkpoint: ConversationCheckpoint;
 }): string {
+  const { evidence } = options.checkpoint;
   return [
     options.openTag,
     options.instruction,
@@ -49,6 +57,14 @@ function renderConversationCheckpointBlock(options: {
     SUMMARY_OPEN,
     options.checkpoint.summary,
     SUMMARY_CLOSE,
+    evidence.length === 0
+      ? ""
+      : renderCompactionEvidenceSection(
+          evidence,
+          options.checkpoint.evidenceMaxChars === undefined
+            ? undefined
+            : { maxChars: options.checkpoint.evidenceMaxChars },
+        ),
     CONVERSATION_CHECKPOINT_CLOSE,
   ]
     .filter((part) => part !== "")
@@ -73,7 +89,6 @@ function parseConversationCheckpointMessage(
     lines.length < 5 ||
     lines[0] !== CONVERSATION_CHECKPOINT_OPEN ||
     lines[1] !== CONVERSATION_CHECKPOINT_INSTRUCTION ||
-    lines.at(-2) !== SUMMARY_CLOSE ||
     lines.at(-1) !== CONVERSATION_CHECKPOINT_CLOSE
   ) {
     return null;
@@ -87,14 +102,30 @@ function parseConversationCheckpointMessage(
   if (lines[summaryOpenIndex] !== SUMMARY_OPEN) {
     return null;
   }
-  const summary = lines.slice(summaryOpenIndex + 1, -2).join("\n");
+  const summaryCloseIndex = lines.indexOf(SUMMARY_CLOSE, summaryOpenIndex + 1);
+  if (summaryCloseIndex < 0 || summaryCloseIndex >= lines.length - 1) {
+    return null;
+  }
+  const summary = lines
+    .slice(summaryOpenIndex + 1, summaryCloseIndex)
+    .join("\n");
   if (summary !== normalizeCheckpointSummary(summary)) {
+    return null;
+  }
+  const evidenceLines = lines.slice(summaryCloseIndex + 1, -1);
+  const visibleEvidence = parseCompactionEvidenceSection(evidenceLines);
+  if (visibleEvidence === null) {
+    return null;
+  }
+  const evidence = message.contextCompaction?.evidence ?? [];
+  if (evidenceLines.length > 0 && message.contextCompaction === undefined) {
     return null;
   }
 
   return {
     summary,
     noLaterMessages,
+    evidence,
   };
 }
 
@@ -115,4 +146,10 @@ export function serializeCheckpointMessageForSummaryPrompt(
   return checkpoint === null
     ? null
     : serializeCheckpointForSummaryPrompt(checkpoint);
+}
+
+export function checkpointEvidenceFromMessage(
+  message: Extract<Message, { readonly role: "user" }>,
+): readonly CompactionEvidence[] {
+  return parseConversationCheckpointMessage(message)?.evidence ?? [];
 }

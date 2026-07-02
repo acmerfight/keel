@@ -10,6 +10,19 @@ export interface Usage {
 interface UserMessage {
   readonly role: "user";
   readonly content: string;
+  readonly contextCompaction?: UserMessageContextCompactionMetadata;
+}
+
+export interface UserMessageContextCompactionEvidence {
+  readonly handle: string;
+  readonly label: string;
+  readonly source: string;
+  readonly why: string;
+  readonly inspectCommand?: string;
+}
+
+export interface UserMessageContextCompactionMetadata {
+  readonly evidence: readonly UserMessageContextCompactionEvidence[];
 }
 
 export type { ToolCall } from "../tools/tool-call.ts";

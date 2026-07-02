@@ -59,6 +59,92 @@ describe("Session Store Transcript Workflow Redaction", () => {
     }
   });
 
+  test(`Given a checkpoint carries source-backed evidence metadata,
+    When the session is persisted and resumed,
+    Then the evidence metadata is restored with at-rest redaction applied`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const messages: readonly Message[] = [
+      {
+        role: "user",
+        content: "checkpoint with evidence metadata",
+        contextCompaction: {
+          evidence: [
+            {
+              handle: "read:sk-secret-329.txt",
+              label: "read sk-secret-329",
+              source: "complete",
+              why: "Bearer live-secret-329-token appeared in the evidence",
+            },
+            {
+              handle: "tool-output:scope/report",
+              label: "bash report",
+              source: "complete",
+              inspectCommand:
+                "keel artifacts show tool-output:scope/sk-secret-330",
+              why: "prior artifact evidence",
+            },
+          ],
+        },
+      },
+      { role: "assistant", content: "Ready to continue.", toolCalls: [] },
+    ];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "checkpoint-evidence-metadata",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When
+      persistSessionMessages({
+        session,
+        previousMessages: [],
+        currentMessages: messages,
+        runtime: runtime(home, 1),
+        reason: "turn",
+      });
+      const ledger = await readFile(session.filePath, "utf8");
+      const resumed = resumeSessionStore({
+        sessionId: "checkpoint-evidence-metadata",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(ledger).not.toContain("sk-secret-329");
+      expect(ledger).not.toContain("sk-secret-330");
+      expect(ledger).not.toContain("live-secret-329-token");
+      expect(resumed.messages[0]).toEqual({
+        role: "user",
+        content: "checkpoint with evidence metadata",
+        contextCompaction: {
+          evidence: [
+            {
+              handle: "read:[REDACTED_SECRET].txt",
+              label: "read [REDACTED_SECRET]",
+              source: "complete",
+              why: "Bearer [REDACTED_SECRET] appeared in the evidence",
+            },
+            {
+              handle: "tool-output:scope/report",
+              label: "bash report",
+              source: "complete",
+              inspectCommand:
+                "keel artifacts show tool-output:scope/[REDACTED_SECRET]",
+              why: "prior artifact evidence",
+            },
+          ],
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a named interactive session starts with a workflow skill,
     When the session is resumed and forked,
     Then the selected workflow skill is restored with the session context`, async () => {

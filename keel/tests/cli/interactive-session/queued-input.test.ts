@@ -228,6 +228,13 @@ describe("Interactive Session - Queued Input", () => {
       {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
+        contextCompaction: {
+          evidence: [
+            expect.objectContaining({
+              handle: "read:package.json@limit=1",
+            }),
+          ],
+        },
       },
       { role: "assistant", content: "Tool turn done.", toolCalls: [] },
       {

@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { providerIds } from "../../core/provider-id.ts";
-import type { Message } from "../../llm/types.ts";
+import type {
+  Message,
+  UserMessageContextCompactionMetadata,
+} from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
 import { builtinToolCallSchema } from "../../tools/tool-call.ts";
 import {
@@ -33,10 +36,27 @@ import {
 
 const toolCallSchema = builtinToolCallSchema;
 
+const userMessageContextCompactionEvidenceSchema = z
+  .object({
+    handle: z.string(),
+    label: z.string(),
+    source: z.string(),
+    why: z.string(),
+    inspectCommand: z.string().optional(),
+  })
+  .strict();
+
+const userMessageContextCompactionSchema = z
+  .object({
+    evidence: z.array(userMessageContextCompactionEvidenceSchema),
+  })
+  .strict();
+
 const userMessageSchema = z
   .object({
     role: z.literal("user"),
     content: z.string(),
+    contextCompaction: userMessageContextCompactionSchema.optional(),
   })
   .strict();
 
@@ -298,6 +318,9 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
 
 type RawMessage = z.infer<typeof messageSchema>;
 type RawStoredMessage = z.infer<typeof storedMessageSchema>;
+type RawUserMessageContextCompactionMetadata = z.infer<
+  typeof userMessageContextCompactionSchema
+>;
 type RawSessionQueuedInput = z.infer<typeof queuedInputSchema>;
 type RawBashApprovalGrant = z.infer<typeof bashApprovalGrantSchema>;
 type RawSessionModelSelection = z.infer<typeof sessionModelSelectionSchema>;
@@ -305,12 +328,59 @@ type RawSessionModelSwitch = z.infer<typeof sessionModelSwitchSchema>;
 type RawSessionHeaderRecord = z.infer<typeof sessionHeaderSchema>;
 type RawSessionMutationRecord = z.infer<typeof sessionMutationRecordSchema>;
 
+function copyUserContextCompactionMetadata(
+  metadata: UserMessageContextCompactionMetadata,
+): UserMessageContextCompactionMetadata {
+  return {
+    evidence: metadata.evidence.map((evidence) => ({
+      handle: evidence.handle,
+      label: evidence.label,
+      source: evidence.source,
+      why: evidence.why,
+      ...(evidence.inspectCommand === undefined
+        ? {}
+        : { inspectCommand: evidence.inspectCommand }),
+    })),
+  };
+}
+
+function toUserContextCompactionMetadata(
+  metadata: RawUserMessageContextCompactionMetadata,
+): UserMessageContextCompactionMetadata {
+  return {
+    evidence: metadata.evidence.map((evidence) => {
+      const inspectCommand = evidence.inspectCommand;
+      return inspectCommand === undefined
+        ? {
+            handle: evidence.handle,
+            label: evidence.label,
+            source: evidence.source,
+            why: evidence.why,
+          }
+        : {
+            handle: evidence.handle,
+            label: evidence.label,
+            source: evidence.source,
+            why: evidence.why,
+            inspectCommand,
+          };
+    }),
+  };
+}
+
 function toMessage(message: RawMessage): Message {
   switch (message.role) {
     case "user":
       return {
         role: "user",
         content: message.content,
+        ...(message.contextCompaction === undefined
+          ? {}
+          : {
+              contextCompaction: toUserContextCompactionMetadata(
+                message.contextCompaction,
+              ),
+            }),
       };
     case "assistant":
       return {
@@ -339,6 +409,13 @@ function copyMessage(message: Message): Message {
       return {
         role: "user",
         content: message.content,
+        ...(message.contextCompaction === undefined
+          ? {}
+          : {
+              contextCompaction: copyUserContextCompactionMetadata(
+                message.contextCompaction,
+              ),
+            }),
       };
     case "assistant":
       return {
