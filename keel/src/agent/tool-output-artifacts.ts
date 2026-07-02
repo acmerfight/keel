@@ -119,6 +119,7 @@ export type ToolOutputArtifactNotice =
 export interface ToolOutputArtifactSettlementResult {
   readonly content: string;
   readonly notice: ToolOutputArtifactNotice;
+  readonly sourceTruncated: boolean;
 }
 
 export interface GeneratedToolOutputArtifactMarker {
@@ -132,9 +133,9 @@ export interface GeneratedToolOutputArtifactMarker {
 }
 
 const TOOL_OUTPUT_ARTIFACT_MARKER_SUFFIX_PATTERN =
-  /\n\[(tool output shortened|stale tool output compacted|current tool output compacted after context overflow): (?:approximately )?omitted ([0-9]+) chars; full output artifact: (tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+); inspect with: keel artifacts show \3(?:; sha256: ([a-f0-9]{64}))?; source status: (complete|source-truncated\/lossy before artifact capture)(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
+  /\n\[(tool output shortened|tool output projected|stale tool output compacted|current tool output compacted after context overflow): (?:approximately )?omitted ([0-9]+) chars; full output artifact: (tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+); inspect with: keel artifacts show \3(?:; sha256: ([a-f0-9]{64}))?; source status: (complete|source-truncated\/lossy before artifact capture)(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
 const TOOL_OUTPUT_ARTIFACT_FAILED_MARKER_SUFFIX_PATTERN =
-  /\n\[(?:tool output shortened|stale tool output compacted|current tool output compacted after context overflow): [^\]]*artifact storage failed: .*; lossy; rerun the tool with narrower parameters if needed(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
+  /\n\[(?:tool output shortened|tool output projected|stale tool output compacted|current tool output compacted after context overflow): [^\]]*artifact storage failed: .*; lossy; rerun the tool with narrower parameters if needed(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
 
 function oneLineReason(reason: string): string {
   return reason.trim().replace(/\s+/gu, " ") || "unknown storage error";
@@ -240,6 +241,7 @@ export async function settleOversizedToolOutput(options: {
     )}]`;
     return {
       content: `${preview}\n${marker}`,
+      sourceTruncated: options.sourceStatus === "source-truncated",
       notice: {
         status: "stored",
         ref: saveResult.ref,
@@ -255,6 +257,62 @@ export async function settleOversizedToolOutput(options: {
   )}]`;
   return {
     content: `${preview}\n${marker}`,
+    sourceTruncated: true,
+    notice: {
+      status: "failed",
+      reason: saveResult.reason,
+      toolCallId: options.toolCallId,
+      toolName: options.toolName,
+      omittedChars,
+    },
+  };
+}
+
+export async function settleProjectedToolOutput(options: {
+  readonly store: ToolOutputArtifactStore;
+  readonly toolCallId: string;
+  readonly toolName: ToolOutputArtifactToolName;
+  readonly previewContent: string;
+  readonly artifactContent: string;
+  readonly sourceStatus: ToolOutputArtifactSourceStatus;
+  readonly purpose: ToolOutputArtifactPurpose;
+}): Promise<ToolOutputArtifactSettlementResult> {
+  const saveResult = await options.store.save({
+    toolCallId: options.toolCallId,
+    toolName: options.toolName,
+    content: options.artifactContent,
+    sourceStatus: options.sourceStatus,
+    purpose: options.purpose,
+  });
+  const omittedChars = Math.max(
+    0,
+    options.artifactContent.length - options.previewContent.length,
+  );
+  if (saveResult.status === "stored") {
+    const marker = `[tool output projected: omitted ${omittedChars} chars; ${toolOutputArtifactStoredMarker(
+      saveResult.ref,
+      options.sourceStatus,
+      saveResult.contentSha256,
+    )}]`;
+    return {
+      content: `${options.previewContent}\n${marker}`,
+      sourceTruncated: options.sourceStatus === "source-truncated",
+      notice: {
+        status: "stored",
+        ref: saveResult.ref,
+        toolCallId: options.toolCallId,
+        toolName: options.toolName,
+        sourceStatus: options.sourceStatus,
+        omittedChars,
+      },
+    };
+  }
+  const marker = `[tool output projected: omitted ${omittedChars} chars; ${toolOutputArtifactFailedMarker(
+    saveResult.reason,
+  )}]`;
+  return {
+    content: `${options.previewContent}\n${marker}`,
+    sourceTruncated: true,
     notice: {
       status: "failed",
       reason: saveResult.reason,

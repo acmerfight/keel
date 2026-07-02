@@ -4,12 +4,14 @@ import { KeelError } from "../core/error.ts";
 import {
   type CapturedByteOutput,
   TailByteOutputLimit,
+  TempFileByteOutputCapture,
 } from "./output-limit.ts";
 import type { ToolResult } from "./types.ts";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 60_000;
 const OUTPUT_MAX_BYTES = 20_000;
+const ARTIFACT_OUTPUT_MAX_BYTES = 10_000_000;
 const EXIT_STDIO_QUIET_DRAIN_MS = 25;
 const EXIT_STDIO_MAX_DRAIN_MS = 1_000;
 
@@ -21,6 +23,8 @@ export interface BashOptions {
 interface BashProcessResult {
   readonly stdout: CapturedByteOutput;
   readonly stderr: CapturedByteOutput;
+  readonly artifactStdout: CapturedByteOutput;
+  readonly artifactStderr: CapturedByteOutput;
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly timedOut: boolean;
@@ -77,20 +81,32 @@ function stopChildProcess(childPid: number | undefined): void {
 function formatCapturedOutput(
   label: "stdout" | "stderr",
   stream: CapturedByteOutput,
+  options: {
+    readonly direction: "first" | "last";
+    readonly maxBytes: number;
+  },
 ): string {
   if (stream.text === "" && !stream.truncated) return "";
 
   const lines = [`${label}:`];
   if (stream.truncated) {
     lines.push(
-      `[bash ${label} truncated: showing last ${OUTPUT_MAX_BYTES} bytes]`,
+      `[bash ${label} truncated: showing ${options.direction} ${options.maxBytes} bytes]`,
     );
   }
   lines.push(stream.text.endsWith("\n") ? stream.text : `${stream.text}\n`);
   return lines.join("\n");
 }
 
-function formatResult(result: BashProcessResult): ToolResult {
+function formatResultSections(
+  result: BashProcessResult,
+  streams: {
+    readonly stdout: CapturedByteOutput;
+    readonly stderr: CapturedByteOutput;
+    readonly direction: "first" | "last";
+    readonly maxBytes: number;
+  },
+): string {
   const sections: string[] = [];
   if (result.timedOut) {
     sections.push(`Command timed out after ${result.timeoutMs}ms`);
@@ -100,15 +116,44 @@ function formatResult(result: BashProcessResult): ToolResult {
     sections.push(`Signal: ${result.signal}`);
   }
 
-  const stdout = formatCapturedOutput("stdout", result.stdout);
-  const stderr = formatCapturedOutput("stderr", result.stderr);
+  const stdout = formatCapturedOutput("stdout", streams.stdout, {
+    direction: streams.direction,
+    maxBytes: streams.maxBytes,
+  });
+  const stderr = formatCapturedOutput("stderr", streams.stderr, {
+    direction: streams.direction,
+    maxBytes: streams.maxBytes,
+  });
   if (stdout !== "") sections.push(stdout);
   if (stderr !== "") sections.push(stderr);
   if (stdout === "" && stderr === "") sections.push("(no output)");
+  return sections.join("\n\n");
+}
+
+function formatResult(result: BashProcessResult): ToolResult {
+  const content = formatResultSections(result, {
+    stdout: result.stdout,
+    stderr: result.stderr,
+    direction: "last",
+    maxBytes: OUTPUT_MAX_BYTES,
+  });
+  const artifactContent = formatResultSections(result, {
+    stdout: result.artifactStdout,
+    stderr: result.artifactStderr,
+    direction: "first",
+    maxBytes: ARTIFACT_OUTPUT_MAX_BYTES,
+  });
+  const previewTruncated = result.stdout.truncated || result.stderr.truncated;
+  const artifactSourceTruncated =
+    result.artifactStdout.truncated || result.artifactStderr.truncated;
 
   return {
-    content: sections.join("\n\n"),
-    sourceTruncated: result.stdout.truncated || result.stderr.truncated,
+    content,
+    ...(previewTruncated ? { sourceTruncated: true } : {}),
+    ...(previewTruncated || artifactSourceTruncated ? { artifactContent } : {}),
+    ...(previewTruncated || artifactSourceTruncated
+      ? { artifactSourceTruncated }
+      : {}),
   };
 }
 
@@ -118,21 +163,29 @@ function runBashProcess(
   signal: AbortSignal | undefined,
   timeoutMs: number,
 ): Promise<BashProcessResult> {
+  if (signal?.aborted === true) {
+    return Promise.reject(
+      new KeelError(
+        "tool_aborted",
+        "bash failed: command aborted",
+        "The task was cancelled. Do not retry this command; proceed with the next step or stop.",
+      ),
+    );
+  }
   const stdout = new TailByteOutputLimit(OUTPUT_MAX_BYTES);
   const stderr = new TailByteOutputLimit(OUTPUT_MAX_BYTES);
+  const artifactStdout = new TempFileByteOutputCapture(
+    "keel-bash-stdout-",
+    ARTIFACT_OUTPUT_MAX_BYTES,
+    OUTPUT_MAX_BYTES,
+  );
+  const artifactStderr = new TempFileByteOutputCapture(
+    "keel-bash-stderr-",
+    ARTIFACT_OUTPUT_MAX_BYTES,
+    OUTPUT_MAX_BYTES,
+  );
 
   return new Promise<BashProcessResult>((resolveProcess, rejectProcess) => {
-    if (signal?.aborted === true) {
-      rejectProcess(
-        new KeelError(
-          "tool_aborted",
-          "bash failed: command aborted",
-          "The task was cancelled. Do not retry this command; proceed with the next step or stop.",
-        ),
-      );
-      return;
-    }
-
     const child: ChildProcessByStdio<null, Readable, Readable> = spawn(
       command,
       {
@@ -172,6 +225,8 @@ function runBashProcess(
       signal?.removeEventListener("abort", abort);
       child.stdout.destroy();
       child.stderr.destroy();
+      artifactStdout.cleanup();
+      artifactStderr.cleanup();
     };
 
     const finish = (
@@ -190,12 +245,35 @@ function runBashProcess(
         rejectProcess(outcome.error);
         return;
       }
-      const capturedStdout = stdout.capture();
-      const capturedStderr = stderr.capture();
+      let capturedStdout: CapturedByteOutput;
+      let capturedStderr: CapturedByteOutput;
+      let capturedArtifactStdout: CapturedByteOutput;
+      let capturedArtifactStderr: CapturedByteOutput;
+      try {
+        capturedStdout = stdout.capture();
+        capturedStderr = stderr.capture();
+        capturedArtifactStdout = artifactStdout.capture();
+        capturedArtifactStderr = artifactStderr.capture();
+      } catch (error) {
+        /* v8 ignore start: temp output capture failures require filesystem faults after process completion. */
+        cleanup();
+        const detail = error instanceof Error ? error.message : String(error);
+        rejectProcess(
+          new KeelError(
+            "tool_unavailable",
+            `bash failed: could not capture output artifact: ${detail}`,
+            "Rerun the command with narrower output or inspect specific files directly.",
+          ),
+        );
+        return;
+        /* v8 ignore stop */
+      }
       cleanup();
       resolveProcess({
         stdout: capturedStdout,
         stderr: capturedStderr,
+        artifactStdout: capturedArtifactStdout,
+        artifactStderr: capturedArtifactStderr,
         exitCode: outcome.exitCode,
         signal: outcome.signal,
         timedOut,
@@ -240,17 +318,42 @@ function runBashProcess(
       });
     };
 
+    const recordOutputChunk = (
+      preview: TailByteOutputLimit,
+      artifact: TempFileByteOutputCapture,
+      label: "stdout" | "stderr",
+      chunk: Buffer,
+    ): void => {
+      try {
+        preview.append(chunk);
+        artifact.append(chunk);
+      } catch (error) {
+        /* v8 ignore start: temp output write failures require filesystem faults while streaming. */
+        stopChildProcess(child.pid);
+        const detail = error instanceof Error ? error.message : String(error);
+        finish({
+          type: "reject",
+          error: new KeelError(
+            "tool_unavailable",
+            `bash failed: could not capture ${label} artifact: ${detail}`,
+            "Rerun the command with narrower output or inspect specific files directly.",
+          ),
+        });
+        /* v8 ignore stop */
+      }
+    };
+
     const timeout = setTimeout(() => {
       timedOut = true;
       stopChildProcess(child.pid);
     }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout.append(chunk);
+      recordOutputChunk(stdout, artifactStdout, "stdout", chunk);
       scheduleExitDrain();
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr.append(chunk);
+      recordOutputChunk(stderr, artifactStderr, "stderr", chunk);
       scheduleExitDrain();
     });
     child.stdout.once("close", () => {
