@@ -117,6 +117,7 @@ async function compactRetainedToolOutput(options: {
   readonly toolCall: ToolCall;
   readonly content: string;
   readonly toolOutputMaxChars: number;
+  readonly sourceTruncated?: boolean;
 }): Promise<{
   readonly content: string;
   readonly saved: readonly SavedToolOutputArtifact[];
@@ -134,6 +135,9 @@ async function compactRetainedToolOutput(options: {
       role: "tool",
       toolCallId: options.toolCall.id,
       content: options.content,
+      ...(options.sourceTruncated === undefined
+        ? {}
+        : { sourceTruncated: options.sourceTruncated }),
     },
     {
       role: "assistant",
@@ -181,6 +185,14 @@ function previewBeforeStaleCompactionMarker(content: string): string {
     throw new Error("Expected stale tool output compaction marker");
   }
   return content.slice(0, markerIndex);
+}
+
+function lineIndex(lines: readonly string[], needle: string): number {
+  const index = lines.findIndex((line) => line.includes(needle));
+  if (index === -1) {
+    throw new Error(`Expected line containing ${needle}`);
+  }
+  return index;
 }
 
 describe("Context Compaction Stale Tool Output", () => {
@@ -565,7 +577,7 @@ describe("Context Compaction Stale Tool Output", () => {
 
   test(`Given retained git_diff output spans multiple files,
     When context compaction projects the tool output,
-    Then the preview renders a structured diff summary with concise hunks`, async () => {
+    Then the preview renders a global summary and file summaries before snippets`, async () => {
     // Given
     const fileDiff = (path: string, marker: string) =>
       [
@@ -581,7 +593,7 @@ describe("Context Compaction Stale Tool Output", () => {
         ...numberedLines(`${path} context`, 12),
       ].join("\n");
     const diffOutput = [
-      "Unstaged changes",
+      "Unstaged changes:",
       fileDiff("src/alpha.ts", "ALPHA"),
       fileDiff("src/critical.ts", "CRITICAL"),
       fileDiff("src/omega.ts", "OMEGA"),
@@ -594,26 +606,140 @@ describe("Context Compaction Stale Tool Output", () => {
         tool: "git_diff",
       },
       content: diffOutput,
-      toolOutputMaxChars: 540,
+      toolOutputMaxChars: 780,
     });
 
     // Then
     const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    const previewLines = preview.split("\n");
     expect(preview).toContain("git_diff source: all changes");
-    expect(preview).toContain("files changed: 3, +6/-6");
-    expect(preview).toContain("src/alpha.ts");
-    expect(preview).toContain("src/critical.ts");
-    expect(preview).toContain("@@ -1,3 +1,3 @@");
+    expect(preview).toContain(
+      "git_diff compacted preview: 3 files, 3 hunks, +6/-6; full output artifact is referenced below",
+    );
+    expect(preview).toContain("Unstaged changes:");
+    expect(preview).toContain("Files:");
+    expect(preview).toContain("- src/alpha.ts: modified, 1 hunk, +2/-2");
+    expect(preview).toContain("- src/critical.ts: modified, 1 hunk, +2/-2");
+    expect(preview).toContain("- src/omega.ts: modified, 1 hunk, +2/-2");
+    expect(lineIndex(previewLines, "- src/omega.ts:")).toBeLessThan(
+      lineIndex(previewLines, "Snippet: src/critical.ts"),
+    );
+    expect(preview).toContain("Snippet: src/critical.ts @@ -1,3 +1,3 @@");
     expect(preview).toContain("-CRITICAL old value");
     expect(preview).toContain("+CRITICAL new value");
-    expect(preview).toContain("[hunk omitted: +1/-1 more lines]");
+    expect(preview).toContain("... omitted within hunk: +1/-1 changed lines");
     expect(preview).not.toContain("diff --git a/src/alpha.ts");
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff output has staged and unstaged sections,
+    When context compaction projects the tool output,
+    Then the preview preserves section labels and summarizes all files`, async () => {
+    // Given
+    const diffOutput = [
+      "Unstaged changes:",
+      "diff --git a/src/unstaged.ts b/src/unstaged.ts",
+      "index 0000000..1111111 100644",
+      "--- a/src/unstaged.ts",
+      "+++ b/src/unstaged.ts",
+      "@@ -1,1 +1,1 @@",
+      "-unstaged old value",
+      "+unstaged new value",
+      "Staged changes:",
+      "diff --git a/src/staged.ts b/src/staged.ts",
+      "index 2222222..3333333 100644",
+      "--- a/src/staged.ts",
+      "+++ b/src/staged.ts",
+      "@@ -1,1 +1,1 @@",
+      "-staged old value",
+      "+staged new value",
+      ...numberedLines("sectioned diff context", 20),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_sectioned_changes",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 640,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    const previewLines = preview.split("\n");
+    expect(preview).toContain(
+      "git_diff compacted preview: 2 files, 2 hunks, +2/-2; full output artifact is referenced below",
+    );
+    expect(preview).toContain("Unstaged changes:");
+    expect(preview).toContain("Staged changes:");
+    expect(preview).toContain("- src/unstaged.ts: modified, 1 hunk, +1/-1");
+    expect(preview).toContain("- src/staged.ts: modified, 1 hunk, +1/-1");
+    expect(lineIndex(previewLines, "Files:")).toBeLessThan(
+      lineIndex(previewLines, "Unstaged changes:"),
+    );
+    expect(lineIndex(previewLines, "Unstaged changes:")).toBeLessThan(
+      lineIndex(previewLines, "- src/unstaged.ts:"),
+    );
+    expect(lineIndex(previewLines, "- src/unstaged.ts:")).toBeLessThan(
+      lineIndex(previewLines, "Staged changes:"),
+    );
+    expect(lineIndex(previewLines, "Staged changes:")).toBeLessThan(
+      lineIndex(previewLines, "- src/staged.ts:"),
+    );
+    expect(preview).toContain("Snippet: src/staged.ts @@ -1,1 +1,1 @@");
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff output has a diagnostic prelude before diff sections,
+    When context compaction projects the tool output,
+    Then the preview keeps the prelude before grouped file summaries`, async () => {
+    // Given
+    const diffOutput = [
+      "warning: CRLF will be replaced by LF in src/prelude.ts",
+      "Unstaged changes:",
+      "diff --git a/src/prelude.ts b/src/prelude.ts",
+      "index 0000000..1111111 100644",
+      "--- a/src/prelude.ts",
+      "+++ b/src/prelude.ts",
+      "@@ -1,1 +1,1 @@",
+      "-prelude old value",
+      "+prelude new value",
+      ...numberedLines("prelude diff context", 12),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_diagnostic_prelude",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 520,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    const previewLines = preview.split("\n");
+    expect(preview).toContain(
+      "warning: CRLF will be replaced by LF in src/prelude.ts",
+    );
+    expect(lineIndex(previewLines, "warning: CRLF")).toBeLessThan(
+      lineIndex(previewLines, "Files:"),
+    );
+    expect(lineIndex(previewLines, "Files:")).toBeLessThan(
+      lineIndex(previewLines, "Unstaged changes:"),
+    );
+    expect(lineIndex(previewLines, "Unstaged changes:")).toBeLessThan(
+      lineIndex(previewLines, "- src/prelude.ts:"),
+    );
     expect(compacted.content).toContain("full output artifact: tool-output:");
   });
 
   test(`Given retained git_diff hunks have several deletions before additions,
     When context compaction projects the tool output,
-    Then the preview keeps representative added lines for each changed file`, async () => {
+    Then the preview keeps balanced replacement snippets for each changed file`, async () => {
     // Given
     const fileDiff = (index: number) => {
       const marker = `QA_GITDIFF_MARKER_${String(index).padStart(2, "0")}`;
@@ -642,14 +768,16 @@ describe("Context Compaction Stale Tool Output", () => {
         tool: "git_diff",
       },
       content: diffOutput,
-      toolOutputMaxChars: 1_600,
+      toolOutputMaxChars: 2_000,
     });
 
     // Then
     const preview = previewBeforeStaleCompactionMarker(compacted.content);
-    expect(preview).toContain("files changed: 7, +7/-21");
-    expect(preview).toContain("src/file-01.ts");
-    expect(preview).toContain("src/file-07.ts");
+    expect(preview).toContain(
+      "git_diff compacted preview: 7 files, 7 hunks, +7/-21; full output artifact is referenced below",
+    );
+    expect(preview).toContain("- src/file-01.ts: modified, 1 hunk, +1/-3");
+    expect(preview).toContain("- src/file-07.ts: modified, 1 hunk, +1/-3");
     for (const index of Array.from({ length: 7 }, (_, item) => item + 1)) {
       expect(preview).toContain(
         `+QA_GITDIFF_MARKER_${String(index).padStart(
@@ -658,9 +786,9 @@ describe("Context Compaction Stale Tool Output", () => {
         )} added value the model must see`,
       );
     }
-    expect(preview).toContain("[hunk omitted: +0/-2 more lines]");
+    expect(preview).toContain("... omitted within hunk: +0/-2 changed lines");
     expect(preview).not.toContain("diff --git a/src/file-01.ts");
-    expect(preview.length).toBeLessThanOrEqual(1_600);
+    expect(preview.length).toBeLessThanOrEqual(2_000);
     expect(compacted.content).toContain("full output artifact: tool-output:");
   });
 
@@ -693,24 +821,82 @@ describe("Context Compaction Stale Tool Output", () => {
         tool: "git_diff",
       },
       content: diffOutput,
-      toolOutputMaxChars: 360,
+      toolOutputMaxChars: 520,
     });
 
     // Then
     const preview = previewBeforeStaleCompactionMarker(compacted.content);
-    expect(preview).toContain("files changed: 2, +2/-2");
-    expect(preview).toContain("src/added.ts");
+    expect(preview).toContain(
+      "git_diff compacted preview: 2 files, 2 hunks, +2/-2; full output artifact is referenced below",
+    );
+    expect(preview).toContain("- src/added.ts: added, 1 hunk, +2/-0");
+    expect(preview).toContain("Snippet: src/added.ts @@ -0,0 +1,2 @@");
     expect(preview).toContain("+ADDED_ONLY_MARKER_335 first line");
-    expect(preview).toContain("[hunk omitted: +1/-0 more lines]");
-    expect(preview).toContain("src/deleted.ts");
+    expect(preview).toContain("... omitted within hunk: +1/-0 changed lines");
+    expect(preview).toContain("- src/deleted.ts: deleted, 1 hunk, +0/-2");
+    expect(preview).toContain("Snippet: src/deleted.ts @@ -1,2 +0,0 @@");
     expect(preview).toContain("-DELETED_ONLY_MARKER_335 first line");
-    expect(preview).toContain("[hunk omitted: +0/-1 more lines]");
+    expect(preview).toContain("... omitted within hunk: +0/-1 changed lines");
     expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff add-only and delete-only hunks cannot fit body lines,
+    When context compaction projects the tool output,
+    Then the preview emits side-specific omission markers`, async () => {
+    // Given
+    const addOnlyOutput = [
+      "diff --git a/src/add-only.ts b/src/add-only.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/src/add-only.ts",
+      "@@ -0,0 +1,1 @@",
+      `+ADD_ONLY_TOO_LONG ${"a".repeat(240)}`,
+      ...numberedLines("add only omission context", 20),
+    ].join("\n");
+    const deleteOnlyOutput = [
+      "diff --git a/src/delete-only.ts b/src/delete-only.ts",
+      "deleted file mode 100644",
+      "--- a/src/delete-only.ts",
+      "+++ /dev/null",
+      "@@ -1,1 +0,0 @@",
+      `-DELETE_ONLY_TOO_LONG ${"d".repeat(240)}`,
+      ...numberedLines("delete only omission context", 20),
+    ].join("\n");
+
+    // When
+    const added = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_add_only_omitted",
+        tool: "git_diff",
+      },
+      content: addOnlyOutput,
+      toolOutputMaxChars: 300,
+    });
+    const deleted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_delete_only_omitted",
+        tool: "git_diff",
+      },
+      content: deleteOnlyOutput,
+      toolOutputMaxChars: 300,
+    });
+
+    // Then
+    const addedPreview = previewBeforeStaleCompactionMarker(added.content);
+    expect(addedPreview).toContain(
+      "Snippet omitted: src/add-only.ts @@ -0,0 +1,1 @@ add-only hunk omitted from preview; +1/-0; inspect artifact for full changed lines",
+    );
+    expect(addedPreview).not.toContain("ADD_ONLY_TOO_LONG");
+    const deletedPreview = previewBeforeStaleCompactionMarker(deleted.content);
+    expect(deletedPreview).toContain(
+      "Snippet omitted: src/delete-only.ts @@ -1,1 +0,0 @@ delete-only hunk omitted from preview; +0/-1; inspect artifact for full changed lines",
+    );
+    expect(deletedPreview).not.toContain("DELETE_ONLY_TOO_LONG");
   });
 
   test(`Given retained git_diff output has a quoted path and multiple hunks,
     When context compaction projects the tool output,
-    Then the preview normalizes the path and reports omitted hunks`, async () => {
+    Then the preview shows retained changed lines under their own hunk headers`, async () => {
     // Given
     const diffOutput = [
       'diff --git "a/src/space \\"file\\".ts" "b/src/space \\"file\\".ts"',
@@ -746,52 +932,156 @@ describe("Context Compaction Stale Tool Output", () => {
         tool: "git_diff",
       },
       content: diffOutput,
-      toolOutputMaxChars: 700,
+      toolOutputMaxChars: 1_500,
     });
 
     // Then
     const preview = previewBeforeStaleCompactionMarker(compacted.content);
-    expect(preview).toContain("files changed: 2, +5/-5");
-    expect(preview).toContain('src/space "file".ts');
+    const previewLines = preview.split("\n");
+    expect(preview).toContain(
+      "git_diff compacted preview: 2 files, 5 hunks, +5/-5; full output artifact is referenced below",
+    );
+    expect(preview).toContain(
+      '- src/space "file".ts: modified, 3 hunks, +3/-3',
+    );
+    expect(preview).toContain('Snippet: src/space "file".ts @@ -1,2 +1,2 @@');
     expect(preview).toContain("-QUOTED_PATH_MARKER old first hunk");
     expect(preview).toContain("+QUOTED_PATH_MARKER new first hunk");
-    expect(preview).toContain("[file omitted: 2 more hunks, +2/-2 more lines]");
-    expect(preview).toContain("src/single-extra.ts");
-    expect(preview).toContain("[file omitted: 1 more hunk, +1/-1 more lines]");
+    expect(preview).toContain('Snippet: src/space "file".ts @@ -10,2 +10,2 @@');
+    expect(preview).toContain("-QUOTED_PATH_MARKER old second hunk");
+    expect(preview).toContain("+QUOTED_PATH_MARKER new second hunk");
+    expect(preview).toContain('Snippet: src/space "file".ts @@ -20,2 +20,2 @@');
+    expect(preview).toContain("-QUOTED_PATH_MARKER old third hunk");
+    expect(preview).toContain("+QUOTED_PATH_MARKER new third hunk");
+    expect(preview).toContain(
+      "- src/single-extra.ts: modified, 2 hunks, +2/-2",
+    );
+    expect(preview).toContain("Snippet: src/single-extra.ts @@ -2,1 +2,1 @@");
+    expect(lineIndex(previewLines, "old second hunk")).toBeGreaterThan(
+      lineIndex(previewLines, "@@ -10,2 +10,2 @@"),
+    );
+    expect(lineIndex(previewLines, "old second hunk")).toBeLessThan(
+      lineIndex(previewLines, "@@ -20,2 +20,2 @@"),
+    );
     expect(preview).not.toContain('"b/src/space \\"file\\".ts"');
     expect(compacted.content).toContain("full output artifact: tool-output:");
   });
 
-  test(`Given retained git_diff output is path-filtered and has no hunk,
+  test(`Given retained git_diff output has a multi-hunk file but detail budget stops early,
     When context compaction projects the tool output,
-    Then the preview keeps the path filter and changed-file heading`, async () => {
+    Then the omitted footer counts the remaining hunks`, async () => {
+    // Given
+    const diffOutput = [
+      "diff --git a/src/multi-omitted.ts b/src/multi-omitted.ts",
+      "index 0000000..1111111 100644",
+      "--- a/src/multi-omitted.ts",
+      "+++ b/src/multi-omitted.ts",
+      "@@ -1,1 +1,1 @@",
+      `-FIRST_OMITTED_OLD ${"o".repeat(180)}`,
+      `+FIRST_OMITTED_NEW ${"n".repeat(180)}`,
+      "@@ -10,1 +10,1 @@",
+      "-SECOND_OMITTED_OLD",
+      "+SECOND_OMITTED_NEW",
+      ...numberedLines("multi hunk omitted context", 20),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_remaining_hunks_omitted",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 380,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain(
+      "Snippet omitted: src/multi-omitted.ts @@ -1,1 +1,1 @@ replacement hunk omitted from preview; +1/-1; inspect artifact for full old/new lines",
+    );
+    expect(preview).toContain(
+      "... details omitted from preview: 2 hunks, +2/-2 changed lines",
+    );
+    expect(preview).not.toContain("SECOND_OMITTED_NEW");
+  });
+
+  test(`Given retained git_diff output has rename-only binary and mode-only diffs,
+    When context compaction projects the tool output,
+    Then the preview keeps useful file summaries without empty snippets`, async () => {
     // Given
     const diffOutput = [
       "diff --git a/src/renamed.ts b/src/renamed.ts",
       "similarity index 100%",
       "rename from src/old.ts",
       "rename to src/renamed.ts",
-      ...numberedLines("rename metadata", 20),
+      "diff --git a/assets/logo.png b/assets/logo.png",
+      "index 0000000..1111111 100644",
+      "Binary files a/assets/logo.png and b/assets/logo.png differ",
+      "diff --git a/scripts/run.sh b/scripts/run.sh",
+      "old mode 100644",
+      "new mode 100755",
+      ...numberedLines("metadata-only diff context", 20),
     ].join("\n");
 
     // When
     const compacted = await compactRetainedToolOutput({
       toolCall: {
-        id: "git_diff_path_no_hunk",
+        id: "git_diff_metadata_only",
         tool: "git_diff",
-        paths: ["src/renamed.ts"],
       },
       content: diffOutput,
-      toolOutputMaxChars: 170,
+      toolOutputMaxChars: 380,
     });
 
     // Then
-    expect(compacted.content).toContain("git_diff source: src/renamed.ts");
-    expect(compacted.content).toContain("files changed: 1, +0/-0");
-    expect(compacted.content).toContain("src/renamed.ts");
-    expect(compacted.content).toContain("[no hunks shown]");
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain(
+      "git_diff compacted preview: 3 files, 0 hunks, +0/-0; full output artifact is referenced below",
+    );
+    expect(preview).toContain("- src/renamed.ts: renamed, 0 hunks, +0/-0");
+    expect(preview).toContain("- assets/logo.png: binary, 0 hunks, +0/-0");
+    expect(preview).toContain("- scripts/run.sh: mode-only, 0 hunks, +0/-0");
+    expect(preview).not.toContain("[no hunks shown]");
+    expect(preview).not.toContain("Snippet:");
     expect(compacted.content).not.toContain("diff --git a/src/renamed.ts");
     expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained metadata-only git_diff output has more file summaries than fit,
+    When context compaction projects the tool output,
+    Then the preview counts omitted files without fake changed lines`, async () => {
+    // Given
+    const diffOutput = Array.from({ length: 8 }, (_, index) => {
+      const number = String(index + 1).padStart(2, "0");
+      const path = `src/renamed-${number}.ts`;
+      return [
+        `diff --git a/src/old-${number}.ts b/${path}`,
+        "similarity index 100%",
+        `rename from src/old-${number}.ts`,
+        `rename to ${path}`,
+      ].join("\n");
+    }).join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_metadata_files_omitted",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 360,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain(
+      "git_diff compacted preview: 8 files, 0 hunks, +0/-0; full output artifact is referenced below",
+    );
+    expect(preview).toContain("- src/renamed-01.ts: renamed, 0 hunks, +0/-0");
+    expect(preview).toContain("... details omitted:");
+    expect(preview).not.toContain("changed lines");
+    expect(preview.length).toBeLessThanOrEqual(360);
   });
 
   test(`Given retained git_diff output has no diff blocks,
@@ -822,16 +1112,88 @@ describe("Context Compaction Stale Tool Output", () => {
     expect(compacted.content).toContain("full output artifact: tool-output:");
   });
 
-  test(`Given retained git_diff output has a very small preview budget,
+  test(`Given retained path-filtered git_diff output has a tight source budget,
     When context compaction projects the tool output,
-    Then the preview remains bounded and keeps the artifact recovery handle`, async () => {
+    Then the global diff summary is kept before long source detail`, async () => {
     // Given
     const diffOutput = [
-      "Unstaged changes",
-      "diff --git a/src/small-budget.ts b/src/small-budget.ts",
-      "@@ -1 +1 @@",
+      "diff --git a/src/path-budget.ts b/src/path-budget.ts",
+      "index 0000000..1111111 100644",
+      "--- a/src/path-budget.ts",
+      "+++ b/src/path-budget.ts",
+      "@@ -1,1 +1,1 @@",
+      "-old path budget value",
+      "+new path budget value",
+      ...numberedLines("path budget diff context", 20),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_long_path_budget",
+        tool: "git_diff",
+        paths: [
+          `src/${"deep/".repeat(16)}path-budget.ts`,
+          `tests/${"wide/".repeat(12)}path-budget.test.ts`,
+        ],
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 230,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain(
+      "git_diff compacted preview: 1 file, 1 hunk, +1/-1",
+    );
+    expect(preview.length).toBeLessThanOrEqual(230);
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff output has an extremely tiny preview budget,
+    When context compaction projects the tool output,
+    Then the preview remains bounded and keeps the artifact handle`, async () => {
+    // Given
+    const diffOutput = [
+      "diff --git a/src/tiny-diff.ts b/src/tiny-diff.ts",
+      "@@ -1,1 +1,1 @@",
       "-old",
       "+new",
+      ...numberedLines("tiny diff context", 20),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_tiny_preview_budget",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 4,
+    });
+
+    // Then
+    expect(previewBeforeStaleCompactionMarker(compacted.content).length).toBe(
+      0,
+    );
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff output has a budget too small for both replacement sides,
+    When context compaction projects the tool output,
+    Then the preview emits a hunk omission marker instead of a one-sided body`, async () => {
+    // Given
+    const oldLine = `-ONLY_OLD_LONG_SIDE ${"o".repeat(180)}`;
+    const newLine = `+ONLY_NEW_LONG_SIDE ${"n".repeat(180)}`;
+    const diffOutput = [
+      "Unstaged changes:",
+      "diff --git a/src/small-budget.ts b/src/small-budget.ts",
+      "index 0000000..1111111 100644",
+      "--- a/src/small-budget.ts",
+      "+++ b/src/small-budget.ts",
+      "@@ -1,1 +1,1 @@",
+      oldLine,
+      newLine,
       ...numberedLines("small budget diff context", 30),
     ].join("\n");
 
@@ -843,14 +1205,187 @@ describe("Context Compaction Stale Tool Output", () => {
         paths: ["src/small-budget.ts"],
       },
       content: diffOutput,
-      toolOutputMaxChars: 48,
+      toolOutputMaxChars: 360,
     });
 
     // Then
-    expect(
-      previewBeforeStaleCompactionMarker(compacted.content).length,
-    ).toBeLessThanOrEqual(48);
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain(
+      "Snippet omitted: src/small-budget.ts @@ -1,1 +1,1 @@ replacement hunk omitted from preview; +1/-1; inspect artifact for full old/new lines",
+    );
+    expect(preview).not.toContain(oldLine);
+    expect(preview).not.toContain(newLine);
+    expect(preview.length).toBeLessThanOrEqual(360);
     expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff output cannot fit a full replacement omission marker,
+    When context compaction projects the tool output,
+    Then the preview still emits a bounded hunk omission marker`, async () => {
+    // Given
+    const oldLine = `-SHORT_MARKER_OLD ${"o".repeat(260)}`;
+    const newLine = `+SHORT_MARKER_NEW ${"n".repeat(260)}`;
+    const diffOutput = [
+      "diff --git a/src/short-marker.ts b/src/short-marker.ts",
+      "index 0000000..1111111 100644",
+      "--- a/src/short-marker.ts",
+      "+++ b/src/short-marker.ts",
+      "@@ -1,1 +1,1 @@",
+      oldLine,
+      newLine,
+      ...numberedLines("short marker diff context", 20),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_short_omission_marker",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 230,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain(
+      "Snippet omitted: src/short-marker.ts @@ -1,1 +1,1 @@; +1/-1",
+    );
+    expect(preview).not.toContain("SHORT_MARKER_OLD");
+    expect(preview).not.toContain("SHORT_MARKER_NEW");
+    expect(preview.length).toBeLessThanOrEqual(230);
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff output has many files and a tight budget,
+    When context compaction projects the tool output,
+    Then file summaries are prioritized over detailed snippets`, async () => {
+    // Given
+    const fileDiff = (index: number) => {
+      const path = `src/file-${String(index).padStart(2, "0")}.ts`;
+      const oldLine =
+        index === 1
+          ? `-FIRST_FILE_LONG_OLD ${"x".repeat(360)}`
+          : `-FILE_${index}_OLD`;
+      const newLine =
+        index === 1
+          ? `+FIRST_FILE_LONG_NEW ${"y".repeat(360)}`
+          : `+FILE_${index}_NEW`;
+      return [
+        `diff --git a/${path} b/${path}`,
+        "index 0000000..1111111 100644",
+        `--- a/${path}`,
+        `+++ b/${path}`,
+        "@@ -1,1 +1,1 @@",
+        oldLine,
+        newLine,
+      ].join("\n");
+    };
+    const diffOutput = Array.from({ length: 6 }, (_, index) =>
+      fileDiff(index + 1),
+    ).join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_file_summaries_before_snippets",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 720,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    const previewLines = preview.split("\n");
+    expect(preview).toContain(
+      "git_diff compacted preview: 6 files, 6 hunks, +6/-6; full output artifact is referenced below",
+    );
+    expect(preview).toContain("- src/file-01.ts: modified, 1 hunk, +1/-1");
+    expect(preview).toContain("- src/file-06.ts: modified, 1 hunk, +1/-1");
+    expect(lineIndex(previewLines, "- src/file-06.ts:")).toBeLessThan(
+      lineIndex(previewLines, "Snippet"),
+    );
+    expect(preview).toContain("details omitted from preview:");
+    expect(preview.length).toBeLessThanOrEqual(720);
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained git_diff output has a very long changed line,
+    When context compaction projects the tool output,
+    Then the preview stays bounded and does not silently cut a half hunk`, async () => {
+    // Given
+    const oldLine = `-LONG_REPLACEMENT_OLD ${"o".repeat(900)}`;
+    const newLine = `+LONG_REPLACEMENT_NEW ${"n".repeat(900)}`;
+    const diffOutput = [
+      "diff --git a/src/long-line.ts b/src/long-line.ts",
+      "index 0000000..1111111 100644",
+      "--- a/src/long-line.ts",
+      "+++ b/src/long-line.ts",
+      "@@ -1,1 +1,1 @@",
+      oldLine,
+      newLine,
+      ...numberedLines("long line diff context", 20),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_long_line",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 360,
+    });
+
+    // Then
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview).toContain(
+      "Snippet omitted: src/long-line.ts @@ -1,1 +1,1 @@ replacement hunk omitted from preview; +1/-1; inspect artifact for full old/new lines",
+    );
+    expect(preview).not.toContain("LONG_REPLACEMENT_OLD");
+    expect(preview).not.toContain("LONG_REPLACEMENT_NEW");
+    expect(preview.length).toBeLessThanOrEqual(360);
+    expect(compacted.content).toContain("full output artifact: tool-output:");
+  });
+
+  test(`Given retained source-truncated git_diff output,
+    When context compaction stores an artifact,
+    Then the compacted marker preserves source-truncated status`, async () => {
+    // Given
+    const diffOutput = [
+      "diff --git a/src/truncated.ts b/src/truncated.ts",
+      "index 0000000..1111111 100644",
+      "--- a/src/truncated.ts",
+      "+++ b/src/truncated.ts",
+      "@@ -1,1 +1,1 @@",
+      "-old truncated value",
+      "+new truncated value",
+      "[git_diff stdout truncated: showing first 100000 bytes]",
+      ...numberedLines("truncated diff context", 20),
+    ].join("\n");
+
+    // When
+    const compacted = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_source_truncated",
+        tool: "git_diff",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 420,
+      sourceTruncated: true,
+    });
+
+    // Then
+    expect(compacted.content).toContain(
+      "source status: source-truncated/lossy before artifact capture",
+    );
+    expect(compacted.saved[0]?.input).toMatchObject({
+      toolCallId: "git_diff_source_truncated",
+      toolName: "git_diff",
+      sourceStatus: "source-truncated",
+      content: diffOutput,
+    });
   });
 
   test(`Given retained bash output has a tiny preview budget,
@@ -1187,6 +1722,111 @@ describe("Context Compaction Stale Tool Output", () => {
       )?.content ?? "";
     expect(compactedToolOutput).toContain(
       "full output artifact: tool-output:run/projected",
+    );
+    expect(compactedToolOutput).toContain(`sha256: ${contentSha256}`);
+  });
+
+  test(`Given a compacted git_diff projection has an exact reusable artifact,
+    When context compaction runs again,
+    Then Keel reuses the artifact ref by sha without saving a duplicate`, async () => {
+    // Given
+    const projectedPreview = [
+      "git_diff source: all changes",
+      "git_diff compacted preview: 1 file, 1 hunk, +1/-1; full output artifact is referenced below",
+      "Files:",
+      "- src/projected.ts: modified, 1 hunk, +1/-1",
+      "",
+      "Snippet: src/projected.ts @@ -1,1 +1,1 @@",
+      "-old projected value",
+      "+new projected value",
+    ].join("\n");
+    const fullOutput = [
+      "diff --git a/src/projected.ts b/src/projected.ts",
+      "index 0000000..1111111 100644",
+      "--- a/src/projected.ts",
+      "+++ b/src/projected.ts",
+      "@@ -1,1 +1,1 @@",
+      "-old projected value",
+      "+new projected value",
+      ...numberedLines("hidden projected git diff", 80),
+    ].join("\n");
+    const omittedChars = fullOutput.length - projectedPreview.length;
+    const contentSha256 = sha256(fullOutput);
+    const projectedMarker = `[stale tool output compacted: approximately omitted ${omittedChars} chars; full output artifact: tool-output:run/git-diff-projected; inspect with: keel artifacts show tool-output:run/git-diff-projected; sha256: ${contentSha256}; source status: complete]`;
+    const projectedToolOutput = `${projectedPreview}\n${projectedMarker}`;
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+      { role: "user", content: "Inspect the diff." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "git_diff_projected_output",
+            tool: "git_diff",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "git_diff_projected_output",
+        content: projectedToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The projected diff was inspected.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue." },
+    ];
+    const artifacts = memoryArtifactStore({
+      existingArtifacts: [
+        {
+          ref: "tool-output:run/git-diff-projected",
+          toolCallId: "git_diff_projected_output",
+          sourceStatus: "complete",
+          content: fullOutput,
+        },
+      ],
+    });
+    const provider: LLMProvider = {
+      id: "reuse-git-diff-projected-artifact-provider",
+      async *stream(options) {
+        expect(options.toolChoice).toBe("none");
+        yield { type: "text", text: "Earlier setup summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: {
+        keepRecentTokens: 100_000,
+        toolOutputMaxChars: 128,
+      },
+      toolOutputArtifacts: { store: artifacts.store },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    if (!result.compacted) {
+      throw new Error("Expected context compaction to retain the tool result");
+    }
+    expect(artifacts.saved).toHaveLength(0);
+    expect(result.artifactNotices).toBeUndefined();
+    const compactedToolOutput =
+      messages.find(
+        (message) =>
+          message.role === "tool" &&
+          message.toolCallId === "git_diff_projected_output",
+      )?.content ?? "";
+    expect(compactedToolOutput).toContain(
+      "full output artifact: tool-output:run/git-diff-projected",
     );
     expect(compactedToolOutput).toContain(`sha256: ${contentSha256}`);
   });
