@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -42,6 +42,60 @@ async function createGitWorkspace(): Promise<string> {
   execFileSync("git", ["add", "app.ts"], { cwd: workspace });
   execFileSync("git", ["commit", "-m", "initial"], { cwd: workspace });
   await writeFile(join(workspace, "app.ts"), "export const value = 2;\n");
+  return workspace;
+}
+
+async function createMetadataHeavyGitWorkspace(): Promise<string> {
+  const workspace = await mkdtemp(
+    join(tmpdir(), "keel-agent-git-diff-metadata-"),
+  );
+  execFileSync("git", ["init"], { cwd: workspace });
+  execFileSync("git", ["config", "user.email", "keel@example.test"], {
+    cwd: workspace,
+  });
+  execFileSync("git", ["config", "user.name", "Keel Test"], {
+    cwd: workspace,
+  });
+
+  await writeFile(join(workspace, ".gitignore"), "bulk/\n", "utf8");
+  const bulkDirectory = join(workspace, "bulk");
+  await mkdir(bulkDirectory);
+  const longName = "x".repeat(180);
+
+  for (let index = 0; index < 620; index += 1) {
+    await writeFile(
+      join(
+        bulkDirectory,
+        `ignored-${String(index).padStart(4, "0")}-${longName}.txt`,
+      ),
+      "base\n",
+      "utf8",
+    );
+  }
+  await writeFile(join(workspace, "zz-target.ts"), "export const value = 1;\n");
+
+  execFileSync("git", ["add", ".gitignore", "zz-target.ts"], {
+    cwd: workspace,
+  });
+  execFileSync("git", ["add", "-f", "bulk"], { cwd: workspace });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: workspace });
+
+  for (let index = 0; index < 620; index += 1) {
+    await writeFile(
+      join(
+        bulkDirectory,
+        `ignored-${String(index).padStart(4, "0")}-${longName}.txt`,
+      ),
+      "changed\n",
+      "utf8",
+    );
+  }
+  await writeFile(
+    join(workspace, "zz-target.ts"),
+    "export const value = 'TARGET_METADATA_SENTINEL';\n",
+    "utf8",
+  );
+
   return workspace;
 }
 
@@ -100,6 +154,68 @@ describe("Agent git diff tool use", () => {
       );
       expect(toolMessage?.content).toContain("diff --git a/app.ts b/app.ts");
       expect(toolMessage?.content).toContain("+export const value = 2;");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given git_diff metadata output exceeds the producer preview cap,
+    When the assistant inspects current changes,
+    Then a visible late path still reaches the model diff`, async () => {
+    // Given
+    const workspace = await createMetadataHeavyGitWorkspace();
+    const provider: LLMProvider = {
+      id: "agent-git-diff-large-metadata",
+      async *stream(options) {
+        if (options.messages.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "inspect_metadata_heavy_changes",
+            tool: "git_diff",
+            mode: "all",
+          };
+        } else {
+          const toolMessage = options.messages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.toolCallId === "inspect_metadata_heavy_changes",
+          );
+          const latePathVisible =
+            toolMessage?.content.includes(
+              "diff --git a/zz-target.ts b/zz-target.ts",
+            ) === true &&
+            toolMessage.content.includes("TARGET_METADATA_SENTINEL") &&
+            !toolMessage.content.includes("bulk/ignored-");
+          yield {
+            type: "text",
+            text: latePathVisible
+              ? "Late visible diff found."
+              : "Late visible diff missing.",
+          };
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "review the current diff",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Late visible diff found.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

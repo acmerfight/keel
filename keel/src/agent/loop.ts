@@ -21,7 +21,10 @@ import {
   type CostTrackingOptions,
   emptyRunAccounting,
 } from "./accounting.ts";
-import type { ContextCompactionOptions } from "./context-compaction.ts";
+import {
+  type ContextCompactionOptions,
+  projectCompactedToolOutput,
+} from "./context-compaction.ts";
 import type { AgentEvent } from "./events.ts";
 import { restorePostCompactionReads } from "./post-compaction-restore.ts";
 import type { AgentTurn } from "./provider-turn.ts";
@@ -43,7 +46,9 @@ import {
   DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_AGGREGATE_INLINE_CHARS,
   DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_INLINE_CHARS,
   settleOversizedToolOutput,
+  settleProjectedToolOutput,
   type ToolOutputArtifactNotice,
+  type ToolOutputArtifactSourceStatus,
   type ToolOutputArtifactsOptions,
   toolMessageSourceTruncationMetadata,
 } from "./tool-output-artifacts.ts";
@@ -184,6 +189,7 @@ interface CompletedTurnToolExecution {
 interface SettledTurnToolExecution extends CompletedTurnToolExecution {
   readonly content: string;
   readonly notice: ToolOutputArtifactNotice | undefined;
+  readonly sourceTruncated: boolean;
 }
 
 function scheduledToolCalls(
@@ -252,15 +258,17 @@ function settlementPlanByExecutionIndex(
   let estimatedInlineChars = 0;
 
   executions.forEach(({ execution }, index) => {
+    const inlineLength =
+      execution.artifactContent?.length ?? execution.content.length;
     if (
-      execution.content.length - maxInlineChars >=
+      inlineLength - maxInlineChars >=
       MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS
     ) {
       plan.set(index, maxInlineChars);
       estimatedInlineChars += maxInlineChars;
       return;
     }
-    estimatedInlineChars += execution.content.length;
+    estimatedInlineChars += inlineLength;
   });
 
   if (estimatedInlineChars <= maxAggregateInlineChars) {
@@ -270,7 +278,7 @@ function settlementPlanByExecutionIndex(
   const candidates = executions
     .map(({ execution }, index) => ({
       index,
-      length: execution.content.length,
+      length: execution.artifactContent?.length ?? execution.content.length,
     }))
     .filter(
       ({ length }) =>
@@ -295,6 +303,24 @@ function settlementPlanByExecutionIndex(
   return plan;
 }
 
+function artifactSourceStatus(
+  execution: ToolExecution,
+): ToolOutputArtifactSourceStatus {
+  return execution.artifactSourceTruncated === true
+    ? "source-truncated"
+    : "complete";
+}
+
+function inlineSettledContent(execution: ToolExecution): string {
+  return execution.artifactContent ?? execution.content;
+}
+
+function inlineSourceTruncated(execution: ToolExecution): boolean {
+  return execution.artifactContent === undefined
+    ? execution.sourceTruncated === true
+    : execution.artifactSourceTruncated === true;
+}
+
 async function settleToolExecutionContents(options: {
   readonly executions: readonly CompletedTurnToolExecution[];
   readonly artifacts: ToolOutputArtifactsOptions | undefined;
@@ -305,6 +331,7 @@ async function settleToolExecutionContents(options: {
       execution,
       content: execution.content,
       notice: undefined,
+      sourceTruncated: execution.sourceTruncated === true,
     }));
   }
   const plan = settlementPlanByExecutionIndex(
@@ -318,8 +345,33 @@ async function settleToolExecutionContents(options: {
       settledExecutions.push({
         toolCall,
         execution,
-        content: execution.content,
+        content: inlineSettledContent(execution),
         notice: undefined,
+        sourceTruncated: inlineSourceTruncated(execution),
+      });
+      continue;
+    }
+    if (execution.artifactContent !== undefined) {
+      const projection = projectCompactedToolOutput({
+        text: execution.artifactContent,
+        maxChars: maxInlineChars,
+        context: { toolName: toolCall.tool, toolCall },
+      });
+      const settled = await settleProjectedToolOutput({
+        store: options.artifacts.store,
+        toolCallId: toolCall.id,
+        toolName: toolCall.tool,
+        previewContent: projection.preview,
+        artifactContent: execution.artifactContent,
+        sourceStatus: artifactSourceStatus(execution),
+        purpose: "settlement",
+      });
+      settledExecutions.push({
+        toolCall,
+        execution,
+        content: settled.content,
+        notice: settled.notice,
+        sourceTruncated: settled.sourceTruncated,
       });
       continue;
     }
@@ -338,6 +390,7 @@ async function settleToolExecutionContents(options: {
       execution,
       content: settled.content,
       notice: settled.notice,
+      sourceTruncated: settled.sourceTruncated,
     });
   }
   return settledExecutions;
@@ -603,7 +656,7 @@ export async function* runAgentTurn(
             content: settled.content,
             ...toolMessageSourceTruncationMetadata({
               content: settled.content,
-              sourceTruncated: settled.execution.sourceTruncated === true,
+              sourceTruncated: settled.sourceTruncated,
             }),
           }),
         );

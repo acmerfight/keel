@@ -7,6 +7,8 @@ import {
   type CapturedByteOutput,
   HeadByteOutputLimit,
   limitCountedOutput,
+  MemoryByteOutputCapture,
+  TempFileByteOutputCapture,
 } from "./output-limit.ts";
 import {
   createProjectIgnorePolicy,
@@ -17,6 +19,7 @@ import { isInsideWorkspace } from "./workspace-path.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const OUTPUT_MAX_BYTES = 100_000;
+const ARTIFACT_OUTPUT_MAX_BYTES = 10_000_000;
 const UNTRACKED_FILE_LIMIT = 50;
 const GIT_OPTIONAL_LOCKS_ENV = "GIT_OPTIONAL_LOCKS";
 const GIT_PAGER_ENV = "GIT_PAGER";
@@ -31,6 +34,7 @@ const DIFF_SAFETY_ARGS = [
 ];
 
 type GitDiffMode = "all" | "unstaged" | "staged";
+type GitProcessCaptureMode = "artifact" | "metadata";
 
 export interface GitDiffOptions {
   readonly mode?: GitDiffMode;
@@ -41,6 +45,8 @@ export interface GitDiffOptions {
 interface GitProcessResult {
   readonly stdout: CapturedByteOutput;
   readonly stderr: CapturedByteOutput;
+  readonly artifactStdout: CapturedByteOutput;
+  readonly artifactStderr: CapturedByteOutput;
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly timedOut: boolean;
@@ -51,10 +57,17 @@ interface RunGitOptions {
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly config?: readonly string[];
+  readonly captureMode?: GitProcessCaptureMode;
 }
 
 interface ChangedTrackedEntry {
   readonly diffPath: string;
+}
+
+interface GitProcessOutputCapture {
+  readonly append: (chunk: Buffer) => void;
+  readonly capture: () => CapturedByteOutput;
+  readonly cleanup: () => void;
 }
 
 function nullDevicePath(): string {
@@ -87,10 +100,12 @@ function gitEnv(): NodeJS.ProcessEnv {
 function runOptions(
   config: readonly string[] | undefined,
   signal: AbortSignal | undefined,
+  captureMode?: GitProcessCaptureMode,
 ): RunGitOptions {
   return {
     ...(config !== undefined ? { config } : {}),
     ...(signal !== undefined ? { signal } : {}),
+    ...(captureMode !== undefined ? { captureMode } : {}),
   };
 }
 
@@ -130,14 +145,46 @@ function stopChildProcess(childPid: number | undefined): void {
 }
 /* v8 ignore stop */
 
+function gitProcessOutputCapture(
+  mode: GitProcessCaptureMode,
+  prefix: string,
+): GitProcessOutputCapture {
+  if (mode === "metadata") {
+    return new MemoryByteOutputCapture(ARTIFACT_OUTPUT_MAX_BYTES);
+  }
+  return new TempFileByteOutputCapture(
+    prefix,
+    ARTIFACT_OUTPUT_MAX_BYTES,
+    OUTPUT_MAX_BYTES,
+  );
+}
+
 function runGitProcess(
   workspacePath: string,
   args: readonly string[],
   options: RunGitOptions = {},
 ): Promise<GitProcessResult> {
+  if (options.signal?.aborted === true) {
+    return Promise.reject(
+      new KeelError(
+        "tool_aborted",
+        "git_diff failed: command aborted",
+        "The task was cancelled. Do not retry this tool call; proceed with the next step or stop.",
+      ),
+    );
+  }
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const captureMode = options.captureMode ?? "artifact";
   const stdout = new HeadByteOutputLimit(OUTPUT_MAX_BYTES);
   const stderr = new HeadByteOutputLimit(OUTPUT_MAX_BYTES);
+  const artifactStdout = gitProcessOutputCapture(
+    captureMode,
+    "keel-git-diff-stdout-",
+  );
+  const artifactStderr = gitProcessOutputCapture(
+    captureMode,
+    "keel-git-diff-stderr-",
+  );
   const gitArgs = [
     "--no-pager",
     "--no-optional-locks",
@@ -146,17 +193,6 @@ function runGitProcess(
   ];
 
   return new Promise<GitProcessResult>((resolveProcess, rejectProcess) => {
-    if (options.signal?.aborted === true) {
-      rejectProcess(
-        new KeelError(
-          "tool_aborted",
-          "git_diff failed: command aborted",
-          "The task was cancelled. Do not retry this tool call; proceed with the next step or stop.",
-        ),
-      );
-      return;
-    }
-
     const child: ChildProcessByStdio<null, Readable, Readable> = spawn(
       "git",
       gitArgs,
@@ -175,6 +211,8 @@ function runGitProcess(
     const cleanup = () => {
       clearTimeout(timeout);
       options.signal?.removeEventListener("abort", abort);
+      artifactStdout.cleanup();
+      artifactStderr.cleanup();
     };
 
     const finish = (
@@ -189,15 +227,41 @@ function runGitProcess(
       /* v8 ignore next: protects close/error races from double-settling the same child process. */
       if (settled) return;
       settled = true;
-      cleanup();
       /* v8 ignore next 4: child spawn failures and mid-process aborts are environment/process faults. */
       if (outcome.type === "reject") {
+        cleanup();
         rejectProcess(outcome.error);
         return;
       }
+      let capturedStdout: CapturedByteOutput;
+      let capturedStderr: CapturedByteOutput;
+      let capturedArtifactStdout: CapturedByteOutput;
+      let capturedArtifactStderr: CapturedByteOutput;
+      try {
+        capturedStdout = stdout.capture();
+        capturedStderr = stderr.capture();
+        capturedArtifactStdout = artifactStdout.capture();
+        capturedArtifactStderr = artifactStderr.capture();
+      } catch (error) {
+        /* v8 ignore start: temp output capture failures require filesystem faults after process completion. */
+        cleanup();
+        const detail = error instanceof Error ? error.message : String(error);
+        rejectProcess(
+          new KeelError(
+            "tool_unavailable",
+            `git_diff failed: could not capture output artifact: ${detail}`,
+            "Use paths to narrow the diff or inspect files directly with read/grep.",
+          ),
+        );
+        return;
+        /* v8 ignore stop */
+      }
+      cleanup();
       resolveProcess({
-        stdout: stdout.capture(),
-        stderr: stderr.capture(),
+        stdout: capturedStdout,
+        stderr: capturedStderr,
+        artifactStdout: capturedArtifactStdout,
+        artifactStderr: capturedArtifactStderr,
         exitCode: outcome.exitCode,
         signal: outcome.signal,
         timedOut,
@@ -225,11 +289,36 @@ function runGitProcess(
       stopChildProcess(child.pid);
     }, timeoutMs);
 
+    const recordOutputChunk = (
+      preview: HeadByteOutputLimit,
+      artifact: GitProcessOutputCapture,
+      label: "stdout" | "stderr",
+      chunk: Buffer,
+    ): void => {
+      try {
+        preview.append(chunk);
+        artifact.append(chunk);
+      } catch (error) {
+        /* v8 ignore start: temp output write failures require filesystem faults while streaming. */
+        stopChildProcess(child.pid);
+        const detail = error instanceof Error ? error.message : String(error);
+        finish({
+          type: "reject",
+          error: new KeelError(
+            "tool_unavailable",
+            `git_diff failed: could not capture ${label} artifact: ${detail}`,
+            "Use paths to narrow the diff or inspect files directly with read/grep.",
+          ),
+        });
+        /* v8 ignore stop */
+      }
+    };
+
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout.append(chunk);
+      recordOutputChunk(stdout, artifactStdout, "stdout", chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr.append(chunk);
+      recordOutputChunk(stderr, artifactStderr, "stderr", chunk);
     });
     /* v8 ignore start: spawn errors require a missing/broken git executable or inaccessible cwd. */
     child.once("error", (error) => {
@@ -402,7 +491,7 @@ async function configuredFilterOverrides(
       "--get-regexp",
       "^filter\\..*\\.(clean|process)$",
     ],
-    runOptions(undefined, signal),
+    runOptions(undefined, signal, "metadata"),
   );
   /* v8 ignore next: exit 1 is git's normal no-match result; other config failures are environment faults. */
   if (result.exitCode === 1) return [];
@@ -410,7 +499,7 @@ async function configuredFilterOverrides(
   expectExitCode("config", result, new Set([0]));
 
   const drivers = new Set<string>();
-  for (const key of result.stdout.text.split("\0")) {
+  for (const key of result.artifactStdout.text.split("\0")) {
     const driver = filterDriverFromKey(key);
     if (driver !== null) drivers.add(driver);
   }
@@ -422,36 +511,65 @@ async function configuredFilterOverrides(
   ]);
 }
 
-function processOutput(result: GitProcessResult): string {
+function processOutput(options: {
+  readonly stdout: CapturedByteOutput;
+  readonly stderr: CapturedByteOutput;
+  readonly maxBytes: number;
+}): string {
   const output: string[] = [];
   /* v8 ignore next: callers skip known-empty tracked diffs; this remains as a defensive guard for git races/warnings. */
-  if (result.stdout.text !== "") output.push(result.stdout.text.trimEnd());
-  if (result.stdout.truncated) {
+  if (options.stdout.text !== "") output.push(options.stdout.text.trimEnd());
+  if (options.stdout.truncated) {
     output.push(
-      `[git_diff stdout truncated: showing first ${OUTPUT_MAX_BYTES} bytes]`,
+      `[git_diff stdout truncated: showing first ${options.maxBytes} bytes]`,
     );
   }
   /* v8 ignore next 3: stderr pass-through is for unexpected git warnings; successful fixture diffs keep stderr empty. */
-  if (result.stderr.text !== "") {
-    output.push(`git stderr:\n${result.stderr.text.trimEnd()}`);
+  if (options.stderr.text !== "") {
+    output.push(`git stderr:\n${options.stderr.text.trimEnd()}`);
   }
   /* v8 ignore next 4: stderr truncation is a defensive cap for unexpected noisy git warnings/errors. */
-  if (result.stderr.truncated) {
+  if (options.stderr.truncated) {
     output.push(
-      `[git_diff stderr truncated: showing first ${OUTPUT_MAX_BYTES} bytes]`,
+      `[git_diff stderr truncated: showing first ${options.maxBytes} bytes]`,
     );
   }
   return output.join("\n");
 }
 
-function appendProcessSection(
+function appendOutputSection(
   sections: string[],
+  label: string,
+  output: string,
+): void {
+  /* v8 ignore next: callers skip known-empty tracked diffs; this remains as a defensive guard for git races/warnings. */
+  if (output !== "") sections.push(`${label}:\n${output}`);
+}
+
+function appendProcessSections(
+  sections: string[],
+  artifactSections: string[],
   label: string,
   result: GitProcessResult,
 ): void {
-  const output = processOutput(result);
-  /* v8 ignore next: callers skip known-empty tracked diffs; this remains as a defensive guard for git races/warnings. */
-  if (output !== "") sections.push(`${label}:\n${output}`);
+  appendOutputSection(
+    sections,
+    label,
+    processOutput({
+      stdout: result.stdout,
+      stderr: result.stderr,
+      maxBytes: OUTPUT_MAX_BYTES,
+    }),
+  );
+  appendOutputSection(
+    artifactSections,
+    label,
+    processOutput({
+      stdout: result.artifactStdout,
+      stderr: result.artifactStderr,
+      maxBytes: ARTIFACT_OUTPUT_MAX_BYTES,
+    }),
+  );
 }
 
 function gitDiffContentSourceTruncated(content: string): boolean {
@@ -506,10 +624,10 @@ async function changedTrackedEntries(
   const result = await runGitProcess(
     workspacePath,
     safeDiffArgs([...args, "--name-status", "-z"], paths),
-    runOptions(config, signal),
+    runOptions(config, signal, "metadata"),
   );
   expectExitCode("diff --name-status", result, new Set([0, 1]));
-  return parseChangedTrackedEntries(result.stdout.text);
+  return parseChangedTrackedEntries(result.artifactStdout.text);
 }
 
 function pathVisibleToProvider(
@@ -587,11 +705,11 @@ async function untrackedFiles(
       "-z",
       ...pathspecArgs(paths),
     ],
-    runOptions(config, signal),
+    runOptions(config, signal, "metadata"),
   );
   expectExitCode("ls-files", result, new Set([0]));
 
-  return result.stdout.text
+  return result.artifactStdout.text
     .split("\0")
     .filter(
       (path) =>
@@ -602,6 +720,7 @@ async function untrackedFiles(
 
 async function appendUntrackedDiffs(
   sections: string[],
+  artifactSections: string[],
   workspacePath: string,
   paths: readonly string[],
   config: readonly string[],
@@ -622,16 +741,17 @@ async function appendUntrackedDiffs(
       ["diff", ...DIFF_SAFETY_ARGS, "--no-index", "--", nullDevicePath(), file],
       runOptions(config, signal),
     );
-    appendProcessSection(
+    appendProcessSections(
       sections,
+      artifactSections,
       `Untracked changes (${relative(workspacePath, resolve(workspacePath, file))})`,
       expectExitCode("diff --no-index", result, new Set([0, 1])),
     );
   }
   if (visibleFiles.truncated) {
-    sections.push(
-      `[git_diff output truncated: showing first ${visibleFiles.items.length} untracked files. Use paths to narrow output.]`,
-    );
+    const marker = `[git_diff output truncated: showing first ${visibleFiles.items.length} untracked files. Use paths to narrow output.]`;
+    sections.push(marker);
+    artifactSections.push(marker);
   }
 }
 
@@ -642,10 +762,10 @@ async function isGitWorkspace(
   const result = await runGitProcess(
     workspacePath,
     ["rev-parse", "--is-inside-work-tree"],
-    runOptions(undefined, signal),
+    runOptions(undefined, signal, "metadata"),
   );
   if (result.exitCode !== 0) return false;
-  return result.stdout.text.trim() === "true";
+  return result.artifactStdout.text.trim() === "true";
 }
 
 export async function executeGitDiff(
@@ -667,6 +787,7 @@ export async function executeGitDiff(
 
   const config = await configuredFilterOverrides(workspacePath, options.signal);
   const sections: string[] = [];
+  const artifactSections: string[] = [];
 
   if (mode === "all" || mode === "unstaged") {
     const unstagedDiff = await runTrackedDiff(
@@ -678,7 +799,12 @@ export async function executeGitDiff(
       projectIgnorePolicy,
     );
     if (unstagedDiff !== null) {
-      appendProcessSection(sections, "Unstaged changes", unstagedDiff);
+      appendProcessSections(
+        sections,
+        artifactSections,
+        "Unstaged changes",
+        unstagedDiff,
+      );
     }
   }
 
@@ -692,13 +818,19 @@ export async function executeGitDiff(
       projectIgnorePolicy,
     );
     if (stagedDiff !== null) {
-      appendProcessSection(sections, "Staged changes", stagedDiff);
+      appendProcessSections(
+        sections,
+        artifactSections,
+        "Staged changes",
+        stagedDiff,
+      );
     }
   }
 
   if (mode === "all" || mode === "unstaged") {
     await appendUntrackedDiffs(
       sections,
+      artifactSections,
       workspacePath,
       paths,
       config,
@@ -709,10 +841,19 @@ export async function executeGitDiff(
 
   const content =
     sections.length === 0 ? "No git changes found." : sections.join("\n\n");
+  const artifactContent =
+    artifactSections.length === 0
+      ? "No git changes found."
+      : artifactSections.join("\n\n");
+  const previewTruncated = gitDiffContentSourceTruncated(content);
+  const artifactSourceTruncated =
+    gitDiffContentSourceTruncated(artifactContent);
   return {
     content,
-    ...(gitDiffContentSourceTruncated(content)
-      ? { sourceTruncated: true }
+    ...(previewTruncated ? { sourceTruncated: true } : {}),
+    ...(previewTruncated || artifactSourceTruncated ? { artifactContent } : {}),
+    ...(previewTruncated || artifactSourceTruncated
+      ? { artifactSourceTruncated }
       : {}),
   };
 }
