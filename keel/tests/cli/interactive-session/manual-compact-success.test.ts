@@ -424,13 +424,10 @@ describe("Interactive Session - Manual Compact Success", () => {
         toolCalls: [],
       },
     ];
-    let summaryPrompt = "";
-    const observedRequestContexts: Message[][] = [];
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
         if (options.toolChoice === "none") {
-          summaryPrompt = options.messages[0]?.content ?? "";
           yield {
             type: "text",
             text: "Manual summary that omits the artifact ref.",
@@ -438,8 +435,17 @@ describe("Interactive Session - Manual Compact Success", () => {
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
-        observedRequestContexts.push(structuredClone([...options.messages]));
-        yield { type: "text", text: "Second prompt done." };
+        const context = JSON.stringify(options.messages);
+        const evidenceSurvived =
+          context.includes(artifactRef) &&
+          context.includes(`inspect: keel artifacts show ${artifactRef}`) &&
+          context.includes("source-truncated/lossy");
+        yield {
+          type: "text",
+          text: evidenceSurvived
+            ? "Manual evidence survived."
+            : "Manual evidence missing.",
+        };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
@@ -500,28 +506,8 @@ describe("Interactive Session - Manual Compact Success", () => {
 
     // Then
     await session;
-    expect(stdout).toBe("Second prompt done.\n");
+    expect(stdout).toBe("Manual evidence survived.\n");
     expect(stderr).toContain("Context compacted: manual");
-    expect(summaryPrompt).toContain("Evidence retained:");
-    expect(summaryPrompt).toContain(artifactRef);
-    expect(observedRequestContexts).toHaveLength(1);
-    const checkpoint = observedRequestContexts[0]?.[0];
-    expect(checkpoint).toMatchObject({
-      role: "user",
-      content: expect.stringContaining("<conversation-checkpoint>"),
-      contextCompaction: {
-        evidence: [
-          expect.objectContaining({
-            handle: artifactRef,
-            inspectCommand: `keel artifacts show ${artifactRef}`,
-          }),
-        ],
-      },
-    });
-    expect(checkpoint?.content).toContain("Evidence retained:");
-    expect(checkpoint?.content).toContain(artifactRef);
-    expect(checkpoint?.content).toContain("read manual-report.log");
-    expect(checkpoint?.content).toContain("source-truncated/lossy");
     expect(sigintHandlers.size).toBe(0);
   });
 

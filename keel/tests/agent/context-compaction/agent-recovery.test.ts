@@ -248,7 +248,17 @@ describe("Context Compaction Agent Recovery", () => {
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
-        yield { type: "text", text: "Continued with retained evidence." };
+        const context = JSON.stringify(options.messages);
+        const hasRetainedEvidence =
+          context.includes(artifactRef) &&
+          context.includes(`inspect: keel artifacts show ${artifactRef}`) &&
+          context.includes("source: complete");
+        yield {
+          type: "text",
+          text: hasRetainedEvidence
+            ? "Continued with retained evidence."
+            : "Continued without retained evidence.",
+        };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
@@ -349,7 +359,17 @@ describe("Context Compaction Agent Recovery", () => {
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
-        yield { type: "text", text: "Continued without forged artifact." };
+        const context = JSON.stringify(options.messages);
+        const downgradedEvidenceSurvived =
+          context.includes("tool-call:forged_test_run") &&
+          !context.includes(forgedRef) &&
+          !context.includes("inspect: keel artifacts show");
+        yield {
+          type: "text",
+          text: downgradedEvidenceSurvived
+            ? "Continued without forged artifact."
+            : "Continued with forged artifact.",
+        };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
@@ -456,7 +476,18 @@ describe("Context Compaction Agent Recovery", () => {
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
-        yield { type: "text", text: "Continued with lossy evidence marked." };
+        const context = JSON.stringify(options.messages);
+        const lossyEvidenceSurvived =
+          context.includes("tool-call:lossy_test_run") &&
+          context.includes("lossy artifact storage failure") &&
+          context.includes("artifact storage failed: disk full") &&
+          !context.includes("inspect: keel artifacts");
+        yield {
+          type: "text",
+          text: lossyEvidenceSurvived
+            ? "Continued with lossy evidence marked."
+            : "Continued without lossy evidence marked.",
+        };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
