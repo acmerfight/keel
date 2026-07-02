@@ -272,38 +272,53 @@ describe("Interactive Session - Manual Compact Success", () => {
     expect(sigintHandlers.size).toBe(0);
   });
 
-  test(`Given manual compaction artifact-backs retained stale tool output,
+  test(`Given manual compaction artifact-backs retained stale tool outputs,
     When user enters /compact,
-    Then stderr includes the artifact inspection command`, async () => {
+    Then stderr includes the artifact inspection commands and reduction stats`, async () => {
     // Given
-    const largeToolOutput = [
-      "MANUAL_LOG_START",
-      "manual log line ".repeat(500),
-      "MANUAL_LOG_END",
+    const firstLargeToolOutput = [
+      "MANUAL_LOG_A_START",
+      "manual log a line ".repeat(500),
+      "MANUAL_LOG_A_END",
+    ].join("\n");
+    const secondLargeToolOutput = [
+      "MANUAL_LOG_B_START",
+      "manual log b line ".repeat(500),
+      "MANUAL_LOG_B_END",
     ].join("\n");
     const initialMessages: readonly Message[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
-      { role: "user", content: "Read the old report." },
+      { role: "user", content: "Read the old reports." },
       {
         role: "assistant",
         content: "",
         toolCalls: [
           {
-            id: "read_manual_report",
+            id: "read_manual_report_a",
             tool: "read",
-            path: "manual-report.log",
+            path: "manual-report-a.log",
+          },
+          {
+            id: "read_manual_report_b",
+            tool: "read",
+            path: "manual-report-b.log",
           },
         ],
       },
       {
         role: "tool",
-        toolCallId: "read_manual_report",
-        content: largeToolOutput,
+        toolCallId: "read_manual_report_a",
+        content: firstLargeToolOutput,
+      },
+      {
+        role: "tool",
+        toolCallId: "read_manual_report_b",
+        content: secondLargeToolOutput,
       },
       {
         role: "assistant",
-        content: "The manual report was inspected.",
+        content: "The manual reports were inspected.",
         toolCalls: [],
       },
       { role: "user", content: "Continue later." },
@@ -373,17 +388,150 @@ describe("Interactive Session - Manual Compact Success", () => {
 
     // Then
     await session;
-    expect(saved).toHaveLength(1);
-    expect(saved[0]).toMatchObject({
-      toolCallId: "read_manual_report",
-      toolName: "read",
-      purpose: "stale-compaction",
-      content: largeToolOutput,
-    });
-    expect(stderr).toContain("Context compacted: manual");
+    expect(saved).toHaveLength(2);
+    expect(saved).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolCallId: "read_manual_report_a",
+          toolName: "read",
+          purpose: "stale-compaction",
+          content: firstLargeToolOutput,
+        }),
+        expect.objectContaining({
+          toolCallId: "read_manual_report_b",
+          toolName: "read",
+          purpose: "stale-compaction",
+          content: secondLargeToolOutput,
+        }),
+      ]),
+    );
+    expect(stderr).toMatch(
+      /Context compacted: manual \(\d+ -> \d+ messages, ~\d+ -> ~\d+ tokens, stale tool outputs 2 \(\d+ -> \d+ chars, ~\d+ -> ~\d+ tokens\)\)\n/u,
+    );
     expect(stderr).toContain(
       "Tool output artifact: tool-output:test/1 (keel artifacts show tool-output:test/1)",
     );
+    expect(stderr).toContain(
+      "Tool output artifact: tool-output:test/2 (keel artifacts show tool-output:test/2)",
+    );
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given manual compaction cannot store a stale tool output artifact,
+    When user enters /compact,
+    Then stderr reports lossy recovery guidance with singular reduction stats`, async () => {
+    // Given
+    const largeToolOutput = [
+      "MANUAL_FAILURE_LOG_START",
+      "manual failure log line ".repeat(500),
+      "MANUAL_FAILURE_LOG_END",
+    ].join("\n");
+    const initialMessages: readonly Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+      { role: "user", content: "Read the failed report." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_manual_failure_report",
+            tool: "read",
+            path: "manual-failure-report.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_manual_failure_report",
+        content: largeToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The failed report was inspected.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue later." },
+    ];
+    const saveAttempts: ToolOutputArtifactSaveInput[] = [];
+    const store: ToolOutputArtifactStore = {
+      verifyReusable: async () => ({ status: "not_reusable" }),
+      save: async (input) => {
+        saveAttempts.push(input);
+        return { status: "failed", reason: "disk\nfull" };
+      },
+    };
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice !== "none") {
+          throw new Error("manual compaction should not start an agent turn");
+        }
+        yield { type: "text", text: "Manual failure summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialMessages,
+      toolOutputArtifacts: { store },
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: {
+          keepRecentTokens: 20_000,
+          toolOutputMaxChars: 128,
+        },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("manual compaction should not print agent events");
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("/compact\n");
+
+    // Then
+    await session;
+    expect(saveAttempts).toEqual([
+      expect.objectContaining({
+        toolCallId: "read_manual_failure_report",
+        toolName: "read",
+        purpose: "stale-compaction",
+        content: largeToolOutput,
+      }),
+    ]);
+    expect(stderr).toMatch(
+      /Context compacted: manual \(\d+ -> \d+ messages, ~\d+ -> ~\d+ tokens, stale tool output 1 \(\d+ -> \d+ chars, ~\d+ -> ~\d+ tokens\)\)\n/u,
+    );
+    expect(stderr).toContain(
+      "Tool output artifact failed: disk\\nfull; output is lossy; rerun with narrower parameters if needed",
+    );
+    expect(stderr).not.toContain("keel artifacts show");
     expect(sigintHandlers.size).toBe(0);
   });
 
