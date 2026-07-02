@@ -141,6 +141,13 @@ describe("Context Compaction Split-Turn Planning", () => {
       {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
+        contextCompaction: {
+          evidence: [
+            expect.objectContaining({
+              handle: "read:consumed.log",
+            }),
+          ],
+        },
       },
       {
         role: "assistant",

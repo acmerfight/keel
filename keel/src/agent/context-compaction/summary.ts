@@ -2,13 +2,21 @@ import { KeelError } from "../../core/error.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
 import type {
   ToolOutputArtifactNotice,
+  ToolOutputArtifactStore,
   ToolOutputArtifactsOptions,
 } from "../tool-output-artifacts.ts";
 import {
+  checkpointEvidenceFromMessage,
   normalizeCheckpointSummary,
   renderConversationCheckpoint,
   serializeCheckpointMessageForSummaryPrompt,
 } from "./checkpoint.ts";
+import {
+  type CompactionEvidence,
+  collectToolCompactionEvidence,
+  mergeCompactionEvidence,
+  renderCompactionEvidenceSection,
+} from "./evidence.ts";
 import {
   MIN_SUMMARY_INPUT_MAX_CHARS,
   type ResolvedContextCompactionOptions,
@@ -24,10 +32,19 @@ import {
 } from "./tool-output-preview.ts";
 
 const MAX_SUMMARY_OVERFLOW_RETRIES = 3;
+const MAX_COMPACTION_EVIDENCE_CHARS = 12_000;
+const MIN_COMPACTION_EVIDENCE_CHARS = 1_000;
+const MIN_COMPACTION_CONVERSATION_CHARS = Math.floor(
+  MIN_SUMMARY_INPUT_MAX_CHARS / 3,
+);
 
 interface TextOnlyTurn {
   readonly text: string;
   readonly usage: Usage;
+}
+
+interface CompactionSummaryTurn extends TextOnlyTurn {
+  readonly summaryInputMaxChars: number;
 }
 
 export interface BuildCompactedMessagesResult {
@@ -116,6 +133,70 @@ function normalizeFocusInstruction(
   return trimmed;
 }
 
+function checkpointEvidenceFromMessages(
+  messages: readonly Message[],
+): readonly CompactionEvidence[] {
+  return messages.flatMap((message) =>
+    message.role === "user" ? checkpointEvidenceFromMessage(message) : [],
+  );
+}
+
+function compactionEvidenceForMessages(options: {
+  readonly messages: readonly Message[];
+  readonly toolOutputMaxChars: number;
+  readonly artifactStore: ToolOutputArtifactStore | undefined;
+}): Promise<readonly CompactionEvidence[]> {
+  return collectToolCompactionEvidence(
+    options.messages,
+    options.toolOutputMaxChars,
+    options.artifactStore,
+  ).then((toolEvidence) =>
+    mergeCompactionEvidence(
+      checkpointEvidenceFromMessages(options.messages),
+      toolEvidence,
+    ),
+  );
+}
+
+async function renderCompactionEvidenceForMessages(options: {
+  readonly messages: readonly Message[];
+  readonly toolOutputMaxChars: number;
+  readonly summaryInputMaxChars: number;
+  readonly artifactStore: ToolOutputArtifactStore | undefined;
+}): Promise<string> {
+  const evidence = await compactionEvidenceForMessages(options);
+  return evidence.length === 0
+    ? ""
+    : renderCompactionEvidenceSection(evidence, {
+        maxChars: compactionEvidenceMaxChars(options.summaryInputMaxChars),
+      });
+}
+
+function compactionEvidenceMaxChars(summaryInputMaxChars: number): number {
+  if (summaryInputMaxChars <= 0) {
+    return 0;
+  }
+  if (summaryInputMaxChars < MIN_SUMMARY_INPUT_MAX_CHARS) {
+    return summaryInputMaxChars;
+  }
+  const conversationReserveChars = Math.max(
+    MIN_COMPACTION_CONVERSATION_CHARS,
+    Math.floor(summaryInputMaxChars / 3),
+  );
+  const maxEvidenceAfterConversationReserve =
+    summaryInputMaxChars - conversationReserveChars;
+  return Math.min(
+    maxEvidenceAfterConversationReserve,
+    Math.min(
+      MAX_COMPACTION_EVIDENCE_CHARS,
+      Math.max(
+        MIN_COMPACTION_EVIDENCE_CHARS,
+        Math.floor(summaryInputMaxChars / 3),
+      ),
+    ),
+  );
+}
+
 function selectSummaryInput(
   serializedMessages: readonly string[],
   maxChars: number,
@@ -147,19 +228,26 @@ function selectSummaryInput(
   return { context: selected.join("\n\n"), omittedCount: 0 };
 }
 
-function buildSummaryPrompt(
+async function buildSummaryPrompt(
   messages: readonly Message[],
   options: ResolvedContextCompactionOptions,
   summaryInputMaxChars = options.summaryInputMaxChars,
   focusInstruction?: string,
-): string {
+  artifactStore?: ToolOutputArtifactStore,
+): Promise<string> {
   const normalizedFocusInstruction =
     normalizeFocusInstruction(focusInstruction);
+  const evidenceSection = await renderCompactionEvidenceForMessages({
+    messages,
+    toolOutputMaxChars: options.toolOutputMaxChars,
+    summaryInputMaxChars,
+    artifactStore,
+  });
   const selected = selectSummaryInput(
     messages.map((message) =>
       serializeMessage(messages, message, options.toolOutputMaxChars),
     ),
-    summaryInputMaxChars,
+    Math.max(0, summaryInputMaxChars - evidenceSection.length),
   );
   const promptParts = [
     "Create a compact checkpoint summary for an ongoing coding-agent conversation.",
@@ -169,6 +257,15 @@ function buildSummaryPrompt(
   if (normalizedFocusInstruction !== undefined) {
     promptParts.push(
       `User manual compaction focus instruction:\n${normalizedFocusInstruction}`,
+    );
+  }
+  if (evidenceSection !== "") {
+    promptParts.push(
+      [
+        "Source-backed evidence handles that must survive this checkpoint.",
+        "When a summary claim depends on exact tool output, file content, search results, or diffs, keep the relevant handle and inspect command.",
+      ].join("\n"),
+      evidenceSection,
     );
   }
   promptParts.push(
@@ -190,6 +287,7 @@ export async function buildCompactedMessages(
   summary: string,
   options: ResolvedContextCompactionOptions,
   toolOutputArtifacts?: ToolOutputArtifactsOptions,
+  summaryInputMaxChars = options.summaryInputMaxChars,
 ): Promise<BuildCompactedMessagesResult> {
   const recentMessages = messages.slice(firstRetainedIndex);
   const recent =
@@ -200,15 +298,25 @@ export async function buildCompactedMessages(
           options.toolOutputMaxChars,
           toolOutputArtifacts.store,
         );
+  const checkpointEvidence = await compactionEvidenceForMessages({
+    messages: messages.slice(0, firstRetainedIndex),
+    toolOutputMaxChars: options.toolOutputMaxChars,
+    artifactStore: toolOutputArtifacts?.store,
+  });
   const checkpoint = renderConversationCheckpoint({
     summary: normalizeCheckpointSummary(summary),
     noLaterMessages: recent.messages.length === 0,
+    evidence: checkpointEvidence,
+    evidenceMaxChars: compactionEvidenceMaxChars(summaryInputMaxChars),
   });
   return {
     messages: [
       {
         role: "user",
         content: checkpoint,
+        ...(checkpointEvidence.length === 0
+          ? {}
+          : { contextCompaction: { evidence: checkpointEvidence } }),
       },
       ...recent.messages,
     ],
@@ -273,8 +381,9 @@ export async function collectCompactionSummary(options: {
   readonly messagesToSummarize: readonly Message[];
   readonly signal: AbortSignal;
   readonly contextCompaction: ResolvedContextCompactionOptions;
+  readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly focusInstruction?: string;
-}): Promise<TextOnlyTurn> {
+}): Promise<CompactionSummaryTurn> {
   let summaryInputMaxChars = options.contextCompaction.summaryInputMaxChars;
 
   let attempt = 0;
@@ -284,14 +393,16 @@ export async function collectCompactionSummary(options: {
       options.contextCompaction,
       summaryInputMaxChars,
       options.focusInstruction,
+      options.toolOutputArtifacts?.store,
     );
     try {
-      return await collectTextOnlyTurn({
+      const turn = await collectTextOnlyTurn({
         provider: options.provider,
         systemPrompt: options.systemPrompt,
-        messages: [{ role: "user", content: prompt }],
+        messages: [{ role: "user", content: await prompt }],
         signal: options.signal,
       });
+      return { ...turn, summaryInputMaxChars };
     } catch (error) {
       if (!isProviderContextOverflow(error)) {
         throw error;

@@ -1,4 +1,9 @@
+import { createHash } from "node:crypto";
 import type { AgentEvent } from "../agent/events.ts";
+import type {
+  ToolOutputArtifactSourceStatus,
+  ToolOutputArtifactStore,
+} from "../agent/tool-output-artifacts.ts";
 import type { Usage } from "../llm/types.ts";
 
 export type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
@@ -94,6 +99,69 @@ export function failingStream(error: unknown): AsyncIterable<never> {
           throw error;
         },
       };
+    },
+  };
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function sourceStatusText(status: ToolOutputArtifactSourceStatus): string {
+  return status === "complete"
+    ? "complete"
+    : "source-truncated/lossy before artifact capture";
+}
+
+export function verifiedToolOutputArtifactFixture(options: {
+  readonly ref: string;
+  readonly toolCallId: string;
+  readonly previewContent: string;
+  readonly omittedChars: number;
+  readonly sourceStatus: ToolOutputArtifactSourceStatus;
+  readonly markerKind?: "tool output shortened" | "stale tool output compacted";
+}): {
+  readonly marker: string;
+  readonly store: ToolOutputArtifactStore;
+} {
+  const artifactContent = `${options.previewContent}${"x".repeat(
+    options.omittedChars,
+  )}`;
+  const contentSha256 = sha256(artifactContent);
+  const markerKind = options.markerKind ?? "tool output shortened";
+  const omittedText =
+    markerKind === "stale tool output compacted"
+      ? `approximately omitted ${options.omittedChars} chars`
+      : `omitted ${options.omittedChars} chars`;
+  return {
+    marker: `[${markerKind}: ${omittedText}; full output artifact: ${options.ref}; inspect with: keel artifacts show ${options.ref}; sha256: ${contentSha256}; source status: ${sourceStatusText(
+      options.sourceStatus,
+    )}]`,
+    store: {
+      verifyReusable: async (input) => {
+        const expectedChars = input.previewContent.length + input.omittedChars;
+        const previewMatches =
+          input.previewKind === "prefix"
+            ? artifactContent.startsWith(input.previewContent)
+            : input.contentSha256 === contentSha256;
+        if (
+          input.ref !== options.ref ||
+          input.toolCallId !== options.toolCallId ||
+          input.sourceStatus !== options.sourceStatus ||
+          input.omittedChars !== options.omittedChars ||
+          artifactContent.length !== expectedChars ||
+          (input.contentSha256 !== undefined &&
+            input.contentSha256 !== contentSha256) ||
+          !previewMatches
+        ) {
+          return { status: "not_reusable" };
+        }
+        return { status: "reusable", contentSha256 };
+      },
+      save: async () => ({
+        status: "failed",
+        reason: "unexpected artifact save in test",
+      }),
     },
   };
 }
