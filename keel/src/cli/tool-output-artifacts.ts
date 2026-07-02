@@ -180,7 +180,18 @@ function artifactMatchesReuseInput(
 ): ToolOutputArtifactReuseResult {
   const contentChars = Number(parsed.metadata.get("contentChars"));
   const contentSha256 = parsed.metadata.get("sha256");
-  const expectedChars = input.contentPrefix.length + input.omittedChars;
+  const expectedChars = input.previewContent.length + input.omittedChars;
+  const parsedBodySha256 =
+    contentSha256 === undefined ? undefined : sha256(parsed.body);
+  const contentHashMatches =
+    contentSha256 !== undefined &&
+    parsedBodySha256 === contentSha256 &&
+    (input.contentSha256 === undefined ||
+      input.contentSha256 === contentSha256);
+  const previewMatches =
+    input.previewKind === "prefix"
+      ? parsed.body.startsWith(utf8RoundTrip(input.previewContent))
+      : input.contentSha256 !== undefined;
   if (
     !Number.isSafeInteger(contentChars) ||
     contentChars !== expectedChars ||
@@ -188,11 +199,8 @@ function artifactMatchesReuseInput(
     parsed.metadata.get("ref") !== input.ref ||
     parsed.metadata.get("toolCallId") !== input.toolCallId ||
     parsed.metadata.get("sourceStatus") !== input.sourceStatus ||
-    contentSha256 === undefined ||
-    sha256(parsed.body) !== contentSha256 ||
-    (input.contentSha256 !== undefined &&
-      input.contentSha256 !== contentSha256) ||
-    !parsed.body.startsWith(utf8RoundTrip(input.contentPrefix))
+    !contentHashMatches ||
+    !previewMatches
   ) {
     return { status: "not_reusable" };
   }

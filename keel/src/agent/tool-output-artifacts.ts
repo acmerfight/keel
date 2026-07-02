@@ -8,6 +8,7 @@ export const TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY =
 
 export type ToolOutputArtifactSourceStatus = "complete" | "source-truncated";
 export type ToolOutputArtifactToolName = ToolCall["tool"] | "unknown";
+type ToolOutputArtifactPreviewKind = "prefix" | "projection";
 
 export function sourceStatusFromToolOutputText(
   content: string,
@@ -66,8 +67,9 @@ export type ToolOutputArtifactSaveResult =
 export interface ToolOutputArtifactReuseInput {
   readonly ref: string;
   readonly toolCallId: string;
-  readonly contentPrefix: string;
+  readonly previewContent: string;
   readonly omittedChars: number;
+  readonly previewKind: ToolOutputArtifactPreviewKind;
   readonly sourceStatus: ToolOutputArtifactSourceStatus;
   readonly contentSha256?: string;
 }
@@ -124,12 +126,13 @@ export interface GeneratedToolOutputArtifactMarker {
   readonly marker: string;
   readonly markerIndex: number;
   readonly omittedChars: number;
+  readonly previewKind: ToolOutputArtifactPreviewKind;
   readonly sourceStatus: ToolOutputArtifactSourceStatus;
   readonly contentSha256?: string;
 }
 
 const TOOL_OUTPUT_ARTIFACT_MARKER_SUFFIX_PATTERN =
-  /\n\[(?:tool output shortened|stale tool output compacted|current tool output compacted after context overflow): (?:approximately )?omitted ([0-9]+) chars; full output artifact: (tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+); inspect with: keel artifacts show \2(?:; sha256: ([a-f0-9]{64}))?; source status: (complete|source-truncated\/lossy before artifact capture)(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
+  /\n\[(tool output shortened|stale tool output compacted|current tool output compacted after context overflow): (?:approximately )?omitted ([0-9]+) chars; full output artifact: (tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+); inspect with: keel artifacts show \3(?:; sha256: ([a-f0-9]{64}))?; source status: (complete|source-truncated\/lossy before artifact capture)(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
 const TOOL_OUTPUT_ARTIFACT_FAILED_MARKER_SUFFIX_PATTERN =
   /\n\[(?:tool output shortened|stale tool output compacted|current tool output compacted after context overflow): [^\]]*artifact storage failed: .*; lossy; rerun the tool with narrower parameters if needed(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
 
@@ -178,12 +181,20 @@ export function generatedToolOutputArtifactMarker(
   if (marker === null) {
     return null;
   }
-  const [, rawOmittedChars = "", ref = "", contentSha256, rawSourceStatus] =
-    marker;
+  const [
+    ,
+    rawMarkerKind = "",
+    rawOmittedChars = "",
+    ref = "",
+    contentSha256,
+    rawSourceStatus,
+  ] = marker;
   const omittedChars = Number(rawOmittedChars);
   if (!Number.isSafeInteger(omittedChars)) {
     return null;
   }
+  const previewKind =
+    rawMarkerKind === "tool output shortened" ? "prefix" : "projection";
   const sourceStatus =
     rawSourceStatus === "complete" ? "complete" : "source-truncated";
   return {
@@ -191,6 +202,7 @@ export function generatedToolOutputArtifactMarker(
     marker: toolOutputArtifactStoredMarker(ref, sourceStatus, contentSha256),
     markerIndex: marker.index,
     omittedChars,
+    previewKind,
     sourceStatus,
     ...(contentSha256 === undefined ? {} : { contentSha256 }),
   };
