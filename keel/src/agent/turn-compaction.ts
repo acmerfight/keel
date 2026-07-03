@@ -240,6 +240,9 @@ export async function* streamTurnWithOverflowRecovery(
     );
     if (
       !preflightCurrentOutputCompactionAttempted &&
+      // After historical compaction, any remaining over-budget request is
+      // worth a current-output-only preflight attempt even when the original
+      // overage was not dominated by the current tool round.
       shouldCompactBeforeRequest(
         config.systemPrompt,
         preflightRequestMessages,

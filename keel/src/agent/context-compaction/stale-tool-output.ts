@@ -274,7 +274,6 @@ function shouldCompactCurrentToolOutput(
   allowPreflightRecompaction: boolean,
 ): boolean {
   const allowSettledPreflightRecompaction =
-    message.role === "tool" &&
     canRecompactPreflightCurrentToolOutput({
       text: message.content,
       allowPreflightRecompaction,
