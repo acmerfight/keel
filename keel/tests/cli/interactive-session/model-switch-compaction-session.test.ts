@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import type { ToolOutputArtifactStore } from "../../../src/agent/tool-output-artifacts.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
@@ -30,6 +31,13 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     let oldProviderTurns = 0;
     let targetProviderTurns = 0;
     const largePrompt = "large history ".repeat(3_000).trim();
+    const artifactStore: ToolOutputArtifactStore = {
+      verifyReusable: async () => ({ status: "not_reusable" }),
+      save: async () => ({
+        status: "failed",
+        reason: "unexpected artifact save in rescue test",
+      }),
+    };
     const oldProvider: LLMProvider = {
       id: "fake",
       async *stream() {
@@ -84,6 +92,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         }
         return resolvedProvider("fake", "fake", oldProvider);
       },
+      toolOutputArtifacts: { store: artifactStore },
       requireKnownCostModel: () => ZERO_COST_MODEL,
       printAgentEvents: async (stream) => {
         let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
@@ -104,7 +113,9 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
 
     // Then
     await session;
-    expect(stderr).toContain("Context compaction skipped: no safe history");
+    expect(stderr).toContain("Context rescue:");
+    expect(stderr).toContain("no safe compaction split");
+    expect(stderr).toContain("switching to qwen/tiny requires compaction");
     expect(stdout).toContain("old provider 1");
     expect(stdout).not.toContain("unexpected target");
     expect(oldProviderTurns).toBe(1);

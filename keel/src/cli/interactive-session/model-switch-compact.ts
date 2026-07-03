@@ -3,6 +3,11 @@ import {
   contextCompactionStatsForCurrentMessages,
   shouldCompactBeforeRequest,
 } from "../../agent/context-compaction.ts";
+import {
+  buildContextRescueReport,
+  contextRescueReasonDetail,
+  isProviderContextOverflowError,
+} from "../../agent/context-rescue.ts";
 import type { CostReport } from "../../agent/events.ts";
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
 import type { ReadVisibilityState } from "../../agent/read-visibility.ts";
@@ -12,6 +17,7 @@ import { bashModeExposesTool } from "../../permissions/bash.ts";
 import type { ProjectInstructionVisibilityState } from "../../tools/scoped-project-instructions.ts";
 import {
   formatContextCompactionReport,
+  formatContextRescueReport,
   formatToolOutputArtifactNotice,
 } from "../output.ts";
 import { formatManualCompactionFailure } from "./commands.ts";
@@ -200,7 +206,19 @@ export async function executeModelSwitchCompaction(
     if (!result.compacted) {
       rollback();
       options.writeStderr(
-        "Context compaction skipped: no safe history to compact.\n",
+        formatContextRescueReport(
+          await buildContextRescueReport({
+            reason: "no_safe_compaction_split",
+            reasonDetail: `switching to ${target.providerId}/${target.model} requires compaction, but no tool-safe historical boundary is available.`,
+            systemPrompt,
+            messages,
+            contextCompaction: target.contextCompaction,
+            requestMetadata: {
+              allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+            },
+            toolOutputArtifacts: options.toolOutputArtifacts,
+          }),
+        ),
       );
       return { status: "rejected" };
     }
@@ -226,10 +244,19 @@ export async function executeModelSwitchCompaction(
         bashToolVisible: bashModeExposesTool(options.cliArgs.bashMode),
       })
     ) {
+      const rescueReport = await buildContextRescueReport({
+        reason: "model_switch_target_overflow",
+        reasonDetail: `switching to ${target.providerId}/${target.model} still exceeds the target context window after model-switch compaction.`,
+        systemPrompt,
+        messages,
+        contextCompaction: target.contextCompaction,
+        requestMetadata: {
+          allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+        },
+        toolOutputArtifacts: options.toolOutputArtifacts,
+      });
       rollback();
-      options.writeStderr(
-        `Error: switching to ${target.providerId}/${target.model} still exceeds the target context window after model-switch compaction.\n`,
-      );
+      options.writeStderr(formatContextRescueReport(rescueReport));
       return { status: "rejected" };
     }
 
@@ -264,6 +291,24 @@ export async function executeModelSwitchCompaction(
     rollback();
     if (signal.aborted) {
       options.writeStdout("\n");
+      return { status: "rejected" };
+    }
+    if (isProviderContextOverflowError(error)) {
+      options.writeStderr(
+        formatContextRescueReport(
+          await buildContextRescueReport({
+            reason: "summary_request_overflow",
+            reasonDetail: contextRescueReasonDetail(error),
+            systemPrompt,
+            messages,
+            contextCompaction: target.contextCompaction,
+            requestMetadata: {
+              allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+            },
+            toolOutputArtifacts: options.toolOutputArtifacts,
+          }),
+        ),
+      );
       return { status: "rejected" };
     }
     options.writeStderr(formatManualCompactionFailure(error));

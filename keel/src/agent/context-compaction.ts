@@ -35,6 +35,8 @@ export { projectCompactedToolOutput } from "./context-compaction/tool-output-pre
 import {
   captureContextCompactionAccountingSnapshot as captureContextCompactionAccountingSnapshotFromAccounting,
   contextCompactionStatsForCurrentMessages as contextCompactionStatsForCurrentMessagesFromAccounting,
+  estimateMessageTokens as estimateContextMessageTokens,
+  estimateTextTokens as estimateContextTextTokens,
   estimateRequestTokens,
   type ContextCompactionAccountingSnapshot as InternalContextCompactionAccountingSnapshot,
   type ContextCompactionStats as InternalContextCompactionStats,
@@ -52,6 +54,13 @@ export type ContextCompactionAccountingSnapshot =
   InternalContextCompactionAccountingSnapshot;
 export type ContextCompactionStats = InternalContextCompactionStats;
 export type { CurrentToolOutputCompactionReason };
+export { estimateContextMessageTokens, estimateContextTextTokens };
+
+export interface ContextCompactionTokenBudget {
+  readonly contextWindowTokens?: number;
+  readonly reserveTokens: number;
+  readonly targetTokens?: number;
+}
 
 export function isCompactedCurrentToolOutput(text: string): boolean {
   return isCompactedCurrentToolOutputFromContent(text);
@@ -116,6 +125,41 @@ function requestTargetTokens(
     return undefined;
   }
   return Math.max(0, resolved.contextWindowTokens - resolved.reserveTokens);
+}
+
+export function contextCompactionTokenBudget(
+  options: ContextCompactionOptions | undefined,
+): ContextCompactionTokenBudget {
+  const resolved = resolveContextCompactionOptions(options);
+  const targetTokens = requestTargetTokens(resolved);
+  return {
+    ...(resolved.contextWindowTokens !== undefined
+      ? { contextWindowTokens: resolved.contextWindowTokens }
+      : {}),
+    reserveTokens: resolved.reserveTokens,
+    ...(targetTokens !== undefined ? { targetTokens } : {}),
+  };
+}
+
+export function hasSafeContextCompactionSplit(
+  messages: readonly Message[],
+  options: ContextCompactionOptions | undefined,
+): boolean {
+  const resolved = resolveContextCompactionOptions(options);
+  return (
+    selectCompactionSplit(messages, {
+      keepRecentTokens: resolved.keepRecentTokens,
+    }) !== null
+  );
+}
+
+export function estimateContextRequestTokens(
+  systemPrompt: string,
+  messages: readonly Message[],
+  accounting?: ContextCompactionAccountingSnapshot,
+  metadata?: ContextCompactionRequestMetadata,
+): number {
+  return estimateRequestTokens(systemPrompt, messages, accounting, metadata);
 }
 
 function currentToolOutputMaxCharsForCompaction(options: {

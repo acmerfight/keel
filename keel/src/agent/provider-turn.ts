@@ -23,7 +23,7 @@ export interface AgentTurn {
   readonly reasoningContent: string | null;
   readonly toolCalls: readonly ToolCall[];
   readonly usage: Usage;
-  readonly stopReason: LLMStopReason;
+  readonly stopReason: LLMStopReason | "context_rescue";
 }
 
 interface AgentTurnStop {

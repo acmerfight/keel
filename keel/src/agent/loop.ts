@@ -398,6 +398,9 @@ async function settleToolExecutionContents(options: {
 }
 
 function agentStopReasonFromProvider(reason: AgentTurn["stopReason"]): string {
+  if (reason === "context_rescue") {
+    return "context_rescue";
+  }
   return reason === "length" ? "provider_length" : "completed";
 }
 

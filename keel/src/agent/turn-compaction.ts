@@ -13,9 +13,16 @@ import {
   captureContextCompactionAccountingSnapshot,
   compactMessages,
   contextCompactionStatsForCurrentMessages,
+  hasSafeContextCompactionSplit,
   shouldCompactBeforeRequest,
   shouldCompactCurrentToolOutputBeforeHistoricalCompaction,
 } from "./context-compaction.ts";
+import {
+  buildContextRescueReport,
+  type ContextRescueReason,
+  contextRescueReasonDetail,
+  isProviderContextOverflowError,
+} from "./context-rescue.ts";
 import type { AgentEvent } from "./events.ts";
 import {
   type AgentTurn,
@@ -29,6 +36,13 @@ import {
   sessionLedgerFromMessages,
 } from "./session-ledger.ts";
 import type { ToolOutputArtifactsOptions } from "./tool-output-artifacts.ts";
+
+const ZERO_USAGE = {
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  uncachedInputTokens: 0,
+  outputTokens: 0,
+};
 
 export interface CompactionConfig {
   readonly provider: LLMProvider;
@@ -68,6 +82,43 @@ function requestMetadataForStream(
       ? { toolChoice: options.toolChoice }
       : {}),
   };
+}
+
+function contextRescueTurn(): AgentTurn {
+  return {
+    text: "",
+    reasoningContent: null,
+    toolCalls: [],
+    usage: ZERO_USAGE,
+    stopReason: "context_rescue",
+  };
+}
+
+function hasNoSafeCompactionSplit(
+  config: CompactionConfig,
+  messages: readonly Message[],
+): boolean {
+  return !hasSafeContextCompactionSplit(messages, config.contextCompaction);
+}
+
+async function buildTurnContextRescueReport(options: {
+  readonly config: CompactionConfig;
+  readonly streamOptions: LedgerTurnOptions;
+  readonly reason: ContextRescueReason;
+  readonly reasonDetail: string;
+  readonly messages?: readonly Message[];
+}) {
+  return buildContextRescueReport({
+    reason: options.reason,
+    reasonDetail: options.reasonDetail,
+    systemPrompt: options.config.systemPrompt,
+    messages:
+      options.messages ??
+      projectSessionLedgerToProviderMessages(options.streamOptions.getLedger()),
+    contextCompaction: options.config.contextCompaction,
+    toolOutputArtifacts: options.config.toolOutputArtifacts,
+    requestMetadata: requestMetadataForStream(options.streamOptions),
+  });
 }
 
 async function attemptContextCompaction(
@@ -181,6 +232,7 @@ export async function* streamTurnWithOverflowRecovery(
   streamOptions: LedgerTurnOptions,
 ): AsyncGenerator<AgentEvent, AgentTurn> {
   let overflowRecoveryAttempted = false;
+  let overflowRecoveryProducedRetry = false;
   let historicalCompactionAttemptedBeforeRequest = false;
   let preflightCurrentOutputCompactionAttempted = false;
 
@@ -219,11 +271,29 @@ export async function* streamTurnWithOverflowRecovery(
       )
     ) {
       historicalCompactionAttemptedBeforeRequest = true;
-      const compaction = await attemptContextCompaction(
-        config,
-        state,
-        streamOptions,
-      );
+      let compaction: CompactMessagesResult;
+      try {
+        compaction = await attemptContextCompaction(
+          config,
+          state,
+          streamOptions,
+        );
+      } catch (error) {
+        if (isProviderContextOverflowError(error)) {
+          yield {
+            type: "context_rescue",
+            report: await buildTurnContextRescueReport({
+              config,
+              streamOptions,
+              reason: "summary_request_overflow",
+              reasonDetail: contextRescueReasonDetail(error),
+              messages: historicalRequestMessages,
+            }),
+          };
+          return contextRescueTurn();
+        }
+        throw error;
+      }
       if (compaction.compacted) {
         yield {
           type: "context_compacted",
@@ -289,20 +359,37 @@ export async function* streamTurnWithOverflowRecovery(
       if (error instanceof ContextOverflowBeforeAssistantError) {
         if (!overflowRecoveryAttempted) {
           overflowRecoveryAttempted = true;
-          const compaction = await attemptContextCompaction(
-            config,
-            state,
-            streamOptions,
-            {
-              allowCurrentToolOutputCompaction: true,
-              ...(preflightCurrentOutputCompactionAttempted
-                ? {
-                    currentToolOutputMaxCharsOverride: 1,
-                    allowPreflightCurrentToolOutputRecompaction: true,
-                  }
-                : {}),
-            },
-          );
+          let compaction: CompactMessagesResult;
+          try {
+            compaction = await attemptContextCompaction(
+              config,
+              state,
+              streamOptions,
+              {
+                allowCurrentToolOutputCompaction: true,
+                ...(preflightCurrentOutputCompactionAttempted
+                  ? {
+                      currentToolOutputMaxCharsOverride: 1,
+                      allowPreflightCurrentToolOutputRecompaction: true,
+                    }
+                  : {}),
+              },
+            );
+          } catch (compactionError) {
+            if (isProviderContextOverflowError(compactionError)) {
+              yield {
+                type: "context_rescue",
+                report: await buildTurnContextRescueReport({
+                  config,
+                  streamOptions,
+                  reason: "summary_request_overflow",
+                  reasonDetail: contextRescueReasonDetail(compactionError),
+                }),
+              };
+              return contextRescueTurn();
+            }
+            throw compactionError;
+          }
           if (compaction.compacted) {
             yield {
               type: "context_compacted",
@@ -314,10 +401,31 @@ export async function* streamTurnWithOverflowRecovery(
             }
             historicalCompactionAttemptedBeforeRequest = true;
             preflightCurrentOutputCompactionAttempted = true;
+            overflowRecoveryProducedRetry = true;
             continue;
           }
         }
-        throw error.error;
+        const recoveryMessages = projectSessionLedgerToProviderMessages(
+          streamOptions.getLedger(),
+        );
+        const noSafeSplit =
+          !overflowRecoveryProducedRetry &&
+          hasNoSafeCompactionSplit(config, recoveryMessages);
+        yield {
+          type: "context_rescue",
+          report: await buildTurnContextRescueReport({
+            config,
+            streamOptions,
+            reason: noSafeSplit
+              ? "no_safe_compaction_split"
+              : "overflow_recovery_failed",
+            reasonDetail: noSafeSplit
+              ? "Provider rejected the request, and no tool-safe historical boundary is available for compaction."
+              : contextRescueReasonDetail(error.error),
+            messages: recoveryMessages,
+          }),
+        };
+        return contextRescueTurn();
       }
       throw error;
     }

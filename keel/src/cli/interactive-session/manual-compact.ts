@@ -1,7 +1,13 @@
 import {
   compactMessages,
   contextCompactionStatsForCurrentMessages,
+  shouldCompactBeforeRequest,
 } from "../../agent/context-compaction.ts";
+import {
+  buildContextRescueReport,
+  contextRescueReasonDetail,
+  isProviderContextOverflowError,
+} from "../../agent/context-rescue.ts";
 import type { CostReport } from "../../agent/events.ts";
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
 import type { ReadVisibilityState } from "../../agent/read-visibility.ts";
@@ -10,6 +16,7 @@ import type { Message, Usage } from "../../llm/types.ts";
 import type { ProjectInstructionVisibilityState } from "../../tools/scoped-project-instructions.ts";
 import {
   formatContextCompactionReport,
+  formatContextRescueReport,
   formatToolOutputArtifactNotice,
 } from "../output.ts";
 import {
@@ -114,15 +121,52 @@ export async function executeManualCompaction(
         return cost;
       }
     } else {
-      options.writeStderr(
-        "Context compaction skipped: no safe history to compact.\n",
-      );
+      if (
+        shouldCompactBeforeRequest(
+          systemPrompt,
+          messages,
+          resolved.contextCompaction,
+        )
+      ) {
+        options.writeStderr(
+          formatContextRescueReport(
+            await buildContextRescueReport({
+              reason: "no_safe_compaction_split",
+              reasonDetail:
+                "The current session is over budget, but no tool-safe historical boundary is available for manual compaction.",
+              systemPrompt,
+              messages,
+              contextCompaction: resolved.contextCompaction,
+              toolOutputArtifacts: options.toolOutputArtifacts,
+            }),
+          ),
+        );
+      } else {
+        options.writeStderr(
+          "Context compaction skipped: no safe history to compact.\n",
+        );
+      }
     }
     return undefined;
   } catch (error) {
     messages.splice(0, messages.length, ...messagesBeforeCompact);
     if (signal.aborted) {
       options.writeStdout("\n");
+      return undefined;
+    }
+    if (isProviderContextOverflowError(error)) {
+      options.writeStderr(
+        formatContextRescueReport(
+          await buildContextRescueReport({
+            reason: "summary_request_overflow",
+            reasonDetail: contextRescueReasonDetail(error),
+            systemPrompt,
+            messages,
+            contextCompaction: resolved.contextCompaction,
+            toolOutputArtifacts: options.toolOutputArtifacts,
+          }),
+        ),
+      );
       return undefined;
     }
     options.writeStderr(formatManualCompactionFailure(error));

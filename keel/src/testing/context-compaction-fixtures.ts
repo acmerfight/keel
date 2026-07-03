@@ -11,6 +11,10 @@ export type ContextCompactedEvent = Extract<
   AgentEvent,
   { readonly type: "context_compacted" }
 >;
+export type ContextRescueEvent = Extract<
+  AgentEvent,
+  { readonly type: "context_rescue" }
+>;
 
 export const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -78,6 +82,14 @@ export function contextCompactedEvents(
   return events.filter(
     (event): event is ContextCompactedEvent =>
       event.type === "context_compacted",
+  );
+}
+
+export function contextRescueEvents(
+  events: readonly AgentEvent[],
+): ContextRescueEvent[] {
+  return events.filter(
+    (event): event is ContextRescueEvent => event.type === "context_rescue",
   );
 }
 

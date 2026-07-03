@@ -1,4 +1,8 @@
 import type { ContextCompactionStats } from "../agent/context-compaction.ts";
+import type {
+  ContextRescueReason,
+  ContextRescueReport,
+} from "../agent/context-rescue.ts";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import type { ToolOutputArtifactNotice } from "../agent/tool-output-artifacts.ts";
 import { toolCallLabel } from "../tools/registry.ts";
@@ -10,6 +14,7 @@ interface CliOutputRuntime {
 
 interface StableInteractiveOutputRuntime {
   readonly writeStdout: (text: string) => void;
+  readonly writeStderr: (text: string) => void;
   readonly writeAssistantHeader: () => void;
   readonly writeStatusLine: (text: string) => void;
 }
@@ -173,6 +178,95 @@ export function formatContextCompactionReport(
   return `Context compacted: ${report.reasonLabel} (${report.beforeMessageCount} -> ${report.afterMessageCount} messages, ~${report.beforeEstimatedTokens} -> ~${report.afterEstimatedTokens} tokens${formatToolOutputCompactionDetails(report)})\n`;
 }
 
+function contextRescueReasonLabel(reason: ContextRescueReason): string {
+  switch (reason) {
+    case "no_safe_compaction_split":
+      return "no safe compaction split";
+    case "summary_request_overflow":
+      return "summary request overflow";
+    case "overflow_recovery_failed":
+      return "overflow recovery failed";
+    case "model_switch_target_overflow":
+      return "model-switch target overflow";
+  }
+}
+
+function formatContextRescueBudget(report: ContextRescueReport): string {
+  if (report.targetTokens === undefined) {
+    return `Budget: ~${report.estimatedTokens} estimated tokens; model context window is unknown.`;
+  }
+  return `Budget: ~${report.estimatedTokens} estimated tokens for target ~${report.targetTokens} (window ${report.contextWindowTokens}, reserve ${report.reserveTokens}, over by ~${report.overageTokens}).`;
+}
+
+export function formatContextRescueReport(report: ContextRescueReport): string {
+  const topConsumerLines =
+    report.topConsumers.length === 0
+      ? ["- none"]
+      : report.topConsumers.map(
+          (consumer) =>
+            `- ${sanitizeStatusLineText(consumer.label)}: ~${consumer.estimatedTokens} tokens, ${consumer.chars} chars`,
+        );
+  const artifactLines =
+    report.artifactRefs.length === 0
+      ? ["- none"]
+      : report.artifactRefs.map(
+          (artifact) =>
+            `- ${sanitizeStatusLineText(artifact.ref)} (${sanitizeStatusLineText(
+              artifact.inspectCommand,
+            )}; ${artifact.sourceStatus})`,
+        );
+  const unverifiedArtifactLines =
+    report.unverifiedArtifactMarkers.length === 0
+      ? ["- none"]
+      : report.unverifiedArtifactMarkers.map(
+          (artifact) =>
+            `- ${sanitizeStatusLineText(artifact.ref)} (${sanitizeStatusLineText(
+              artifact.inspectCommand,
+            )}; ${artifact.sourceStatus}; ${sanitizeStatusLineText(
+              artifact.reason,
+            )})`,
+        );
+  const lossyLines =
+    report.lossyStates.length === 0
+      ? ["- none"]
+      : report.lossyStates.map(
+          (state) =>
+            `- ${sanitizeStatusLineText(state.label)}: ${sanitizeStatusLineText(
+              state.reason,
+            )}`,
+        );
+  const recentStateLines =
+    report.recentState.length === 0
+      ? ["- none"]
+      : report.recentState.map(
+          (state) =>
+            `- ${sanitizeStatusLineText(state.label)}: ${sanitizeStatusLineText(
+              state.preview,
+            )}${state.truncated ? " (truncated)" : ""}`,
+        );
+  return [
+    "Context rescue: normal compaction could not produce a request that fits.",
+    `Reason: ${contextRescueReasonLabel(report.reason)} (${sanitizeStatusLineText(
+      report.reasonDetail,
+    )})`,
+    formatContextRescueBudget(report),
+    `Messages: ${report.messageCount}`,
+    "Top context consumers:",
+    ...topConsumerLines,
+    "Available artifacts:",
+    ...artifactLines,
+    "Unverified artifact markers:",
+    ...unverifiedArtifactLines,
+    "Lossy states:",
+    ...lossyLines,
+    "Recent state:",
+    ...recentStateLines,
+    "Next steps:",
+    ...report.nextSteps.map((step) => `- ${sanitizeStatusLineText(step)}`),
+    "",
+  ].join("\n");
+}
+
 export function formatToolOutputArtifactNotice(
   notice: ToolOutputArtifactNotice,
 ): string {
@@ -209,6 +303,8 @@ export async function printAgentEvents(
           reasonLabel: contextCompactionReasonLabel(event.reason),
         }),
       );
+    } else if (event.type === "context_rescue") {
+      runtime.writeStderr(formatContextRescueReport(event.report));
     } else if (event.type === "provider_retry") {
       runtime.writeStderr(
         `Provider retry: ${sanitizeToolLabel(event.provider)} ${providerRetryReasonLabel(event.reason)} (attempt ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)}ms)\n`,
@@ -256,6 +352,9 @@ export async function printStableInteractiveAgentEvents(
             reasonLabel: contextCompactionReasonLabel(event.reason),
           }).trimEnd(),
         );
+        break;
+      case "context_rescue":
+        runtime.writeStderr(formatContextRescueReport(event.report));
         break;
       case "provider_retry":
         runtime.writeStatusLine(

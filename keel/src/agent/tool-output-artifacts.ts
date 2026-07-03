@@ -133,10 +133,15 @@ export interface GeneratedToolOutputArtifactMarker {
   readonly contentSha256?: string;
 }
 
+export interface GeneratedFailedToolOutputArtifactMarker {
+  readonly markerIndex: number;
+  readonly reason: string;
+}
+
 const TOOL_OUTPUT_ARTIFACT_MARKER_SUFFIX_PATTERN =
   /\n\[(tool output shortened|tool output projected|stale tool output compacted|current tool output compacted before provider request|current tool output compacted after context overflow): (?:approximately )?omitted ([0-9]+) chars; full output artifact: (tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+); inspect with: keel artifacts show \3(?:; sha256: ([a-f0-9]{64}))?; source status: (complete|source-truncated\/lossy before artifact capture)(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
 const TOOL_OUTPUT_ARTIFACT_FAILED_MARKER_SUFFIX_PATTERN =
-  /\n\[(?:tool output shortened|tool output projected|stale tool output compacted|current tool output compacted before provider request|current tool output compacted after context overflow): [^\]]*artifact storage failed: .*; lossy; rerun the tool with narrower parameters if needed(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
+  /\n\[(?:tool output shortened|tool output projected|stale tool output compacted|current tool output compacted before provider request|current tool output compacted after context overflow): [^\]]*artifact storage failed: (.*); lossy; rerun the tool with narrower parameters if needed(?:; model recovery: rerun the tool with narrower parameters if needed)?\]$/u;
 
 function oneLineReason(reason: string): string {
   return reason.trim().replace(/\s+/gu, " ") || "unknown storage error";
@@ -207,6 +212,20 @@ export function generatedToolOutputArtifactMarker(
     previewKind,
     sourceStatus,
     ...(contentSha256 === undefined ? {} : { contentSha256 }),
+  };
+}
+
+export function generatedFailedToolOutputArtifactMarker(
+  text: string,
+): GeneratedFailedToolOutputArtifactMarker | null {
+  const marker = TOOL_OUTPUT_ARTIFACT_FAILED_MARKER_SUFFIX_PATTERN.exec(text);
+  if (marker === null) {
+    return null;
+  }
+  const [, reason = "unknown storage error"] = marker;
+  return {
+    markerIndex: marker.index,
+    reason,
   };
 }
 

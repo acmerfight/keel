@@ -16,6 +16,7 @@ import { KeelError } from "../../../src/core/error.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   collect,
+  contextRescueEvents,
   endEvent,
   estimatedTextTokens,
   failingStream,
@@ -848,7 +849,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
 
   test(`Given overflow recovery already retried once,
     When the compacted request still overflows,
-    Then the agent fails instead of compacting in a loop`, async () => {
+    Then the agent reports rescue instead of compacting in a loop`, async () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Earlier task ".repeat(80) },
@@ -876,27 +877,29 @@ describe("Context Compaction Overflow Edge Cases", () => {
       },
     };
 
-    // When / Then
-    await expect(
-      collect(
-        runAgentTurn({
-          workspace: workspace(),
-          provider,
-          messages,
-          systemPrompt: "You are helpful.",
-          signal: freshSignal(),
-          allowBash: false,
-          stopPolicy: defaultStopPolicy(),
-          contextCompaction: {
-            keepRecentTokens: 6,
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({
-      name: "KeelError",
-      code: "provider_context_overflow",
-    });
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 6,
+        },
+      }),
+    );
+
+    // Then
     expect(requestCount).toBe(3);
+    expect(contextRescueEvents(events)).toHaveLength(1);
+    expect(contextRescueEvents(events)[0]?.report.reason).toBe(
+      "overflow_recovery_failed",
+    );
+    expect(endEvent(events)).toMatchObject({ stopReason: "context_rescue" });
   });
 
   test(`Given the provider sends an empty text delta before context overflow,
@@ -961,7 +964,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
 
   test(`Given context overflow cannot be compacted safely,
     When overflow recovery runs,
-    Then the original provider overflow is surfaced`, async () => {
+    Then the agent reports a rescue state`, async () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Only current ask." },
@@ -980,27 +983,30 @@ describe("Context Compaction Overflow Edge Cases", () => {
       },
     };
 
-    // When / Then
-    await expect(
-      collect(
-        runAgentTurn({
-          workspace: workspace(),
-          provider,
-          messages,
-          systemPrompt: "You are helpful.",
-          signal: freshSignal(),
-          allowBash: false,
-          stopPolicy: defaultStopPolicy(),
-          contextCompaction: {
-            keepRecentTokens: 1,
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({
-      name: "KeelError",
-      code: "provider_context_overflow",
-    });
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 1,
+        },
+      }),
+    );
+
+    // Then
     expect(requestCount).toBe(1);
+    expect(contextRescueEvents(events)[0]?.report).toMatchObject({
+      reason: "no_safe_compaction_split",
+      reasonDetail:
+        "Provider rejected the request, and no tool-safe historical boundary is available for compaction.",
+    });
+    expect(endEvent(events)).toMatchObject({ stopReason: "context_rescue" });
   });
 
   test(`Given provider context overflow happens before output without explicit compaction options,
