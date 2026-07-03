@@ -184,22 +184,22 @@ export function isCompactedCurrentToolOutput(text: string): boolean {
 
 function isAlreadyCompactedCurrentToolOutput(options: {
   readonly text: string;
+  readonly reason: CurrentToolOutputCompactionReason;
   readonly allowPreflightRecompaction: boolean;
 }): boolean {
   return (
     isCompactedCurrentToolOutput(options.text) &&
-    !(
-      options.allowPreflightRecompaction &&
-      PREFLIGHT_CURRENT_TOOL_OUTPUT_COMPACTED_SUFFIX_PATTERN.test(options.text)
-    )
+    !canOverflowRecoveryRecompactPreflightCurrentToolOutput(options)
   );
 }
 
-function canRecompactPreflightCurrentToolOutput(options: {
+function canOverflowRecoveryRecompactPreflightCurrentToolOutput(options: {
   readonly text: string;
+  readonly reason: CurrentToolOutputCompactionReason;
   readonly allowPreflightRecompaction: boolean;
 }): boolean {
   return (
+    options.reason === "overflow_recovery" &&
     options.allowPreflightRecompaction &&
     PREFLIGHT_CURRENT_TOOL_OUTPUT_COMPACTED_SUFFIX_PATTERN.test(options.text)
   );
@@ -274,8 +274,9 @@ function shouldCompactCurrentToolOutput(
   allowPreflightRecompaction: boolean,
 ): boolean {
   const allowSettledPreflightRecompaction =
-    canRecompactPreflightCurrentToolOutput({
+    canOverflowRecoveryRecompactPreflightCurrentToolOutput({
       text: message.content,
+      reason,
       allowPreflightRecompaction,
     });
   return (
@@ -290,6 +291,7 @@ function shouldCompactCurrentToolOutput(
       !isGeneratedSettledToolOutput(message.content, settledMaxChars)) &&
     !isAlreadyCompactedCurrentToolOutput({
       text: message.content,
+      reason,
       allowPreflightRecompaction,
     })
   );

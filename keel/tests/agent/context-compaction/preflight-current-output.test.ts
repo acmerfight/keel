@@ -1815,6 +1815,48 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     expect(compactedOutput).not.toContain("Infinity");
   });
 
+  test(`Given a preflight current-output compaction attempt receives the recompaction flag,
+    When the current output is already preflight-compacted,
+    Then only overflow recovery has authority to recompact that marker`, () => {
+    // Given
+    const currentToolOutput = [
+      "PREFLIGHT_REAUTH_START",
+      "preflight preview row ".repeat(200),
+      "[current tool output compacted before provider request: approximately omitted 1200 chars; rerun the tool with narrower parameters if needed]",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Read the log." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_preflight_reauth",
+            tool: "read",
+            path: "preflight-reauth.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_preflight_reauth",
+        content: currentToolOutput,
+      },
+    ];
+
+    // When
+    const result = compactCurrentToolOutputs(messages, 1, {
+      reason: "preflight",
+      allowPreflightRecompaction: true,
+    });
+
+    // Then
+    expect(result.stats.toolOutputsCompacted).toBe(0);
+    expect(capturedToolOutput(result.messages, "read_preflight_reauth")).toBe(
+      currentToolOutput,
+    );
+  });
+
   test(`Given the artifact-backed current-output compaction boundary receives no reason override,
     When an artifact is stored,
     Then the artifact purpose remains overflow recovery`, async () => {
