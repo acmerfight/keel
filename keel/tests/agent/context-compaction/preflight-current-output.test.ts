@@ -12,6 +12,7 @@ import {
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
 import { postCompactionReadToolCallId } from "../../../src/agent/post-compaction-read-id.ts";
+import { createReadVisibilityState } from "../../../src/agent/read-visibility.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
 import type {
   ToolOutputArtifactSaveInput,
@@ -684,6 +685,139 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       reason: "proactive",
       toolOutputsCompacted: 0,
     });
+  });
+
+  test(`Given historical compaction would restore visible reads before preflight,
+    When a fresh oversized current read dominates the next request,
+    Then the agent compacts that current read before historical restoration can duplicate it`, async () => {
+    // Given
+    const workspaceDir = await mkdtemp(join(tmpdir(), "keel-preflight-"));
+    const oldOutput = [
+      "OLD_RESTORED_START",
+      "old restored row ".repeat(650),
+      "OLD_RESTORED_END",
+    ].join("\n");
+    const newOutput = [
+      "NEW_DOMINANT_START",
+      "new dominant row ".repeat(650),
+      "NEW_DOMINANT_END",
+    ].join("\n");
+    await writeFile(join(workspaceDir, "old.txt"), oldOutput, "utf8");
+    await writeFile(join(workspaceDir, "new.txt"), newOutput, "utf8");
+    const readVisibility = createReadVisibilityState();
+    const messages: Message[] = [
+      { role: "user", content: "Read old.txt and continue." },
+    ];
+    let mainRequests = 0;
+    let summaryRequests = 0;
+    let acceptedNewReadMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "preflight-before-restore-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          yield { type: "text", text: "Earlier read summary." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        const newReadOutput = capturedToolOutput(options.messages, "read_new");
+        if (newReadOutput !== "") {
+          acceptedNewReadMessages = [...options.messages];
+          if (newReadOutput === newOutput) {
+            throw new KeelError(
+              "provider_context_overflow",
+              "Provider should not see the uncompacted fresh current read",
+            );
+          }
+          yield { type: "text", text: "SECOND_DONE" };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (mainRequests === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_old",
+            tool: "read",
+            path: "old.txt",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        if (mainRequests === 2) {
+          yield { type: "text", text: "FIRST_DONE" };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        yield {
+          type: "tool_call",
+          id: "read_new",
+          tool: "read",
+          path: "new.txt",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      await collect(
+        runAgentTurn({
+          workspace: workspaceDir,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          readVisibility,
+          contextCompaction: {
+            contextWindowTokens: 20_000,
+          },
+        }),
+      );
+      messages.push({ role: "user", content: "Read new.txt and continue." });
+
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace: workspaceDir,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          readVisibility,
+          contextCompaction: {
+            contextWindowTokens: 20_000,
+          },
+        }),
+      );
+
+      // Then
+      const acceptedNewReadOutput = capturedToolOutput(
+        acceptedNewReadMessages,
+        "read_new",
+      );
+      const acceptedToolOutputText = acceptedNewReadMessages
+        .filter((message) => message.role === "tool")
+        .map((message) => message.content)
+        .join("\n");
+      expect(acceptedNewReadOutput).toContain(
+        PREFLIGHT_CURRENT_TOOL_OUTPUT_MARKER,
+      );
+      expect(acceptedToolOutputText).not.toContain("NEW_DOMINANT_END");
+      expect(summaryRequests).toBe(0);
+      expect(
+        contextCompactedEvents(events).map((event) => event.reason),
+      ).toEqual(["preflight"]);
+    } finally {
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   test(`Given historical compaction leaves the protected current round over budget,

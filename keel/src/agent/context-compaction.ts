@@ -280,6 +280,40 @@ export function shouldCompactBeforeRequest(
   );
 }
 
+export function shouldCompactCurrentToolOutputBeforeHistoricalCompaction(
+  systemPrompt: string,
+  messages: readonly Message[],
+  options: ContextCompactionOptions | undefined,
+  accounting?: ContextCompactionAccountingSnapshot,
+  metadata?: ContextCompactionRequestMetadata,
+): boolean {
+  const resolved = resolveContextCompactionOptions(options);
+  const targetTokens = requestTargetTokens(resolved);
+  if (targetTokens === undefined) {
+    return false;
+  }
+  const beforeEstimatedTokens = estimateRequestTokens(
+    systemPrompt,
+    messages,
+    accounting,
+    metadata,
+  );
+  const overageTokens = beforeEstimatedTokens - targetTokens;
+  if (overageTokens <= 0) {
+    return false;
+  }
+
+  const currentOutputChars =
+    currentToolRound(messages)?.toolOutputs.reduce(
+      (total, output) => total + output.message.content.length,
+      0,
+    ) ?? 0;
+  if (currentOutputChars <= resolved.toolOutputMaxChars) {
+    return false;
+  }
+  return Math.ceil(currentOutputChars / 4) >= overageTokens;
+}
+
 export function contextCompactionStatsForCurrentMessages(options: {
   readonly stats: ContextCompactionStats;
   readonly systemPrompt: string;
