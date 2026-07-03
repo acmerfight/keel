@@ -9,10 +9,12 @@ import {
   type ContextCompactionAccountingSnapshot,
   type ContextCompactionOptions,
   type ContextCompactionRequestMetadata,
+  type CurrentToolOutputCompactionReason,
   captureContextCompactionAccountingSnapshot,
   compactMessages,
   contextCompactionStatsForCurrentMessages,
   shouldCompactBeforeRequest,
+  shouldCompactCurrentToolOutputBeforeHistoricalCompaction,
 } from "./context-compaction.ts";
 import type { AgentEvent } from "./events.ts";
 import {
@@ -50,6 +52,11 @@ export interface LedgerTurnOptions extends StreamTurnOptions {
 
 interface AttemptContextCompactionOptions {
   readonly allowCurrentToolOutputCompaction?: boolean;
+  readonly currentToolOutputCompactionReason?: CurrentToolOutputCompactionReason;
+  readonly onlyCurrentToolOutputCompaction?: boolean;
+  readonly currentToolOutputMaxCharsOverride?: number;
+  readonly allowPreflightCurrentToolOutputRecompaction?: boolean;
+  readonly restoreAfterCompaction?: boolean;
 }
 
 function requestMetadataForStream(
@@ -91,15 +98,35 @@ async function attemptContextCompaction(
     ...(options?.allowCurrentToolOutputCompaction === true
       ? { allowCurrentToolOutputCompaction: true }
       : {}),
+    ...(options?.currentToolOutputCompactionReason !== undefined
+      ? {
+          currentToolOutputCompactionReason:
+            options.currentToolOutputCompactionReason,
+        }
+      : {}),
+    ...(options?.onlyCurrentToolOutputCompaction === true
+      ? { onlyCurrentToolOutputCompaction: true }
+      : {}),
+    ...(options?.currentToolOutputMaxCharsOverride !== undefined
+      ? {
+          currentToolOutputMaxCharsOverride:
+            options.currentToolOutputMaxCharsOverride,
+        }
+      : {}),
+    ...(options?.allowPreflightCurrentToolOutputRecompaction === true
+      ? { allowPreflightCurrentToolOutputRecompaction: true }
+      : {}),
   });
   let finalResult = result;
   if (result.compacted) {
     state.contextAccounting = undefined;
     streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
-    try {
-      await config.onContextCompacted?.(targetMessages);
-    } finally {
-      streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
+    if (options?.restoreAfterCompaction !== false) {
+      try {
+        await config.onContextCompacted?.(targetMessages);
+      } finally {
+        streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
+      }
     }
     finalResult = {
       ...result,
@@ -119,21 +146,51 @@ async function attemptContextCompaction(
   return finalResult;
 }
 
+async function* attemptPreflightCurrentOutputCompaction(
+  config: CompactionConfig,
+  state: CompactionState,
+  streamOptions: LedgerTurnOptions,
+): AsyncGenerator<AgentEvent> {
+  const compaction = await attemptContextCompaction(
+    config,
+    state,
+    streamOptions,
+    {
+      allowCurrentToolOutputCompaction: true,
+      currentToolOutputCompactionReason: "preflight",
+      onlyCurrentToolOutputCompaction: true,
+      restoreAfterCompaction: false,
+    },
+  );
+  if (!compaction.compacted) {
+    return;
+  }
+  yield {
+    type: "context_compacted",
+    reason: "preflight",
+    ...compaction.stats,
+  };
+  for (const notice of compaction.artifactNotices ?? []) {
+    yield { type: "tool_output_artifact", ...notice };
+  }
+}
+
 export async function* streamTurnWithOverflowRecovery(
   config: CompactionConfig,
   state: CompactionState,
   streamOptions: LedgerTurnOptions,
 ): AsyncGenerator<AgentEvent, AgentTurn> {
   let overflowRecoveryAttempted = false;
-  let compactedBeforeRequest = false;
+  let historicalCompactionAttemptedBeforeRequest = false;
+  let preflightCurrentOutputCompactionAttempted = false;
 
   for (;;) {
     const requestMessages = projectSessionLedgerToProviderMessages(
       streamOptions.getLedger(),
     );
     if (
-      !compactedBeforeRequest &&
-      shouldCompactBeforeRequest(
+      !preflightCurrentOutputCompactionAttempted &&
+      shouldCompactCurrentToolOutputBeforeHistoricalCompaction(
         config.systemPrompt,
         requestMessages,
         config.contextCompaction,
@@ -141,7 +198,27 @@ export async function* streamTurnWithOverflowRecovery(
         requestMetadataForStream(streamOptions),
       )
     ) {
-      compactedBeforeRequest = true;
+      preflightCurrentOutputCompactionAttempted = true;
+      yield* attemptPreflightCurrentOutputCompaction(
+        config,
+        state,
+        streamOptions,
+      );
+    }
+    const historicalRequestMessages = projectSessionLedgerToProviderMessages(
+      streamOptions.getLedger(),
+    );
+    if (
+      !historicalCompactionAttemptedBeforeRequest &&
+      shouldCompactBeforeRequest(
+        config.systemPrompt,
+        historicalRequestMessages,
+        config.contextCompaction,
+        state.contextAccounting,
+        requestMetadataForStream(streamOptions),
+      )
+    ) {
+      historicalCompactionAttemptedBeforeRequest = true;
       const compaction = await attemptContextCompaction(
         config,
         state,
@@ -157,6 +234,29 @@ export async function* streamTurnWithOverflowRecovery(
           yield { type: "tool_output_artifact", ...notice };
         }
       }
+    }
+    const preflightRequestMessages = projectSessionLedgerToProviderMessages(
+      streamOptions.getLedger(),
+    );
+    if (
+      !preflightCurrentOutputCompactionAttempted &&
+      // After historical compaction, any remaining over-budget request is
+      // worth a current-output-only preflight attempt even when the original
+      // overage was not dominated by the current tool round.
+      shouldCompactBeforeRequest(
+        config.systemPrompt,
+        preflightRequestMessages,
+        config.contextCompaction,
+        state.contextAccounting,
+        requestMetadataForStream(streamOptions),
+      )
+    ) {
+      preflightCurrentOutputCompactionAttempted = true;
+      yield* attemptPreflightCurrentOutputCompaction(
+        config,
+        state,
+        streamOptions,
+      );
     }
     try {
       const currentRequestMessages = projectSessionLedgerToProviderMessages(
@@ -193,7 +293,15 @@ export async function* streamTurnWithOverflowRecovery(
             config,
             state,
             streamOptions,
-            { allowCurrentToolOutputCompaction: true },
+            {
+              allowCurrentToolOutputCompaction: true,
+              ...(preflightCurrentOutputCompactionAttempted
+                ? {
+                    currentToolOutputMaxCharsOverride: 1,
+                    allowPreflightCurrentToolOutputRecompaction: true,
+                  }
+                : {}),
+            },
           );
           if (compaction.compacted) {
             yield {
@@ -204,7 +312,8 @@ export async function* streamTurnWithOverflowRecovery(
             for (const notice of compaction.artifactNotices ?? []) {
               yield { type: "tool_output_artifact", ...notice };
             }
-            compactedBeforeRequest = true;
+            historicalCompactionAttemptedBeforeRequest = true;
+            preflightCurrentOutputCompactionAttempted = true;
             continue;
           }
         }

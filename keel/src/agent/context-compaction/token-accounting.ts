@@ -60,6 +60,8 @@ export interface ContextCompactionStats {
   readonly beforeEstimatedTokens: number;
   readonly afterEstimatedTokens: number;
   readonly toolOutputsCompacted: number;
+  readonly staleToolOutputsCompacted: number;
+  readonly currentToolOutputsCompacted: number;
   readonly toolOutputCharsBefore: number;
   readonly toolOutputCharsAfter: number;
   readonly toolOutputEstimatedTokensBefore: number;

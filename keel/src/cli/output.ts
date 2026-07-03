@@ -123,9 +123,19 @@ function contextCompactionReasonLabel(
   switch (reason) {
     case "proactive":
       return "proactive";
+    case "preflight":
+      return "preflight";
     case "overflow_recovery":
       return "overflow recovery";
   }
+}
+
+function formatToolOutputCompactionCount(
+  scope: "current" | "stale",
+  count: number,
+): string {
+  const outputLabel = count === 1 ? "tool output" : "tool outputs";
+  return `${scope} ${outputLabel} ${count}`;
 }
 
 function formatToolOutputCompactionDetails(
@@ -134,13 +144,31 @@ function formatToolOutputCompactionDetails(
   if (event.toolOutputsCompacted === 0) {
     return "";
   }
-  const outputLabel =
-    event.toolOutputsCompacted === 1 ? "tool output" : "tool outputs";
-  return `, stale ${outputLabel} ${event.toolOutputsCompacted} (${event.toolOutputCharsBefore} -> ${event.toolOutputCharsAfter} chars, ~${event.toolOutputEstimatedTokensBefore} -> ~${event.toolOutputEstimatedTokensAfter} tokens)`;
+  const scopeDetails = [
+    ...(event.staleToolOutputsCompacted === 0
+      ? []
+      : [
+          formatToolOutputCompactionCount(
+            "stale",
+            event.staleToolOutputsCompacted,
+          ),
+        ]),
+    ...(event.currentToolOutputsCompacted === 0
+      ? []
+      : [
+          formatToolOutputCompactionCount(
+            "current",
+            event.currentToolOutputsCompacted,
+          ),
+        ]),
+  ].join(", ");
+  return `, ${scopeDetails} (${event.toolOutputCharsBefore} -> ${event.toolOutputCharsAfter} chars, ~${event.toolOutputEstimatedTokensBefore} -> ~${event.toolOutputEstimatedTokensAfter} tokens)`;
 }
 
 export function formatContextCompactionReport(
-  report: ContextCompactionStats & { readonly reasonLabel: string },
+  report: ContextCompactionStats & {
+    readonly reasonLabel: string;
+  },
 ): string {
   return `Context compacted: ${report.reasonLabel} (${report.beforeMessageCount} -> ${report.afterMessageCount} messages, ~${report.beforeEstimatedTokens} -> ~${report.afterEstimatedTokens} tokens${formatToolOutputCompactionDetails(report)})\n`;
 }
