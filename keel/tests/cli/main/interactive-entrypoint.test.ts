@@ -40,6 +40,19 @@ async function waitForCondition(
   throw new Error(message);
 }
 
+function oversizedReadFixture(options: {
+  readonly start: string;
+  readonly end: string;
+  readonly fill: string;
+}): string {
+  return [
+    options.start,
+    options.fill.repeat(51_000),
+    options.end,
+    "tail beyond the read tool byte budget ".repeat(200),
+  ].join("\n");
+}
+
 describe("CLI Main - Interactive Entrypoint", () => {
   test(`Given provider and model flags are used for an interactive session,
     When the CLI main runs in-process,
@@ -317,6 +330,252 @@ describe("CLI Main - Interactive Entrypoint", () => {
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the provider retries during a real interactive terminal session,
+    When the assistant replies after the retry,
+    Then the display keeps the retry status separate from assistant output`, async () => {
+    // Given
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      req.resume();
+      req.on("end", () => {
+        requestCount++;
+        if (requestCount === 1) {
+          res.writeHead(429, {
+            "Content-Type": "application/json",
+            "Retry-After": "0",
+          });
+          res.end(JSON.stringify({ error: { message: "Rate limited" } }));
+          return;
+        }
+
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Recovered."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input,
+      inputIsTTY: true,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      input.write("hello\n");
+      input.end();
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(requestCount).toBe(2);
+      expect(fixture.stdout()).toBe("Recovered.\n");
+      expect(fixture.stderr()).toBe(
+        [
+          "Keel interactive session\n",
+          "keel> hello\n",
+          "status: Provider retry: DeepSeek rate limited (attempt 1/4 in 0ms)\n",
+          "assistant:\n",
+        ].join(""),
+      );
+    } finally {
+      await close(server);
+    }
+  });
+
+  test(`Given a tool fails during a real interactive terminal session,
+    When the assistant replies after seeing the failure,
+    Then the display keeps the failed tool status separate from assistant output`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-fail-"));
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(sseToolCall("call_read", "read", { path: "missing.txt" }));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Handled failure."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input,
+      inputIsTTY: true,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      input.write("read missing.txt\n");
+      input.end();
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Handled failure.\n");
+      expect(fixture.stderr()).toBe(
+        [
+          "Keel interactive session\n",
+          "keel> read missing.txt\n",
+          "status: Tool: read missing.txt\n",
+          "status: Tool failed: read missing.txt\n",
+          "assistant:\n",
+        ].join(""),
+      );
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_read",
+        content: expect.stringContaining("Tool failed: read failed"),
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a real interactive terminal session artifacts a large tool output,
+    When the assistant replies after the artifact-backed turn,
+    Then the display shows the artifact inspection command as a status line`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-main-tui-artifact-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-home-"));
+    await writeFile(
+      join(workspace, "large.log"),
+      oversizedReadFixture({
+        start: "INTERACTIVE_LARGE_START",
+        fill: "i",
+        end: "INTERACTIVE_LARGE_END",
+      }),
+      "utf8",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(sseToolCall("call_read", "read", { path: "large.log" }));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        const secondRequest = requestWithMessagesSchema.parse(
+          capturedBodies[1],
+        );
+        const toolMessage = secondRequest.messages?.find(
+          (message) =>
+            message.role === "tool" && message.tool_call_id === "call_read",
+        );
+        const artifactRef = toolMessage?.content?.match(
+          /tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/u,
+        )?.[0];
+        res.end(
+          sseTextReplyWithUsage(
+            artifactRef === undefined
+              ? "Artifact missing."
+              : `Artifact ready ${artifactRef}`,
+          ),
+        );
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      input.write("read large.log\n");
+      input.end();
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      const artifactRef = fixture
+        .stdout()
+        .match(/tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/u)?.[0];
+      expect(artifactRef).toBeDefined();
+      expect(fixture.stderr()).toContain("status: Tool: read large.log\n");
+      expect(fixture.stderr()).toContain(
+        `status: Tool output artifact: ${artifactRef} (keel artifacts show ${artifactRef})\n`,
+      );
+      expect(fixture.stderr()).toContain("assistant:\n");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   });
 
