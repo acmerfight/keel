@@ -52,6 +52,9 @@ export interface LedgerTurnOptions extends StreamTurnOptions {
 interface AttemptContextCompactionOptions {
   readonly allowCurrentToolOutputCompaction?: boolean;
   readonly currentToolOutputCompactionReason?: CurrentToolOutputCompactionReason;
+  readonly onlyCurrentToolOutputCompaction?: boolean;
+  readonly currentToolOutputMaxCharsOverride?: number;
+  readonly allowPreflightCurrentToolOutputRecompaction?: boolean;
   readonly restoreAfterCompaction?: boolean;
 }
 
@@ -100,6 +103,18 @@ async function attemptContextCompaction(
             options.currentToolOutputCompactionReason,
         }
       : {}),
+    ...(options?.onlyCurrentToolOutputCompaction === true
+      ? { onlyCurrentToolOutputCompaction: true }
+      : {}),
+    ...(options?.currentToolOutputMaxCharsOverride !== undefined
+      ? {
+          currentToolOutputMaxCharsOverride:
+            options.currentToolOutputMaxCharsOverride,
+        }
+      : {}),
+    ...(options?.allowPreflightCurrentToolOutputRecompaction === true
+      ? { allowPreflightCurrentToolOutputRecompaction: true }
+      : {}),
   });
   let finalResult = result;
   if (result.compacted) {
@@ -111,8 +126,6 @@ async function attemptContextCompaction(
       } finally {
         streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
       }
-    } else {
-      streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
     }
     finalResult = {
       ...result,
@@ -193,6 +206,7 @@ export async function* streamTurnWithOverflowRecovery(
         {
           allowCurrentToolOutputCompaction: true,
           currentToolOutputCompactionReason: "preflight",
+          onlyCurrentToolOutputCompaction: true,
           restoreAfterCompaction: false,
         },
       );
@@ -242,7 +256,15 @@ export async function* streamTurnWithOverflowRecovery(
             config,
             state,
             streamOptions,
-            { allowCurrentToolOutputCompaction: true },
+            {
+              allowCurrentToolOutputCompaction: true,
+              ...(preflightCurrentOutputCompactionAttempted
+                ? {
+                    currentToolOutputMaxCharsOverride: 1,
+                    allowPreflightCurrentToolOutputRecompaction: true,
+                  }
+                : {}),
+            },
           );
           if (compaction.compacted) {
             yield {

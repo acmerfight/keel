@@ -26,6 +26,7 @@ import {
   projectCompactedToolOutput,
 } from "./context-compaction.ts";
 import type { AgentEvent } from "./events.ts";
+import { postCompactionReadToolCallId } from "./post-compaction-read-id.ts";
 import { restorePostCompactionReads } from "./post-compaction-restore.ts";
 import type { AgentTurn } from "./provider-turn.ts";
 import {
@@ -488,7 +489,7 @@ export async function* runAgentTurn(
         projectInstructionVisibility,
         messages: targetMessages,
         nextToolCallId: () =>
-          `post_compaction_read_${postCompactionReadSequence++}`,
+          postCompactionReadToolCallId(postCompactionReadSequence++),
       });
     },
   };

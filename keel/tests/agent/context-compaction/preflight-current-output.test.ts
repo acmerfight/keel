@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   compactCurrentToolOutputs,
@@ -8,15 +11,13 @@ import {
 } from "../../../src/agent/context-compaction.ts";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
+import { postCompactionReadToolCallId } from "../../../src/agent/post-compaction-read-id.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
 import type {
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
-import {
-  formatContextCompactionReport,
-  printAgentEvents,
-} from "../../../src/cli/output.ts";
+import { printAgentEvents } from "../../../src/cli/output.ts";
 import { KeelError } from "../../../src/core/error.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
@@ -195,6 +196,109 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       type: "text",
       text: "Continued after preflight compaction.",
     });
+  });
+
+  test(`Given provider accounting covers the unchanged prompt before a tool result,
+    When preflight compacts the current tool output mid-turn,
+    Then the compacted request uses that accounting before deciding it fits`, async () => {
+    // Given
+    const workspaceDir = await mkdtemp(join(tmpdir(), "keel-preflight-"));
+    const currentToolOutput = [
+      "ACCOUNTED_LOG_START",
+      "accounted log row ".repeat(500),
+      "ACCOUNTED_LOG_END",
+    ].join("\n");
+    await writeFile(join(workspaceDir, "accounted.log"), currentToolOutput);
+    const messages: Message[] = [
+      {
+        role: "user",
+        content: `Read accounted.log and continue. ${"background ".repeat(
+          2_500,
+        )}`,
+      },
+    ];
+    let providerRequests = 0;
+    let acceptedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "preflight-accounting-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          throw new Error("Current-output preflight must not summarize");
+        }
+
+        providerRequests++;
+        if (providerRequests === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_accounted_log",
+            tool: "read",
+            path: "accounted.log",
+          };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 10,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 10,
+              outputTokens: 0,
+            },
+          };
+          return;
+        }
+
+        acceptedMessages = [...options.messages];
+        if (
+          capturedToolOutput(options.messages, "read_accounted_log") ===
+          currentToolOutput
+        ) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Preflight should use provider accounting for the unchanged prefix",
+          );
+        }
+        yield { type: "text", text: "Continued with accounted preflight." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace: workspaceDir,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          contextCompaction: {
+            contextWindowTokens: 300,
+            reserveTokens: 0,
+            keepRecentTokens: 1,
+            toolOutputMaxChars: 128,
+          },
+        }),
+      );
+
+      // Then
+      expect(providerRequests).toBe(2);
+      const acceptedToolOutput = capturedToolOutput(
+        acceptedMessages,
+        "read_accounted_log",
+      );
+      expect(acceptedToolOutput).toContain(
+        PREFLIGHT_CURRENT_TOOL_OUTPUT_MARKER,
+      );
+      expect(acceptedToolOutput).not.toContain("ACCOUNTED_LOG_END");
+      expect(onlyContextCompactedEvent(events)).toMatchObject({
+        reason: "preflight",
+        toolOutputsCompacted: 1,
+      });
+    } finally {
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   test(`Given several medium current tool outputs are individually under the inline cap but collectively over budget,
@@ -493,6 +597,387 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     });
   });
 
+  test(`Given historical compaction leaves the protected current round over budget,
+    When preflight current-output compaction runs after that summary,
+    Then it does not make a second summary provider request`, async () => {
+    // Given
+    const currentToolOutput = [
+      "CURRENT_DOMINATES_START",
+      "current dominates row ".repeat(1_200),
+      "CURRENT_DOMINATES_END",
+    ].join("\n");
+    const messages: Message[] = [
+      {
+        role: "user",
+        content: `Older history ${"older detail ".repeat(900)}`,
+      },
+      {
+        role: "assistant",
+        content: "Older history acknowledged.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Read the dominant current output." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_dominant_current",
+            tool: "read",
+            path: "dominant.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_dominant_current",
+        content: currentToolOutput,
+      },
+    ];
+    let summaryRequests = 0;
+    let mainRequests = 0;
+    let acceptedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "preflight-current-output-no-second-summary-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          if (summaryRequests > 1) {
+            throw new Error(
+              "Preflight current-output compaction must not summarize",
+            );
+          }
+          yield { type: "text", text: "Earlier history summary." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        acceptedMessages = [...options.messages];
+        yield { type: "text", text: "Continued after one summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          contextWindowTokens: 900,
+          reserveTokens: 0,
+          keepRecentTokens: 1,
+          toolOutputMaxChars: 128,
+        },
+      }),
+    );
+
+    // Then
+    expect(summaryRequests).toBe(1);
+    expect(mainRequests).toBe(1);
+    expect(
+      capturedToolOutput(acceptedMessages, "read_dominant_current"),
+    ).toContain(PREFLIGHT_CURRENT_TOOL_OUTPUT_MARKER);
+    expect(contextCompactedEvents(events).map((event) => event.reason)).toEqual(
+      ["proactive", "preflight"],
+    );
+  });
+
+  test(`Given the current tool output is already preflight-compacted,
+    When the next request is still locally over budget,
+    Then preflight does not compact the current output again`, async () => {
+    // Given
+    const alreadyCompactedOutput =
+      "preview\n[current tool output compacted before provider request: approximately omitted 6000 chars; rerun the tool with narrower parameters if needed]";
+    const messages: Message[] = [
+      { role: "user", content: "Continue from the compacted output." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_already_compacted",
+            tool: "read",
+            path: "already.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_already_compacted",
+        content: alreadyCompactedOutput,
+      },
+    ];
+    let mainRequests = 0;
+    let acceptedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "already-preflight-compacted-provider",
+      async *stream(options) {
+        mainRequests++;
+        acceptedMessages = [...options.messages];
+        yield { type: "text", text: "Continued with existing compaction." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          contextWindowTokens: 1,
+          reserveTokens: 0,
+          keepRecentTokens: 1,
+          toolOutputMaxChars: 32,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(1);
+    expect(capturedToolOutput(acceptedMessages, "read_already_compacted")).toBe(
+      alreadyCompactedOutput,
+    );
+    expect(contextCompactedEvents(events)).toEqual([]);
+  });
+
+  test(`Given an over-budget conversation has no current tool output,
+    When the agent continues the turn,
+    Then it sends the original conversation without a compaction event`, async () => {
+    // Given
+    const oversizedInstruction = `Continue from this large instruction. ${"detail ".repeat(
+      600,
+    )}`;
+    const messages: Message[] = [
+      {
+        role: "user",
+        content: oversizedInstruction,
+      },
+    ];
+    let mainRequests = 0;
+    let acceptedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "no-current-output-preflight-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          throw new Error("Current-output preflight must not summarize");
+        }
+
+        mainRequests++;
+        acceptedMessages = [...options.messages];
+        yield { type: "text", text: "Continued without compaction." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          contextWindowTokens: 1,
+          reserveTokens: 0,
+          keepRecentTokens: 1,
+          toolOutputMaxChars: 32,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(1);
+    expect(acceptedMessages).toEqual([
+      {
+        role: "user",
+        content: oversizedInstruction,
+      },
+    ]);
+    expect(contextCompactedEvents(events)).toEqual([]);
+  });
+
+  test(`Given a restored post-compaction read remains in the current round,
+    When preflight current-output compaction runs,
+    Then the agent preserves the restored read output`, async () => {
+    // Given
+    const restoredToolCallId = postCompactionReadToolCallId(0);
+    const restoredOutput = [
+      "RESTORED_READ_START",
+      "restored read row ".repeat(600),
+      "RESTORED_READ_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Continue from the restored read." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: restoredToolCallId,
+            tool: "read",
+            path: "restored.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: restoredToolCallId,
+        content: restoredOutput,
+      },
+    ];
+    let mainRequests = 0;
+    let acceptedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "preflight-restored-read-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          throw new Error("Preflight must not summarize restored reads");
+        }
+
+        mainRequests++;
+        acceptedMessages = [...options.messages];
+        yield { type: "text", text: "Continued with restored read." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          contextWindowTokens: 1,
+          reserveTokens: 0,
+          keepRecentTokens: 1,
+          toolOutputMaxChars: 32,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(1);
+    expect(capturedToolOutput(acceptedMessages, restoredToolCallId)).toBe(
+      restoredOutput,
+    );
+    expect(contextCompactedEvents(events)).toEqual([]);
+  });
+
+  test(`Given the provider still rejects after preflight current-output compaction,
+    When overflow recovery runs,
+    Then it can shrink the preflight marker and retry the provider`, async () => {
+    // Given
+    const currentToolOutput = [
+      "PREFLIGHT_FALLBACK_START",
+      "fallback row ".repeat(220),
+      "PREFLIGHT_FALLBACK_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Read the fallback log and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_fallback_log",
+            tool: "read",
+            path: "fallback.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_fallback_log",
+        content: currentToolOutput,
+      },
+    ];
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "preflight-overflow-fallback-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          throw new Error("Current-output fallback should not summarize");
+        }
+
+        mainRequests++;
+        const currentOutput = capturedToolOutput(
+          options.messages,
+          "read_fallback_log",
+        );
+        if (mainRequests === 1) {
+          expect(currentOutput).toContain(PREFLIGHT_CURRENT_TOOL_OUTPUT_MARKER);
+          throw new KeelError(
+            "provider_context_overflow",
+            "Provider tokenization still rejected the preflight request",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        expect(currentOutput).toContain(
+          "[current tool output compacted after context overflow:",
+        );
+        expect(currentOutput).toContain(
+          `approximately omitted ${currentToolOutput.length} chars`,
+        );
+        expect(currentOutput).not.toContain(
+          PREFLIGHT_CURRENT_TOOL_OUTPUT_MARKER,
+        );
+        yield { type: "text", text: "Continued after overflow fallback." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          contextWindowTokens: 500,
+          reserveTokens: 0,
+          keepRecentTokens: 1,
+          toolOutputMaxChars: 1_000,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(capturedToolOutput(retriedMessages, "read_fallback_log")).toContain(
+      "[current tool output compacted after context overflow:",
+    );
+    expect(contextCompactedEvents(events).map((event) => event.reason)).toEqual(
+      ["preflight", "overflow_recovery"],
+    );
+  });
+
   test(`Given preflight compaction stores a source-truncated current tool output artifact,
     When the provider receives the compacted request,
     Then the output marker and event carry the artifact ref and lossy source status`, async () => {
@@ -688,9 +1173,156 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     expect(stderr).not.toContain("stale tool output 1");
   });
 
-  test(`Given lower-level current-output compaction is called without a preflight reason,
+  test(`Given overflow recovery compacts retained stale and current tool outputs,
+    When the agent stream is printed,
+    Then stderr reports both tool-output scopes`, async () => {
+    // Given
+    const staleToolOutput = [
+      "STALE_LOG_START",
+      "stale log row ".repeat(500),
+      "STALE_LOG_END",
+    ].join("\n");
+    const currentToolOutput = [
+      "CURRENT_LOG_START",
+      "current log row ".repeat(500),
+      "CURRENT_LOG_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Remember the setup." },
+      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+      { role: "user", content: "Read the stale log." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_stale_log",
+            tool: "read",
+            path: "stale.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_stale_log",
+        content: staleToolOutput,
+      },
+      {
+        role: "assistant",
+        content: "The stale log was inspected.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Read the current log and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_current_log",
+            tool: "read",
+            path: "current.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_current_log",
+        content: currentToolOutput,
+      },
+    ];
+    let mainRequests = 0;
+    let summaryRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "mixed-tool-output-cli-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          yield { type: "text", text: "Earlier setup summary." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+
+        mainRequests++;
+        if (mainRequests === 1) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Request exceeded context before mixed compaction",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        const retriedStaleOutput = capturedToolOutput(
+          retriedMessages,
+          "read_stale_log",
+        );
+        const retriedCurrentOutput = capturedToolOutput(
+          retriedMessages,
+          "read_current_log",
+        );
+        if (
+          !retriedStaleOutput.includes("[stale tool output compacted:") ||
+          retriedStaleOutput.includes("STALE_LOG_END") ||
+          !retriedCurrentOutput.includes(
+            "[current tool output compacted after context overflow:",
+          ) ||
+          retriedCurrentOutput.includes("CURRENT_LOG_END")
+        ) {
+          throw new KeelError(
+            "provider_context_overflow",
+            "Retry did not compact both tool-output scopes",
+          );
+        }
+
+        yield {
+          type: "text",
+          text: "Continued after mixed tool-output compaction.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    let stdout = "";
+    let stderr = "";
+
+    // When
+    await printAgentEvents(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          keepRecentTokens: 20_000,
+          toolOutputMaxChars: 128,
+        },
+      }),
+      {
+        writeStdout(text) {
+          stdout += text;
+        },
+        writeStderr(text) {
+          stderr += text;
+        },
+      },
+    );
+
+    // Then
+    expect(mainRequests).toBe(2);
+    expect(summaryRequests).toBe(1);
+    expect(stdout).toBe("Continued after mixed tool-output compaction.");
+    expect(stderr).toContain("Context compacted: overflow recovery");
+    expect(stderr).toContain("stale tool output 1");
+    expect(stderr).toContain("current tool output 1");
+    expect(stderr).not.toContain("current tool outputs 2");
+    expect(stderr).not.toContain("stale tool outputs 2");
+  });
+
+  test(`Given the current-output compaction boundary receives no preflight reason,
     When current tool output is compacted,
-    Then it keeps the overflow-recovery marker and recognizes both current-output markers`, () => {
+    Then the boundary uses the overflow-recovery marker and recognizes both current-output markers`, () => {
     // Given
     const currentToolOutput = [
       "DEFAULT_REASON_START",
@@ -738,9 +1370,53 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     expect(isCompactedCurrentToolOutput("ordinary output")).toBe(false);
   });
 
-  test(`Given artifact-backed current-output compaction is called without explicit options,
+  test(`Given the current-output compaction boundary receives an unsafe omitted count marker,
+    When the output is recompacted,
+    Then the boundary falls back to the projected omitted count`, () => {
+    // Given
+    const unsafeOmittedChars = "9".repeat(40);
+    const currentToolOutput = `preview\n[current tool output compacted before provider request: approximately omitted ${unsafeOmittedChars} chars; rerun the tool with narrower parameters if needed]`;
+    const messages: Message[] = [
+      { role: "user", content: "Read the log." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_unsafe_omitted_count",
+            tool: "read",
+            path: "unsafe.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_unsafe_omitted_count",
+        content: currentToolOutput,
+      },
+    ];
+
+    // When
+    const result = compactCurrentToolOutputs(messages, 1, {
+      reason: "overflow_recovery",
+      allowPreflightRecompaction: true,
+    });
+
+    // Then
+    const compactedOutput = capturedToolOutput(
+      result.messages,
+      "read_unsafe_omitted_count",
+    );
+    expect(compactedOutput).toContain(
+      "[current tool output compacted after context overflow:",
+    );
+    expect(compactedOutput).not.toContain(unsafeOmittedChars);
+    expect(compactedOutput).not.toContain("Infinity");
+  });
+
+  test(`Given the artifact-backed current-output compaction boundary receives no reason override,
     When an artifact is stored,
-    Then the default purpose remains overflow recovery`, async () => {
+    Then the artifact purpose remains overflow recovery`, async () => {
     // Given
     const currentToolOutput = [
       "DEFAULT_ARTIFACT_START",
@@ -788,9 +1464,50 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     ).toContain("[current tool output compacted after context overflow:");
   });
 
-  test(`Given compactMessages is asked to use the preflight marker without an over-budget estimate,
+  test(`Given artifact-backed current-output compaction would make the output larger,
+    When the artifact marker is longer than the omitted content,
+    Then the original current output is retained`, async () => {
+    // Given
+    const currentToolOutput = "small output";
+    const messages: Message[] = [
+      { role: "user", content: "Run the small command." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "run_small_artifact",
+            tool: "bash",
+            command: "node small.js",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "run_small_artifact",
+        content: currentToolOutput,
+      },
+    ];
+    const saved: SavedToolOutputArtifact[] = [];
+
+    // When
+    const result = await compactCurrentToolOutputsWithArtifacts(
+      messages,
+      1,
+      storingArtifactStore(saved),
+    );
+
+    // Then
+    expect(saved).toHaveLength(1);
+    expect(result.stats.toolOutputsCompacted).toBe(0);
+    expect(capturedToolOutput(result.messages, "run_small_artifact")).toBe(
+      currentToolOutput,
+    );
+  });
+
+  test(`Given the compaction boundary receives an oversized current output under the request budget,
     When current output still exceeds the configured inline cap,
-    Then the lower-level compactor keeps the configured cap and preflight marker`, async () => {
+    Then it keeps the configured cap and preflight marker`, async () => {
     // Given
     const currentToolOutput = [
       "DIRECT_UNDER_BUDGET_START",
@@ -903,32 +1620,47 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     expect(messages.some((message) => message.role === "tool")).toBe(false);
   });
 
-  test(`Given a compaction report omits the optional tool-output scope,
-    When the report includes compacted tool outputs,
-    Then CLI formatting defaults that detail to stale output reporting`, () => {
-    // When
-    const report = formatContextCompactionReport({
-      reasonLabel: "overflow recovery",
+  test(`Given printed agent events report proactive compaction,
+    When the event contains compacted tool-output stats,
+    Then CLI output labels those details as stale tool output`, async () => {
+    // Given
+    let stderr = "";
+    const event: AgentEvent = {
+      type: "context_compacted",
+      reason: "proactive",
       beforeMessageCount: 4,
       afterMessageCount: 4,
       beforeEstimatedTokens: 1200,
       afterEstimatedTokens: 300,
-      toolOutputsCompacted: 2,
+      toolOutputsCompacted: 1,
+      staleToolOutputsCompacted: 1,
+      currentToolOutputsCompacted: 0,
       toolOutputCharsBefore: 4000,
       toolOutputCharsAfter: 600,
       toolOutputEstimatedTokensBefore: 1000,
       toolOutputEstimatedTokensAfter: 150,
+    };
+    async function* eventStream(): AsyncIterable<AgentEvent> {
+      yield event;
+    }
+
+    // When
+    await printAgentEvents(eventStream(), {
+      writeStdout() {},
+      writeStderr(text) {
+        stderr += text;
+      },
     });
 
     // Then
-    expect(report).toContain("Context compacted: overflow recovery");
-    expect(report).toContain("stale tool outputs 2");
-    expect(report).not.toContain("current tool outputs 2");
+    expect(stderr).toContain("Context compacted: proactive");
+    expect(stderr).toContain("stale tool output 1");
+    expect(stderr).not.toContain("current tool output 1");
   });
 
   test(`Given printed agent events report overflow-recovery compaction,
     When the event contains compacted tool-output stats,
-    Then CLI output labels those details as stale rather than current`, async () => {
+    Then CLI output labels those details as current tool output`, async () => {
     // Given
     let stderr = "";
     const event: AgentEvent = {
@@ -939,6 +1671,8 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       beforeEstimatedTokens: 1200,
       afterEstimatedTokens: 300,
       toolOutputsCompacted: 1,
+      staleToolOutputsCompacted: 0,
+      currentToolOutputsCompacted: 1,
       toolOutputCharsBefore: 4000,
       toolOutputCharsAfter: 600,
       toolOutputEstimatedTokensBefore: 1000,
@@ -958,7 +1692,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
 
     // Then
     expect(stderr).toContain("Context compacted: overflow recovery");
-    expect(stderr).toContain("stale tool output 1");
-    expect(stderr).not.toContain("current tool output 1");
+    expect(stderr).toContain("current tool output 1");
+    expect(stderr).not.toContain("stale tool output 1");
   });
 });

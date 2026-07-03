@@ -74,6 +74,9 @@ interface CompactMessagesOptions {
   readonly focusInstruction?: string;
   readonly allowCurrentToolOutputCompaction?: boolean;
   readonly currentToolOutputCompactionReason?: CurrentToolOutputCompactionReason;
+  readonly onlyCurrentToolOutputCompaction?: boolean;
+  readonly currentToolOutputMaxCharsOverride?: number;
+  readonly allowPreflightCurrentToolOutputRecompaction?: boolean;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
 }
 
@@ -103,23 +106,27 @@ function currentToolOutputCompactionReason(
   return options.currentToolOutputCompactionReason ?? "overflow_recovery";
 }
 
+const CURRENT_TOOL_OUTPUT_COMPACTION_MARKER_BUDGET_CHARS = 512;
+
+function requestTargetTokens(
+  resolved: ResolvedContextCompactionOptions,
+): number | undefined {
+  if (resolved.contextWindowTokens === undefined) {
+    return undefined;
+  }
+  return Math.max(0, resolved.contextWindowTokens - resolved.reserveTokens);
+}
+
 function currentToolOutputMaxCharsForCompaction(options: {
   readonly messages: readonly Message[];
   readonly resolved: ResolvedContextCompactionOptions;
   readonly beforeEstimatedTokens: number;
-  readonly reason: CurrentToolOutputCompactionReason;
 }): number {
-  if (
-    options.reason !== "preflight" ||
-    options.resolved.contextWindowTokens === undefined
-  ) {
+  const targetTokens = requestTargetTokens(options.resolved);
+  if (targetTokens === undefined) {
     return options.resolved.toolOutputMaxChars;
   }
 
-  const targetTokens = Math.max(
-    0,
-    options.resolved.contextWindowTokens - options.resolved.reserveTokens,
-  );
   const overageTokens = options.beforeEstimatedTokens - targetTokens;
   if (overageTokens <= 0) {
     return options.resolved.toolOutputMaxChars;
@@ -136,12 +143,15 @@ function currentToolOutputMaxCharsForCompaction(options: {
   );
   const currentOutputEstimatedTokens = Math.ceil(currentOutputChars / 4);
   if (overageTokens >= currentOutputEstimatedTokens) {
-    return options.resolved.toolOutputMaxChars;
+    return 1;
   }
 
   const targetAggregateChars = Math.max(
     currentOutputs.length,
-    currentOutputChars - overageTokens * 4,
+    currentOutputChars -
+      overageTokens * 4 -
+      CURRENT_TOOL_OUTPUT_COMPACTION_MARKER_BUDGET_CHARS *
+        currentOutputs.length,
   );
   const targetCharsPerOutput = Math.floor(
     targetAggregateChars / currentOutputs.length,
@@ -150,6 +160,84 @@ function currentToolOutputMaxCharsForCompaction(options: {
     1,
     Math.min(options.resolved.toolOutputMaxChars, targetCharsPerOutput),
   );
+}
+
+async function compactCurrentToolOutputsForRequest(options: {
+  readonly systemPrompt: string;
+  readonly messages: Message[];
+  readonly resolved: ResolvedContextCompactionOptions;
+  readonly beforeMessageCount: number;
+  readonly beforeEstimatedTokens: number;
+  readonly contextAccounting: ContextCompactionAccountingSnapshot | undefined;
+  readonly requestMetadata: ContextCompactionRequestMetadata | undefined;
+  readonly reason: CurrentToolOutputCompactionReason;
+  readonly toolOutputArtifacts: ToolOutputArtifactsOptions | undefined;
+  readonly maxCharsOverride: number | undefined;
+  readonly requireUnderBudget: boolean;
+  readonly allowPreflightRecompaction: boolean;
+}): Promise<CompactMessagesResult> {
+  const currentToolOutputMaxChars =
+    options.maxCharsOverride ??
+    currentToolOutputMaxCharsForCompaction({
+      messages: options.messages,
+      resolved: options.resolved,
+      beforeEstimatedTokens: options.beforeEstimatedTokens,
+    });
+  const currentToolOutputCompaction =
+    options.toolOutputArtifacts === undefined
+      ? compactCurrentToolOutputs(options.messages, currentToolOutputMaxChars, {
+          reason: options.reason,
+          settledMaxChars: options.resolved.toolOutputMaxChars,
+          allowPreflightRecompaction: options.allowPreflightRecompaction,
+        })
+      : await compactCurrentToolOutputsWithArtifacts(
+          options.messages,
+          currentToolOutputMaxChars,
+          options.toolOutputArtifacts.store,
+          {
+            reason: options.reason,
+            settledMaxChars: options.resolved.toolOutputMaxChars,
+            allowPreflightRecompaction: options.allowPreflightRecompaction,
+          },
+        );
+  /* v8 ignore next 3: agent preflight covers this no-op path; the guard preserves the compacted-result invariant when no current output is eligible. */
+  if (currentToolOutputCompaction.stats.toolOutputsCompacted === 0) {
+    return { compacted: false, usage: ZERO_USAGE };
+  }
+
+  const afterEstimatedTokens = estimateRequestTokens(
+    options.systemPrompt,
+    currentToolOutputCompaction.messages,
+    options.contextAccounting,
+    options.requestMetadata,
+  );
+  const targetTokens = requestTargetTokens(options.resolved);
+  if (
+    afterEstimatedTokens >= options.beforeEstimatedTokens ||
+    (options.requireUnderBudget &&
+      targetTokens !== undefined &&
+      afterEstimatedTokens > targetTokens)
+  ) {
+    return { compacted: false, usage: ZERO_USAGE };
+  }
+
+  options.messages.splice(
+    0,
+    options.messages.length,
+    ...currentToolOutputCompaction.messages,
+  );
+  return {
+    compacted: true,
+    usage: ZERO_USAGE,
+    stats: {
+      beforeMessageCount: options.beforeMessageCount,
+      afterMessageCount: options.messages.length,
+      beforeEstimatedTokens: options.beforeEstimatedTokens,
+      afterEstimatedTokens,
+      ...currentToolOutputCompaction.stats,
+    },
+    ...artifactNoticesResult(currentToolOutputCompaction.artifactNotices),
+  };
 }
 
 export function captureContextCompactionAccountingSnapshot(options: {
@@ -197,6 +285,25 @@ export async function compactMessages(
     options.contextAccounting,
     options.requestMetadata,
   );
+  const reason = currentToolOutputCompactionReason(options);
+
+  if (options.onlyCurrentToolOutputCompaction === true) {
+    return await compactCurrentToolOutputsForRequest({
+      systemPrompt: options.systemPrompt,
+      messages: options.messages,
+      resolved,
+      beforeMessageCount,
+      beforeEstimatedTokens,
+      contextAccounting: options.contextAccounting,
+      requestMetadata: options.requestMetadata,
+      reason,
+      toolOutputArtifacts: options.toolOutputArtifacts,
+      maxCharsOverride: options.currentToolOutputMaxCharsOverride,
+      requireUnderBudget: reason === "preflight",
+      allowPreflightRecompaction:
+        options.allowPreflightCurrentToolOutputRecompaction === true,
+    });
+  }
 
   const split = selectCompactionSplit(options.messages, {
     keepRecentTokens: resolved.keepRecentTokens,
@@ -208,50 +315,21 @@ export async function compactMessages(
   const plan = planCompaction(options.messages, split, resolved);
   if (plan.messagesToSummarize.length === 0) {
     if (options.allowCurrentToolOutputCompaction === true) {
-      const reason = currentToolOutputCompactionReason(options);
-      const currentToolOutputMaxChars = currentToolOutputMaxCharsForCompaction({
+      return await compactCurrentToolOutputsForRequest({
+        systemPrompt: options.systemPrompt,
         messages: options.messages,
         resolved,
+        beforeMessageCount,
         beforeEstimatedTokens,
+        contextAccounting: options.contextAccounting,
+        requestMetadata: options.requestMetadata,
         reason,
+        toolOutputArtifacts: options.toolOutputArtifacts,
+        maxCharsOverride: options.currentToolOutputMaxCharsOverride,
+        requireUnderBudget: false,
+        allowPreflightRecompaction:
+          options.allowPreflightCurrentToolOutputRecompaction === true,
       });
-      const currentToolOutputCompaction =
-        options.toolOutputArtifacts === undefined
-          ? compactCurrentToolOutputs(
-              options.messages,
-              currentToolOutputMaxChars,
-              { reason, settledMaxChars: resolved.toolOutputMaxChars },
-            )
-          : await compactCurrentToolOutputsWithArtifacts(
-              options.messages,
-              currentToolOutputMaxChars,
-              options.toolOutputArtifacts.store,
-              { reason, settledMaxChars: resolved.toolOutputMaxChars },
-            );
-      /* v8 ignore next: V8 does not attribute the fall-through branch here; overflow-edge-cases covers both no-op and compacted current-output paths. */
-      if (currentToolOutputCompaction.stats.toolOutputsCompacted === 0) {
-        return { compacted: false, usage: ZERO_USAGE };
-      }
-      options.messages.splice(
-        0,
-        options.messages.length,
-        ...currentToolOutputCompaction.messages,
-      );
-      return {
-        compacted: true,
-        usage: ZERO_USAGE,
-        stats: {
-          beforeMessageCount,
-          afterMessageCount: options.messages.length,
-          beforeEstimatedTokens,
-          afterEstimatedTokens: estimateRequestTokens(
-            options.systemPrompt,
-            options.messages,
-          ),
-          ...currentToolOutputCompaction.stats,
-        },
-        ...artifactNoticesResult(currentToolOutputCompaction.artifactNotices),
-      };
     }
     // The protected current suffix starts at the beginning of the transcript and
     // has no oversized current tool output we can shrink. Creating an empty
@@ -280,7 +358,6 @@ export async function compactMessages(
     options.toolOutputArtifacts,
     summaryTurn.summaryInputMaxChars,
   );
-  const reason = currentToolOutputCompactionReason(options);
   const currentToolOutputMaxChars = currentToolOutputMaxCharsForCompaction({
     messages: compacted.messages,
     resolved,
@@ -290,21 +367,32 @@ export async function compactMessages(
       undefined,
       options.requestMetadata,
     ),
-    reason,
   });
   const currentToolOutputCompaction =
     options.allowCurrentToolOutputCompaction === true
       ? options.toolOutputArtifacts === undefined
         ? compactCurrentToolOutputs(
             compacted.messages,
-            currentToolOutputMaxChars,
-            { reason, settledMaxChars: resolved.toolOutputMaxChars },
+            options.currentToolOutputMaxCharsOverride ??
+              currentToolOutputMaxChars,
+            {
+              reason,
+              settledMaxChars: resolved.toolOutputMaxChars,
+              allowPreflightRecompaction:
+                options.allowPreflightCurrentToolOutputRecompaction === true,
+            },
           )
         : await compactCurrentToolOutputsWithArtifacts(
             compacted.messages,
-            currentToolOutputMaxChars,
+            options.currentToolOutputMaxCharsOverride ??
+              currentToolOutputMaxChars,
             options.toolOutputArtifacts.store,
-            { reason, settledMaxChars: resolved.toolOutputMaxChars },
+            {
+              reason,
+              settledMaxChars: resolved.toolOutputMaxChars,
+              allowPreflightRecompaction:
+                options.allowPreflightCurrentToolOutputRecompaction === true,
+            },
           )
       : {
           messages: compacted.messages,
