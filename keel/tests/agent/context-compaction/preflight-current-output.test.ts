@@ -36,7 +36,9 @@ const PREFLIGHT_CURRENT_TOOL_OUTPUT_MARKER =
   "[current tool output compacted before provider request:";
 
 interface SavedToolOutputArtifact {
+  readonly ref: string;
   readonly input: ToolOutputArtifactSaveInput;
+  readonly contentSha256: string;
 }
 
 function sha256(content: string): string {
@@ -45,15 +47,55 @@ function sha256(content: string): string {
 
 function storingArtifactStore(
   saved: SavedToolOutputArtifact[],
+  options?: {
+    readonly refForIndex?: (index: number) => string;
+  },
 ): ToolOutputArtifactStore {
+  const artifacts = new Map<
+    string,
+    {
+      readonly content: string;
+      readonly input: ToolOutputArtifactSaveInput;
+      readonly contentSha256: string;
+    }
+  >();
   return {
-    verifyReusable: async () => ({ status: "not_reusable" }),
+    verifyReusable: async (input) => {
+      const artifact = artifacts.get(input.ref);
+      if (artifact === undefined) {
+        return { status: "not_reusable" };
+      }
+      const previewMatches =
+        input.previewKind === "prefix"
+          ? artifact.content.startsWith(input.previewContent)
+          : input.contentSha256 === artifact.contentSha256;
+      if (
+        artifact.input.toolCallId !== input.toolCallId ||
+        artifact.input.sourceStatus !== input.sourceStatus ||
+        artifact.content.length !==
+          input.previewContent.length + input.omittedChars ||
+        (input.contentSha256 !== undefined &&
+          input.contentSha256 !== artifact.contentSha256) ||
+        !previewMatches
+      ) {
+        return { status: "not_reusable" };
+      }
+      return { status: "reusable", contentSha256: artifact.contentSha256 };
+    },
     save: async (input) => {
-      saved.push({ input });
+      const index = saved.length + 1;
+      const ref = options?.refForIndex?.(index) ?? `tool-output:test/${index}`;
+      const contentSha256 = sha256(input.content);
+      saved.push({ ref, input, contentSha256 });
+      artifacts.set(ref, {
+        content: input.content,
+        input,
+        contentSha256,
+      });
       return {
         status: "stored",
-        ref: `tool-output:test/${saved.length}`,
-        contentSha256: sha256(input.content),
+        ref,
+        contentSha256,
       };
     },
   };
@@ -1196,6 +1238,142 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     expect(capturedToolOutput(retriedMessages, "read_fallback_log")).toContain(
       "[current tool output compacted after context overflow:",
     );
+    expect(contextCompactedEvents(events).map((event) => event.reason)).toEqual(
+      ["preflight", "overflow_recovery"],
+    );
+  });
+
+  test(`Given artifact-backed preflight current-output compaction is still rejected by the provider,
+    When overflow recovery runs,
+    Then it reuses the artifact marker and retries with the overflow-recovery marker`, async () => {
+    // Given
+    const currentToolOutput = [
+      "ARTIFACT_PREFLIGHT_FALLBACK_START",
+      "artifact fallback row ".repeat(900),
+      "ARTIFACT_PREFLIGHT_FALLBACK_END",
+    ].join("\n");
+    const workspacePath = await mkdtemp(
+      join(tmpdir(), "keel-preflight-artifact-fallback-"),
+    );
+    await writeFile(
+      join(workspacePath, "artifact-fallback.log"),
+      currentToolOutput,
+      "utf8",
+    );
+    const messages: Message[] = [
+      { role: "user", content: "Read artifact-fallback.log and continue." },
+    ];
+    const saved: SavedToolOutputArtifact[] = [];
+    const artifactRef =
+      "tool-output:run-00000000-0000-4000-8000-000000000000/00000000-0000-4000-8000-000000000001";
+    let mainRequests = 0;
+    let retriedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "artifact-preflight-overflow-fallback-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          throw new Error(
+            "Artifact-backed current-output fallback should not summarize",
+          );
+        }
+
+        mainRequests++;
+        const currentOutput = capturedToolOutput(
+          options.messages,
+          "read_artifact_fallback_log",
+        );
+        if (currentOutput === "") {
+          yield {
+            type: "tool_call",
+            id: "read_artifact_fallback_log",
+            tool: "read",
+            path: "artifact-fallback.log",
+          };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 900,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 900,
+              outputTokens: 1,
+            },
+          };
+          return;
+        }
+
+        if (mainRequests === 2) {
+          expect(currentOutput).toContain(PREFLIGHT_CURRENT_TOOL_OUTPUT_MARKER);
+          expect(currentOutput).toContain(
+            `full output artifact: ${artifactRef}`,
+          );
+          throw new KeelError(
+            "provider_context_overflow",
+            "Provider tokenization still rejected the artifact-backed preflight request",
+          );
+        }
+
+        retriedMessages = [...options.messages];
+        expect(currentOutput).toContain(
+          "[current tool output compacted after context overflow:",
+        );
+        expect(currentOutput).toContain(
+          `approximately omitted ${currentToolOutput.length} chars`,
+        );
+        expect(currentOutput).toContain(`full output artifact: ${artifactRef}`);
+        expect(currentOutput).not.toContain(
+          PREFLIGHT_CURRENT_TOOL_OUTPUT_MARKER,
+        );
+        expect(currentOutput).not.toContain("ARTIFACT_PREFLIGHT_FALLBACK_END");
+        yield {
+          type: "text",
+          text: "Continued after artifact overflow fallback.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    let events: AgentEvent[] = [];
+    try {
+      events = await collect(
+        runAgentTurn({
+          workspace: workspacePath,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          contextCompaction: {
+            contextWindowTokens: 1_000,
+            reserveTokens: 0,
+            keepRecentTokens: 1,
+            toolOutputMaxChars: 1_000,
+          },
+          toolOutputArtifacts: {
+            store: storingArtifactStore(saved, {
+              refForIndex: () => artifactRef,
+            }),
+          },
+        }),
+      );
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true });
+    }
+
+    // Then
+    expect(mainRequests).toBe(3);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.input).toMatchObject({
+      toolCallId: "read_artifact_fallback_log",
+      toolName: "read",
+      purpose: "current-preflight-compaction",
+      content: currentToolOutput,
+    });
+    expect(
+      capturedToolOutput(retriedMessages, "read_artifact_fallback_log"),
+    ).toContain("[current tool output compacted after context overflow:");
     expect(contextCompactedEvents(events).map((event) => event.reason)).toEqual(
       ["preflight", "overflow_recovery"],
     );

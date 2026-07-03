@@ -195,6 +195,16 @@ function isAlreadyCompactedCurrentToolOutput(options: {
   );
 }
 
+function canRecompactPreflightCurrentToolOutput(options: {
+  readonly text: string;
+  readonly allowPreflightRecompaction: boolean;
+}): boolean {
+  return (
+    options.allowPreflightRecompaction &&
+    PREFLIGHT_CURRENT_TOOL_OUTPUT_COMPACTED_SUFFIX_PATTERN.test(options.text)
+  );
+}
+
 function compactStaleToolOutput(
   projection: ProjectedToolOutput,
   artifactMarker?: string,
@@ -263,6 +273,12 @@ function shouldCompactCurrentToolOutput(
   reason: CurrentToolOutputCompactionReason,
   allowPreflightRecompaction: boolean,
 ): boolean {
+  const allowSettledPreflightRecompaction =
+    message.role === "tool" &&
+    canRecompactPreflightCurrentToolOutput({
+      text: message.content,
+      allowPreflightRecompaction,
+    });
   return (
     message.role === "tool" &&
     currentToolOutputIndexes.has(messageIndex) &&
@@ -271,7 +287,8 @@ function shouldCompactCurrentToolOutput(
       isPostCompactionReadToolCallId(message.toolCallId)
     ) &&
     message.content.length > toolOutputMaxChars &&
-    !isGeneratedSettledToolOutput(message.content, settledMaxChars) &&
+    (allowSettledPreflightRecompaction ||
+      !isGeneratedSettledToolOutput(message.content, settledMaxChars)) &&
     !isAlreadyCompactedCurrentToolOutput({
       text: message.content,
       allowPreflightRecompaction,

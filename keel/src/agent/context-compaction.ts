@@ -222,9 +222,17 @@ async function compactCurrentToolOutputsForRequest(options: {
     options.contextAccounting,
     options.requestMetadata,
   );
+  const allowEqualEstimatePreflightOverflowRetry =
+    options.reason === "overflow_recovery" &&
+    options.allowPreflightRecompaction &&
+    currentToolOutputCompaction.stats.currentToolOutputsCompacted > 0 &&
+    currentToolOutputCompaction.stats.toolOutputCharsAfter <
+      currentToolOutputCompaction.stats.toolOutputCharsBefore;
   const targetTokens = requestTargetTokens(options.resolved);
   if (
-    afterEstimatedTokens >= options.beforeEstimatedTokens ||
+    afterEstimatedTokens > options.beforeEstimatedTokens ||
+    (afterEstimatedTokens === options.beforeEstimatedTokens &&
+      !allowEqualEstimatePreflightOverflowRetry) ||
     (options.requireUnderBudgetUnlessSettledBudgetExceeded &&
       targetTokens !== undefined &&
       afterEstimatedTokens > targetTokens &&
