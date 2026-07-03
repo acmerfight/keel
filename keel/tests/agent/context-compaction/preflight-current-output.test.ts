@@ -198,6 +198,95 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     });
   });
 
+  test(`Given an oversized current tool output remains over the local request budget after shrinking,
+    When the next provider request starts,
+    Then the agent still sends the compacted current output`, async () => {
+    // Given
+    const currentToolOutput = [
+      "LOW_WINDOW_OUTPUT_START",
+      "low window output row ".repeat(600),
+      "LOW_WINDOW_OUTPUT_END",
+    ].join("\n");
+    const messages: Message[] = [
+      { role: "user", content: "Read the low-window output and continue." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "read_low_window_output",
+            tool: "read",
+            path: "low-window.log",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_low_window_output",
+        content: currentToolOutput,
+      },
+    ];
+    let mainRequests = 0;
+    let summaryRequests = 0;
+    let acceptedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "preflight-current-output-over-local-budget-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          throw new Error("Current-output preflight should not summarize");
+        }
+
+        mainRequests++;
+        acceptedMessages = [...options.messages];
+        yield {
+          type: "text",
+          text: "Continued with compacted current output.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const events = await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          contextWindowTokens: 1,
+          reserveTokens: 0,
+          keepRecentTokens: 1,
+          toolOutputMaxChars: 128,
+        },
+      }),
+    );
+
+    // Then
+    expect(mainRequests).toBe(1);
+    expect(summaryRequests).toBe(0);
+    const acceptedToolOutput = capturedToolOutput(
+      acceptedMessages,
+      "read_low_window_output",
+    );
+    expect(acceptedToolOutput).not.toBe(currentToolOutput);
+    expect(acceptedToolOutput).toContain(PREFLIGHT_CURRENT_TOOL_OUTPUT_MARKER);
+    expect(acceptedToolOutput).not.toContain("LOW_WINDOW_OUTPUT_END");
+    expect(onlyContextCompactedEvent(events)).toMatchObject({
+      reason: "preflight",
+      toolOutputsCompacted: 1,
+      currentToolOutputsCompacted: 1,
+    });
+    expect(events).toContainEqual({
+      type: "text",
+      text: "Continued with compacted current output.",
+    });
+  });
+
   test(`Given provider accounting covers the unchanged prompt before a tool result,
     When preflight compacts the current tool output mid-turn,
     Then the compacted request uses that accounting before deciding it fits`, async () => {

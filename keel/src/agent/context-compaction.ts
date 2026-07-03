@@ -17,6 +17,7 @@ import {
   EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
   isCompactedCurrentToolOutput as isCompactedCurrentToolOutputFromContent,
   mergeStaleToolOutputCompactionStats,
+  type StaleToolOutputCompactionStats,
 } from "./context-compaction/stale-tool-output.ts";
 import {
   buildCompactedMessages,
@@ -162,6 +163,16 @@ function currentToolOutputMaxCharsForCompaction(options: {
   );
 }
 
+function compactedCurrentOutputsExceededSettledBudget(options: {
+  readonly stats: StaleToolOutputCompactionStats;
+  readonly resolved: ResolvedContextCompactionOptions;
+}): boolean {
+  return (
+    options.stats.currentToolOutputsCompacted > 0 &&
+    options.stats.toolOutputCharsBefore > options.resolved.toolOutputMaxChars
+  );
+}
+
 async function compactCurrentToolOutputsForRequest(options: {
   readonly systemPrompt: string;
   readonly messages: Message[];
@@ -173,7 +184,7 @@ async function compactCurrentToolOutputsForRequest(options: {
   readonly reason: CurrentToolOutputCompactionReason;
   readonly toolOutputArtifacts: ToolOutputArtifactsOptions | undefined;
   readonly maxCharsOverride: number | undefined;
-  readonly requireUnderBudget: boolean;
+  readonly requireUnderBudgetUnlessSettledBudgetExceeded: boolean;
   readonly allowPreflightRecompaction: boolean;
 }): Promise<CompactMessagesResult> {
   const currentToolOutputMaxChars =
@@ -214,9 +225,13 @@ async function compactCurrentToolOutputsForRequest(options: {
   const targetTokens = requestTargetTokens(options.resolved);
   if (
     afterEstimatedTokens >= options.beforeEstimatedTokens ||
-    (options.requireUnderBudget &&
+    (options.requireUnderBudgetUnlessSettledBudgetExceeded &&
       targetTokens !== undefined &&
-      afterEstimatedTokens > targetTokens)
+      afterEstimatedTokens > targetTokens &&
+      !compactedCurrentOutputsExceededSettledBudget({
+        stats: currentToolOutputCompaction.stats,
+        resolved: options.resolved,
+      }))
   ) {
     return { compacted: false, usage: ZERO_USAGE };
   }
@@ -299,7 +314,7 @@ export async function compactMessages(
       reason,
       toolOutputArtifacts: options.toolOutputArtifacts,
       maxCharsOverride: options.currentToolOutputMaxCharsOverride,
-      requireUnderBudget: reason === "preflight",
+      requireUnderBudgetUnlessSettledBudgetExceeded: reason === "preflight",
       allowPreflightRecompaction:
         options.allowPreflightCurrentToolOutputRecompaction === true,
     });
@@ -326,7 +341,7 @@ export async function compactMessages(
         reason,
         toolOutputArtifacts: options.toolOutputArtifacts,
         maxCharsOverride: options.currentToolOutputMaxCharsOverride,
-        requireUnderBudget: false,
+        requireUnderBudgetUnlessSettledBudgetExceeded: false,
         allowPreflightRecompaction:
           options.allowPreflightCurrentToolOutputRecompaction === true,
       });
