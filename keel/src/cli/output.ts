@@ -123,26 +123,38 @@ function contextCompactionReasonLabel(
   switch (reason) {
     case "proactive":
       return "proactive";
+    case "preflight":
+      return "preflight";
     case "overflow_recovery":
       return "overflow recovery";
   }
 }
 
+function toolOutputCompactionScope(
+  reason: Extract<AgentEvent, { readonly type: "context_compacted" }>["reason"],
+): "current" | "stale" {
+  return reason === "preflight" ? "current" : "stale";
+}
+
 function formatToolOutputCompactionDetails(
   event: ContextCompactionStats,
+  scope: "current" | "stale",
 ): string {
   if (event.toolOutputsCompacted === 0) {
     return "";
   }
   const outputLabel =
     event.toolOutputsCompacted === 1 ? "tool output" : "tool outputs";
-  return `, stale ${outputLabel} ${event.toolOutputsCompacted} (${event.toolOutputCharsBefore} -> ${event.toolOutputCharsAfter} chars, ~${event.toolOutputEstimatedTokensBefore} -> ~${event.toolOutputEstimatedTokensAfter} tokens)`;
+  return `, ${scope} ${outputLabel} ${event.toolOutputsCompacted} (${event.toolOutputCharsBefore} -> ${event.toolOutputCharsAfter} chars, ~${event.toolOutputEstimatedTokensBefore} -> ~${event.toolOutputEstimatedTokensAfter} tokens)`;
 }
 
 export function formatContextCompactionReport(
-  report: ContextCompactionStats & { readonly reasonLabel: string },
+  report: ContextCompactionStats & {
+    readonly reasonLabel: string;
+    readonly toolOutputScope?: "current" | "stale";
+  },
 ): string {
-  return `Context compacted: ${report.reasonLabel} (${report.beforeMessageCount} -> ${report.afterMessageCount} messages, ~${report.beforeEstimatedTokens} -> ~${report.afterEstimatedTokens} tokens${formatToolOutputCompactionDetails(report)})\n`;
+  return `Context compacted: ${report.reasonLabel} (${report.beforeMessageCount} -> ${report.afterMessageCount} messages, ~${report.beforeEstimatedTokens} -> ~${report.afterEstimatedTokens} tokens${formatToolOutputCompactionDetails(report, report.toolOutputScope ?? "stale")})\n`;
 }
 
 export function formatToolOutputArtifactNotice(
@@ -179,6 +191,7 @@ export async function printAgentEvents(
         formatContextCompactionReport({
           ...event,
           reasonLabel: contextCompactionReasonLabel(event.reason),
+          toolOutputScope: toolOutputCompactionScope(event.reason),
         }),
       );
     } else if (event.type === "provider_retry") {
@@ -226,6 +239,7 @@ export async function printStableInteractiveAgentEvents(
           formatContextCompactionReport({
             ...event,
             reasonLabel: contextCompactionReasonLabel(event.reason),
+            toolOutputScope: toolOutputCompactionScope(event.reason),
           }).trimEnd(),
         );
         break;

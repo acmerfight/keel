@@ -11,7 +11,7 @@ export interface CostReport {
   readonly budgetExceeded: boolean;
 }
 
-type ContextCompactionReason = "proactive" | "overflow_recovery";
+type ContextCompactionReason = "proactive" | "preflight" | "overflow_recovery";
 
 // stopReason is "completed" when the assistant finished with a plain answer;
 // otherwise it is the stop policy's reason label (e.g. "cost_budget",

@@ -9,6 +9,7 @@ import {
   type ContextCompactionAccountingSnapshot,
   type ContextCompactionOptions,
   type ContextCompactionRequestMetadata,
+  type CurrentToolOutputCompactionReason,
   captureContextCompactionAccountingSnapshot,
   compactMessages,
   contextCompactionStatsForCurrentMessages,
@@ -50,6 +51,8 @@ export interface LedgerTurnOptions extends StreamTurnOptions {
 
 interface AttemptContextCompactionOptions {
   readonly allowCurrentToolOutputCompaction?: boolean;
+  readonly currentToolOutputCompactionReason?: CurrentToolOutputCompactionReason;
+  readonly restoreAfterCompaction?: boolean;
 }
 
 function requestMetadataForStream(
@@ -91,14 +94,24 @@ async function attemptContextCompaction(
     ...(options?.allowCurrentToolOutputCompaction === true
       ? { allowCurrentToolOutputCompaction: true }
       : {}),
+    ...(options?.currentToolOutputCompactionReason !== undefined
+      ? {
+          currentToolOutputCompactionReason:
+            options.currentToolOutputCompactionReason,
+        }
+      : {}),
   });
   let finalResult = result;
   if (result.compacted) {
     state.contextAccounting = undefined;
     streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
-    try {
-      await config.onContextCompacted?.(targetMessages);
-    } finally {
+    if (options?.restoreAfterCompaction !== false) {
+      try {
+        await config.onContextCompacted?.(targetMessages);
+      } finally {
+        streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
+      }
+    } else {
       streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
     }
     finalResult = {
@@ -125,14 +138,15 @@ export async function* streamTurnWithOverflowRecovery(
   streamOptions: LedgerTurnOptions,
 ): AsyncGenerator<AgentEvent, AgentTurn> {
   let overflowRecoveryAttempted = false;
-  let compactedBeforeRequest = false;
+  let historicalCompactionAttemptedBeforeRequest = false;
+  let preflightCurrentOutputCompactionAttempted = false;
 
   for (;;) {
     const requestMessages = projectSessionLedgerToProviderMessages(
       streamOptions.getLedger(),
     );
     if (
-      !compactedBeforeRequest &&
+      !historicalCompactionAttemptedBeforeRequest &&
       shouldCompactBeforeRequest(
         config.systemPrompt,
         requestMessages,
@@ -141,7 +155,7 @@ export async function* streamTurnWithOverflowRecovery(
         requestMetadataForStream(streamOptions),
       )
     ) {
-      compactedBeforeRequest = true;
+      historicalCompactionAttemptedBeforeRequest = true;
       const compaction = await attemptContextCompaction(
         config,
         state,
@@ -151,6 +165,41 @@ export async function* streamTurnWithOverflowRecovery(
         yield {
           type: "context_compacted",
           reason: "proactive",
+          ...compaction.stats,
+        };
+        for (const notice of compaction.artifactNotices ?? []) {
+          yield { type: "tool_output_artifact", ...notice };
+        }
+      }
+    }
+    const preflightRequestMessages = projectSessionLedgerToProviderMessages(
+      streamOptions.getLedger(),
+    );
+    if (
+      !preflightCurrentOutputCompactionAttempted &&
+      shouldCompactBeforeRequest(
+        config.systemPrompt,
+        preflightRequestMessages,
+        config.contextCompaction,
+        state.contextAccounting,
+        requestMetadataForStream(streamOptions),
+      )
+    ) {
+      preflightCurrentOutputCompactionAttempted = true;
+      const compaction = await attemptContextCompaction(
+        config,
+        state,
+        streamOptions,
+        {
+          allowCurrentToolOutputCompaction: true,
+          currentToolOutputCompactionReason: "preflight",
+          restoreAfterCompaction: false,
+        },
+      );
+      if (compaction.compacted) {
+        yield {
+          type: "context_compacted",
+          reason: "preflight",
           ...compaction.stats,
         };
         for (const notice of compaction.artifactNotices ?? []) {
@@ -204,7 +253,8 @@ export async function* streamTurnWithOverflowRecovery(
             for (const notice of compaction.artifactNotices ?? []) {
               yield { type: "tool_output_artifact", ...notice };
             }
-            compactedBeforeRequest = true;
+            historicalCompactionAttemptedBeforeRequest = true;
+            preflightCurrentOutputCompactionAttempted = true;
             continue;
           }
         }

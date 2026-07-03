@@ -1,7 +1,9 @@
 import type { LLMProvider, Message, Usage } from "../llm/types.ts";
+import { currentToolRound } from "./context-compaction/current-tool-round.ts";
 import type {
   ContextCompactionOptions as InternalContextCompactionOptions,
   ContextCompactionRequestMetadata as InternalContextCompactionRequestMetadata,
+  ResolvedContextCompactionOptions,
 } from "./context-compaction/options.ts";
 import { resolveContextCompactionOptions } from "./context-compaction/options.ts";
 import {
@@ -9,6 +11,7 @@ import {
   selectCompactionSplit,
 } from "./context-compaction/planning.ts";
 import {
+  type CurrentToolOutputCompactionReason,
   compactCurrentToolOutputs,
   compactCurrentToolOutputsWithArtifacts,
   EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
@@ -21,7 +24,11 @@ import {
 } from "./context-compaction/summary.ts";
 
 export { currentToolRound } from "./context-compaction/current-tool-round.ts";
-export { compactStaleToolOutputsWithArtifacts } from "./context-compaction/stale-tool-output.ts";
+export {
+  compactCurrentToolOutputs,
+  compactCurrentToolOutputsWithArtifacts,
+  compactStaleToolOutputsWithArtifacts,
+} from "./context-compaction/stale-tool-output.ts";
 export { projectCompactedToolOutput } from "./context-compaction/tool-output-preview.ts";
 
 import {
@@ -43,6 +50,7 @@ export type ContextCompactionRequestMetadata =
 export type ContextCompactionAccountingSnapshot =
   InternalContextCompactionAccountingSnapshot;
 export type ContextCompactionStats = InternalContextCompactionStats;
+export type { CurrentToolOutputCompactionReason };
 
 export function isCompactedCurrentToolOutput(text: string): boolean {
   return isCompactedCurrentToolOutputFromContent(text);
@@ -65,6 +73,7 @@ interface CompactMessagesOptions {
   readonly requestMetadata?: ContextCompactionRequestMetadata;
   readonly focusInstruction?: string;
   readonly allowCurrentToolOutputCompaction?: boolean;
+  readonly currentToolOutputCompactionReason?: CurrentToolOutputCompactionReason;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
 }
 
@@ -86,6 +95,61 @@ function artifactNoticesResult(
 ): { readonly artifactNotices?: readonly ToolOutputArtifactNotice[] } {
   const artifactNotices = sources.flatMap((source) => source ?? []);
   return artifactNotices.length > 0 ? { artifactNotices } : {};
+}
+
+function currentToolOutputCompactionReason(
+  options: CompactMessagesOptions,
+): CurrentToolOutputCompactionReason {
+  return options.currentToolOutputCompactionReason ?? "overflow_recovery";
+}
+
+function currentToolOutputMaxCharsForCompaction(options: {
+  readonly messages: readonly Message[];
+  readonly resolved: ResolvedContextCompactionOptions;
+  readonly beforeEstimatedTokens: number;
+  readonly reason: CurrentToolOutputCompactionReason;
+}): number {
+  if (
+    options.reason !== "preflight" ||
+    options.resolved.contextWindowTokens === undefined
+  ) {
+    return options.resolved.toolOutputMaxChars;
+  }
+
+  const targetTokens = Math.max(
+    0,
+    options.resolved.contextWindowTokens - options.resolved.reserveTokens,
+  );
+  const overageTokens = options.beforeEstimatedTokens - targetTokens;
+  if (overageTokens <= 0) {
+    return options.resolved.toolOutputMaxChars;
+  }
+
+  const currentOutputs = currentToolRound(options.messages)?.toolOutputs ?? [];
+  if (currentOutputs.length === 0) {
+    return options.resolved.toolOutputMaxChars;
+  }
+
+  const currentOutputChars = currentOutputs.reduce(
+    (total, output) => total + output.message.content.length,
+    0,
+  );
+  const currentOutputEstimatedTokens = Math.ceil(currentOutputChars / 4);
+  if (overageTokens >= currentOutputEstimatedTokens) {
+    return options.resolved.toolOutputMaxChars;
+  }
+
+  const targetAggregateChars = Math.max(
+    currentOutputs.length,
+    currentOutputChars - overageTokens * 4,
+  );
+  const targetCharsPerOutput = Math.floor(
+    targetAggregateChars / currentOutputs.length,
+  );
+  return Math.max(
+    1,
+    Math.min(options.resolved.toolOutputMaxChars, targetCharsPerOutput),
+  );
 }
 
 export function captureContextCompactionAccountingSnapshot(options: {
@@ -144,16 +208,25 @@ export async function compactMessages(
   const plan = planCompaction(options.messages, split, resolved);
   if (plan.messagesToSummarize.length === 0) {
     if (options.allowCurrentToolOutputCompaction === true) {
+      const reason = currentToolOutputCompactionReason(options);
+      const currentToolOutputMaxChars = currentToolOutputMaxCharsForCompaction({
+        messages: options.messages,
+        resolved,
+        beforeEstimatedTokens,
+        reason,
+      });
       const currentToolOutputCompaction =
         options.toolOutputArtifacts === undefined
           ? compactCurrentToolOutputs(
               options.messages,
-              resolved.toolOutputMaxChars,
+              currentToolOutputMaxChars,
+              { reason, settledMaxChars: resolved.toolOutputMaxChars },
             )
           : await compactCurrentToolOutputsWithArtifacts(
               options.messages,
-              resolved.toolOutputMaxChars,
+              currentToolOutputMaxChars,
               options.toolOutputArtifacts.store,
+              { reason, settledMaxChars: resolved.toolOutputMaxChars },
             );
       /* v8 ignore next: V8 does not attribute the fall-through branch here; overflow-edge-cases covers both no-op and compacted current-output paths. */
       if (currentToolOutputCompaction.stats.toolOutputsCompacted === 0) {
@@ -207,17 +280,31 @@ export async function compactMessages(
     options.toolOutputArtifacts,
     summaryTurn.summaryInputMaxChars,
   );
+  const reason = currentToolOutputCompactionReason(options);
+  const currentToolOutputMaxChars = currentToolOutputMaxCharsForCompaction({
+    messages: compacted.messages,
+    resolved,
+    beforeEstimatedTokens: estimateRequestTokens(
+      options.systemPrompt,
+      compacted.messages,
+      undefined,
+      options.requestMetadata,
+    ),
+    reason,
+  });
   const currentToolOutputCompaction =
     options.allowCurrentToolOutputCompaction === true
       ? options.toolOutputArtifacts === undefined
         ? compactCurrentToolOutputs(
             compacted.messages,
-            resolved.toolOutputMaxChars,
+            currentToolOutputMaxChars,
+            { reason, settledMaxChars: resolved.toolOutputMaxChars },
           )
         : await compactCurrentToolOutputsWithArtifacts(
             compacted.messages,
-            resolved.toolOutputMaxChars,
+            currentToolOutputMaxChars,
             options.toolOutputArtifacts.store,
+            { reason, settledMaxChars: resolved.toolOutputMaxChars },
           )
       : {
           messages: compacted.messages,
