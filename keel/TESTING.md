@@ -79,6 +79,25 @@ When a coverage gap exposes duplicated state, prefer one source of truth plus de
 
 For safety boundaries, prefer one authoritative execution path. Parallel allow/deny paths drift over time and can leave dead code that only looks protective.
 
+## Acceptance vs Contract Tests
+
+Test code falls into one role: slice acceptance, boundary contract, or test support. Do not let one role pretend to be another.
+
+- Slice acceptance proves the product promise through the first supported product boundary that can show it, then asserts the observable result: CLI output, interactive behavior, agent workflow result, persisted state, file change, process result, or external entrypoint result.
+- Boundary contract tests prove narrower behavior only when that boundary owns the risk: provider protocol, tool safety, persistence/schema invariant, state-machine invariant, or architecture rule.
+- A test below the first observable boundary is not acceptance if the user-visible path could break while the test still passes.
+- If a higher-boundary test already proves the same observable promise, do not keep a lower-boundary duplicate only for coverage, speed, or convenience.
+- Coverage is not a reason to keep duplicate lower-boundary tests. After deleting one, apply coverage triage: reachable behavior is covered through the supported boundary, unreachable code is removed or refactored, and necessary guards keep named contract or invariant tests.
+- If a lower-boundary contract test remains, its title and assertions must name the contract it owns, not a user behavior it does not exercise.
+
+Before adding or keeping a test, answer:
+
+1. What product promise or boundary contract does this test specify?
+2. What is the first supported boundary where that promise is observable?
+3. Would breaking the real user path fail this test?
+4. Are the assertions on boundary output/state, or on internal return values/control flow?
+5. If this contract supports a user-visible promise, where is the acceptance test?
+
 ## Choosing A Test Boundary
 
 Prefer the highest product boundary that still gives a clear, stable failure:

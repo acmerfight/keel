@@ -82,6 +82,8 @@ As slice acceptance, a test like "LLMProvider.stream returns AsyncIterable" is h
 
 Lower-level provider, tool, or invariant tests may cover contracts and edge cases at the boundary that owns the risk, but they cannot be the only proof for a slice whose promised result is visible through the CLI or agent. First prove the user can see the improvement; then add narrower tests for observable boundary results.
 
+A lower-level test can support the slice, but it is not the slice acceptance test unless it exercises the user action and observable result from the slice sentence.
+
 ## When You're Stuck
 
 If you can't figure out how to make the current slice end-to-end, you're probably trying to deliver too much. Remove scope until you can answer "what can a user do with this?" in one sentence.
