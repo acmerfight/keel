@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import type { CostReport } from "../agent/events.ts";
 import { runAgentTurn } from "../agent/loop.ts";
+import { postCompactionReadToolCallId } from "../agent/post-compaction-read-id.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import {
   clearReadVisibilityState,
@@ -431,7 +432,7 @@ export async function runInteractiveSession(
                 readVisibility,
                 projectInstructionVisibility,
                 nextPostCompactionReadToolCallId: () =>
-                  `post_compaction_read_${postCompactionReadSequence++}`,
+                  postCompactionReadToolCallId(postCompactionReadSequence++),
                 options,
                 recordCompactionCost,
               });
@@ -524,7 +525,7 @@ export async function runInteractiveSession(
             readVisibility,
             projectInstructionVisibility,
             nextPostCompactionReadToolCallId: () =>
-              `post_compaction_read_${postCompactionReadSequence++}`,
+              postCompactionReadToolCallId(postCompactionReadSequence++),
             options,
             recordCompactionCost,
           });
