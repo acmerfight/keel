@@ -66,6 +66,145 @@ describe("CLI Main - Doctor Command", () => {
     expect(fixture.stderr()).toBe("");
   });
 
+  test(`Given a known large-context model is selected,
+    When the user runs offline diagnostics,
+    Then it explains the effective context policy`, async () => {
+    // Given
+    const fixture = createRuntime(
+      ["--doctor", "--offline", "--provider=qwen", "--model=qwen3.7-plus"],
+      {
+        env: {
+          QWEN_API_KEY: "test-key",
+        },
+      },
+    );
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toContain("Context policy:");
+    expect(fixture.stdout()).toContain(
+      "  model context window: 1000000 tokens (source: registry)",
+    );
+    expect(fixture.stdout()).toContain(
+      "  compact before: >983616 estimated tokens",
+    );
+    expect(fixture.stdout()).toContain("  reserve: 16384 tokens (default)");
+    expect(fixture.stdout()).toContain(
+      "  keep recent target: 20000 tokens (default)",
+    );
+    expect(fixture.stdout()).toContain(
+      "  tool output preview/projection: 2000 chars (default)",
+    );
+    expect(fixture.stdout()).toContain(
+      "  summary input cap: 96000 chars (default)",
+    );
+    expect(fixture.stdout()).toContain(
+      "  artifact retention: raw, unredacted tool output under KEEL_HOME artifacts for 30 days by default or until manual removal; inspect refs with keel artifacts show <ref>",
+    );
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given the context window env overrides model metadata,
+    When the user runs offline diagnostics,
+    Then the context policy uses the environment window for its threshold`, async () => {
+    // Given
+    const fixture = createRuntime(
+      ["--doctor", "--offline", "--provider=qwen", "--model=qwen3.7-plus"],
+      {
+        env: {
+          KEEL_CONTEXT_WINDOW_TOKENS: "128000",
+          QWEN_API_KEY: "test-key",
+        },
+      },
+    );
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toContain(
+      "  model context window: 128000 tokens (source: KEEL_CONTEXT_WINDOW_TOKENS)",
+    );
+    expect(fixture.stdout()).toContain(
+      "  compact before: >111616 estimated tokens",
+    );
+    expect(fixture.stdout()).toContain(
+      "  summary input cap: 96000 chars (default)",
+    );
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given model metadata has no context window,
+    When the user runs offline diagnostics,
+    Then the context policy keeps fixed limits and avoids a misleading threshold`, async () => {
+    // Given
+    const fixture = createRuntime(
+      ["--doctor", "--offline", "--provider=qwen", "--model=qwen-future"],
+      {
+        env: {
+          QWEN_API_KEY: "test-key",
+        },
+      },
+    );
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toContain("Context policy:");
+    expect(fixture.stdout()).toContain("  model context window: unknown");
+    expect(fixture.stdout()).toContain(
+      "  compact before: unavailable (context window unknown)",
+    );
+    expect(fixture.stdout()).toContain("  reserve: 16384 tokens (default)");
+    expect(fixture.stdout()).toContain(
+      "  keep recent target: 20000 tokens (default)",
+    );
+    expect(fixture.stdout()).toContain(
+      "  tool output preview/projection: 2000 chars (default)",
+    );
+    expect(fixture.stdout()).toContain(
+      "  summary input cap: 96000 chars (default)",
+    );
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given a small context window clamps summary input,
+    When the user runs offline diagnostics,
+    Then the context policy shows the clamped summary input cap`, async () => {
+    // Given
+    const fixture = createRuntime(
+      ["--doctor", "--offline", "--provider=qwen", "--model=qwen3.7-plus"],
+      {
+        env: {
+          KEEL_CONTEXT_WINDOW_TOKENS: "17000",
+          QWEN_API_KEY: "test-key",
+        },
+      },
+    );
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toContain(
+      "  model context window: 17000 tokens (source: KEEL_CONTEXT_WINDOW_TOKENS)",
+    );
+    expect(fixture.stdout()).toContain(
+      "  compact before: >616 estimated tokens",
+    );
+    expect(fixture.stdout()).toContain(
+      "  summary input cap: 1848 chars (clamped by context window)",
+    );
+    expect(fixture.stderr()).toBe("");
+  });
+
   test(`Given Qwen diagnostics use equals flags with an unparseable base URL,
     When the CLI main dispatches the doctor command,
     Then it rejects the local provider config while preserving the source`, async () => {

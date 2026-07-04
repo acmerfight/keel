@@ -60,6 +60,13 @@ export function resolveContextCompactionOptions(
   };
 }
 
+export function contextCompactionRequestTargetTokens(options: {
+  readonly contextWindowTokens: number;
+  readonly reserveTokens: number;
+}): number {
+  return Math.max(0, options.contextWindowTokens - options.reserveTokens);
+}
+
 export function resolvedRequestMetadata(
   metadata: ContextCompactionRequestMetadata | undefined,
 ): ResolvedContextCompactionRequestMetadata {
