@@ -45,6 +45,8 @@ function swapSymlinkAfterFirstMutationCheck(
     formatRestoreOutput: projectInstructions.formatRestoreOutput,
     visibleInstructionsMostRecentFirst:
       projectInstructions.visibleInstructionsMostRecentFirst,
+    snapshot: projectInstructions.snapshot,
+    restoreSnapshot: projectInstructions.restoreSnapshot,
     markInstructionPathsVisible:
       projectInstructions.markInstructionPathsVisible,
     applyMutationTargetPaths: projectInstructions.applyMutationTargetPaths,
