@@ -90,6 +90,7 @@ export type CompactMessagesResult =
     }
   | {
       readonly compacted: true;
+      readonly historyCompacted: boolean;
       readonly usage: Usage;
       readonly stats: ContextCompactionStats;
       readonly artifactNotices?: readonly ToolOutputArtifactNotice[];
@@ -265,6 +266,7 @@ async function compactCurrentToolOutputsForRequest(options: {
   );
   return {
     compacted: true,
+    historyCompacted: false,
     usage: ZERO_USAGE,
     stats: {
       beforeMessageCount: options.beforeMessageCount,
@@ -481,6 +483,7 @@ export async function compactMessages(
   );
   return {
     compacted: true,
+    historyCompacted: true,
     usage: summaryTurn.usage,
     stats: {
       beforeMessageCount,

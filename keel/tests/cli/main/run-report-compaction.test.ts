@@ -523,6 +523,143 @@ describe("CLI Main - Run Report Compaction", () => {
     }
   });
 
+  test(`Given an interactive report session restores a compacted read after history compaction,
+    When the report message count is unchanged,
+    Then the report still records proactive history scope`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-session-history-scope-report-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const reportPath = join(workspace, "history-scope.json");
+    await writeFile(
+      join(workspace, "medium.txt"),
+      [
+        "MEDIUM_START",
+        ...Array.from(
+          { length: 180 },
+          (_, index) =>
+            `medium line ${index} context payload for summary scope detection and live compaction verification`,
+        ),
+        "MEDIUM_END",
+      ].join("\n"),
+      "utf8",
+    );
+    const input = new PassThrough();
+    input.write("read medium.txt and confirm\n");
+    let continuationQueued = false;
+    const queueContinuation = () => {
+      if (continuationQueued) {
+        return;
+      }
+      continuationQueued = true;
+      input.end("Now summarize\n");
+    };
+    const mainBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const requestBody = JSON.parse(body);
+        if (isSummaryRequest(requestBody)) {
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          });
+          res.end(sseTextReplyWithUsage("MEDIUM_CHECKPOINT"));
+          return;
+        }
+        mainBodies.push(requestBody);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (mainBodies.length === 1) {
+          res.write(
+            sseToolCall("read_medium_file", "read", { path: "medium.txt" }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (mainBodies.length === 2) {
+          const currentOutput = toolMessageContent(
+            mainBodies[1],
+            "read_medium_file",
+          );
+          const preflightCompacted = currentOutput.includes(
+            "[current tool output compacted before provider request:",
+          );
+          res.end(
+            sseTextReplyWithUsage(
+              preflightCompacted ? "medium confirmed" : "medium missing",
+            ),
+          );
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("history scope report ready"));
+      });
+    });
+    await listen(server);
+    const run = createRuntime(["--report", reportPath], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_CONTEXT_WINDOW_TOKENS: "4000",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+      onStdout: (text) => {
+        if (text.includes("medium confirmed")) {
+          queueContinuation();
+        }
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(run.stdout().slice(-128)).toContain(
+        "history scope report ready\n",
+      );
+      expect(run.stderr()).toContain("Context compacted: proactive");
+      const report = await readReport(reportPath);
+      const proactive = report.contextCompactions.find(
+        (compaction) => compaction.reason === "proactive",
+      );
+      expect(proactive).toMatchObject({
+        providerRequestAction: "compacted_before_request",
+        scopes: ["history"],
+        staleToolOutputsCompacted: 0,
+        currentToolOutputsCompacted: 0,
+        toolOutputsCompacted: 0,
+        artifacts: [],
+      });
+      expect(proactive?.beforeMessageCount).toBe(proactive?.afterMessageCount);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an interactive report session compacts retained stale tool output,
     When queued input continues after the read,
     Then the report records stale tool-output scope and artifact details`, async () => {

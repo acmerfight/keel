@@ -22,6 +22,7 @@ export type AgentEvent =
   | ({
       readonly type: "context_compacted";
       readonly reason: ContextCompactionReason;
+      readonly historyCompacted: boolean;
       readonly artifacts: readonly ToolOutputArtifactCompactionArtifact[];
     } & ContextCompactionStats)
   | {

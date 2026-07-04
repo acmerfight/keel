@@ -48,7 +48,7 @@ function contextCompactionScopes(
   event: ContextCompactionEvent,
 ): readonly RunReportContextCompactionScope[] {
   const scopes: RunReportContextCompactionScope[] = [];
-  if (event.beforeMessageCount !== event.afterMessageCount) {
+  if (event.historyCompacted) {
     scopes.push("history");
   }
   if (event.staleToolOutputsCompacted > 0) {
