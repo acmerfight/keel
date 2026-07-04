@@ -117,23 +117,17 @@ export type ToolOutputArtifactNotice =
       readonly omittedChars: number;
     };
 
+type ToolOutputArtifactRecoverableCompactionArtifact = {
+  readonly status: "stored" | "reused";
+  readonly ref: string;
+  readonly toolCallId: string;
+  readonly toolName: ToolOutputArtifactToolName;
+  readonly sourceStatus: ToolOutputArtifactSourceStatus;
+  readonly omittedChars: number;
+};
+
 export type ToolOutputArtifactCompactionArtifact =
-  | {
-      readonly status: "stored";
-      readonly ref: string;
-      readonly toolCallId: string;
-      readonly toolName: ToolOutputArtifactToolName;
-      readonly sourceStatus: ToolOutputArtifactSourceStatus;
-      readonly omittedChars: number;
-    }
-  | {
-      readonly status: "reused";
-      readonly ref: string;
-      readonly toolCallId: string;
-      readonly toolName: ToolOutputArtifactToolName;
-      readonly sourceStatus: ToolOutputArtifactSourceStatus;
-      readonly omittedChars: number;
-    }
+  | ToolOutputArtifactRecoverableCompactionArtifact
   | {
       readonly status: "failed";
       readonly reason: string;

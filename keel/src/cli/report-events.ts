@@ -60,25 +60,28 @@ function contextCompactionScopes(
   return scopes;
 }
 
+function contextCompactionStats(
+  event: ContextCompactionEvent,
+): ContextCompactionStats {
+  const {
+    type: _type,
+    reason: _reason,
+    historyCompacted: _historyCompacted,
+    artifacts: _artifacts,
+    ...stats
+  } = event;
+  return stats;
+}
+
 function runReportContextCompaction(
   event: ContextCompactionEvent,
 ): RunReportContextCompaction {
   return {
+    ...contextCompactionStats(event),
     reason: event.reason,
     providerRequestAction: providerRequestAction(event.reason),
     scopes: contextCompactionScopes(event),
     artifacts: event.artifacts,
-    beforeMessageCount: event.beforeMessageCount,
-    afterMessageCount: event.afterMessageCount,
-    beforeEstimatedTokens: event.beforeEstimatedTokens,
-    afterEstimatedTokens: event.afterEstimatedTokens,
-    toolOutputsCompacted: event.toolOutputsCompacted,
-    staleToolOutputsCompacted: event.staleToolOutputsCompacted,
-    currentToolOutputsCompacted: event.currentToolOutputsCompacted,
-    toolOutputCharsBefore: event.toolOutputCharsBefore,
-    toolOutputCharsAfter: event.toolOutputCharsAfter,
-    toolOutputEstimatedTokensBefore: event.toolOutputEstimatedTokensBefore,
-    toolOutputEstimatedTokensAfter: event.toolOutputEstimatedTokensAfter,
   };
 }
 
