@@ -486,6 +486,13 @@ export async function compactMessages(
     compacted.staleToolOutputStats,
     currentToolOutputCompaction.stats,
   );
+  const afterEstimatedTokens = estimateRequestTokens(
+    options.systemPrompt,
+    currentToolOutputCompaction.messages,
+    options.contextAccounting,
+    options.requestMetadata,
+  );
+
   options.messages.splice(
     0,
     options.messages.length,
@@ -499,10 +506,7 @@ export async function compactMessages(
       beforeMessageCount,
       afterMessageCount: options.messages.length,
       beforeEstimatedTokens,
-      afterEstimatedTokens: estimateRequestTokens(
-        options.systemPrompt,
-        options.messages,
-      ),
+      afterEstimatedTokens,
       ...toolOutputStats,
     },
     ...artifactNoticesResult(

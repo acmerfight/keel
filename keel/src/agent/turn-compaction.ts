@@ -56,6 +56,7 @@ interface AttemptContextCompactionOptions {
   readonly onlyCurrentToolOutputCompaction?: boolean;
   readonly currentToolOutputMaxCharsOverride?: number;
   readonly allowPreflightCurrentToolOutputRecompaction?: boolean;
+  readonly requireShrinkingHistoryCompaction?: boolean;
   readonly restoreAfterCompaction?: boolean;
 }
 
@@ -119,24 +120,45 @@ async function attemptContextCompaction(
   });
   let finalResult = result;
   if (result.compacted) {
-    state.contextAccounting = undefined;
-    streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
-    if (options?.restoreAfterCompaction !== false) {
-      try {
-        await config.onContextCompacted?.(targetMessages);
-      } finally {
-        streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
+    const preRestoreStats = contextCompactionStatsForCurrentMessages({
+      stats: result.stats,
+      systemPrompt: config.systemPrompt,
+      messages: targetMessages,
+      requestMetadata,
+    });
+    const rejectsGrowingHistoryCompaction =
+      options?.requireShrinkingHistoryCompaction === true &&
+      result.historyCompacted &&
+      preRestoreStats.afterEstimatedTokens >=
+        preRestoreStats.beforeEstimatedTokens;
+    if (rejectsGrowingHistoryCompaction) {
+      finalResult = {
+        compacted: false,
+        usage: result.usage,
+      };
+    } else {
+      state.contextAccounting = undefined;
+      streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
+      if (options?.restoreAfterCompaction !== false) {
+        try {
+          await config.onContextCompacted?.(targetMessages);
+        } finally {
+          streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
+        }
       }
+      finalResult = {
+        ...result,
+        stats:
+          options?.restoreAfterCompaction === false
+            ? preRestoreStats
+            : contextCompactionStatsForCurrentMessages({
+                stats: result.stats,
+                systemPrompt: config.systemPrompt,
+                messages: targetMessages,
+                requestMetadata,
+              }),
+      };
     }
-    finalResult = {
-      ...result,
-      stats: contextCompactionStatsForCurrentMessages({
-        stats: result.stats,
-        systemPrompt: config.systemPrompt,
-        messages: targetMessages,
-        requestMetadata,
-      }),
-    };
   }
   state.accounting = addRequestAccounting(
     state.accounting,
@@ -225,6 +247,9 @@ export async function* streamTurnWithOverflowRecovery(
         config,
         state,
         streamOptions,
+        {
+          requireShrinkingHistoryCompaction: true,
+        },
       );
       if (compaction.compacted) {
         yield {
