@@ -118,6 +118,23 @@ Run professional QA before opening or updating the PR.
 
 Open or update the PR according to repo conventions.
 
+Before creating or editing the PR, set the PR title according to
+`keel/CONTRIBUTING.md`.
+
+The title must follow one of these Conventional Commit forms:
+
+```text
+<type>(<scope>): <summary>
+<type>(<scope>)!: <summary>
+```
+
+Allowed types: feat, fix, perf, refactor, docs, test, build, ci, chore, revert.
+Scopes are required.
+
+Treat the PR title as the eventual squash commit title. Use `!` only for breaking
+changes. Put issue links such as `Fixes #123` in the PR body, not in the title.
+Do not open or update a PR with a non-conforming title.
+
 PR body must include:
 
 - Problem

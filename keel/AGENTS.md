@@ -57,6 +57,7 @@ Prefer concrete code. Keep control flow local and linear; add abstraction only f
 
 ## Topic Docs
 
+- [CONTRIBUTING.md](CONTRIBUTING.md) - contribution rules, including the PR title protocol.
 - [DEVELOPMENT.md](DEVELOPMENT.md) - code style, type precision, safety boundaries, shell/provider visibility semantics, and abstraction discipline.
 - [TESTING.md](TESTING.md) - BDD style, test boundaries, coverage triage, and verification expectations.
 - [SLICING.md](SLICING.md) - vertical slicing rules and how to choose a runnable slice boundary.
@@ -83,6 +84,21 @@ BDD first. Every feature starts with a failing GWTE test for observable behavior
 Every deliverable is a vertical slice: after the PR, a user can run a command or exercise an agent workflow and observe the result. See [SLICING.md](SLICING.md).
 
 Pick the highest-priority roadmap gap that can ship as a bounded vertical slice. Re-check the current product entrypoint before choosing work.
+
+## Pull Requests
+
+Before creating, editing, or recommending a PR title, follow the PR title
+protocol in [CONTRIBUTING.md](CONTRIBUTING.md). Use one of these Conventional
+Commit forms:
+
+```text
+<type>(<scope>): <summary>
+<type>(<scope>)!: <summary>
+```
+
+Allowed types: feat, fix, perf, refactor, docs, test, build, ci, chore, revert.
+Scopes are required. Use `!` only for breaking changes. Do not create or update
+a PR with a non-conforming title.
 
 ## Merge To Main
 
