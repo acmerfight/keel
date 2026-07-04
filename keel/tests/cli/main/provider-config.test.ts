@@ -45,7 +45,7 @@ describe("CLI Main - Provider Config", () => {
         JSON.parse(await readFile(reportPath, "utf8")),
       );
       expect(report).toMatchObject({
-        schemaVersion: 2,
+        schemaVersion: 3,
         modelsUsed: [{ provider: "fake", model: "fake" }],
         usageByModel: [
           {
@@ -56,6 +56,7 @@ describe("CLI Main - Provider Config", () => {
           },
         ],
         costUsd: 0,
+        contextCompactions: [],
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

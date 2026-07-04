@@ -2071,6 +2071,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const event: AgentEvent = {
       type: "context_compacted",
       reason: "proactive",
+      artifacts: [],
       beforeMessageCount: 4,
       afterMessageCount: 4,
       beforeEstimatedTokens: 1200,
@@ -2109,6 +2110,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const event: AgentEvent = {
       type: "context_compacted",
       reason: "overflow_recovery",
+      artifacts: [],
       beforeMessageCount: 4,
       afterMessageCount: 4,
       beforeEstimatedTokens: 1200,

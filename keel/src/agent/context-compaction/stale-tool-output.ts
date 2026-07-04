@@ -5,6 +5,7 @@ import {
   isGeneratedSettledToolOutput,
   sourceStatusFromToolOutputText,
   TOOL_OUTPUT_ARTIFACT_MODEL_RECOVERY,
+  type ToolOutputArtifactCompactionArtifact,
   type ToolOutputArtifactNotice,
   type ToolOutputArtifactPurpose,
   type ToolOutputArtifactSourceStatus,
@@ -70,12 +71,14 @@ export interface StaleToolOutputCompactionResult {
   readonly messages: readonly Message[];
   readonly stats: StaleToolOutputCompactionStats;
   readonly artifactNotices?: readonly ToolOutputArtifactNotice[];
+  readonly artifactReports?: readonly ToolOutputArtifactCompactionArtifact[];
 }
 
 interface StaleToolOutputCompactionEntry {
   readonly message: Message;
   readonly stats: StaleToolOutputCompactionStats;
   readonly artifactNotice?: ToolOutputArtifactNotice;
+  readonly artifactReport?: ToolOutputArtifactCompactionArtifact;
 }
 
 export const EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS: StaleToolOutputCompactionStats =
@@ -338,6 +341,7 @@ async function artifactMarkerForCompactedToolOutput(options: {
   readonly marker: string;
   readonly omittedChars: number;
   readonly notice?: ToolOutputArtifactNotice;
+  readonly report: ToolOutputArtifactCompactionArtifact;
 }> {
   const existingArtifact = generatedToolOutputArtifactMarker(options.content);
   if (existingArtifact !== null) {
@@ -368,6 +372,14 @@ async function artifactMarkerForCompactedToolOutput(options: {
             verification.contentSha256,
           ),
           omittedChars: originalOmittedChars,
+          report: {
+            status: "reused",
+            ref: existingArtifact.ref,
+            toolCallId: options.toolCallId,
+            toolName: options.toolName,
+            sourceStatus: existingArtifact.sourceStatus,
+            omittedChars: originalOmittedChars,
+          },
         };
       }
     } catch {}
@@ -397,6 +409,14 @@ async function artifactMarkerForCompactedToolOutput(options: {
         sourceStatus,
         omittedChars: options.omittedChars,
       },
+      report: {
+        status: "stored",
+        ref: saveResult.ref,
+        toolCallId: options.toolCallId,
+        toolName: options.toolName,
+        sourceStatus,
+        omittedChars: options.omittedChars,
+      },
     };
   }
   return {
@@ -407,6 +427,14 @@ async function artifactMarkerForCompactedToolOutput(options: {
       reason: saveResult.reason,
       toolCallId: options.toolCallId,
       toolName: options.toolName,
+      omittedChars: options.omittedChars,
+    },
+    report: {
+      status: "failed",
+      reason: saveResult.reason,
+      toolCallId: options.toolCallId,
+      toolName: options.toolName,
+      sourceStatus,
       omittedChars: options.omittedChars,
     },
   };
@@ -550,6 +578,7 @@ export async function compactStaleToolOutputsWithArtifacts(
           ...(artifact.notice === undefined
             ? {}
             : { artifactNotice: artifact.notice }),
+          artifactReport: artifact.report,
         };
       },
     ),
@@ -562,9 +591,13 @@ export async function compactStaleToolOutputsWithArtifacts(
   const artifactNotices = compactedEntries.flatMap((entry) =>
     entry.artifactNotice === undefined ? [] : [entry.artifactNotice],
   );
+  const artifactReports = compactedEntries.flatMap((entry) =>
+    entry.artifactReport === undefined ? [] : [entry.artifactReport],
+  );
   return {
     messages: compactedMessages,
     stats,
+    artifactReports,
     ...(artifactNotices.length === 0 ? {} : { artifactNotices }),
   };
 }
@@ -760,6 +793,7 @@ export async function compactCurrentToolOutputsWithArtifacts(
           ...(artifact.notice === undefined
             ? {}
             : { artifactNotice: artifact.notice }),
+          artifactReport: artifact.report,
         };
       },
     ),
@@ -772,9 +806,13 @@ export async function compactCurrentToolOutputsWithArtifacts(
   const artifactNotices = compactedEntries.flatMap((entry) =>
     entry.artifactNotice === undefined ? [] : [entry.artifactNotice],
   );
+  const artifactReports = compactedEntries.flatMap((entry) =>
+    entry.artifactReport === undefined ? [] : [entry.artifactReport],
+  );
   return {
     messages: compactedMessages,
     stats,
+    artifactReports,
     ...(artifactNotices.length === 0 ? {} : { artifactNotices }),
   };
 }

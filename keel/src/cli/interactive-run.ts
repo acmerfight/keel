@@ -25,6 +25,7 @@ import {
   resolveInteractiveProvider,
 } from "./provider-config.ts";
 import { writeRunReport } from "./report.ts";
+import { createAgentEventReportRecorder } from "./report-events.ts";
 import { resolveResumedWorkflowSkill } from "./resumed-workflow-skill.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { formatCliRuntimeError } from "./runtime-error.ts";
@@ -364,6 +365,7 @@ export async function runInteractiveCli(
               inputEchoesToDisplay: runtime.stderrIsTTY === true,
             })
           : undefined;
+      const reportRecorder = createAgentEventReportRecorder();
       interactiveDisplay?.writeIntro();
       const interactiveResult = await runInteractiveSession({
         cliArgs,
@@ -413,8 +415,12 @@ export async function runInteractiveCli(
         requireKnownCostModel,
         printAgentEvents: (stream) =>
           interactiveDisplay === undefined
-            ? printAgentEvents(stream, runtime)
-            : printStableInteractiveAgentEvents(stream, interactiveDisplay),
+            ? printAgentEvents(stream, runtime, reportRecorder)
+            : printStableInteractiveAgentEvents(
+                stream,
+                interactiveDisplay,
+                reportRecorder,
+              ),
         formatCostReport,
       });
       if (
@@ -425,6 +431,7 @@ export async function runInteractiveCli(
           usageByModel: interactiveResult.report.usageByModel,
           end: interactiveResult.report.end,
           durationMs: runtime.now() - startedAt,
+          contextCompactions: reportRecorder.contextCompactions(),
         });
       }
     } finally {
