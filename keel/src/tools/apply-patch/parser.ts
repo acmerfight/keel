@@ -46,6 +46,10 @@ interface ParsedStandardHunk {
 
 type StandardHunkLineSide = "old" | "new" | "both";
 
+interface StandardHunkSideBuilder {
+  text: string;
+}
+
 function isFileOperationHeader(line: string): boolean {
   return (
     line.startsWith(ADD_FILE_MARKER) ||
@@ -196,6 +200,28 @@ function parseStandardFileHeaders(
   return { oldPath, newPath, next: index + 1 };
 }
 
+function appendStandardHunkSideLine(
+  side: StandardHunkSideBuilder,
+  text: string,
+): void {
+  side.text += `${text}\n`;
+}
+
+function markStandardHunkSideNoNewline(side: StandardHunkSideBuilder): void {
+  side.text = side.text.slice(0, -1);
+}
+
+function standardHunkSideLines(
+  side: StandardHunkSideBuilder,
+  sawNoNewlineMarker: boolean,
+): readonly string[] {
+  const text =
+    !sawNoNewlineMarker && side.text.endsWith("\n")
+      ? side.text.slice(0, -1)
+      : side.text;
+  return text.split("\n");
+}
+
 function parseStandardHunk(
   path: string,
   lines: readonly string[],
@@ -206,12 +232,14 @@ function parseStandardHunk(
     invalidStandardDiff(`invalid hunk header for ${path}`);
   }
 
-  const oldLines: string[] = [];
-  const newLines: string[] = [];
+  const oldSide: StandardHunkSideBuilder = {
+    text: "",
+  };
+  const newSide: StandardHunkSideBuilder = {
+    text: "",
+  };
   let lastLineSide: StandardHunkLineSide | null = null;
   let sawNoNewlineMarker = false;
-  let oldHasNoNewlineMarker = false;
-  let newHasNoNewlineMarker = false;
   let index = start + 1;
   while (index < lines.length) {
     const line = parserLine(lines, index);
@@ -224,24 +252,24 @@ function parseStandardHunk(
       }
       sawNoNewlineMarker = true;
       if (lastLineSide === "old" || lastLineSide === "both") {
-        oldHasNoNewlineMarker = true;
+        markStandardHunkSideNoNewline(oldSide);
       }
       if (lastLineSide === "new" || lastLineSide === "both") {
-        newHasNoNewlineMarker = true;
+        markStandardHunkSideNoNewline(newSide);
       }
       lastLineSide = null;
       index++;
       continue;
     }
     if (line.startsWith(" ")) {
-      oldLines.push(line.slice(1));
-      newLines.push(line.slice(1));
+      appendStandardHunkSideLine(oldSide, line.slice(1));
+      appendStandardHunkSideLine(newSide, line.slice(1));
       lastLineSide = "both";
     } else if (line.startsWith("-")) {
-      oldLines.push(line.slice(1));
+      appendStandardHunkSideLine(oldSide, line.slice(1));
       lastLineSide = "old";
     } else if (line.startsWith("+")) {
-      newLines.push(line.slice(1));
+      appendStandardHunkSideLine(newSide, line.slice(1));
       lastLineSide = "new";
     } else {
       invalidStandardDiff(`hunk for ${path} has an invalid line`);
@@ -249,12 +277,10 @@ function parseStandardHunk(
     index++;
   }
 
+  const oldLines = standardHunkSideLines(oldSide, sawNoNewlineMarker);
+  const newLines = standardHunkSideLines(newSide, sawNoNewlineMarker);
   if (oldLines.length === 0 || oldLines.every((line) => line === "")) {
     invalidStandardDiff(`hunk for ${path} has no effective old lines`);
-  }
-  if (sawNoNewlineMarker) {
-    if (!oldHasNoNewlineMarker && oldLines.length > 0) oldLines.push("");
-    if (!newHasNoNewlineMarker && newLines.length > 0) newLines.push("");
   }
   return { hunk: { oldLines, newLines }, next: index };
 }

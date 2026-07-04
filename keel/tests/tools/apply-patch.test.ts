@@ -302,6 +302,42 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a standard unified diff continues after a no-newline marker,
+    When apply_patch validates and applies the diff,
+    Then the marker only affects the file line it follows`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "plain.txt"), "prefix", "utf8");
+    const patch = [
+      "diff --git a/plain.txt b/plain.txt",
+      "--- a/plain.txt",
+      "+++ b/plain.txt",
+      "@@ -1 +1,2 @@",
+      " prefix",
+      "\\ No newline at end of file",
+      "+suffix",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "plain.txt"),
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nM plain.txt");
+      expect(await readFile(join(workspace, "plain.txt"), "utf8")).toBe(
+        "prefixsuffix\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a standard unified diff removes the final newline from a file,
     When apply_patch validates and applies the diff,
     Then it writes the file without a trailing newline`, async () => {
