@@ -5,7 +5,10 @@ import type {
   ContextCompactionRequestMetadata as InternalContextCompactionRequestMetadata,
   ResolvedContextCompactionOptions,
 } from "./context-compaction/options.ts";
-import { resolveContextCompactionOptions } from "./context-compaction/options.ts";
+import {
+  contextCompactionRequestTargetTokens,
+  resolveContextCompactionOptions,
+} from "./context-compaction/options.ts";
 import {
   planCompaction,
   selectCompactionSplit,
@@ -25,6 +28,10 @@ import {
 } from "./context-compaction/summary.ts";
 
 export { currentToolRound } from "./context-compaction/current-tool-round.ts";
+export {
+  contextCompactionRequestTargetTokens,
+  resolveContextCompactionOptions,
+} from "./context-compaction/options.ts";
 export {
   compactCurrentToolOutputs,
   compactCurrentToolOutputsWithArtifacts,
@@ -130,7 +137,10 @@ function requestTargetTokens(
   if (resolved.contextWindowTokens === undefined) {
     return undefined;
   }
-  return Math.max(0, resolved.contextWindowTokens - resolved.reserveTokens);
+  return contextCompactionRequestTargetTokens({
+    contextWindowTokens: resolved.contextWindowTokens,
+    reserveTokens: resolved.reserveTokens,
+  });
 }
 
 function currentToolOutputMaxCharsForCompaction(options: {

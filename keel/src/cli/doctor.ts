@@ -1,5 +1,9 @@
 import { execFile } from "node:child_process";
 import { z } from "zod";
+import {
+  contextCompactionRequestTargetTokens,
+  resolveContextCompactionOptions,
+} from "../agent/context-compaction.ts";
 import { KeelError } from "../core/error.ts";
 import { resolveRipgrep } from "../tools/ripgrep.ts";
 import {
@@ -13,6 +17,7 @@ import {
   type ProviderSelection,
   validateProviderBaseUrl,
 } from "./provider-config.ts";
+import { TOOL_OUTPUT_ARTIFACT_RETENTION_DESCRIPTION } from "./tool-output-artifacts.ts";
 
 export interface DoctorResult {
   readonly exitCode: number;
@@ -241,6 +246,81 @@ function contextWindowLine(contextWindow: ContextWindowDiagnostic): string {
   }
 }
 
+function contextPolicyWindowLine(
+  contextWindow: ContextWindowDiagnostic,
+): string {
+  switch (contextWindow.status) {
+    case "disabled":
+      return "model context window: disabled";
+    case "unknown":
+      return "model context window: unknown";
+    case "enabled":
+      return `model context window: ${contextWindow.tokens} tokens (source: ${contextWindow.source})`;
+    case "invalid":
+      return `model context window: invalid (source: ${contextWindow.source})`;
+  }
+}
+
+function unavailableCompactBeforeLine(
+  contextWindow: Exclude<
+    ContextWindowDiagnostic,
+    { readonly status: "enabled" }
+  >,
+): string {
+  switch (contextWindow.status) {
+    case "disabled":
+      return "compact before: unavailable (context window disabled)";
+    case "unknown":
+      return "compact before: unavailable (context window unknown)";
+    case "invalid":
+      return "compact before: unavailable (context window invalid)";
+  }
+}
+
+function summaryInputCapLine(options: {
+  readonly summaryInputMaxChars: number;
+  readonly defaultSummaryInputMaxChars: number;
+}): string {
+  const source =
+    options.summaryInputMaxChars < options.defaultSummaryInputMaxChars
+      ? "clamped by context window"
+      : "default";
+  return `summary input cap: ${options.summaryInputMaxChars} chars (${source})`;
+}
+
+function contextPolicyLines(
+  contextWindow: ContextWindowDiagnostic,
+): readonly string[] {
+  const defaultCompaction = resolveContextCompactionOptions(undefined);
+  const compaction =
+    contextWindow.status === "enabled"
+      ? resolveContextCompactionOptions({
+          contextWindowTokens: contextWindow.tokens,
+        })
+      : defaultCompaction;
+  const compactBefore =
+    contextWindow.status === "enabled"
+      ? `compact before: >${contextCompactionRequestTargetTokens({
+          contextWindowTokens: contextWindow.tokens,
+          reserveTokens: compaction.reserveTokens,
+        })} estimated tokens`
+      : unavailableCompactBeforeLine(contextWindow);
+
+  return [
+    "Context policy:",
+    `  ${contextPolicyWindowLine(contextWindow)}`,
+    `  ${compactBefore}`,
+    `  reserve: ${compaction.reserveTokens} tokens (default)`,
+    `  keep recent target: ${compaction.keepRecentTokens} tokens (default)`,
+    `  tool output preview/projection: ${compaction.toolOutputMaxChars} chars (default)`,
+    `  ${summaryInputCapLine({
+      summaryInputMaxChars: compaction.summaryInputMaxChars,
+      defaultSummaryInputMaxChars: defaultCompaction.summaryInputMaxChars,
+    })}`,
+    `  artifact retention: ${TOOL_OUTPUT_ARTIFACT_RETENTION_DESCRIPTION}`,
+  ];
+}
+
 export function capabilityNames(
   capabilities: Extract<
     ModelMetadataDiagnostic,
@@ -290,6 +370,8 @@ function providerDiagnosticLines(
     ...modelMetadataLines(diagnostic.modelMetadata),
     `cost model: ${diagnostic.costModel}`,
     ...diagnostic.issues.map((issue) => `${issue.severity}: ${issue.message}`),
+    "",
+    ...contextPolicyLines(diagnostic.contextWindow),
   ];
 }
 
