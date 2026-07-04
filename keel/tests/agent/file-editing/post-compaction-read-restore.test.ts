@@ -193,7 +193,11 @@ describe("File Editing Post-Compaction Read Restore", () => {
     Then the edit uses a fresh post-compaction read snapshot`, async () => {
     // Given
     const workspace = await createWorkspace();
-    await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
+    await writeFile(
+      join(workspace, "note.txt"),
+      `hello old world\n${"old filler line\n".repeat(500)}`,
+      "utf8",
+    );
     let turn = 0;
     const messages: Message[] = [{ role: "user", content: "read note.txt" }];
     const readVisibility = createReadVisibilityState();
@@ -393,13 +397,14 @@ describe("File Editing Post-Compaction Read Restore", () => {
     // Given
     const workspace = await createWorkspace();
     const targetOffset = 2101;
+    const oldLineSuffix = "old filler ".repeat(500);
     const prefix = Array.from(
       { length: targetOffset - 1 },
       (_, index) => `filler ${index}`,
     ).join("\n");
     await writeFile(
       join(workspace, "note.txt"),
-      `${prefix}\ntarget old value\n`,
+      `${prefix}\ntarget old value ${oldLineSuffix}\n`,
       "utf8",
     );
     let turn = 0;
