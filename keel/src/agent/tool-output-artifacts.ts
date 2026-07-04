@@ -117,6 +117,26 @@ export type ToolOutputArtifactNotice =
       readonly omittedChars: number;
     };
 
+type ToolOutputArtifactRecoverableCompactionArtifact = {
+  readonly status: "stored" | "reused";
+  readonly ref: string;
+  readonly toolCallId: string;
+  readonly toolName: ToolOutputArtifactToolName;
+  readonly sourceStatus: ToolOutputArtifactSourceStatus;
+  readonly omittedChars: number;
+};
+
+export type ToolOutputArtifactCompactionArtifact =
+  | ToolOutputArtifactRecoverableCompactionArtifact
+  | {
+      readonly status: "failed";
+      readonly reason: string;
+      readonly toolCallId: string;
+      readonly toolName: ToolOutputArtifactToolName;
+      readonly sourceStatus: ToolOutputArtifactSourceStatus;
+      readonly omittedChars: number;
+    };
+
 export interface ToolOutputArtifactSettlementResult {
   readonly content: string;
   readonly notice: ToolOutputArtifactNotice;

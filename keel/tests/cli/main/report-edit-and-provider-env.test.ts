@@ -40,7 +40,7 @@ describe("CLI Main - Report Edit And Provider Env", () => {
         JSON.parse(await readFile(reportPath, "utf8")),
       );
       expect(report).toMatchObject({
-        schemaVersion: 2,
+        schemaVersion: 3,
         modelsUsed: [{ provider: "fake", model: "fake" }],
         usageByModel: [
           {
@@ -51,6 +51,7 @@ describe("CLI Main - Report Edit And Provider Env", () => {
           },
         ],
         costUsd: 0,
+        contextCompactions: [],
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

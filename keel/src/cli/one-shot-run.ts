@@ -20,6 +20,7 @@ import {
   resolveProvider,
 } from "./provider-config.ts";
 import { assertEndEventHasCost, writeRunReport } from "./report.ts";
+import { createAgentEventReportRecorder } from "./report-events.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { formatCliRuntimeError } from "./runtime-error.ts";
 import {
@@ -119,7 +120,8 @@ export async function runOneShotCli(
         : {}),
     });
 
-    const finalEnd = await printAgentEvents(stream, runtime);
+    const reportRecorder = createAgentEventReportRecorder();
+    const finalEnd = await printAgentEvents(stream, runtime, reportRecorder);
     runtime.writeStdout("\n");
     if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
       runtime.writeStderr(formatCostReport(finalEnd.cost, cliArgs.maxCostUsd));
@@ -138,6 +140,7 @@ export async function runOneShotCli(
         ],
         end: finalEnd,
         durationMs: runtime.now() - startedAt,
+        contextCompactions: reportRecorder.contextCompactions(),
       });
     }
     if (

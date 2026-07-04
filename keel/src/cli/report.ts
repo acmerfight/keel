@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { errorMessage } from "../core/error.ts";
 import type { EndEvent } from "./output.ts";
+import type { RunReportContextCompaction } from "./report-events.ts";
 
 // The report schema is consumed by external tooling (the eval runner and any
 // script comparing runs across keel versions). Bump schemaVersion on any
@@ -10,6 +11,7 @@ interface RunReportInput {
   readonly usageByModel: readonly RunReportModelUsage[];
   readonly end: EndEventWithCost;
   readonly durationMs: number;
+  readonly contextCompactions: readonly RunReportContextCompaction[];
 }
 
 interface RunReportModelUsage {
@@ -21,7 +23,7 @@ interface RunReportModelUsage {
 }
 
 interface RunReport {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly modelsUsed: readonly {
     readonly provider: string;
     readonly model: string;
@@ -32,6 +34,7 @@ interface RunReport {
   readonly usage: Extract<AgentEvent, { readonly type: "end" }>["usage"];
   readonly durationMs: number;
   readonly costUsd: number;
+  readonly contextCompactions: readonly RunReportContextCompaction[];
 }
 
 type EndEventWithCost = EndEvent & { readonly cost: CostReport };
@@ -61,7 +64,7 @@ export function assertEndEventHasCost(
 export function writeRunReport(filePath: string, input: RunReportInput): void {
   const cost = input.end.cost;
   const report: RunReport = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     modelsUsed: input.usageByModel.map((entry) => ({
       provider: entry.provider,
       model: entry.model,
@@ -78,6 +81,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     usage: input.end.usage,
     durationMs: input.durationMs,
     costUsd: cost.spentUsd,
+    contextCompactions: input.contextCompactions,
   };
   try {
     writeFileSync(filePath, `${JSON.stringify(report)}\n`, "utf8");

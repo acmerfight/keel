@@ -20,6 +20,7 @@ export function createRuntime(
     readonly input?: PassThrough;
     readonly inputIsTTY?: boolean;
     readonly stderrIsTTY?: boolean;
+    readonly onStdout?: (text: string) => void;
     readonly onStderr?: (text: string) => void;
     readonly onSigint?: (handler: () => void) => void;
     readonly offSigint?: (handler: () => void) => void;
@@ -52,6 +53,7 @@ export function createRuntime(
       now: options.now ?? (() => 0),
       writeStdout: (text) => {
         stdout += text;
+        options.onStdout?.(text);
       },
       writeStderr: (text) => {
         stderr += text;
