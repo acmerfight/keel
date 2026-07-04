@@ -11,7 +11,26 @@ import {
   createWorkspace,
   freshSignal,
 } from "../../../src/testing/file-editing-fixtures.ts";
-import { createProjectInstructionVisibilityState } from "../../../src/tools/scoped-project-instructions.ts";
+import {
+  createProjectInstructionVisibilityState,
+  type ProjectInstructionVisibilityState,
+} from "../../../src/tools/scoped-project-instructions.ts";
+
+function failFirstProjectInstructionRestore(
+  projectInstructions: ProjectInstructionVisibilityState,
+): ProjectInstructionVisibilityState {
+  let restoreAttempts = 0;
+  return {
+    ...projectInstructions,
+    formatRestoreOutput: (snapshot) => {
+      restoreAttempts += 1;
+      if (restoreAttempts === 1) {
+        throw new Error("restore failed after clearing scoped instructions");
+      }
+      return projectInstructions.formatRestoreOutput(snapshot);
+    },
+  };
+}
 
 describe("File Editing Post-Compaction Scoped Instructions", () => {
   test(`Given a scoped AGENTS.md read is compacted before the next model request,
@@ -34,7 +53,10 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     );
     let turn = 0;
     const messages: Message[] = [
-      { role: "user", content: "read the API server" },
+      {
+        role: "user",
+        content: `read the API server. ${"background context ".repeat(1_500)}`,
+      },
     ];
     const readVisibility = createReadVisibilityState();
     const projectInstructionVisibility =
@@ -225,6 +247,166 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
       expect(events).toContainEqual({
         type: "text",
         text: "Updated the API server.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given scoped instructions restoration fails after clearing visibility,
+    When the next edit runs without rereading,
+    Then the earlier read visibility still allows the edit`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "packages", "api", "src"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(workspace, "packages", "api", "AGENTS.md"),
+      "API rule: preserve the exported route name.\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "packages", "api", "src", "server.ts"),
+      "export const route = 'current';\n",
+      "utf8",
+    );
+    const usage = {
+      inputTokens: 1,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 1,
+      outputTokens: 1,
+    };
+    let turn = 0;
+    const messages: Message[] = [
+      {
+        role: "user",
+        content: `read the API server. ${"background context ".repeat(1_500)}`,
+      },
+    ];
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility = failFirstProjectInstructionRestore(
+      createProjectInstructionVisibilityState(workspace),
+    );
+    let editToolOutput = "";
+    const provider: LLMProvider = {
+      id: "scoped-restore-failure-rolls-back",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Earlier API server read." };
+          yield { type: "stop", reason: "stop", usage };
+          return;
+        }
+
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "read_api_server_for_rollback",
+            tool: "read",
+            path: "packages/api/src/server.ts",
+          };
+          yield { type: "stop", reason: "stop", usage };
+          return;
+        }
+
+        if (turn === 1) {
+          turn++;
+          yield { type: "text", text: "Read the API server." };
+          yield { type: "stop", reason: "stop", usage };
+          return;
+        }
+
+        if (turn === 2) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "edit_api_server_after_restore_failure",
+            tool: "edit",
+            path: "packages/api/src/server.ts",
+            edits: [{ oldText: "'current'", newText: "'fresh'" }],
+          };
+          yield { type: "stop", reason: "stop", usage };
+          return;
+        }
+
+        editToolOutput =
+          options.messages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.toolCallId === "edit_api_server_after_restore_failure",
+          )?.content ?? "";
+        yield { type: "text", text: "Updated after restore failure." };
+        yield { type: "stop", reason: "stop", usage };
+      },
+    };
+
+    try {
+      await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          readVisibility,
+          projectInstructionVisibility,
+        }),
+      );
+      messages.push({ role: "user", content: "trigger compaction" });
+
+      // When
+      await expect(
+        collect(
+          runAgentTurn({
+            workspace,
+            provider,
+            messages,
+            systemPrompt: "You are a helpful assistant.",
+            signal: freshSignal(),
+            allowBash: false,
+            stopPolicy: defaultStopPolicy(),
+            readVisibility,
+            projectInstructionVisibility,
+            contextCompaction: {
+              contextWindowTokens: 1,
+              reserveTokens: 0,
+              keepRecentTokens: 1,
+            },
+          }),
+        ),
+      ).rejects.toThrow("restore failed after clearing scoped instructions");
+      messages.push({ role: "user", content: "freshen the API server" });
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          readVisibility,
+          projectInstructionVisibility,
+        }),
+      );
+
+      // Then
+      expect(
+        await readFile(
+          join(workspace, "packages", "api", "src", "server.ts"),
+          "utf8",
+        ),
+      ).toBe("export const route = 'fresh';\n");
+      expect(editToolOutput).toContain("Edited packages/api/src/server.ts");
+      expect(editToolOutput).not.toContain(
+        "project instructions have not been reviewed",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Updated after restore failure.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

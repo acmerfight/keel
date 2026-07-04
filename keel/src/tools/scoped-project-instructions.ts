@@ -57,6 +57,10 @@ export interface ProjectInstructionVisibilityState {
   ) => ScopedProjectInstructionsOutput | null;
   readonly assertMutationAllowed: (targetPaths: readonly string[]) => void;
   readonly visibleInstructionsMostRecentFirst: () => readonly VisibleProjectInstructionSnapshot[];
+  readonly snapshot: () => readonly VisibleProjectInstructionSnapshot[];
+  readonly restoreSnapshot: (
+    snapshot: readonly VisibleProjectInstructionSnapshot[],
+  ) => void;
   readonly markInstructionPathsVisible: (
     instructionPaths: readonly string[],
   ) => void;
@@ -395,6 +399,13 @@ export function createProjectInstructionVisibilityState(
     },
     visibleInstructionsMostRecentFirst: () =>
       [...visibleInstructions.values()].reverse(),
+    snapshot: () => [...visibleInstructions.values()],
+    restoreSnapshot: (snapshot) => {
+      visibleInstructions.clear();
+      for (const instruction of snapshot) {
+        visibleInstructions.set(instruction.instructionPath, instruction);
+      }
+    },
     markInstructionPathsVisible: (instructionPaths) => {
       for (const instructionPath of instructionPaths) {
         const snapshot = snapshotForInstructionPath(instructionPath);
