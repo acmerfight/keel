@@ -11,7 +11,7 @@ import {
 } from "../../src/testing/eval-fixtures.ts";
 
 const runReportSchema = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   modelsUsed: z.array(
     z.object({
       provider: z.string(),
@@ -42,6 +42,7 @@ const runReportSchema = z.object({
   }),
   durationMs: z.number().nonnegative(),
   costUsd: z.number(),
+  contextCompactions: z.array(z.unknown()),
 });
 
 const resultLineSchema = z.object({

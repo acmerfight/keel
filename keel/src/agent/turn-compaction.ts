@@ -168,6 +168,8 @@ async function* attemptPreflightCurrentOutputCompaction(
   yield {
     type: "context_compacted",
     reason: "preflight",
+    historyCompacted: compaction.historyCompacted,
+    artifacts: compaction.artifactReports ?? [],
     ...compaction.stats,
   };
   for (const notice of compaction.artifactNotices ?? []) {
@@ -228,6 +230,8 @@ export async function* streamTurnWithOverflowRecovery(
         yield {
           type: "context_compacted",
           reason: "proactive",
+          historyCompacted: compaction.historyCompacted,
+          artifacts: compaction.artifactReports ?? [],
           ...compaction.stats,
         };
         for (const notice of compaction.artifactNotices ?? []) {
@@ -307,6 +311,8 @@ export async function* streamTurnWithOverflowRecovery(
             yield {
               type: "context_compacted",
               reason: "overflow_recovery",
+              historyCompacted: compaction.historyCompacted,
+              artifacts: compaction.artifactReports ?? [],
               ...compaction.stats,
             };
             for (const notice of compaction.artifactNotices ?? []) {

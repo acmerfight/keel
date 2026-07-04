@@ -1,6 +1,7 @@
 import { KeelError } from "../../core/error.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
 import type {
+  ToolOutputArtifactCompactionArtifact,
   ToolOutputArtifactNotice,
   ToolOutputArtifactStore,
   ToolOutputArtifactsOptions,
@@ -51,6 +52,7 @@ export interface BuildCompactedMessagesResult {
   readonly messages: readonly Message[];
   readonly staleToolOutputStats: StaleToolOutputCompactionStats;
   readonly artifactNotices?: readonly ToolOutputArtifactNotice[];
+  readonly artifactReports?: readonly ToolOutputArtifactCompactionArtifact[];
 }
 
 function toolContextForSummaryInput(
@@ -324,6 +326,10 @@ export async function buildCompactedMessages(
     ...(recent.artifactNotices !== undefined &&
     recent.artifactNotices.length > 0
       ? { artifactNotices: recent.artifactNotices }
+      : {}),
+    ...(recent.artifactReports !== undefined &&
+    recent.artifactReports.length > 0
+      ? { artifactReports: recent.artifactReports }
       : {}),
   };
 }

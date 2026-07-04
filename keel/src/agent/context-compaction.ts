@@ -41,6 +41,7 @@ import {
   shouldCompactBeforeRequest as shouldCompactBeforeRequestFromAccounting,
 } from "./context-compaction/token-accounting.ts";
 import type {
+  ToolOutputArtifactCompactionArtifact,
   ToolOutputArtifactNotice,
   ToolOutputArtifactsOptions,
 } from "./tool-output-artifacts.ts";
@@ -89,9 +90,11 @@ export type CompactMessagesResult =
     }
   | {
       readonly compacted: true;
+      readonly historyCompacted: boolean;
       readonly usage: Usage;
       readonly stats: ContextCompactionStats;
       readonly artifactNotices?: readonly ToolOutputArtifactNotice[];
+      readonly artifactReports?: readonly ToolOutputArtifactCompactionArtifact[];
     };
 
 function artifactNoticesResult(
@@ -99,6 +102,18 @@ function artifactNoticesResult(
 ): { readonly artifactNotices?: readonly ToolOutputArtifactNotice[] } {
   const artifactNotices = sources.flatMap((source) => source ?? []);
   return artifactNotices.length > 0 ? { artifactNotices } : {};
+}
+
+function artifactReportsResult(
+  ...sources: readonly (
+    | readonly ToolOutputArtifactCompactionArtifact[]
+    | undefined
+  )[]
+): {
+  readonly artifactReports?: readonly ToolOutputArtifactCompactionArtifact[];
+} {
+  const artifactReports = sources.flatMap((source) => source ?? []);
+  return artifactReports.length > 0 ? { artifactReports } : {};
 }
 
 function currentToolOutputCompactionReason(
@@ -251,6 +266,7 @@ async function compactCurrentToolOutputsForRequest(options: {
   );
   return {
     compacted: true,
+    historyCompacted: false,
     usage: ZERO_USAGE,
     stats: {
       beforeMessageCount: options.beforeMessageCount,
@@ -260,6 +276,7 @@ async function compactCurrentToolOutputsForRequest(options: {
       ...currentToolOutputCompaction.stats,
     },
     ...artifactNoticesResult(currentToolOutputCompaction.artifactNotices),
+    ...artifactReportsResult(currentToolOutputCompaction.artifactReports),
   };
 }
 
@@ -466,6 +483,7 @@ export async function compactMessages(
   );
   return {
     compacted: true,
+    historyCompacted: true,
     usage: summaryTurn.usage,
     stats: {
       beforeMessageCount,
@@ -480,6 +498,10 @@ export async function compactMessages(
     ...artifactNoticesResult(
       compacted.artifactNotices,
       currentToolOutputCompaction.artifactNotices,
+    ),
+    ...artifactReportsResult(
+      compacted.artifactReports,
+      currentToolOutputCompaction.artifactReports,
     ),
   };
 }

@@ -1,6 +1,7 @@
 import type { ToolCall, Usage } from "../llm/types.ts";
 import type { ContextCompactionStats } from "./context-compaction.ts";
 import type {
+  ToolOutputArtifactCompactionArtifact,
   ToolOutputArtifactSourceStatus,
   ToolOutputArtifactToolName,
 } from "./tool-output-artifacts.ts";
@@ -21,6 +22,8 @@ export type AgentEvent =
   | ({
       readonly type: "context_compacted";
       readonly reason: ContextCompactionReason;
+      readonly historyCompacted: boolean;
+      readonly artifacts: readonly ToolOutputArtifactCompactionArtifact[];
     } & ContextCompactionStats)
   | {
       readonly type: "provider_retry";

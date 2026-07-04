@@ -2,6 +2,7 @@ import type { ContextCompactionStats } from "../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import type { ToolOutputArtifactNotice } from "../agent/tool-output-artifacts.ts";
 import { toolCallLabel } from "../tools/registry.ts";
+import type { AgentEventReportRecorder } from "./report-events.ts";
 
 interface CliOutputRuntime {
   readonly writeStdout: (text: string) => void;
@@ -197,9 +198,11 @@ export function formatCostReport(cost: CostReport, maxUsd: number): string {
 export async function printAgentEvents(
   stream: AsyncIterable<AgentEvent>,
   runtime: CliOutputRuntime,
+  reportRecorder?: AgentEventReportRecorder,
 ): Promise<EndEvent | undefined> {
   let finalEnd: EndEvent | undefined;
   for await (const event of stream) {
+    reportRecorder?.record(event);
     if (event.type === "text") {
       runtime.writeStdout(sanitizeAssistantText(event.text));
     } else if (event.type === "context_compacted") {
@@ -237,10 +240,12 @@ export async function printAgentEvents(
 export async function printStableInteractiveAgentEvents(
   stream: AsyncIterable<AgentEvent>,
   runtime: StableInteractiveOutputRuntime,
+  reportRecorder?: AgentEventReportRecorder,
 ): Promise<EndEvent | undefined> {
   let finalEnd: EndEvent | undefined;
   let assistantHeaderWritten = false;
   for await (const event of stream) {
+    reportRecorder?.record(event);
     switch (event.type) {
       case "text":
         if (!assistantHeaderWritten) {
