@@ -110,6 +110,474 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a standard unified diff updates read files,
+    When apply_patch validates and applies the diff,
+    Then it writes every file through the normal patch result`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-");
+    const workspacePath = await realpath(workspace);
+    await writeFile(
+      join(workspace, "src.ts"),
+      [
+        "export function first() {",
+        "  return 1;",
+        "}",
+        "",
+        "export function second() {",
+        "  return 2;",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "util.ts"),
+      'export const name = "old";\n',
+      "utf8",
+    );
+    const patch = [
+      "diff --git a/src.ts b/src.ts",
+      "--- a/src.ts",
+      "+++ b/src.ts",
+      "@@ -1,3 +1,3 @@",
+      " export function first() {",
+      "-  return 1;",
+      "+  return 10;",
+      " }",
+      "@@ -5,3 +5,3 @@",
+      " export function second() {",
+      "-  return 2;",
+      "+  return 20;",
+      " }",
+      "diff --git a/util.ts b/util.ts",
+      "index 1111111..2222222 100644",
+      "--- a/util.ts",
+      "+++ b/util.ts",
+      "@@ -1 +1 @@",
+      '-export const name = "old";',
+      '+export const name = "new";',
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "src.ts") ||
+            targetPath === join(workspacePath, "util.ts"),
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nM src.ts\nM util.ts");
+      expect(result.targetPaths).toEqual([
+        join(workspacePath, "src.ts"),
+        join(workspacePath, "util.ts"),
+      ]);
+      expect(await readFile(join(workspace, "src.ts"), "utf8")).toBe(
+        [
+          "export function first() {",
+          "  return 10;",
+          "}",
+          "",
+          "export function second() {",
+          "  return 20;",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      expect(await readFile(join(workspace, "util.ts"), "utf8")).toBe(
+        'export const name = "new";\n',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff carries no-newline markers,
+    When apply_patch validates and applies the diff,
+    Then it updates the file without adding a trailing newline`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "plain.txt"), "old", "utf8");
+    const patch = [
+      "diff --git a/plain.txt b/plain.txt",
+      "--- a/plain.txt\t2026-07-04 00:00:00",
+      "+++ b/plain.txt\t2026-07-04 00:00:00",
+      "@@ -1 +1 @@",
+      "-old",
+      "\\ No newline at end of file",
+      "+new",
+      "\\ No newline at end of file",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "plain.txt"),
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nM plain.txt");
+      expect(await readFile(join(workspace, "plain.txt"), "utf8")).toBe("new");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff path contains the git path separator text,
+    When apply_patch validates and applies the diff,
+    Then it treats the matching file headers as the update target`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await mkdir(join(workspace, "a b"));
+    await writeFile(join(workspace, "a b", "file.txt"), "old\n", "utf8");
+    const patch = [
+      "diff --git a/a b/file.txt b/a b/file.txt",
+      "index 3367afd..3e75765 100644",
+      "--- a/a b/file.txt\t",
+      "+++ b/a b/file.txt\t",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "a b", "file.txt"),
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nM a b/file.txt");
+      expect(await readFile(join(workspace, "a b", "file.txt"), "utf8")).toBe(
+        "new\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff adds the final newline to a file,
+    When apply_patch validates and applies the diff,
+    Then it writes the new trailing newline`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "plain.txt"), "old", "utf8");
+    const patch = [
+      "diff --git a/plain.txt b/plain.txt",
+      "--- a/plain.txt",
+      "+++ b/plain.txt",
+      "@@ -1 +1 @@",
+      "-old",
+      "\\ No newline at end of file",
+      "+new",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "plain.txt"),
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nM plain.txt");
+      expect(await readFile(join(workspace, "plain.txt"), "utf8")).toBe(
+        "new\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff removes the final newline from a file,
+    When apply_patch validates and applies the diff,
+    Then it writes the file without a trailing newline`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "plain.txt"), "old\n", "utf8");
+    const patch = [
+      "diff --git a/plain.txt b/plain.txt",
+      "--- a/plain.txt",
+      "+++ b/plain.txt",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "\\ No newline at end of file",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "plain.txt"),
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nM plain.txt");
+      expect(await readFile(join(workspace, "plain.txt"), "utf8")).toBe("new");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff targets an unread file,
+    When apply_patch validates the diff,
+    Then it rejects the update with the existing read-before-edit failure`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(
+      join(workspace, "src.ts"),
+      "export const value = 1;\n",
+      "utf8",
+    );
+    const patch = [
+      "diff --git a/src.ts b/src.ts",
+      "--- a/src.ts",
+      "+++ b/src.ts",
+      "@@ -1 +1 @@",
+      "-export const value = 1;",
+      "+export const value = 2;",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: () => false,
+            },
+          }),
+        "tool_file_not_read",
+        "file has not been read: src.ts",
+      );
+      expect(await readFile(join(workspace, "src.ts"), "utf8")).toBe(
+        "export const value = 1;\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given unsupported or malformed standard unified diff syntax,
+    When apply_patch parses the diff,
+    Then it reports a recoverable patch error for the invalid diff`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const cases = [
+      {
+        patch: "diff --git src.ts b/src.ts",
+        message: "file header must be diff --git a/<path> b/<path>",
+      },
+      {
+        patch: "diff --git a/src.ts src.ts",
+        message: "file header must be diff --git a/<path> b/<path>",
+      },
+      {
+        patch: "diff --git a/ b/src.ts",
+        message: "file header path is empty",
+      },
+      {
+        patch: "diff --git a/src.ts b/",
+        message: "file header path is empty",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/renamed.ts",
+          "--- a/src.ts",
+          "+++ b/renamed.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "renames and copies are not supported",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "Binary files a/src.ts and b/src.ts differ",
+        ].join("\n"),
+        message: "Binary files a/src.ts and b/src.ts differ",
+      },
+      {
+        patch: [
+          "diff --git a/new.txt b/new.txt",
+          "--- /dev/null",
+          "+++ b/new.txt",
+          "@@ -0,0 +1 @@",
+          "+new",
+        ].join("\n"),
+        message: "file additions and deletions are not supported",
+      },
+      {
+        patch: ["diff --git a/src.ts b/src.ts", "index 111..222"].join("\n"),
+        message: "missing --- file header",
+      },
+      {
+        patch: ["diff --git a/src.ts b/src.ts", "--- a/src.ts"].join("\n"),
+        message: "missing +++ file header",
+      },
+      {
+        patch: [
+          "diff --git a/one.ts b/one.ts",
+          "diff --git a/two.ts b/two.ts",
+          "--- a/two.ts",
+          "+++ b/two.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "missing ---/+++ file headers",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "--- a/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "expected +++ <path> file header",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "--- src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "expected --- a/<path>",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "--- a/",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "file header path is empty",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "--- a/src.ts",
+          "+++ b/other.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "renames and copies are not supported",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/other.ts",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "diff --git paths do not match ---/+++ file headers",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ bad",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "invalid hunk header",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "\\ No newline at end of file",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "no-newline marker",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "old",
+        ].join("\n"),
+        message: "has an invalid line",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -0,0 +1 @@",
+          "+new",
+        ].join("\n"),
+        message: "has no effective old lines",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+        ].join("\n"),
+        message: "has no hunks",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "not a hunk",
+        ].join("\n"),
+        message: "expected @@ hunk header",
+      },
+    ] satisfies readonly {
+      readonly patch: string;
+      readonly message: string;
+    }[];
+
+    try {
+      for (const invalid of cases) {
+        // When / Then
+        expectApplyPatchError(
+          () => executeApplyPatch(workspace, invalid.patch),
+          "tool_invalid_patch",
+          invalid.message,
+        );
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a patch hunk line only appears inside a longer line,
     When apply_patch validates the update hunk,
     Then it rejects the patch without mutating the file`, async () => {

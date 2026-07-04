@@ -8,6 +8,43 @@ const DELETE_FILE_MARKER = "*** Delete File: ";
 const UPDATE_FILE_MARKER = "*** Update File: ";
 const MOVE_TO_MARKER = "*** Move to: ";
 const HUNK_MARKER = "@@";
+const STANDARD_DIFF_MARKER = "diff --git ";
+const STANDARD_OLD_FILE_MARKER = "--- ";
+const STANDARD_NEW_FILE_MARKER = "+++ ";
+const STANDARD_OLD_PATH_PREFIX = "a/";
+const STANDARD_NEW_PATH_PREFIX = "b/";
+const NO_NEWLINE_MARKER = "\\ No newline at end of file";
+const UNSUPPORTED_STANDARD_DIFF_METADATA_PREFIXES = [
+  "new file mode ",
+  "deleted file mode ",
+  "old mode ",
+  "new mode ",
+  "similarity index ",
+  "dissimilarity index ",
+  "rename from ",
+  "rename to ",
+  "copy from ",
+  "copy to ",
+  "Binary files ",
+] as const;
+
+interface StandardFileHeaders {
+  readonly oldPath: string;
+  readonly newPath: string;
+  readonly next: number;
+}
+
+interface ParsedStandardFileDiff {
+  readonly operation: ParsedPatchOperation;
+  readonly next: number;
+}
+
+interface ParsedStandardHunk {
+  readonly hunk: ParsedPatchHunk;
+  readonly next: number;
+}
+
+type StandardHunkLineSide = "old" | "new" | "both";
 
 function isFileOperationHeader(line: string): boolean {
   return (
@@ -36,6 +73,240 @@ function parserLine(lines: readonly string[], index: number): string {
     throw new Error("apply_patch parser line invariant violated");
   }
   return line;
+}
+
+function isStandardUnifiedDiff(lines: readonly string[]): boolean {
+  return lines[0]?.startsWith(STANDARD_DIFF_MARKER) === true;
+}
+
+function unsupportedStandardDiff(message: string): never {
+  throw patchError(
+    "tool_invalid_patch",
+    `apply_patch failed: unsupported standard unified diff: ${message}`,
+    "Use a standard unified diff that updates an existing file without renames, file mode changes, binary patches, additions, or deletions.",
+  );
+}
+
+function invalidStandardDiff(message: string): never {
+  throw patchError(
+    "tool_invalid_patch",
+    `apply_patch failed: invalid standard unified diff: ${message}`,
+    "Use diff --git a/<path> b/<path>, --- a/<path>, +++ b/<path>, and @@ hunks with lines prefixed by space, -, or +.",
+  );
+}
+
+function metadataFreePath(text: string): string {
+  const tabIndex = text.indexOf("\t");
+  return tabIndex === -1 ? text : text.slice(0, tabIndex);
+}
+
+function standardDiffGitPathText(line: string): string {
+  const paths = line.slice(STANDARD_DIFF_MARKER.length);
+  if (!paths.startsWith(STANDARD_OLD_PATH_PREFIX)) {
+    invalidStandardDiff("file header must be diff --git a/<path> b/<path>");
+  }
+  if (!paths.includes(` ${STANDARD_NEW_PATH_PREFIX}`)) {
+    invalidStandardDiff("file header must be diff --git a/<path> b/<path>");
+  }
+  if (
+    paths.startsWith(`${STANDARD_OLD_PATH_PREFIX} `) ||
+    paths.endsWith(` ${STANDARD_NEW_PATH_PREFIX}`)
+  ) {
+    invalidStandardDiff("file header path is empty");
+  }
+  return paths;
+}
+
+function assertStandardDiffGitMatchesFileHeaders(
+  line: string,
+  headers: StandardFileHeaders,
+): void {
+  const paths = standardDiffGitPathText(line);
+  const expected = `${STANDARD_OLD_PATH_PREFIX}${headers.oldPath} ${STANDARD_NEW_PATH_PREFIX}${headers.newPath}`;
+  if (paths !== expected) {
+    invalidStandardDiff("diff --git paths do not match ---/+++ file headers");
+  }
+}
+
+function parseStandardFileHeaderPath(
+  line: string,
+  marker: string,
+  pathPrefix: string,
+): string {
+  if (!line.startsWith(marker)) {
+    invalidStandardDiff(`expected ${marker}<path> file header`);
+  }
+  const path = metadataFreePath(line.slice(marker.length));
+  if (path === "/dev/null") {
+    unsupportedStandardDiff("file additions and deletions are not supported");
+  }
+  if (!path.startsWith(pathPrefix)) {
+    invalidStandardDiff(`expected ${marker}${pathPrefix}<path>`);
+  }
+  const workspacePath = path.slice(pathPrefix.length);
+  if (workspacePath === "") {
+    invalidStandardDiff("file header path is empty");
+  }
+  return workspacePath;
+}
+
+function isUnsupportedStandardDiffMetadata(line: string): boolean {
+  return (
+    UNSUPPORTED_STANDARD_DIFF_METADATA_PREFIXES.some((prefix) =>
+      line.startsWith(prefix),
+    ) || line === "GIT binary patch"
+  );
+}
+
+function parseStandardFileHeaders(
+  lines: readonly string[],
+  start: number,
+  diffPathHint: string,
+): StandardFileHeaders {
+  let index = start;
+  while (index < lines.length) {
+    const line = parserLine(lines, index);
+    if (line.startsWith(STANDARD_OLD_FILE_MARKER)) break;
+    if (line.startsWith(STANDARD_DIFF_MARKER)) {
+      invalidStandardDiff(`missing ---/+++ file headers for ${diffPathHint}`);
+    }
+    if (isUnsupportedStandardDiffMetadata(line)) {
+      unsupportedStandardDiff(line);
+    }
+    index++;
+  }
+
+  if (index >= lines.length) {
+    invalidStandardDiff(`missing --- file header for ${diffPathHint}`);
+  }
+  const oldPath = parseStandardFileHeaderPath(
+    parserLine(lines, index),
+    STANDARD_OLD_FILE_MARKER,
+    STANDARD_OLD_PATH_PREFIX,
+  );
+  index++;
+  if (index >= lines.length) {
+    invalidStandardDiff(`missing +++ file header for ${oldPath}`);
+  }
+  const newPath = parseStandardFileHeaderPath(
+    parserLine(lines, index),
+    STANDARD_NEW_FILE_MARKER,
+    STANDARD_NEW_PATH_PREFIX,
+  );
+  return { oldPath, newPath, next: index + 1 };
+}
+
+function parseStandardHunk(
+  path: string,
+  lines: readonly string[],
+  start: number,
+): ParsedStandardHunk {
+  const header = parserLine(lines, start);
+  if (!/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/u.test(header)) {
+    invalidStandardDiff(`invalid hunk header for ${path}`);
+  }
+
+  const oldLines: string[] = [];
+  const newLines: string[] = [];
+  let lastLineSide: StandardHunkLineSide | null = null;
+  let sawNoNewlineMarker = false;
+  let oldHasNoNewlineMarker = false;
+  let newHasNoNewlineMarker = false;
+  let index = start + 1;
+  while (index < lines.length) {
+    const line = parserLine(lines, index);
+    if (line.startsWith(STANDARD_DIFF_MARKER) || line.startsWith(HUNK_MARKER)) {
+      break;
+    }
+    if (line === NO_NEWLINE_MARKER) {
+      if (lastLineSide === null) {
+        invalidStandardDiff(`no-newline marker for ${path} has no file line`);
+      }
+      sawNoNewlineMarker = true;
+      if (lastLineSide === "old" || lastLineSide === "both") {
+        oldHasNoNewlineMarker = true;
+      }
+      if (lastLineSide === "new" || lastLineSide === "both") {
+        newHasNoNewlineMarker = true;
+      }
+      lastLineSide = null;
+      index++;
+      continue;
+    }
+    if (line.startsWith(" ")) {
+      oldLines.push(line.slice(1));
+      newLines.push(line.slice(1));
+      lastLineSide = "both";
+    } else if (line.startsWith("-")) {
+      oldLines.push(line.slice(1));
+      lastLineSide = "old";
+    } else if (line.startsWith("+")) {
+      newLines.push(line.slice(1));
+      lastLineSide = "new";
+    } else {
+      invalidStandardDiff(`hunk for ${path} has an invalid line`);
+    }
+    index++;
+  }
+
+  if (oldLines.length === 0 || oldLines.every((line) => line === "")) {
+    invalidStandardDiff(`hunk for ${path} has no effective old lines`);
+  }
+  if (sawNoNewlineMarker) {
+    if (!oldHasNoNewlineMarker && oldLines.length > 0) oldLines.push("");
+    if (!newHasNoNewlineMarker && newLines.length > 0) newLines.push("");
+  }
+  return { hunk: { oldLines, newLines }, next: index };
+}
+
+function parseStandardFileDiff(
+  lines: readonly string[],
+  start: number,
+): ParsedStandardFileDiff {
+  const diffHeader = parserLine(lines, start);
+  standardDiffGitPathText(diffHeader);
+  const headers = parseStandardFileHeaders(
+    lines,
+    start + 1,
+    diffHeader.slice(STANDARD_DIFF_MARKER.length),
+  );
+  if (headers.oldPath !== headers.newPath) {
+    unsupportedStandardDiff("renames and copies are not supported");
+  }
+  assertStandardDiffGitMatchesFileHeaders(diffHeader, headers);
+
+  let index = headers.next;
+  const hunks: ParsedPatchHunk[] = [];
+  while (index < lines.length) {
+    const line = parserLine(lines, index);
+    if (line.startsWith(STANDARD_DIFF_MARKER)) break;
+    if (!line.startsWith(HUNK_MARKER)) {
+      invalidStandardDiff(`expected @@ hunk header for ${headers.oldPath}`);
+    }
+    const parsed = parseStandardHunk(headers.oldPath, lines, index);
+    hunks.push(parsed.hunk);
+    index = parsed.next;
+  }
+  if (hunks.length === 0) {
+    invalidStandardDiff(`file ${headers.oldPath} has no hunks`);
+  }
+  return {
+    operation: { kind: "update", path: headers.oldPath, movePath: null, hunks },
+    next: index,
+  };
+}
+
+function parseStandardUnifiedDiff(
+  lines: readonly string[],
+): readonly ParsedPatchOperation[] {
+  const operations: ParsedPatchOperation[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const parsed = parseStandardFileDiff(lines, index);
+    operations.push(parsed.operation);
+    index = parsed.next;
+  }
+  return operations;
 }
 
 function parseAddOperation(
@@ -176,6 +447,9 @@ export function parsePatch(patch: string): readonly ParsedPatchOperation[] {
     .replace(/\r/gu, "\n")
     .trim()
     .split("\n");
+  if (isStandardUnifiedDiff(lines)) {
+    return parseStandardUnifiedDiff(lines);
+  }
   if (lines[0] !== BEGIN_PATCH_MARKER || lines.at(-1) !== END_PATCH_MARKER) {
     throw patchError(
       "tool_invalid_patch",

@@ -586,6 +586,60 @@ describe("File Editing Multi Edit And Apply Patch", () => {
     }
   });
 
+  test(`Given the assistant proposes a standard unified diff after reading the target,
+    When the agent handles the apply_patch tool call,
+    Then the diff update is visible before the assistant replies`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(
+      join(workspace, "src.ts"),
+      ["export function run() {", "  return 1;", "}", ""].join("\n"),
+      "utf8",
+    );
+    const provider = createFakeProvider([
+      fakeToolResponse("read", { path: "src.ts" }),
+      fakeToolResponse("apply_patch", {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1,3 +1,3 @@",
+          " export function run() {",
+          "-  return 1;",
+          "+  return 2;",
+          " }",
+        ].join("\n"),
+      }),
+      fakeResponse("Applied the standard diff."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "apply this standard diff",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "src.ts"), "utf8")).toBe(
+        ["export function run() {", "  return 2;", "}", ""].join("\n"),
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Applied the standard diff.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a nested AGENTS.md applies to an apply_patch addition,
     When the assistant patches before seeing those instructions,
     Then the first patch is blocked and the retry can create the file`, async () => {
