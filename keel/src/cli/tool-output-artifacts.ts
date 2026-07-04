@@ -23,6 +23,7 @@ const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9._-]+$/u;
 const TOOL_OUTPUT_REF_PATTERN =
   /^tool-output:([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/u;
 const TOOL_OUTPUT_ARTIFACT_RETENTION_DAYS = 30;
+export const TOOL_OUTPUT_ARTIFACT_RETENTION_DESCRIPTION = `raw, unredacted tool output under KEEL_HOME artifacts for ${TOOL_OUTPUT_ARTIFACT_RETENTION_DAYS} days by default or until manual removal; inspect refs with keel artifacts show <ref>`;
 const TOOL_OUTPUT_ARTIFACT_RETENTION_MS =
   TOOL_OUTPUT_ARTIFACT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
