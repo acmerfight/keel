@@ -37,8 +37,18 @@ export interface CompactionConfig {
   readonly contextCompaction: ContextCompactionOptions | undefined;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly costTracking: CostTrackingOptions | undefined;
-  readonly onContextCompacted?: (messages: Message[]) => Promise<void>;
+  readonly onContextCompacted: (
+    messages: Message[],
+  ) => Promise<ContextCompactionFinalization>;
 }
+
+interface ContextCompactionFinalization {
+  readonly rollback: () => void;
+}
+
+const NO_CONTEXT_COMPACTION_FINALIZATION: ContextCompactionFinalization = {
+  rollback: () => {},
+};
 
 export type CompactionState = {
   contextAccounting: ContextCompactionAccountingSnapshot | undefined;
@@ -120,7 +130,12 @@ async function attemptContextCompaction(
   });
   let finalResult = result;
   if (result.compacted) {
-    const preRestoreStats = contextCompactionStatsForCurrentMessages({
+    let finalization = NO_CONTEXT_COMPACTION_FINALIZATION;
+    if (options?.restoreAfterCompaction !== false) {
+      finalization = await config.onContextCompacted(targetMessages);
+    }
+
+    const finalStats = contextCompactionStatsForCurrentMessages({
       stats: result.stats,
       systemPrompt: config.systemPrompt,
       messages: targetMessages,
@@ -129,9 +144,9 @@ async function attemptContextCompaction(
     const rejectsGrowingHistoryCompaction =
       options?.requireShrinkingHistoryCompaction === true &&
       result.historyCompacted &&
-      preRestoreStats.afterEstimatedTokens >=
-        preRestoreStats.beforeEstimatedTokens;
+      finalStats.afterEstimatedTokens >= finalStats.beforeEstimatedTokens;
     if (rejectsGrowingHistoryCompaction) {
+      finalization.rollback();
       finalResult = {
         compacted: false,
         usage: result.usage,
@@ -139,24 +154,9 @@ async function attemptContextCompaction(
     } else {
       state.contextAccounting = undefined;
       streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
-      if (options?.restoreAfterCompaction !== false) {
-        try {
-          await config.onContextCompacted?.(targetMessages);
-        } finally {
-          streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
-        }
-      }
       finalResult = {
         ...result,
-        stats:
-          options?.restoreAfterCompaction === false
-            ? preRestoreStats
-            : contextCompactionStatsForCurrentMessages({
-                stats: result.stats,
-                systemPrompt: config.systemPrompt,
-                messages: targetMessages,
-                requestMetadata,
-              }),
+        stats: finalStats,
       };
     }
   }

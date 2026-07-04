@@ -683,6 +683,160 @@ describe("CLI Main - Run Report Compaction", () => {
     }
   });
 
+  test(`Given restored reads make a proactive history checkpoint larger after finalization,
+    When the next provider request is sent,
+    Then the final larger checkpoint is rejected without recording compaction`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-session-post-restore-growth-report-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const reportPath = join(workspace, "post-restore-growth.json");
+    await writeFile(
+      join(workspace, "restore-growth.txt"),
+      [
+        "RESTORE_GROWTH_START",
+        ...Array.from(
+          { length: 1_200 },
+          (_, index) => `restore growth line ${index}: ${"payload ".repeat(8)}`,
+        ),
+        "RESTORE_GROWTH_END",
+      ].join("\n"),
+      "utf8",
+    );
+    const input = new PassThrough();
+    input.write("read restore-growth.txt and confirm\n");
+    let continuationQueued = false;
+    const queueContinuation = () => {
+      if (continuationQueued) {
+        return;
+      }
+      continuationQueued = true;
+      input.end("Now summarize\n");
+    };
+    let summaryRequests = 0;
+    const mainBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const requestBody = JSON.parse(body);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (isSummaryRequest(requestBody)) {
+          summaryRequests++;
+          res.end(sseTextReplyWithUsage("RESTORE_SMALL_CHECKPOINT"));
+          return;
+        }
+
+        mainBodies.push(requestBody);
+        if (mainBodies.length === 1) {
+          res.write(
+            sseToolCall("read_restore_growth", "read", {
+              path: "restore-growth.txt",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        if (mainBodies.length === 2) {
+          const currentOutput = toolMessageContent(
+            mainBodies[1],
+            "read_restore_growth",
+          );
+          const preflightCompacted = currentOutput.includes(
+            "[current tool output compacted before provider request:",
+          );
+          res.end(
+            sseTextReplyWithUsage(
+              preflightCompacted
+                ? "restore growth confirmed"
+                : "restore growth missing",
+            ),
+          );
+          return;
+        }
+
+        const requestText = JSON.stringify(mainBodies[2]);
+        const keptOriginalHistory =
+          requestText.includes("restore growth confirmed") &&
+          requestText.includes(
+            "[current tool output compacted before provider request:",
+          ) &&
+          !requestText.includes("RESTORE_SMALL_CHECKPOINT") &&
+          !requestText.includes("RESTORE_GROWTH_END");
+        res.end(
+          sseTextReplyWithUsage(
+            keptOriginalHistory
+              ? "post-restore growth rejected"
+              : "larger restored checkpoint sent",
+          ),
+        );
+      });
+    });
+    await listen(server);
+    const run = createRuntime(["--report", reportPath], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_CONTEXT_WINDOW_TOKENS: "4000",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+      onStdout: (text) => {
+        if (text.includes("restore growth confirmed")) {
+          queueContinuation();
+        }
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(summaryRequests).toBe(1);
+      expect(mainBodies).toHaveLength(3);
+      expect(run.stdout().slice(-128)).toContain(
+        "post-restore growth rejected\n",
+      );
+      expect(run.stderr()).toContain("Context compacted: preflight");
+      expect(run.stderr()).not.toContain("Context compacted: proactive");
+      const report = await readReport(reportPath);
+      expect(
+        report.contextCompactions.some(
+          (compaction) => compaction.reason === "preflight",
+        ),
+      ).toBe(true);
+      expect(
+        report.contextCompactions.some(
+          (compaction) => compaction.reason === "proactive",
+        ),
+      ).toBe(false);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an interactive report session restores a compacted read after history compaction,
     When the report message count is unchanged,
     Then the report still records proactive history scope`, async () => {
@@ -706,7 +860,9 @@ describe("CLI Main - Run Report Compaction", () => {
       "utf8",
     );
     const input = new PassThrough();
-    input.write("read medium.txt and confirm\n");
+    input.write(
+      `read medium.txt and confirm. ${"background context ".repeat(1_500)}\n`,
+    );
     let continuationQueued = false;
     const queueContinuation = () => {
       if (continuationQueued) {
@@ -812,6 +968,9 @@ describe("CLI Main - Run Report Compaction", () => {
         toolOutputsCompacted: 0,
         artifacts: [],
       });
+      expect(proactive?.afterEstimatedTokens).toBeLessThan(
+        proactive?.beforeEstimatedTokens ?? 0,
+      );
       expect(proactive?.beforeMessageCount).toBe(proactive?.afterMessageCount);
     } finally {
       await close(server);

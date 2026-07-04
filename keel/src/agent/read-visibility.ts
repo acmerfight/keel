@@ -12,6 +12,8 @@ export interface ReadVisibilityState {
   readonly hasRead: (targetPath: string) => boolean;
   readonly visibleReadsMostRecentFirst: () => readonly VisibleReadSnapshot[];
   readonly clear: () => void;
+  readonly snapshot: () => readonly VisibleReadSnapshot[];
+  readonly restoreSnapshot: (snapshot: readonly VisibleReadSnapshot[]) => void;
   readonly applyImmediateMutation: (execution: ToolExecution) => void;
   readonly applyVisibleToolExecutions: (
     executions: readonly ToolExecution[],
@@ -44,6 +46,13 @@ export function createReadVisibilityState(): ReadVisibilityState {
     hasRead: (targetPath) => visibleReads.has(targetPath),
     visibleReadsMostRecentFirst: () => [...visibleReads.values()].reverse(),
     clear: () => visibleReads.clear(),
+    snapshot: () => [...visibleReads.values()],
+    restoreSnapshot: (snapshot) => {
+      visibleReads.clear();
+      for (const read of snapshot) {
+        visibleReads.set(read.targetPath, read);
+      }
+    },
     applyImmediateMutation: applyMutation,
     applyVisibleToolExecutions: (executions) => {
       for (const execution of executions) {

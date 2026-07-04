@@ -482,15 +482,37 @@ export async function* runAgentTurn(
       : {}),
     costTracking,
     onContextCompacted: async (targetMessages) => {
-      await restorePostCompactionReads({
-        workspace,
-        signal,
-        readVisibility,
-        projectInstructionVisibility,
-        messages: targetMessages,
-        nextToolCallId: () =>
-          postCompactionReadToolCallId(postCompactionReadSequence++),
-      });
+      const postCompactionReadSequenceSnapshot = postCompactionReadSequence;
+      const readVisibilitySnapshot = readVisibility.snapshot();
+      const projectInstructionVisibilitySnapshot =
+        projectInstructionVisibility.snapshot();
+      try {
+        await restorePostCompactionReads({
+          workspace,
+          signal,
+          readVisibility,
+          projectInstructionVisibility,
+          messages: targetMessages,
+          nextToolCallId: () =>
+            postCompactionReadToolCallId(postCompactionReadSequence++),
+        });
+      } catch (error) {
+        postCompactionReadSequence = postCompactionReadSequenceSnapshot;
+        readVisibility.restoreSnapshot(readVisibilitySnapshot);
+        projectInstructionVisibility.restoreSnapshot(
+          projectInstructionVisibilitySnapshot,
+        );
+        throw error;
+      }
+      return {
+        rollback: () => {
+          postCompactionReadSequence = postCompactionReadSequenceSnapshot;
+          readVisibility.restoreSnapshot(readVisibilitySnapshot);
+          projectInstructionVisibility.restoreSnapshot(
+            projectInstructionVisibilitySnapshot,
+          );
+        },
+      };
     },
   };
   const state: CompactionState = {
