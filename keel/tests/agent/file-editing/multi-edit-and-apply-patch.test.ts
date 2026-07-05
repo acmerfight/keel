@@ -640,6 +640,66 @@ describe("File Editing Multi Edit And Apply Patch", () => {
     }
   });
 
+  test(`Given the assistant proposes a standard unified diff that renames and edits a read file,
+    When the agent handles the apply_patch tool call,
+    Then the old path is removed and the new path contains the edited text before the assistant replies`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "src"), { recursive: true });
+    await writeFile(
+      join(workspace, "src", "old.ts"),
+      "export const value = 1;\n",
+      "utf8",
+    );
+    const provider = createFakeProvider([
+      fakeToolResponse("read", { path: "src/old.ts" }),
+      fakeToolResponse("apply_patch", {
+        patch: [
+          "diff --git a/src/old.ts b/src/new.ts",
+          "similarity index 80%",
+          "rename from src/old.ts",
+          "rename to src/new.ts",
+          "index 1111111..2222222 100644",
+          "--- a/src/old.ts",
+          "+++ b/src/new.ts",
+          "@@ -1 +1 @@",
+          "-export const value = 1;",
+          "+export const value = 2;",
+        ].join("\n"),
+      }),
+      fakeResponse("Applied the standard rename diff."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "apply this standard rename diff",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      await expect(
+        readFile(join(workspace, "src", "old.ts"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(join(workspace, "src", "new.ts"), "utf8")).toBe(
+        "export const value = 2;\n",
+      );
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Applied the standard rename diff.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the assistant proposes a standard unified diff that adds and deletes files,
     When the agent handles the apply_patch tool call,
     Then the file addition and deletion are visible before the assistant replies`, async () => {

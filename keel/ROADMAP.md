@@ -250,9 +250,11 @@ Codex/Claude Code — or directly moves the eval numbers.
   line-ending drift, trailing whitespace, smart punctuation, common
   indentation, `replaceAll`, enforced read-before-edit, multi-replacement
   edit calls for one file, and apply_patch Add/Update/Delete/Move batches for
-  coordinated larger changes. Stale or ambiguous edit failures include bounded
-  current-file diagnostics for retry. The remaining gap is fuller diff
-  semantics. Edit success rate is a tracked eval sub-metric.
+  coordinated larger changes. Standard Git-style text diffs now cover updates,
+  additions, deletions, and renames. Stale or ambiguous edit failures include
+  bounded current-file diagnostics for retry. The remaining gap is fuller diff
+  semantics such as copies, file modes, and binary patches. Edit success rate is
+  a tracked eval sub-metric.
 - **Project context injection** — ✅ Partial (2026-06): root `AGENTS.md` is
   loaded into the system prompt with safety checks. Nested `AGENTS.md` files are
   discovered for scoped paths, shown through read/search outputs, restored after
