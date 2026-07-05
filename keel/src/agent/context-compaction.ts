@@ -124,6 +124,26 @@ function artifactReportsResult(
   return artifactReports.length > 0 ? { artifactReports } : {};
 }
 
+async function discardStoredArtifactReports(
+  options: ToolOutputArtifactsOptions | undefined,
+  reports: readonly ToolOutputArtifactCompactionArtifact[],
+): Promise<void> {
+  if (options === undefined) {
+    return;
+  }
+  const refs: string[] = [];
+  for (const report of reports) {
+    if (report.status === "stored") {
+      refs.push(report.ref);
+    }
+  }
+  await Promise.all(
+    refs.map(async (ref) => {
+      await options.store.discard(ref);
+    }),
+  );
+}
+
 function currentToolOutputCompactionReason(
   options: CompactMessagesOptions,
 ): CurrentToolOutputCompactionReason {
@@ -267,6 +287,10 @@ async function compactCurrentToolOutputsForRequest(options: {
         resolved: options.resolved,
       }))
   ) {
+    await discardStoredArtifactReports(
+      options.toolOutputArtifacts,
+      currentToolOutputCompaction.artifactReports ?? [],
+    );
     return { compacted: false, usage: ZERO_USAGE };
   }
 
