@@ -1916,7 +1916,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
 
   test(`Given artifact-backed current-output compaction would make the output larger,
     When the artifact marker is longer than the omitted content,
-    Then the original current output is retained`, async () => {
+    Then the original current output is retained without saving an unreferenced artifact`, async () => {
     // Given
     const currentToolOutput = "small output";
     const messages: Message[] = [
@@ -1948,8 +1948,10 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     );
 
     // Then
-    expect(saved).toHaveLength(1);
+    expect(saved).toHaveLength(0);
     expect(result.stats.toolOutputsCompacted).toBe(0);
+    expect(result.artifactReports).toEqual([]);
+    expect(result.artifactNotices).toBeUndefined();
     expect(capturedToolOutput(result.messages, "run_small_artifact")).toBe(
       currentToolOutput,
     );

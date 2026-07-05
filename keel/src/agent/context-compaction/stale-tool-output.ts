@@ -805,6 +805,9 @@ export async function compactCurrentToolOutputsWithArtifacts(
           artifact.omittedChars,
         );
         if (compactedContent.length >= message.content.length) {
+          if (artifact.report.status === "stored") {
+            await store.discard(artifact.report.ref);
+          }
           return {
             message,
             stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
