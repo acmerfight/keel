@@ -60,6 +60,9 @@ function storedArtifactStore(
       const ref = `tool-output:test/${saved.length}`;
       return { status: "stored", ref, contentSha256: "0".repeat(64) };
     },
+    discard: async () => {
+      saved.pop();
+    },
   };
 }
 

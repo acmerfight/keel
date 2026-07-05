@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   compactMessages,
+  compactStaleToolOutputs,
   compactStaleToolOutputsWithArtifacts,
 } from "../../../src/agent/context-compaction.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
@@ -95,6 +96,13 @@ function memoryArtifactStore(options?: {
         });
         return { status: "stored", ref, contentSha256 };
       },
+      discard: async (ref) => {
+        const index = saved.findIndex((artifact) => artifact.ref === ref);
+        if (index !== -1) {
+          saved.splice(index, 1);
+        }
+        artifacts.delete(ref);
+      },
     },
   };
 }
@@ -111,6 +119,48 @@ function numberedLines(
         20,
       )}`,
   );
+}
+
+function multilineOutputJustOver(maxChars: number): string {
+  const lines = ["STALE_GROWTH_START"];
+  for (let index = 0; ; index++) {
+    const nextLine = `stale growth line ${String(index + 1).padStart(
+      3,
+      "0",
+    )} ${"x".repeat(12)}`;
+    const candidate = [...lines, nextLine, "STALE_GROWTH_END"].join("\n");
+    if (candidate.length > maxChars) {
+      return candidate;
+    }
+    lines.push(nextLine);
+  }
+}
+
+function retainedReadMessages(content: string): Message[] {
+  return [
+    { role: "user", content: "Inspect the retained output." },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "read_stale_growth",
+          tool: "read",
+          path: "stale-growth.log",
+        },
+      ],
+    },
+    {
+      role: "tool",
+      toolCallId: "read_stale_growth",
+      content,
+    },
+    {
+      role: "assistant",
+      content: "The retained output was inspected.",
+      toolCalls: [],
+    },
+  ];
 }
 
 async function compactRetainedToolOutput(options: {
@@ -196,6 +246,62 @@ function lineIndex(lines: readonly string[], needle: string): number {
 }
 
 describe("Context Compaction Stale Tool Output", () => {
+  test(`Given a stale tool output is only slightly larger than the preview budget,
+    When the stale compaction marker would make the provider-visible output larger,
+    Then stale tool-output compaction reports no change`, () => {
+    // Given
+    const toolOutputMaxChars = 2_000;
+    const retainedOutput = multilineOutputJustOver(toolOutputMaxChars);
+    const messages = retainedReadMessages(retainedOutput);
+
+    // When
+    const result = compactStaleToolOutputs(messages, toolOutputMaxChars);
+
+    // Then
+    expect(result.messages).toEqual(messages);
+    expect(result.stats).toEqual({
+      toolOutputsCompacted: 0,
+      staleToolOutputsCompacted: 0,
+      currentToolOutputsCompacted: 0,
+      toolOutputCharsBefore: 0,
+      toolOutputCharsAfter: 0,
+      toolOutputEstimatedTokensBefore: 0,
+      toolOutputEstimatedTokensAfter: 0,
+    });
+  });
+
+  test(`Given artifact-backed stale tool-output compaction would grow the retained output,
+    When stale compaction checks the artifact path,
+    Then it reports no change without saving an unreferenced artifact`, async () => {
+    // Given
+    const toolOutputMaxChars = 2_000;
+    const retainedOutput = multilineOutputJustOver(toolOutputMaxChars);
+    const messages = retainedReadMessages(retainedOutput);
+    const artifacts = memoryArtifactStore();
+
+    // When
+    const result = await compactStaleToolOutputsWithArtifacts(
+      messages,
+      toolOutputMaxChars,
+      artifacts.store,
+    );
+
+    // Then
+    expect(result.messages).toEqual(messages);
+    expect(result.stats).toEqual({
+      toolOutputsCompacted: 0,
+      staleToolOutputsCompacted: 0,
+      currentToolOutputsCompacted: 0,
+      toolOutputCharsBefore: 0,
+      toolOutputCharsAfter: 0,
+      toolOutputEstimatedTokensBefore: 0,
+      toolOutputEstimatedTokensAfter: 0,
+    });
+    expect(result.artifactReports).toEqual([]);
+    expect(result.artifactNotices).toBeUndefined();
+    expect(artifacts.saved).toEqual([]);
+  });
+
   test(`Given a retained failed bash output has the useful error in the tail,
     When context compaction projects the tool output,
     Then the model-visible preview keeps stream summaries, tail diagnostics, and the artifact ref`, async () => {
@@ -246,7 +352,7 @@ describe("Context Compaction Stale Tool Output", () => {
     // Given
     const tailFailureSuffix = "LONG_BASH_FAILURE_TAIL_335";
     const longFailureLine = `stderr failure ${"x".repeat(
-      400,
+      2_000,
     )} ${tailFailureSuffix}`;
     const bashOutput = `${["Exit code: 1", "", "stderr:", longFailureLine].join("\n")}\n`;
 
@@ -321,7 +427,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "Exit code: 1",
       "",
       "stdout:",
-      `setup passed ${"x".repeat(80)}`,
+      `setup passed ${"x".repeat(1_000)}`,
       "stderr:",
       `tail failure details ${"y".repeat(80)}`,
     ].join("\n");
@@ -512,6 +618,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "src/file-001.ts:1:MATCH_001",
       "src/file-002.ts:2:MATCH_002",
       "src/file-003.ts:3:MATCH_003",
+      `src/file-004.ts:4:MATCH_004 ${"x".repeat(1_000)}`,
       "[grep output truncated: showing first 30 matches]",
       warning,
     ].join("\n");
@@ -634,6 +741,11 @@ describe("Context Compaction Stale Tool Output", () => {
       ...Array.from(
         { length: 35 },
         (_, index) => `src/module-${String(index + 1).padStart(3, "0")}.ts`,
+      ),
+      ...Array.from(
+        { length: 80 },
+        (_, index) =>
+          `src/omitted-module-${String(index + 1).padStart(3, "0")}.ts`,
       ),
       "[glob output truncated: showing first 35 files. Narrow the pattern or path to see more.]",
     ].join("\n");
@@ -1509,11 +1621,11 @@ describe("Context Compaction Stale Tool Output", () => {
     });
   });
 
-  test(`Given retained bash output has a tiny preview budget,
+  test(`Given retained bash output has a tiny preview budget and a large original output,
     When context compaction projects the tool output,
     Then Keel still keeps a bounded tail preview and artifact handle`, async () => {
     // Given
-    const bashOutput = "abc";
+    const bashOutput = ["setup noise ".repeat(100), "abc"].join("\n");
 
     // When
     const compacted = await compactRetainedToolOutput({
@@ -1527,7 +1639,8 @@ describe("Context Compaction Stale Tool Output", () => {
     });
 
     // Then
-    expect(previewBeforeStaleCompactionMarker(compacted.content)).toBe("c");
+    const preview = previewBeforeStaleCompactionMarker(compacted.content);
+    expect(preview.length).toBeLessThanOrEqual(2);
     expect(compacted.content).toContain("full output artifact: tool-output:");
   });
 

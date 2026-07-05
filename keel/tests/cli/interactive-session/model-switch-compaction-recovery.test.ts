@@ -402,6 +402,9 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
         saved.push(input);
         return { status: "stored", ref, contentSha256: "0".repeat(64) };
       },
+      discard: async () => {
+        saved.pop();
+      },
     };
     let stdout = "";
     let stderr = "";

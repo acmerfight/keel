@@ -1485,6 +1485,7 @@ describe("Context Compaction Summary Checkpoints", () => {
         status: "failed",
         reason: "unexpected artifact save in test",
       }),
+      discard: async () => {},
     };
 
     // When
@@ -1758,6 +1759,7 @@ describe("Context Compaction Summary Checkpoints", () => {
         status: "failed",
         reason: "unexpected save",
       }),
+      discard: async () => {},
     };
     const messages: Message[] = [
       { role: "user", content: "Read the no-sha report." },
@@ -1827,6 +1829,7 @@ describe("Context Compaction Summary Checkpoints", () => {
         status: "failed",
         reason: "unexpected save",
       }),
+      discard: async () => {},
     };
     const messages: Message[] = [
       { role: "user", content: "Run the unverified command." },

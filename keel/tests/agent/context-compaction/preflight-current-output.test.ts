@@ -98,6 +98,13 @@ function storingArtifactStore(
         contentSha256,
       };
     },
+    discard: async (ref) => {
+      const index = saved.findIndex((artifact) => artifact.ref === ref);
+      if (index !== -1) {
+        saved.splice(index, 1);
+      }
+      artifacts.delete(ref);
+    },
   };
 }
 

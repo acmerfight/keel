@@ -218,6 +218,16 @@ function compactStaleToolOutput(
   )}`;
 }
 
+function projectedStaleToolOutputWouldGrow(options: {
+  readonly projection: ProjectedToolOutput;
+  readonly originalContent: string;
+}): boolean {
+  return (
+    compactStaleToolOutput(options.projection).length >=
+    options.originalContent.length
+  );
+}
+
 function compactCurrentToolOutput(
   projection: ProjectedToolOutput,
   artifactMarker?: string,
@@ -482,6 +492,17 @@ export function compactStaleToolOutputs(
         maxChars: toolOutputMaxChars,
         context: toolContextForToolOutput(messages, message.toolCallId),
       });
+      if (
+        projectedStaleToolOutputWouldGrow({
+          projection,
+          originalContent: message.content,
+        })
+      ) {
+        return {
+          message,
+          stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+        };
+      }
       const compactedContent = compactStaleToolOutput(projection);
       return {
         message: {
@@ -565,6 +586,15 @@ export async function compactStaleToolOutputsWithArtifacts(
           projection,
           artifact.marker,
         );
+        if (compactedContent.length >= message.content.length) {
+          if (artifact.report.status === "stored") {
+            await store.discard(artifact.report.ref);
+          }
+          return {
+            message,
+            stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+          };
+        }
         return {
           message: {
             ...message,

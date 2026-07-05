@@ -99,6 +99,69 @@ function sseReadToolCalls(
 }
 
 describe("CLI Tool Output Artifacts", () => {
+  test(`Given a stored CLI tool-output artifact,
+    When the store discards its ref,
+    Then the artifact file is removed`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const store = createToolOutputArtifactStore({
+      runtime: {
+        env: (key) => (key === "KEEL_HOME" ? home : undefined),
+        now: () => 0,
+      },
+      scope: "discard-test",
+    });
+
+    try {
+      const saved = await store.save({
+        toolCallId: "read_discarded_report",
+        toolName: "read",
+        content: "discarded report content",
+        sourceStatus: "complete",
+        purpose: "stale-compaction",
+      });
+      if (saved.status !== "stored") {
+        throw new Error(
+          `Expected artifact storage to succeed: ${saved.reason}`,
+        );
+      }
+      const paths = artifactPaths(home, saved.ref);
+      const beforeDiscard = await stat(paths.file);
+      expect(beforeDiscard.size).toBeGreaterThan(0);
+
+      // When
+      await store.discard(saved.ref);
+
+      // Then
+      await expect(stat(paths.file)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an invalid tool-output artifact ref,
+    When the CLI artifact store discards it,
+    Then the discard is a no-op`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const store = createToolOutputArtifactStore({
+      runtime: {
+        env: (key) => (key === "KEEL_HOME" ? home : undefined),
+        now: () => 0,
+      },
+      scope: "discard-invalid-test",
+    });
+
+    try {
+      // When / Then
+      await expect(store.discard("not-a-tool-output-ref")).resolves.toBe(
+        undefined,
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a retained tool output marker matches a CLI artifact,
     When context compaction runs with the CLI artifact store,
     Then Keel reuses the artifact ref without saving another artifact`, async () => {

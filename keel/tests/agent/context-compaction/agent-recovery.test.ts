@@ -399,6 +399,7 @@ describe("Context Compaction Agent Recovery", () => {
               status: "failed",
               reason: "unexpected save",
             }),
+            discard: async () => {},
           },
         },
       }),

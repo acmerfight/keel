@@ -36,6 +36,18 @@ function retainedStaleReadFixture(label: string): string {
   ].join("\n");
 }
 
+function barelyOversizedStaleReadFixture(label: string): string {
+  return [
+    `${label}_START`,
+    ...Array.from(
+      { length: 28 },
+      (_, index) =>
+        `${label.toLowerCase()} retained evidence ${index}: ${"x".repeat(42)}`,
+    ),
+    `${label}_END`,
+  ].join("\n");
+}
+
 const reportSchema = z
   .object({
     schemaVersion: z.literal(3),
@@ -972,6 +984,158 @@ describe("CLI Main - Run Report Compaction", () => {
         proactive?.beforeEstimatedTokens ?? 0,
       );
       expect(proactive?.beforeMessageCount).toBe(proactive?.afterMessageCount);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given stale tool-output compaction would grow the retained output,
+    When queued input continues after the read,
+    Then the provider request keeps the smaller original output and the report records only history compaction`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-session-stale-growth-report-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const reportPath = join(workspace, "stale-growth.json");
+    await writeFile(
+      join(workspace, "stale-growth.log"),
+      barelyOversizedStaleReadFixture("STALE_GROWTH"),
+      "utf8",
+    );
+    const input = new PassThrough();
+    input.write("remember setup before the small stale read\n");
+    input.write("inspect stale-growth.log\n");
+    const firstAssistantAnswer = [
+      "SETUP_START",
+      "setup remembered ".repeat(5_800),
+      "SETUP_END",
+    ].join("\n");
+    const mainBodies: unknown[] = [];
+    let continuationQueued = false;
+    const queueContinuation = () => {
+      if (continuationQueued) {
+        return;
+      }
+      continuationQueued = true;
+      input.end("continue after the small stale read\n");
+    };
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const requestBody = JSON.parse(body);
+        if (isSummaryRequest(requestBody)) {
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          });
+          res.end(sseTextReplyWithUsage("STALE_GROWTH_SETUP_CHECKPOINT"));
+          return;
+        }
+        mainBodies.push(requestBody);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (mainBodies.length === 1) {
+          res.end(sseTextReplyWithUsage(firstAssistantAnswer));
+          return;
+        }
+        if (mainBodies.length === 2) {
+          res.write(
+            sseToolCall("read_stale_growth_report", "read", {
+              path: "stale-growth.log",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        const staleOutput = toolMessageContent(
+          mainBodies[mainBodies.length - 1],
+          "read_stale_growth_report",
+        );
+        if (mainBodies.length === 3) {
+          const fullOutputVisible = staleOutput.includes("STALE_GROWTH_END");
+          res.end(
+            sseTextReplyWithUsage(
+              fullOutputVisible
+                ? `The small stale report was inspected.\n${"analysis note ".repeat(
+                    2_500,
+                  )}`
+                : "small stale read missing",
+            ),
+          );
+          return;
+        }
+
+        const smallerOriginalKept =
+          staleOutput.includes("STALE_GROWTH_END") &&
+          !staleOutput.includes("[stale tool output compacted:");
+        res.end(
+          sseTextReplyWithUsage(
+            smallerOriginalKept
+              ? "stale growth avoided"
+              : "stale tool output grew",
+          ),
+        );
+      });
+    });
+    await listen(server);
+    const run = createRuntime(["--report", reportPath], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_CONTEXT_WINDOW_TOKENS: "46384",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+      onStdout: (text) => {
+        if (text.includes("The small stale report was inspected.")) {
+          queueContinuation();
+        }
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(run.stdout().slice(-128)).toContain("stale growth avoided\n");
+      expect(run.stderr()).toContain("Context compacted: proactive");
+      expect(mainBodies).toHaveLength(4);
+      const report = await readReport(reportPath);
+      const proactive = onlyContextCompaction(report);
+      expect(proactive).toMatchObject({
+        reason: "proactive",
+        providerRequestAction: "compacted_before_request",
+        scopes: ["history"],
+        staleToolOutputsCompacted: 0,
+        currentToolOutputsCompacted: 0,
+        toolOutputsCompacted: 0,
+        artifacts: [],
+      });
+      expect(proactive.toolOutputCharsBefore).toBe(0);
+      expect(proactive.toolOutputCharsAfter).toBe(0);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
