@@ -81,6 +81,17 @@ interface StaleToolOutputCompactionEntry {
   readonly artifactReport?: ToolOutputArtifactCompactionArtifact;
 }
 
+type ToolOutputCompactionAttempt =
+  | {
+      readonly status: "accepted";
+      readonly entry: StaleToolOutputCompactionEntry;
+    }
+  | {
+      readonly status: "rejected";
+      readonly entry: StaleToolOutputCompactionEntry;
+      readonly pendingStoredArtifactRef?: string;
+    };
+
 export const EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS: StaleToolOutputCompactionStats =
   {
     toolOutputsCompacted: 0,
@@ -218,16 +229,6 @@ function compactStaleToolOutput(
   )}`;
 }
 
-function projectedStaleToolOutputWouldGrow(options: {
-  readonly projection: ProjectedToolOutput;
-  readonly originalContent: string;
-}): boolean {
-  return (
-    compactStaleToolOutput(options.projection).length >=
-    options.originalContent.length
-  );
-}
-
 function compactCurrentToolOutput(
   projection: ProjectedToolOutput,
   artifactMarker?: string,
@@ -337,6 +338,82 @@ function toolContextForToolOutput(
   }
   /* v8 ignore next: valid tool-result ledgers preserve the matching assistant tool call; this labels corrupted current-schema histories. */
   return { toolName: "unknown" };
+}
+
+function rejectedToolOutputCompactionAttempt(options: {
+  readonly message: Message;
+  readonly artifactReport?: ToolOutputArtifactCompactionArtifact;
+}): ToolOutputCompactionAttempt {
+  const pendingStoredArtifactRef =
+    options.artifactReport?.status === "stored"
+      ? options.artifactReport.ref
+      : undefined;
+  return {
+    status: "rejected",
+    entry: {
+      message: options.message,
+      stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
+    },
+    ...(pendingStoredArtifactRef === undefined
+      ? {}
+      : { pendingStoredArtifactRef }),
+  };
+}
+
+function buildToolOutputCompactionAttempt(options: {
+  readonly message: Message;
+  readonly compactedContent: string;
+  readonly scope: ToolOutputCompactionStatsScope;
+  readonly artifactNotice?: ToolOutputArtifactNotice;
+  readonly artifactReport?: ToolOutputArtifactCompactionArtifact;
+}): ToolOutputCompactionAttempt {
+  if (options.compactedContent.length >= options.message.content.length) {
+    return rejectedToolOutputCompactionAttempt({
+      message: options.message,
+      ...(options.artifactReport === undefined
+        ? {}
+        : { artifactReport: options.artifactReport }),
+    });
+  }
+  return {
+    status: "accepted",
+    entry: {
+      message: {
+        ...options.message,
+        content: options.compactedContent,
+      },
+      stats: toolOutputCompactionStats(
+        options.message.content,
+        options.compactedContent,
+        options.scope,
+      ),
+      ...(options.artifactNotice === undefined
+        ? {}
+        : { artifactNotice: options.artifactNotice }),
+      ...(options.artifactReport === undefined
+        ? {}
+        : { artifactReport: options.artifactReport }),
+    },
+  };
+}
+
+async function settleArtifactToolOutputCompactionAttempt(
+  attempt: ToolOutputCompactionAttempt,
+  store: ToolOutputArtifactStore,
+): Promise<StaleToolOutputCompactionEntry> {
+  if (
+    attempt.status === "rejected" &&
+    attempt.pendingStoredArtifactRef !== undefined
+  ) {
+    await store.discard(attempt.pendingStoredArtifactRef);
+  }
+  return attempt.entry;
+}
+
+function settleToolOutputCompactionAttempt(
+  attempt: ToolOutputCompactionAttempt,
+): StaleToolOutputCompactionEntry {
+  return attempt.entry;
 }
 
 async function artifactMarkerForCompactedToolOutput(options: {
@@ -492,29 +569,14 @@ export function compactStaleToolOutputs(
         maxChars: toolOutputMaxChars,
         context: toolContextForToolOutput(messages, message.toolCallId),
       });
-      if (
-        projectedStaleToolOutputWouldGrow({
-          projection,
-          originalContent: message.content,
-        })
-      ) {
-        return {
-          message,
-          stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
-        };
-      }
       const compactedContent = compactStaleToolOutput(projection);
-      return {
-        message: {
-          ...message,
-          content: compactedContent,
-        },
-        stats: toolOutputCompactionStats(
-          message.content,
+      return settleToolOutputCompactionAttempt(
+        buildToolOutputCompactionAttempt({
+          message,
           compactedContent,
-          "stale",
-        ),
-      };
+          scope: "stale",
+        }),
+      );
     },
   );
   const stats = compactedEntries.reduce(
@@ -586,30 +648,18 @@ export async function compactStaleToolOutputsWithArtifacts(
           projection,
           artifact.marker,
         );
-        if (compactedContent.length >= message.content.length) {
-          if (artifact.report.status === "stored") {
-            await store.discard(artifact.report.ref);
-          }
-          return {
+        return await settleArtifactToolOutputCompactionAttempt(
+          buildToolOutputCompactionAttempt({
             message,
-            stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
-          };
-        }
-        return {
-          message: {
-            ...message,
-            content: compactedContent,
-          },
-          stats: toolOutputCompactionStats(
-            message.content,
             compactedContent,
-            "stale",
-          ),
-          ...(artifact.notice === undefined
-            ? {}
-            : { artifactNotice: artifact.notice }),
-          artifactReport: artifact.report,
-        };
+            scope: "stale",
+            ...(artifact.notice === undefined
+              ? {}
+              : { artifactNotice: artifact.notice }),
+            artifactReport: artifact.report,
+          }),
+          store,
+        );
       },
     ),
   );
@@ -697,23 +747,13 @@ export function compactCurrentToolOutputs(
           projection.omittedChars,
         ),
       );
-      if (compactedContent.length >= message.content.length) {
-        return {
+      return settleToolOutputCompactionAttempt(
+        buildToolOutputCompactionAttempt({
           message,
-          stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
-        };
-      }
-      return {
-        message: {
-          ...message,
-          content: compactedContent,
-        },
-        stats: toolOutputCompactionStats(
-          message.content,
           compactedContent,
-          "current",
-        ),
-      };
+          scope: "current",
+        }),
+      );
     },
   );
   const stats = compactedEntries.reduce(
@@ -804,30 +844,18 @@ export async function compactCurrentToolOutputsWithArtifacts(
           reason,
           artifact.omittedChars,
         );
-        if (compactedContent.length >= message.content.length) {
-          if (artifact.report.status === "stored") {
-            await store.discard(artifact.report.ref);
-          }
-          return {
+        return await settleArtifactToolOutputCompactionAttempt(
+          buildToolOutputCompactionAttempt({
             message,
-            stats: EMPTY_STALE_TOOL_OUTPUT_COMPACTION_STATS,
-          };
-        }
-        return {
-          message: {
-            ...message,
-            content: compactedContent,
-          },
-          stats: toolOutputCompactionStats(
-            message.content,
             compactedContent,
-            "current",
-          ),
-          ...(artifact.notice === undefined
-            ? {}
-            : { artifactNotice: artifact.notice }),
-          artifactReport: artifact.report,
-        };
+            scope: "current",
+            ...(artifact.notice === undefined
+              ? {}
+              : { artifactNotice: artifact.notice }),
+            artifactReport: artifact.report,
+          }),
+          store,
+        );
       },
     ),
   );
