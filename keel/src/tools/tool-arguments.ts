@@ -142,7 +142,7 @@ export const applyPatchToolArgumentsSchema = z
     patch: z
       .string()
       .describe(
-        "Full apply_patch text. Supports Add File, Update File, Delete File, Update File with Move to sections, and standard Git-style unified diffs for text file updates, additions, and deletions.",
+        "Full apply_patch text. Supports Add File, Update File, Delete File, Update File with Move to sections, and standard Git-style unified diffs for text file updates, additions, deletions, and renames.",
       ),
   })
   .strict();

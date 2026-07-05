@@ -18,10 +18,7 @@ const NO_NEWLINE_MARKER = "\\ No newline at end of file";
 const UNSUPPORTED_STANDARD_DIFF_METADATA_PREFIXES = [
   "old mode ",
   "new mode ",
-  "similarity index ",
   "dissimilarity index ",
-  "rename from ",
-  "rename to ",
   "copy from ",
   "copy to ",
   "Binary files ",
@@ -32,6 +29,9 @@ interface StandardFileHeaders {
   readonly newPath: string | null;
   readonly sawNewFileMode: boolean;
   readonly sawDeletedFileMode: boolean;
+  readonly sawSimilarityIndex: boolean;
+  readonly renameFrom: string | null;
+  readonly renameTo: string | null;
   readonly next: number;
 }
 
@@ -91,7 +91,7 @@ function unsupportedStandardDiff(message: string): never {
   throw patchError(
     "tool_invalid_patch",
     `apply_patch failed: unsupported standard unified diff: ${message}`,
-    "Use a standard unified diff that updates, adds, or deletes text files without renames, file mode changes, or binary patches.",
+    "Use a standard unified diff that updates, adds, deletes, or renames text files without copies, file mode changes, or binary patches.",
   );
 }
 
@@ -125,6 +125,14 @@ function standardDiffGitPathText(line: string): string {
   return paths;
 }
 
+function hasStandardRenameMetadata(headers: StandardFileHeaders): boolean {
+  return (
+    headers.renameFrom !== null ||
+    headers.renameTo !== null ||
+    headers.sawSimilarityIndex
+  );
+}
+
 function assertStandardDiffGitMatchesFileHeaders(
   line: string,
   headers: StandardFileHeaders,
@@ -135,7 +143,11 @@ function assertStandardDiffGitMatchesFileHeaders(
   const newDiffPath = headers.newPath ?? targetPath;
   const expected = `${STANDARD_OLD_PATH_PREFIX}${oldDiffPath} ${STANDARD_NEW_PATH_PREFIX}${newDiffPath}`;
   if (paths !== expected) {
-    invalidStandardDiff("diff --git paths do not match ---/+++ file headers");
+    invalidStandardDiff(
+      hasStandardRenameMetadata(headers)
+        ? "rename metadata does not match diff --git paths"
+        : "diff --git paths do not match ---/+++ file headers",
+    );
   }
 }
 
@@ -202,6 +214,22 @@ function isStandardFileLifecycleMetadata(line: string): boolean {
   return line.startsWith("deleted file mode ");
 }
 
+function isStandardSimilarityIndexMetadata(line: string): boolean {
+  if (!line.startsWith("similarity index ")) return false;
+  if (!/^similarity index (?:100|[1-9]?\d)%$/u.test(line)) {
+    invalidStandardDiff(line);
+  }
+  return true;
+}
+
+function parseStandardRenameMetadataPath(line: string, prefix: string): string {
+  const path = metadataFreePath(line.slice(prefix.length));
+  if (path === "") {
+    invalidStandardDiff("rename metadata path is empty");
+  }
+  return path;
+}
+
 function isUnsupportedStandardDiffMetadata(line: string): boolean {
   return (
     UNSUPPORTED_STANDARD_DIFF_METADATA_PREFIXES.some((prefix) =>
@@ -218,6 +246,9 @@ function parseStandardFileHeaders(
   let index = start;
   let sawNewFileMode = false;
   let sawDeletedFileMode = false;
+  let sawSimilarityIndex = false;
+  let renameFrom: string | null = null;
+  let renameTo: string | null = null;
   while (index < lines.length) {
     const line = parserLine(lines, index);
     if (line.startsWith(STANDARD_OLD_FILE_MARKER)) break;
@@ -232,7 +263,25 @@ function parseStandardFileHeaders(
         index,
         sawNewFileMode,
         sawDeletedFileMode,
+        sawSimilarityIndex,
+        renameFrom,
+        renameTo,
       );
+    }
+    if (isStandardSimilarityIndexMetadata(line)) {
+      sawSimilarityIndex = true;
+      index++;
+      continue;
+    }
+    if (line.startsWith("rename from ")) {
+      renameFrom = parseStandardRenameMetadataPath(line, "rename from ");
+      index++;
+      continue;
+    }
+    if (line.startsWith("rename to ")) {
+      renameTo = parseStandardRenameMetadataPath(line, "rename to ");
+      index++;
+      continue;
     }
     if (isUnsupportedStandardDiffMetadata(line)) {
       unsupportedStandardDiff(line);
@@ -253,6 +302,9 @@ function parseStandardFileHeaders(
       index,
       sawNewFileMode,
       sawDeletedFileMode,
+      sawSimilarityIndex,
+      renameFrom,
+      renameTo,
     );
   }
   const oldPath = parseStandardFileHeaderPath(
@@ -274,6 +326,9 @@ function parseStandardFileHeaders(
     newPath,
     sawNewFileMode,
     sawDeletedFileMode,
+    sawSimilarityIndex,
+    renameFrom,
+    renameTo,
     next: index + 1,
   };
 }
@@ -283,7 +338,30 @@ function parseStandardLifecycleHeadersWithoutFileHeaders(
   next: number,
   sawNewFileMode: boolean,
   sawDeletedFileMode: boolean,
+  sawSimilarityIndex: boolean,
+  renameFrom: string | null,
+  renameTo: string | null,
 ): StandardFileHeaders {
+  if (sawSimilarityIndex || renameFrom !== null || renameTo !== null) {
+    if (renameFrom === null || renameTo === null) {
+      invalidStandardDiff("rename diff is missing rename from/to metadata");
+    }
+    if (sawNewFileMode || sawDeletedFileMode) {
+      invalidStandardDiff(
+        "rename metadata cannot be combined with file lifecycle metadata",
+      );
+    }
+    return {
+      oldPath: renameFrom,
+      newPath: renameTo,
+      sawNewFileMode,
+      sawDeletedFileMode,
+      sawSimilarityIndex,
+      renameFrom,
+      renameTo,
+      next,
+    };
+  }
   if (sawNewFileMode === sawDeletedFileMode) {
     invalidStandardDiff(
       `missing --- file header for ${diffHeader.slice(STANDARD_DIFF_MARKER.length)}`,
@@ -295,6 +373,9 @@ function parseStandardLifecycleHeadersWithoutFileHeaders(
     newPath: sawNewFileMode ? path : null,
     sawNewFileMode,
     sawDeletedFileMode,
+    sawSimilarityIndex,
+    renameFrom,
+    renameTo,
     next,
   };
 }
@@ -393,7 +474,24 @@ function hasEffectiveStandardLines(lines: readonly string[]): boolean {
   return lines.some((line) => line !== "");
 }
 
-function validateStandardLifecycleMetadata(headers: StandardFileHeaders): void {
+function validateStandardFileMetadata(headers: StandardFileHeaders): void {
+  if (hasStandardRenameMetadata(headers)) {
+    if (headers.renameFrom === null || headers.renameTo === null) {
+      invalidStandardDiff("rename diff is missing rename from/to metadata");
+    }
+    if (headers.oldPath === null || headers.newPath === null) {
+      invalidStandardDiff("rename metadata cannot use /dev/null file headers");
+    }
+    if (headers.oldPath === headers.newPath) {
+      invalidStandardDiff("rename metadata does not rename a file");
+    }
+    if (
+      headers.renameFrom !== headers.oldPath ||
+      headers.renameTo !== headers.newPath
+    ) {
+      invalidStandardDiff("rename metadata does not match file headers");
+    }
+  }
   if (headers.oldPath === null) {
     if (headers.sawDeletedFileMode) {
       invalidStandardDiff(
@@ -420,11 +518,23 @@ function addFileLinesFromStandardContent(content: string): readonly string[] {
   return content.split("\n");
 }
 
+function standardUpdateHunksFromParsed(
+  path: string,
+  parsedHunks: readonly ParsedStandardHunk[],
+): readonly ParsedPatchHunk[] {
+  return parsedHunks.map((parsed) => {
+    if (!hasEffectiveStandardLines(parsed.hunk.oldLines)) {
+      invalidStandardDiff(`hunk for ${path} has no effective old lines`);
+    }
+    return parsed.hunk;
+  });
+}
+
 function standardPatchOperationFromHunks(
   headers: StandardFileHeaders,
   parsedHunks: readonly ParsedStandardHunk[],
 ): ParsedPatchOperation {
-  validateStandardLifecycleMetadata(headers);
+  validateStandardFileMetadata(headers);
   if (headers.oldPath === null) {
     const path = standardFileHeaderTargetPath(headers);
     let content = "";
@@ -457,20 +567,21 @@ function standardPatchOperationFromHunks(
     return { kind: "delete", path, expectedContent };
   }
   if (headers.oldPath !== headers.newPath) {
-    unsupportedStandardDiff("renames and copies are not supported");
+    if (!hasStandardRenameMetadata(headers)) {
+      invalidStandardDiff("rename diff is missing rename from/to metadata");
+    }
+    return {
+      kind: "update",
+      path: headers.oldPath,
+      movePath: headers.newPath,
+      hunks: standardUpdateHunksFromParsed(headers.oldPath, parsedHunks),
+    };
   }
   return {
     kind: "update",
     path: headers.oldPath,
     movePath: null,
-    hunks: parsedHunks.map((parsed) => {
-      if (!hasEffectiveStandardLines(parsed.hunk.oldLines)) {
-        invalidStandardDiff(
-          `hunk for ${headers.oldPath} has no effective old lines`,
-        );
-      }
-      return parsed.hunk;
-    }),
+    hunks: standardUpdateHunksFromParsed(headers.oldPath, parsedHunks),
   };
 }
 
@@ -499,7 +610,8 @@ function parseStandardFileDiff(
   if (
     parsedHunks.length === 0 &&
     headers.oldPath !== null &&
-    headers.newPath !== null
+    headers.newPath !== null &&
+    !hasStandardRenameMetadata(headers)
   ) {
     invalidStandardDiff(`file ${targetPath} has no hunks`);
   }

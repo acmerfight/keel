@@ -625,6 +625,103 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a standard unified diff renames a read text file,
+    When apply_patch validates and applies the diff,
+    Then it removes the old path, writes the new path, and records undo operations`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-rename-");
+    const workspacePath = await realpath(workspace);
+    const sourcePath = join(workspacePath, "src", "old.ts");
+    const targetPath = join(workspacePath, "src", "new.ts");
+    await mkdir(join(workspacePath, "src"));
+    await writeFile(sourcePath, "export const value = 1;\n", "utf8");
+    const patch = [
+      "diff --git a/src/old.ts b/src/new.ts",
+      "similarity index 100%",
+      "rename from src/old.ts",
+      "rename to src/new.ts",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (path) => path === sourcePath,
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nR src/old.ts -> src/new.ts");
+      expect(result.targetPaths).toEqual([sourcePath, targetPath]);
+      await expect(readFile(sourcePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await readFile(targetPath, "utf8")).toBe(
+        "export const value = 1;\n",
+      );
+      expect(result.checkpointOperations).toEqual([
+        {
+          operation: "delete",
+          filePath: sourcePath,
+          beforeContent: "export const value = 1;\n",
+          mode: expect.any(Number),
+        },
+        {
+          operation: "create",
+          filePath: targetPath,
+          afterContent: "export const value = 1;\n",
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff renames and edits a read text file,
+    When apply_patch validates and applies the diff,
+    Then it moves the file through the normal patch result with the text changes applied`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-rename-");
+    const workspacePath = await realpath(workspace);
+    const sourcePath = join(workspacePath, "src", "old.ts");
+    const targetPath = join(workspacePath, "src", "new.ts");
+    await mkdir(join(workspacePath, "src"));
+    await writeFile(sourcePath, "export const value = 1;\n", "utf8");
+    const patch = [
+      "diff --git a/src/old.ts b/src/new.ts",
+      "similarity index 80%",
+      "rename from src/old.ts",
+      "rename to src/new.ts",
+      "index 1111111..2222222 100644",
+      "--- a/src/old.ts",
+      "+++ b/src/new.ts",
+      "@@ -1 +1 @@",
+      "-export const value = 1;",
+      "+export const value = 2;",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (path) => path === sourcePath,
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nR src/old.ts -> src/new.ts");
+      expect(result.targetPaths).toEqual([sourcePath, targetPath]);
+      await expect(readFile(sourcePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await readFile(targetPath, "utf8")).toBe(
+        "export const value = 2;\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given unsupported or malformed standard unified diff syntax,
     When apply_patch parses the diff,
     Then it reports a recoverable patch error for the invalid diff`, async () => {
@@ -656,7 +753,145 @@ describe("Apply Patch Tool", () => {
           "-old",
           "+new",
         ].join("\n"),
-        message: "renames and copies are not supported",
+        message: "rename diff is missing rename from/to metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/renamed.ts",
+          "similarity index 101%",
+          "rename from src.ts",
+          "rename to renamed.ts",
+        ].join("\n"),
+        message: "similarity index 101%",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/renamed.ts",
+          "rename from \tsrc.ts",
+          "rename to renamed.ts",
+        ].join("\n"),
+        message: "rename metadata path is empty",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/renamed.ts",
+          "similarity index 100%",
+        ].join("\n"),
+        message: "rename diff is missing rename from/to metadata",
+      },
+      {
+        patch: ["diff --git a/src.ts b/renamed.ts", "rename from src.ts"].join(
+          "\n",
+        ),
+        message: "rename diff is missing rename from/to metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/renamed.ts",
+          "new file mode 100644",
+          "rename from src.ts",
+          "rename to renamed.ts",
+        ].join("\n"),
+        message:
+          "rename metadata cannot be combined with file lifecycle metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/renamed.ts",
+          "deleted file mode 100644",
+          "rename from src.ts",
+          "rename to renamed.ts",
+        ].join("\n"),
+        message:
+          "rename metadata cannot be combined with file lifecycle metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "similarity index 100%",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "rename diff is missing rename from/to metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "rename from src.ts",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "rename diff is missing rename from/to metadata",
+      },
+      {
+        patch: [
+          "diff --git a/new.txt b/new.txt",
+          "similarity index 100%",
+          "rename from old.txt",
+          "rename to new.txt",
+          "--- /dev/null",
+          "+++ b/new.txt",
+          "@@ -0,0 +1 @@",
+          "+new",
+        ].join("\n"),
+        message: "rename metadata cannot use /dev/null file headers",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "similarity index 100%",
+          "rename from src.ts",
+          "rename to src.ts",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "rename metadata does not rename a file",
+      },
+      {
+        patch: [
+          "diff --git a/header-old.ts b/new.ts",
+          "similarity index 80%",
+          "rename from metadata-old.ts",
+          "rename to new.ts",
+          "--- a/header-old.ts",
+          "+++ b/new.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "rename metadata does not match file headers",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/header-new.ts",
+          "similarity index 80%",
+          "rename from src.ts",
+          "rename to metadata-new.ts",
+          "--- a/src.ts",
+          "+++ b/header-new.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "rename metadata does not match file headers",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/copied.ts",
+          "similarity index 100%",
+          "copy from src.ts",
+          "copy to copied.ts",
+        ].join("\n"),
+        message: "copy from src.ts",
       },
       {
         patch: [
@@ -849,7 +1084,16 @@ describe("Apply Patch Tool", () => {
           "-old",
           "+new",
         ].join("\n"),
-        message: "renames and copies are not supported",
+        message: "rename diff is missing rename from/to metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/renamed.ts",
+          "similarity index 100%",
+          "rename from other.ts",
+          "rename to renamed.ts",
+        ].join("\n"),
+        message: "rename metadata does not match diff --git paths",
       },
       {
         patch: [
