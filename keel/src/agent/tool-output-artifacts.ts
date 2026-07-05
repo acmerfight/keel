@@ -91,6 +91,7 @@ export interface ToolOutputArtifactStore {
   readonly save: (
     input: ToolOutputArtifactSaveInput,
   ) => Promise<ToolOutputArtifactSaveResult>;
+  readonly discard: (ref: string) => Promise<void>;
 }
 
 export interface ToolOutputArtifactsOptions {

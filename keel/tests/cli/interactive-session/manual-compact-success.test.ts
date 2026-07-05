@@ -331,6 +331,9 @@ describe("Interactive Session - Manual Compact Success", () => {
         saved.push(input);
         return { status: "stored", ref, contentSha256: "0".repeat(64) };
       },
+      discard: async () => {
+        saved.pop();
+      },
     };
     const provider: LLMProvider = {
       id: "fake",
@@ -460,6 +463,7 @@ describe("Interactive Session - Manual Compact Success", () => {
         saveAttempts.push(input);
         return { status: "failed", reason: "disk\nfull" };
       },
+      discard: async () => {},
     };
     const provider: LLMProvider = {
       id: "fake",

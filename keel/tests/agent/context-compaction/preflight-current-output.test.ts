@@ -98,6 +98,13 @@ function storingArtifactStore(
         contentSha256,
       };
     },
+    discard: async (ref) => {
+      const index = saved.findIndex((artifact) => artifact.ref === ref);
+      if (index !== -1) {
+        saved.splice(index, 1);
+      }
+      artifacts.delete(ref);
+    },
   };
 }
 
@@ -1909,7 +1916,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
 
   test(`Given artifact-backed current-output compaction would make the output larger,
     When the artifact marker is longer than the omitted content,
-    Then the original current output is retained`, async () => {
+    Then the original current output is retained without saving an unreferenced artifact`, async () => {
     // Given
     const currentToolOutput = "small output";
     const messages: Message[] = [
@@ -1941,11 +1948,63 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     );
 
     // Then
-    expect(saved).toHaveLength(1);
+    expect(saved).toHaveLength(0);
     expect(result.stats.toolOutputsCompacted).toBe(0);
+    expect(result.artifactReports).toEqual([]);
+    expect(result.artifactNotices).toBeUndefined();
     expect(capturedToolOutput(result.messages, "run_small_artifact")).toBe(
       currentToolOutput,
     );
+  });
+
+  test(`Given current-output artifact storage fails before a no-op compaction,
+    When the failed artifact marker would make the output larger,
+    Then the original output is retained without reporting an artifact side effect`, async () => {
+    // Given
+    const currentToolOutput = "small output";
+    const messages: Message[] = [
+      { role: "user", content: "Run the small command." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "run_small_failed_artifact",
+            tool: "bash",
+            command: "node small.js",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "run_small_failed_artifact",
+        content: currentToolOutput,
+      },
+    ];
+    const discards: string[] = [];
+    const store: ToolOutputArtifactStore = {
+      verifyReusable: async () => ({ status: "not_reusable" }),
+      save: async () => ({ status: "failed", reason: "disk full" }),
+      discard: async (ref) => {
+        discards.push(ref);
+      },
+    };
+
+    // When
+    const result = await compactCurrentToolOutputsWithArtifacts(
+      messages,
+      1,
+      store,
+    );
+
+    // Then
+    expect(discards).toEqual([]);
+    expect(result.stats.toolOutputsCompacted).toBe(0);
+    expect(result.artifactReports).toEqual([]);
+    expect(result.artifactNotices).toBeUndefined();
+    expect(
+      capturedToolOutput(result.messages, "run_small_failed_artifact"),
+    ).toBe(currentToolOutput);
   });
 
   test(`Given the compaction boundary receives an oversized current output under the request budget,

@@ -162,6 +162,7 @@ export function verifiedToolOutputArtifactFixture(options: {
         status: "failed",
         reason: "unexpected artifact save in test",
       }),
+      discard: async () => {},
     },
   };
 }

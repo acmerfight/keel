@@ -314,6 +314,13 @@ export function createToolOutputArtifactStore(
         return { status: "failed", reason };
       }
     },
+    discard: async (ref: string): Promise<void> => {
+      const parsed = parseToolOutputArtifactRef(ref);
+      if (parsed === null) {
+        return;
+      }
+      await rm(artifactPath(options.runtime, parsed), { force: true });
+    },
   };
 }
 

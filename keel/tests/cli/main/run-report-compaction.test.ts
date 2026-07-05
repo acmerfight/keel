@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +32,18 @@ function retainedStaleReadFixture(label: string): string {
   return [
     `${label}_START`,
     `${label.toLowerCase()} retained evidence `.repeat(1_800),
+    `${label}_END`,
+  ].join("\n");
+}
+
+function barelyOversizedStaleReadFixture(label: string): string {
+  return [
+    `${label}_START`,
+    ...Array.from(
+      { length: 28 },
+      (_, index) =>
+        `${label.toLowerCase()} retained evidence ${index}: ${"x".repeat(42)}`,
+    ),
     `${label}_END`,
   ].join("\n");
 }
@@ -108,6 +120,21 @@ const requestControlSchema = z
 
 async function readReport(path: string): Promise<z.infer<typeof reportSchema>> {
   return reportSchema.parse(JSON.parse(await readFile(path, "utf8")));
+}
+
+async function toolOutputArtifactFileCount(home: string): Promise<number> {
+  try {
+    const entries = await readdir(join(home, "artifacts", "tool-output"), {
+      recursive: true,
+      withFileTypes: true,
+    });
+    return entries.filter((entry) => entry.isFile()).length;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return 0;
+    }
+    throw error;
+  }
 }
 
 function onlyContextCompaction(report: z.infer<typeof reportSchema>) {
@@ -270,6 +297,104 @@ describe("CLI Main - Run Report Compaction", () => {
       expect(firstArtifactRef(compaction)).toMatch(
         /^tool-output:run-[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/u,
       );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given current-output preflight compaction would only save an orphan artifact,
+    When the compacted marker would make the output larger,
+    Then the report records no compaction and no artifact remains on disk`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-report-current-noop-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const reportPath = join(workspace, "current-noop.json");
+    await writeFile(join(workspace, "current-small.log"), "small output\n");
+    const mainBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const requestBody = JSON.parse(body);
+        if (isSummaryRequest(requestBody)) {
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          });
+          res.end(sseTextReplyWithUsage("unexpected summary request"));
+          return;
+        }
+        mainBodies.push(requestBody);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (mainBodies.length === 1) {
+          res.write(
+            sseToolCall("read_current_noop", "read", {
+              path: "current-small.log",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        const currentOutput = toolMessageContent(
+          mainBodies[1],
+          "read_current_noop",
+        );
+        const originalOutputKept =
+          currentOutput.includes("small output") &&
+          !currentOutput.includes("[current tool output compacted");
+        res.end(
+          sseTextReplyWithUsage(
+            originalOutputKept ? "current noop ready" : "current noop leaked",
+          ),
+        );
+      });
+    });
+    await listen(server);
+    const run = createRuntime(
+      ["--report", reportPath, "inspect current-small.log"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_CONTEXT_WINDOW_TOKENS: "4000",
+          KEEL_HOME: home,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(run.stdout()).toBe("current noop ready\n");
+      expect(run.stderr()).not.toContain("Context compacted:");
+      expect(run.stderr()).not.toContain("Tool output artifact:");
+      const report = await readReport(reportPath);
+      expect(report.contextCompactions).toEqual([]);
+      expect(await toolOutputArtifactFileCount(home)).toBe(0);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -972,6 +1097,158 @@ describe("CLI Main - Run Report Compaction", () => {
         proactive?.beforeEstimatedTokens ?? 0,
       );
       expect(proactive?.beforeMessageCount).toBe(proactive?.afterMessageCount);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given stale tool-output compaction would grow the retained output,
+    When queued input continues after the read,
+    Then the provider request keeps the smaller original output and the report records only history compaction`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-session-stale-growth-report-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+    const reportPath = join(workspace, "stale-growth.json");
+    await writeFile(
+      join(workspace, "stale-growth.log"),
+      barelyOversizedStaleReadFixture("STALE_GROWTH"),
+      "utf8",
+    );
+    const input = new PassThrough();
+    input.write("remember setup before the small stale read\n");
+    input.write("inspect stale-growth.log\n");
+    const firstAssistantAnswer = [
+      "SETUP_START",
+      "setup remembered ".repeat(5_800),
+      "SETUP_END",
+    ].join("\n");
+    const mainBodies: unknown[] = [];
+    let continuationQueued = false;
+    const queueContinuation = () => {
+      if (continuationQueued) {
+        return;
+      }
+      continuationQueued = true;
+      input.end("continue after the small stale read\n");
+    };
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const requestBody = JSON.parse(body);
+        if (isSummaryRequest(requestBody)) {
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          });
+          res.end(sseTextReplyWithUsage("STALE_GROWTH_SETUP_CHECKPOINT"));
+          return;
+        }
+        mainBodies.push(requestBody);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (mainBodies.length === 1) {
+          res.end(sseTextReplyWithUsage(firstAssistantAnswer));
+          return;
+        }
+        if (mainBodies.length === 2) {
+          res.write(
+            sseToolCall("read_stale_growth_report", "read", {
+              path: "stale-growth.log",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        const staleOutput = toolMessageContent(
+          mainBodies[mainBodies.length - 1],
+          "read_stale_growth_report",
+        );
+        if (mainBodies.length === 3) {
+          const fullOutputVisible = staleOutput.includes("STALE_GROWTH_END");
+          res.end(
+            sseTextReplyWithUsage(
+              fullOutputVisible
+                ? `The small stale report was inspected.\n${"analysis note ".repeat(
+                    2_500,
+                  )}`
+                : "small stale read missing",
+            ),
+          );
+          return;
+        }
+
+        const smallerOriginalKept =
+          staleOutput.includes("STALE_GROWTH_END") &&
+          !staleOutput.includes("[stale tool output compacted:");
+        res.end(
+          sseTextReplyWithUsage(
+            smallerOriginalKept
+              ? "stale growth avoided"
+              : "stale tool output grew",
+          ),
+        );
+      });
+    });
+    await listen(server);
+    const run = createRuntime(["--report", reportPath], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_CONTEXT_WINDOW_TOKENS: "46384",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+      onStdout: (text) => {
+        if (text.includes("The small stale report was inspected.")) {
+          queueContinuation();
+        }
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(run.stdout().slice(-128)).toContain("stale growth avoided\n");
+      expect(run.stderr()).toContain("Context compacted: proactive");
+      expect(mainBodies).toHaveLength(4);
+      const report = await readReport(reportPath);
+      const proactive = onlyContextCompaction(report);
+      expect(proactive).toMatchObject({
+        reason: "proactive",
+        providerRequestAction: "compacted_before_request",
+        scopes: ["history"],
+        staleToolOutputsCompacted: 0,
+        currentToolOutputsCompacted: 0,
+        toolOutputsCompacted: 0,
+        artifacts: [],
+      });
+      expect(proactive.toolOutputCharsBefore).toBe(0);
+      expect(proactive.toolOutputCharsAfter).toBe(0);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });

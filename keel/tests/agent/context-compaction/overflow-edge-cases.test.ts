@@ -84,6 +84,7 @@ function failingArtifactStore(
       saved.push({ input });
       return { status: "failed", reason: options?.reason ?? "disk full" };
     },
+    discard: async () => {},
   };
 }
 
@@ -195,6 +196,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
           contentSha256: "0".repeat(64),
         };
       },
+      discard: async () => {},
     };
     const provider: LLMProvider = {
       id: "small-current-output-artifact-provider",

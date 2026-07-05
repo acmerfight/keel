@@ -56,6 +56,9 @@ function artifactStoreSavingTo(
         contentSha256: "0".repeat(64),
       };
     },
+    discard: async () => {
+      saved.pop();
+    },
   };
 }
 
@@ -417,6 +420,7 @@ describe("Agent Tool Output Artifacts", () => {
         status: "failed",
         reason: "test artifact store is unavailable",
       }),
+      discard: async () => {},
     };
     let requestCount = 0;
     const provider: LLMProvider = {
@@ -902,6 +906,9 @@ describe("Agent Tool Output Artifacts", () => {
           ref: `tool-output:test/${saved.length}`,
           contentSha256: "0".repeat(64),
         };
+      },
+      discard: async () => {
+        saved.pop();
       },
     };
     const messages: Message[] = [{ role: "user", content: "inspect the logs" }];
