@@ -27,6 +27,12 @@ export type ParsedPatchOperation =
       readonly hunks: readonly ParsedPatchHunk[];
     }
   | {
+      readonly kind: "copy";
+      readonly sourcePath: string;
+      readonly path: string;
+      readonly hunks: readonly ParsedPatchHunk[];
+    }
+  | {
       readonly kind: "delete";
       readonly path: string;
       readonly expectedContent: string | null;
@@ -46,6 +52,17 @@ export type PreparedPatchOperation =
       readonly resolvedTargetPath: string;
       readonly parentPath: string;
       readonly afterContent: string;
+    }
+  | {
+      readonly kind: "copy";
+      readonly sourcePath: string;
+      readonly path: string;
+      readonly workspacePath: string;
+      readonly targetPath: string;
+      readonly resolvedTargetPath: string;
+      readonly parentPath: string;
+      readonly afterContent: string;
+      readonly mode: number;
     }
   | {
       readonly kind: "update";
@@ -81,7 +98,7 @@ export type PreparedPatchOperation =
     };
 
 export type AppliedPatchOperation =
-  | (Extract<PreparedPatchOperation, { readonly kind: "add" }> & {
+  | (Extract<PreparedPatchOperation, { readonly kind: "add" | "copy" }> & {
       readonly appliedIdentity: FileIdentity;
       readonly createdParentDirectories: readonly string[];
     })

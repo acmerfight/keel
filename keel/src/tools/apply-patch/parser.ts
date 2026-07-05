@@ -19,8 +19,6 @@ const UNSUPPORTED_STANDARD_DIFF_METADATA_PREFIXES = [
   "old mode ",
   "new mode ",
   "dissimilarity index ",
-  "copy from ",
-  "copy to ",
   "Binary files ",
 ] as const;
 
@@ -32,6 +30,8 @@ interface StandardFileHeaders {
   readonly sawSimilarityIndex: boolean;
   readonly renameFrom: string | null;
   readonly renameTo: string | null;
+  readonly copyFrom: string | null;
+  readonly copyTo: string | null;
   readonly next: number;
 }
 
@@ -46,6 +46,12 @@ interface ParsedStandardHunk {
   readonly newContent: string;
   readonly newHasNoFinalNewline: boolean;
   readonly next: number;
+}
+
+interface ValidatedStandardCopyMetadata {
+  readonly kind: "copy";
+  readonly sourcePath: string;
+  readonly targetPath: string;
 }
 
 type StandardHunkLineSide = "old" | "new" | "both";
@@ -91,7 +97,7 @@ function unsupportedStandardDiff(message: string): never {
   throw patchError(
     "tool_invalid_patch",
     `apply_patch failed: unsupported standard unified diff: ${message}`,
-    "Use a standard unified diff that updates, adds, deletes, or renames text files without copies, file mode changes, or binary patches.",
+    "Use a standard unified diff that updates, adds, deletes, renames, or copies text files without file mode changes or binary patches.",
   );
 }
 
@@ -129,8 +135,24 @@ function hasStandardRenameMetadata(headers: StandardFileHeaders): boolean {
   return (
     headers.renameFrom !== null ||
     headers.renameTo !== null ||
-    headers.sawSimilarityIndex
+    (headers.sawSimilarityIndex && !hasStandardCopyMetadata(headers))
   );
+}
+
+function hasStandardCopyMetadata(headers: StandardFileHeaders): boolean {
+  return headers.copyFrom !== null || headers.copyTo !== null;
+}
+
+function standardMetadataDiffPathMismatch(
+  headers: StandardFileHeaders,
+): string {
+  if (hasStandardCopyMetadata(headers)) {
+    return "copy metadata does not match diff --git paths";
+  }
+  if (hasStandardRenameMetadata(headers)) {
+    return "rename metadata does not match diff --git paths";
+  }
+  return "diff --git paths do not match ---/+++ file headers";
 }
 
 function assertStandardDiffGitMatchesFileHeaders(
@@ -143,11 +165,7 @@ function assertStandardDiffGitMatchesFileHeaders(
   const newDiffPath = headers.newPath ?? targetPath;
   const expected = `${STANDARD_OLD_PATH_PREFIX}${oldDiffPath} ${STANDARD_NEW_PATH_PREFIX}${newDiffPath}`;
   if (paths !== expected) {
-    invalidStandardDiff(
-      hasStandardRenameMetadata(headers)
-        ? "rename metadata does not match diff --git paths"
-        : "diff --git paths do not match ---/+++ file headers",
-    );
+    invalidStandardDiff(standardMetadataDiffPathMismatch(headers));
   }
 }
 
@@ -222,10 +240,14 @@ function isStandardSimilarityIndexMetadata(line: string): boolean {
   return true;
 }
 
-function parseStandardRenameMetadataPath(line: string, prefix: string): string {
+function parseStandardPathMetadata(
+  line: string,
+  prefix: string,
+  metadataName: "copy" | "rename",
+): string {
   const path = metadataFreePath(line.slice(prefix.length));
   if (path === "") {
-    invalidStandardDiff("rename metadata path is empty");
+    invalidStandardDiff(`${metadataName} metadata path is empty`);
   }
   return path;
 }
@@ -249,6 +271,8 @@ function parseStandardFileHeaders(
   let sawSimilarityIndex = false;
   let renameFrom: string | null = null;
   let renameTo: string | null = null;
+  let copyFrom: string | null = null;
+  let copyTo: string | null = null;
   while (index < lines.length) {
     const line = parserLine(lines, index);
     if (line.startsWith(STANDARD_OLD_FILE_MARKER)) break;
@@ -266,6 +290,8 @@ function parseStandardFileHeaders(
         sawSimilarityIndex,
         renameFrom,
         renameTo,
+        copyFrom,
+        copyTo,
       );
     }
     if (isStandardSimilarityIndexMetadata(line)) {
@@ -274,12 +300,22 @@ function parseStandardFileHeaders(
       continue;
     }
     if (line.startsWith("rename from ")) {
-      renameFrom = parseStandardRenameMetadataPath(line, "rename from ");
+      renameFrom = parseStandardPathMetadata(line, "rename from ", "rename");
       index++;
       continue;
     }
     if (line.startsWith("rename to ")) {
-      renameTo = parseStandardRenameMetadataPath(line, "rename to ");
+      renameTo = parseStandardPathMetadata(line, "rename to ", "rename");
+      index++;
+      continue;
+    }
+    if (line.startsWith("copy from ")) {
+      copyFrom = parseStandardPathMetadata(line, "copy from ", "copy");
+      index++;
+      continue;
+    }
+    if (line.startsWith("copy to ")) {
+      copyTo = parseStandardPathMetadata(line, "copy to ", "copy");
       index++;
       continue;
     }
@@ -305,6 +341,8 @@ function parseStandardFileHeaders(
       sawSimilarityIndex,
       renameFrom,
       renameTo,
+      copyFrom,
+      copyTo,
     );
   }
   const oldPath = parseStandardFileHeaderPath(
@@ -329,6 +367,8 @@ function parseStandardFileHeaders(
     sawSimilarityIndex,
     renameFrom,
     renameTo,
+    copyFrom,
+    copyTo,
     next: index + 1,
   };
 }
@@ -341,7 +381,36 @@ function parseStandardLifecycleHeadersWithoutFileHeaders(
   sawSimilarityIndex: boolean,
   renameFrom: string | null,
   renameTo: string | null,
+  copyFrom: string | null,
+  copyTo: string | null,
 ): StandardFileHeaders {
+  if (copyFrom !== null || copyTo !== null) {
+    if (copyFrom === null || copyTo === null) {
+      invalidStandardDiff("copy diff is missing copy from/to metadata");
+    }
+    if (renameFrom !== null || renameTo !== null) {
+      invalidStandardDiff(
+        "copy metadata cannot be combined with rename metadata",
+      );
+    }
+    if (sawNewFileMode || sawDeletedFileMode) {
+      invalidStandardDiff(
+        "copy metadata cannot be combined with file lifecycle metadata",
+      );
+    }
+    return {
+      oldPath: copyFrom,
+      newPath: copyTo,
+      sawNewFileMode,
+      sawDeletedFileMode,
+      sawSimilarityIndex,
+      renameFrom,
+      renameTo,
+      copyFrom,
+      copyTo,
+      next,
+    };
+  }
   if (sawSimilarityIndex || renameFrom !== null || renameTo !== null) {
     if (renameFrom === null || renameTo === null) {
       invalidStandardDiff("rename diff is missing rename from/to metadata");
@@ -359,6 +428,8 @@ function parseStandardLifecycleHeadersWithoutFileHeaders(
       sawSimilarityIndex,
       renameFrom,
       renameTo,
+      copyFrom,
+      copyTo,
       next,
     };
   }
@@ -376,6 +447,8 @@ function parseStandardLifecycleHeadersWithoutFileHeaders(
     sawSimilarityIndex,
     renameFrom,
     renameTo,
+    copyFrom,
+    copyTo,
     next,
   };
 }
@@ -474,7 +547,41 @@ function hasEffectiveStandardLines(lines: readonly string[]): boolean {
   return lines.some((line) => line !== "");
 }
 
-function validateStandardFileMetadata(headers: StandardFileHeaders): void {
+function validateStandardFileMetadata(
+  headers: StandardFileHeaders,
+): ValidatedStandardCopyMetadata | null {
+  if (hasStandardCopyMetadata(headers)) {
+    if (headers.copyFrom === null || headers.copyTo === null) {
+      invalidStandardDiff("copy diff is missing copy from/to metadata");
+    }
+    if (headers.renameFrom !== null || headers.renameTo !== null) {
+      invalidStandardDiff(
+        "copy metadata cannot be combined with rename metadata",
+      );
+    }
+    if (headers.oldPath === null || headers.newPath === null) {
+      invalidStandardDiff("copy metadata cannot use /dev/null file headers");
+    }
+    if (headers.oldPath === headers.newPath) {
+      invalidStandardDiff("copy metadata does not copy a file");
+    }
+    if (headers.sawNewFileMode || headers.sawDeletedFileMode) {
+      invalidStandardDiff(
+        "copy metadata cannot be combined with file lifecycle metadata",
+      );
+    }
+    if (
+      headers.copyFrom !== headers.oldPath ||
+      headers.copyTo !== headers.newPath
+    ) {
+      invalidStandardDiff("copy metadata does not match file headers");
+    }
+    return {
+      kind: "copy",
+      sourcePath: headers.oldPath,
+      targetPath: headers.newPath,
+    };
+  }
   if (hasStandardRenameMetadata(headers)) {
     if (headers.renameFrom === null || headers.renameTo === null) {
       invalidStandardDiff("rename diff is missing rename from/to metadata");
@@ -498,7 +605,7 @@ function validateStandardFileMetadata(headers: StandardFileHeaders): void {
         "new file diff cannot use deleted file mode metadata",
       );
     }
-    return;
+    return null;
   }
   if (headers.newPath === null) {
     if (headers.sawNewFileMode) {
@@ -506,11 +613,12 @@ function validateStandardFileMetadata(headers: StandardFileHeaders): void {
         "deleted file diff cannot use new file mode metadata",
       );
     }
-    return;
+    return null;
   }
   if (headers.sawNewFileMode || headers.sawDeletedFileMode) {
     invalidStandardDiff("file lifecycle metadata does not match file headers");
   }
+  return null;
 }
 
 function addFileLinesFromStandardContent(content: string): readonly string[] {
@@ -534,7 +642,7 @@ function standardPatchOperationFromHunks(
   headers: StandardFileHeaders,
   parsedHunks: readonly ParsedStandardHunk[],
 ): ParsedPatchOperation {
-  validateStandardFileMetadata(headers);
+  const metadata = validateStandardFileMetadata(headers);
   if (headers.oldPath === null) {
     const path = standardFileHeaderTargetPath(headers);
     let content = "";
@@ -565,6 +673,14 @@ function standardPatchOperationFromHunks(
       expectedContent += parsed.oldContent;
     }
     return { kind: "delete", path, expectedContent };
+  }
+  if (metadata?.kind === "copy") {
+    return {
+      kind: "copy",
+      sourcePath: metadata.sourcePath,
+      path: metadata.targetPath,
+      hunks: standardUpdateHunksFromParsed(metadata.sourcePath, parsedHunks),
+    };
   }
   if (headers.oldPath !== headers.newPath) {
     if (!hasStandardRenameMetadata(headers)) {
@@ -611,7 +727,8 @@ function parseStandardFileDiff(
     parsedHunks.length === 0 &&
     headers.oldPath !== null &&
     headers.newPath !== null &&
-    !hasStandardRenameMetadata(headers)
+    !hasStandardRenameMetadata(headers) &&
+    !hasStandardCopyMetadata(headers)
   ) {
     invalidStandardDiff(`file ${targetPath} has no hunks`);
   }
