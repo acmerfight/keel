@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import type { Stats } from "node:fs";
 import {
+  chmodSync,
   closeSync,
   existsSync,
   fchmodSync,
@@ -196,6 +197,41 @@ type PersistedCheckpoint = z.infer<typeof checkpointSchema>;
 type PersistedBatchCheckpointOperation = z.infer<
   typeof batchCheckpointOperationSchema
 >;
+type PersistedNonCreateBatchCheckpointOperation = Exclude<
+  PersistedBatchCheckpointOperation,
+  { readonly operation: "create" }
+>;
+type CoalescableUndoCheckpointOperation =
+  | PersistedNonCreateBatchCheckpointOperation
+  | {
+      readonly operation: "create";
+      readonly relativePath: string;
+      readonly afterContent: string;
+      readonly currentMissingAllowed: boolean;
+    };
+type CoalescedUndoCheckpointOperation =
+  | CoalescableUndoCheckpointOperation
+  | {
+      readonly operation: "expect-missing";
+      readonly relativePath: string;
+    }
+  | {
+      readonly operation: "delete-create";
+      readonly relativePath: string;
+      readonly beforeContent: string;
+      readonly afterContent: string;
+      readonly mode: number;
+      readonly currentMissingAllowed: boolean;
+    };
+type UndoCheckpointFileState =
+  | { readonly status: "missing" }
+  | { readonly status: "file"; readonly content: string };
+type UndoCheckpointCoalesceResult =
+  | {
+      readonly status: "ok";
+      readonly operations: readonly CoalescedUndoCheckpointOperation[];
+    }
+  | RestoreLastEditCheckpointResult;
 
 function gitOutput(workspace: string, args: readonly string[]): string | null {
   try {
@@ -598,6 +634,218 @@ function coalesceTaskCheckpointOperations(
   return [...operationByPath.values()];
 }
 
+function undoCheckpointOperationBeforeState(
+  operation: CoalescableUndoCheckpointOperation,
+): UndoCheckpointFileState {
+  if (operation.operation === "create") return { status: "missing" };
+  return { status: "file", content: operation.beforeContent };
+}
+
+function undoCheckpointOperationAfterState(
+  operation: CoalescedUndoCheckpointOperation,
+): UndoCheckpointFileState {
+  if (operation.operation === "delete") return { status: "missing" };
+  if (
+    operation.operation === "create" ||
+    operation.operation === "edit" ||
+    operation.operation === "delete-create"
+  ) {
+    return { status: "file", content: operation.afterContent };
+  }
+  return { status: "missing" };
+}
+
+function sameUndoCheckpointFileState(
+  first: UndoCheckpointFileState,
+  second: UndoCheckpointFileState,
+): boolean {
+  if (first.status !== second.status) return false;
+  if (first.status === "missing") return true;
+  /* v8 ignore next 1: status equality above makes this unreachable. */
+  if (second.status === "missing") return false;
+  return first.content === second.content;
+}
+
+function undoCheckpointOperationCanRestoreFromMissing(
+  operation: CoalescedUndoCheckpointOperation,
+): boolean {
+  if (operation.operation === "expect-missing") {
+    return true;
+  }
+  if (operation.operation === "create") return operation.currentMissingAllowed;
+  if (operation.operation === "delete-create") {
+    return operation.currentMissingAllowed;
+  }
+  return false;
+}
+
+function mergeUndoCheckpointOperations(
+  existing: CoalescedUndoCheckpointOperation,
+  next: CoalescableUndoCheckpointOperation,
+): CoalescedUndoCheckpointOperation | RestoreLastEditCheckpointResult {
+  const existingAfterState = undoCheckpointOperationAfterState(existing);
+  const nextBeforeState = undoCheckpointOperationBeforeState(next);
+  const canContinueFromMissing =
+    nextBeforeState.status === "missing" &&
+    undoCheckpointOperationCanRestoreFromMissing(existing);
+  if (
+    !sameUndoCheckpointFileState(existingAfterState, nextBeforeState) &&
+    !canContinueFromMissing
+  ) {
+    return blockedRestore(next);
+  }
+
+  if (existing.operation === "expect-missing") {
+    /* v8 ignore next 3: continuity rejects non-create operations before this branch. */
+    if (next.operation !== "create") {
+      invalidCheckpointError();
+    }
+    return {
+      operation: "create",
+      relativePath: existing.relativePath,
+      afterContent: next.afterContent,
+      currentMissingAllowed: true,
+    };
+  }
+
+  if (existing.operation === "create") {
+    if (next.operation === "delete") {
+      return {
+        operation: "expect-missing",
+        relativePath: existing.relativePath,
+      };
+    }
+    return {
+      operation: "create",
+      relativePath: existing.relativePath,
+      afterContent: next.afterContent,
+      currentMissingAllowed: next.operation === "create",
+    };
+  }
+
+  if (existing.operation === "delete") {
+    /* v8 ignore next 3: continuity rejects non-create operations after a delete. */
+    if (next.operation !== "create") {
+      invalidCheckpointError();
+    }
+    return {
+      operation: "delete-create",
+      relativePath: existing.relativePath,
+      beforeContent: existing.beforeContent,
+      afterContent: next.afterContent,
+      mode: existing.mode,
+      currentMissingAllowed: true,
+    };
+  }
+
+  if (existing.operation === "delete-create") {
+    if (next.operation === "delete") {
+      return {
+        operation: "delete",
+        relativePath: existing.relativePath,
+        beforeContent: existing.beforeContent,
+        mode: existing.mode,
+      };
+    }
+    if (next.operation === "create") {
+      return {
+        operation: "delete-create",
+        relativePath: existing.relativePath,
+        beforeContent: existing.beforeContent,
+        afterContent: next.afterContent,
+        mode: existing.mode,
+        currentMissingAllowed: true,
+      };
+    }
+    return {
+      operation: "delete-create",
+      relativePath: existing.relativePath,
+      beforeContent: existing.beforeContent,
+      afterContent: next.afterContent,
+      mode: existing.mode,
+      currentMissingAllowed: false,
+    };
+  }
+
+  if (next.operation === "delete") {
+    return {
+      operation: "delete",
+      relativePath: existing.relativePath,
+      beforeContent: existing.beforeContent,
+      mode: next.mode,
+    };
+  }
+
+  return {
+    operation: "edit",
+    relativePath: existing.relativePath,
+    beforeContent: existing.beforeContent,
+    afterContent: next.afterContent,
+  };
+}
+
+function coalesceUndoCheckpointOperations(
+  checkpointOperations: readonly PersistedBatchCheckpointOperation[],
+): UndoCheckpointCoalesceResult {
+  const operationByPath = new Map<string, CoalescedUndoCheckpointOperation>();
+
+  for (const operation of checkpointOperations) {
+    const coalescedOperation: CoalescableUndoCheckpointOperation =
+      operation.operation === "create"
+        ? {
+            operation: "create",
+            relativePath: operation.relativePath,
+            afterContent: operation.afterContent,
+            currentMissingAllowed: true,
+          }
+        : operation;
+    const existing = operationByPath.get(operation.relativePath);
+    if (existing === undefined) {
+      operationByPath.set(operation.relativePath, coalescedOperation);
+      continue;
+    }
+
+    const merged = mergeUndoCheckpointOperations(existing, coalescedOperation);
+    if ("status" in merged) return merged;
+    operationByPath.set(operation.relativePath, merged);
+  }
+
+  return { status: "ok", operations: [...operationByPath.values()] };
+}
+
+function checkpointForwardOperations(
+  checkpoint: LastEditCheckpoint,
+): readonly PersistedBatchCheckpointOperation[] {
+  if (checkpoint.operation === "batch") return checkpoint.operations;
+  if (checkpoint.operation === "edit") {
+    return [
+      {
+        operation: "edit",
+        relativePath: checkpoint.relativePath,
+        beforeContent: checkpoint.beforeContent,
+        afterContent: checkpoint.afterContent,
+      },
+    ];
+  }
+  if (checkpoint.operation === "delete") {
+    return [
+      {
+        operation: "delete",
+        relativePath: checkpoint.relativePath,
+        beforeContent: checkpoint.beforeContent,
+        mode: checkpoint.mode,
+      },
+    ];
+  }
+  return [
+    {
+      operation: "create",
+      relativePath: checkpoint.relativePath,
+      afterContent: checkpoint.afterContent,
+    },
+  ];
+}
+
 export function recordLastTaskCheckpoint(
   options: RecordLastBatchCheckpointOptions,
 ): RecordLastEditCheckpointResult {
@@ -770,12 +1018,6 @@ function validateBatchRestoreOperation(
   };
 }
 
-function isRestoreResult(
-  value: ResolvedBatchRestoreOperation | RestoreLastEditCheckpointResult,
-): value is RestoreLastEditCheckpointResult {
-  return "status" in value;
-}
-
 function restoreDeletedFile(
   filePath: string,
   beforeContent: string,
@@ -815,6 +1057,7 @@ type AppliedBatchRestoreOperation =
       readonly operation: "edit";
       readonly restorePath: string;
       readonly afterContent: string;
+      readonly mode?: number;
     }
   | {
       readonly operation: "create";
@@ -834,6 +1077,10 @@ function rollbackBatchRestore(
     try {
       if (operation.operation === "edit") {
         writeFileSync(operation.restorePath, operation.afterContent, "utf8");
+        /* v8 ignore next 3: only chmod-changing restore failures need mode rollback. */
+        if (operation.mode !== undefined) {
+          chmodSync(operation.restorePath, operation.mode);
+        }
       } else if (operation.operation === "create") {
         writeFileSync(operation.filePath, operation.afterContent, {
           encoding: "utf8",
@@ -867,7 +1114,7 @@ function restoreBatchCheckpoint(
       gitWorkspace.root,
       operation,
     );
-    if (isRestoreResult(validated)) return validated;
+    if ("status" in validated) return validated;
     operations.push(validated);
   }
 
@@ -930,6 +1177,229 @@ function restoreBatchCheckpoint(
     status: "restored",
     restoredLabel: `${checkpoint.operations.length} files`,
   };
+}
+
+type ResolvedDeleteCreateRestoreOperation =
+  | {
+      readonly operation: "delete-create";
+      readonly filePath: string;
+      readonly relativePath: string;
+      readonly exists: false;
+      readonly beforeContent: string;
+      readonly mode: number;
+    }
+  | {
+      readonly operation: "delete-create";
+      readonly filePath: string;
+      readonly restorePath: string;
+      readonly relativePath: string;
+      readonly exists: true;
+      readonly beforeContent: string;
+      readonly afterContent: string;
+      readonly mode: number;
+      readonly rollbackMode: number;
+    };
+
+type ResolvedCoalescedRestoreOperation =
+  | ResolvedBatchRestoreOperation
+  | ResolvedDeleteCreateRestoreOperation;
+
+function validateCoalescedCreateRestoreOperation(
+  gitRoot: string,
+  operation: Extract<
+    CoalescedUndoCheckpointOperation,
+    { readonly operation: "create" }
+  >,
+): ResolvedBatchRestoreOperation | RestoreLastEditCheckpointResult {
+  const filePath = checkpointTargetPath(gitRoot, operation.relativePath);
+  const targetStat = lstatIfPossible(filePath);
+  if (targetStat === null) {
+    if (!operation.currentMissingAllowed) {
+      return blockedRestore(operation);
+    }
+    return {
+      operation: "create",
+      filePath,
+      relativePath: operation.relativePath,
+      exists: false,
+      afterContent: operation.afterContent,
+    };
+  }
+  if (targetStat.isSymbolicLink()) {
+    return blockedRestore(operation);
+  }
+  const restorePath = realpathIfPossible(filePath);
+  /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
+  if (restorePath === null || !isInside(gitRoot, restorePath)) {
+    return blockedRestore(operation);
+  }
+  const currentContent = readFileIfPossible(restorePath);
+  if (currentContent !== operation.afterContent) {
+    return blockedRestore(operation);
+  }
+  return {
+    operation: "create",
+    filePath,
+    relativePath: operation.relativePath,
+    exists: true,
+    afterContent: operation.afterContent,
+    mode: targetStat.mode & 0o7777,
+  };
+}
+
+function validateDeleteCreateRestoreOperation(
+  gitRoot: string,
+  operation: Extract<
+    CoalescedUndoCheckpointOperation,
+    { readonly operation: "delete-create" }
+  >,
+): ResolvedDeleteCreateRestoreOperation | RestoreLastEditCheckpointResult {
+  const filePath = checkpointTargetPath(gitRoot, operation.relativePath);
+  const targetStat = lstatIfPossible(filePath);
+  if (targetStat === null) {
+    if (!operation.currentMissingAllowed) {
+      return blockedRestore(operation);
+    }
+    const parentPath = realpathIfPossible(dirname(filePath));
+    if (parentPath === null || !isInside(gitRoot, parentPath)) {
+      return blockedRestore(operation);
+    }
+    return {
+      operation: "delete-create",
+      filePath,
+      relativePath: operation.relativePath,
+      exists: false,
+      beforeContent: operation.beforeContent,
+      mode: operation.mode,
+    };
+  }
+
+  if (targetStat.isSymbolicLink()) {
+    return blockedRestore(operation);
+  }
+
+  const restorePath = realpathIfPossible(filePath);
+  /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
+  if (restorePath === null || !isInside(gitRoot, restorePath)) {
+    return blockedRestore(operation);
+  }
+  const currentContent = readFileIfPossible(restorePath);
+  if (currentContent !== operation.afterContent) {
+    return blockedRestore(operation);
+  }
+
+  return {
+    operation: "delete-create",
+    filePath,
+    restorePath,
+    relativePath: operation.relativePath,
+    exists: true,
+    beforeContent: operation.beforeContent,
+    afterContent: operation.afterContent,
+    mode: operation.mode,
+    rollbackMode: targetStat.mode & 0o7777,
+  };
+}
+
+function restoreResolvedCoalescedOperations(
+  operations: readonly ResolvedCoalescedRestoreOperation[],
+): RestoreLastEditCheckpointResult | null {
+  const applied: AppliedBatchRestoreOperation[] = [];
+  for (const operation of operations.toReversed()) {
+    if (operation.operation === "delete-create") {
+      if (!operation.exists) {
+        /* v8 ignore next 8: filesystem races or permissions can still block after validation. */
+        if (
+          !restoreDeletedFile(
+            operation.filePath,
+            operation.beforeContent,
+            operation.mode,
+          )
+        ) {
+          return blockedBatchRestore(applied, operation);
+        }
+        applied.push({ operation: "delete", filePath: operation.filePath });
+        continue;
+      }
+
+      const rollbackOperation: AppliedBatchRestoreOperation = {
+        operation: "edit",
+        restorePath: operation.restorePath,
+        afterContent: operation.afterContent,
+        mode: operation.rollbackMode,
+      };
+      try {
+        writeFileSync(operation.restorePath, operation.beforeContent, "utf8");
+        chmodSync(operation.restorePath, operation.mode);
+        applied.push(rollbackOperation);
+      } catch {
+        /* v8 ignore next 5: filesystem races or permissions can still block after validation. */
+        return blockedBatchRestore(
+          [...applied, rollbackOperation],
+          operation,
+          "Could not restore file.",
+        );
+      }
+      continue;
+    }
+
+    if (operation.operation === "create") {
+      if (operation.exists) {
+        try {
+          rmSync(operation.filePath);
+          applied.push({
+            operation: "create",
+            filePath: operation.filePath,
+            afterContent: operation.afterContent,
+            mode: operation.mode,
+          });
+        } catch {
+          /* v8 ignore next 5: filesystem races or permissions can still block after validation. */
+          return blockedBatchRestore(
+            applied,
+            operation,
+            "Could not restore file.",
+          );
+        }
+      }
+    } else if (operation.operation === "delete") {
+      /* v8 ignore next 8: filesystem races or permissions can still block after validation. */
+      if (
+        !restoreDeletedFile(
+          operation.filePath,
+          operation.beforeContent,
+          operation.mode,
+        )
+      ) {
+        return blockedBatchRestore(applied, operation);
+      }
+      applied.push({ operation: "delete", filePath: operation.filePath });
+    } else {
+      try {
+        writeFileSync(operation.restorePath, operation.beforeContent, "utf8");
+        applied.push({
+          operation: "edit",
+          restorePath: operation.restorePath,
+          afterContent: operation.afterContent,
+        });
+      } catch {
+        /* v8 ignore next 12: filesystem races or permissions can still block after validation. */
+        return blockedBatchRestore(
+          [
+            ...applied,
+            {
+              operation: "edit",
+              restorePath: operation.restorePath,
+              afterContent: operation.afterContent,
+            },
+          ],
+          operation,
+          "Could not restore file.",
+        );
+      }
+    }
+  }
+  return null;
 }
 
 function restoreCheckpoint(
@@ -1019,6 +1489,61 @@ function checkpointRestoredLabel(checkpoint: LastEditCheckpoint): string {
   return checkpoint.relativePath;
 }
 
+function selectedCheckpointsRestoredLabel(
+  checkpoints: readonly LastEditCheckpoint[],
+): string {
+  return `${checkpoints.length} checkpoints`;
+}
+
+function unavailableUndoCheckpointMessage(checkpointIndex: number): string {
+  return `No undo checkpoint ${checkpointIndex}. Run keel /undo --list to choose an available checkpoint.`;
+}
+
+function restoreCoalescedUndoCheckpointOperations(
+  operations: readonly CoalescedUndoCheckpointOperation[],
+  gitWorkspace: GitWorkspace,
+): RestoreLastEditCheckpointResult {
+  const restoreOperations: ResolvedCoalescedRestoreOperation[] = [];
+  for (const operation of operations) {
+    if (operation.operation === "expect-missing") {
+      const filePath = checkpointTargetPath(
+        gitWorkspace.root,
+        operation.relativePath,
+      );
+      if (lstatIfPossible(filePath) !== null) {
+        return blockedRestore(operation);
+      }
+      continue;
+    }
+    const validated =
+      operation.operation === "delete-create"
+        ? validateDeleteCreateRestoreOperation(gitWorkspace.root, operation)
+        : operation.operation === "create"
+          ? validateCoalescedCreateRestoreOperation(
+              gitWorkspace.root,
+              operation,
+            )
+          : validateBatchRestoreOperation(gitWorkspace.root, operation);
+    if ("status" in validated) return validated;
+    restoreOperations.push(validated);
+  }
+
+  if (restoreOperations.length === 0) {
+    return {
+      status: "restored",
+      restoredLabel: "0 files",
+    };
+  }
+
+  const blocked = restoreResolvedCoalescedOperations(restoreOperations);
+  /* v8 ignore next 1: post-validation filesystem races are covered by rollback helpers. */
+  if (blocked !== null) return blocked;
+  return {
+    status: "restored",
+    restoredLabel: `${restoreOperations.length} files`,
+  };
+}
+
 function readWorkspaceCheckpointStack(
   gitWorkspace: GitWorkspace,
 ): readonly LastEditCheckpoint[] {
@@ -1044,20 +1569,68 @@ export function listUndoCheckpoints(
 export function restoreLastEditCheckpoint(
   workspace: string,
 ): RestoreLastEditCheckpointResult {
+  return restoreUndoCheckpointsThrough(workspace, 1);
+}
+
+export function restoreUndoCheckpointsThrough(
+  workspace: string,
+  checkpointIndex: number,
+): RestoreLastEditCheckpointResult {
   const gitWorkspace = findGitWorkspace(workspace);
   if (gitWorkspace === null) {
     return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
   }
 
-  const checkpoints = readWorkspaceCheckpointStack(gitWorkspace);
-  const checkpoint = checkpoints.at(-1);
-  if (checkpoint === undefined) {
-    return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
+  if (!Number.isSafeInteger(checkpointIndex) || checkpointIndex < 1) {
+    return {
+      status: "none",
+      message: unavailableUndoCheckpointMessage(checkpointIndex),
+    };
   }
 
-  const result = restoreCheckpoint(checkpoint, gitWorkspace);
+  const checkpoints = readWorkspaceCheckpointStack(gitWorkspace);
+  if (checkpoints.length === 0) {
+    return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
+  }
+  if (checkpointIndex > checkpoints.length) {
+    return {
+      status: "none",
+      message: unavailableUndoCheckpointMessage(checkpointIndex),
+    };
+  }
+
+  const selectedCheckpoints = checkpoints.slice(-checkpointIndex);
+  if (checkpointIndex === 1) {
+    const checkpoint = selectedCheckpoints[0];
+    /* v8 ignore next 3: length and range checks above guarantee one selected checkpoint. */
+    if (checkpoint === undefined) {
+      return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
+    }
+    const result = restoreCheckpoint(checkpoint, gitWorkspace);
+    if (result.status === "restored") {
+      writeCheckpoint(gitWorkspace.checkpointPath, checkpoints.slice(0, -1));
+    }
+    return result;
+  }
+
+  const checkpointOperations = selectedCheckpoints.flatMap((checkpoint) =>
+    checkpointForwardOperations(checkpoint),
+  );
+  const coalesced = coalesceUndoCheckpointOperations(checkpointOperations);
+  if (coalesced.status !== "ok") return coalesced;
+  const result = restoreCoalescedUndoCheckpointOperations(
+    coalesced.operations,
+    gitWorkspace,
+  );
   if (result.status === "restored") {
-    writeCheckpoint(gitWorkspace.checkpointPath, checkpoints.slice(0, -1));
+    writeCheckpoint(
+      gitWorkspace.checkpointPath,
+      checkpoints.slice(0, -checkpointIndex),
+    );
+    return {
+      status: "restored",
+      restoredLabel: selectedCheckpointsRestoredLabel(selectedCheckpoints),
+    };
   }
   return result;
 }

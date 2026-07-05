@@ -30,10 +30,16 @@ export interface DoctorCliArgs {
   readonly model?: string;
 }
 
-interface UndoCliArgs {
-  readonly command: "undo";
-  readonly mode: "restore" | "list";
-}
+type UndoCliArgs =
+  | {
+      readonly command: "undo";
+      readonly mode: "restore" | "list";
+    }
+  | {
+      readonly command: "undo";
+      readonly mode: "restore-through";
+      readonly checkpointIndex: number;
+    };
 
 interface SessionsListCliArgs {
   readonly command: "sessions";

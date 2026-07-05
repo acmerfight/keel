@@ -143,6 +143,89 @@ describe("Interactive Session - Undo", () => {
     });
   });
 
+  test(`Given the user targets an undo checkpoint by list index,
+    When the interactive command is parsed,
+    Then the parser returns the target index`, () => {
+    // Given / When
+    const command = parseInteractiveCommand("/undo --to 2");
+
+    // Then
+    expect(command).toEqual({
+      kind: "undo",
+      mode: "restore-through",
+      checkpointIndex: 2,
+    });
+  });
+
+  test(`Given the user passes an invalid undo target index,
+    When the interactive command is parsed,
+    Then the parser reports the target index requirement`, () => {
+    // Given / When
+    const command = parseInteractiveCommand("/undo --to 0");
+
+    // Then
+    expect(command).toEqual({
+      kind: "invalid",
+      message: "Error: /undo --to requires a positive integer.",
+    });
+  });
+
+  test(`Given the user targets an undo checkpoint with inline syntax,
+    When the interactive command is parsed,
+    Then the parser returns the target index`, () => {
+    // Given / When
+    const command = parseInteractiveCommand("/undo --to=2");
+
+    // Then
+    expect(command).toEqual({
+      kind: "undo",
+      mode: "restore-through",
+      checkpointIndex: 2,
+    });
+  });
+
+  test(`Given the user targets an undo checkpoint with an unsafe integer,
+    When the interactive command is parsed,
+    Then the parser reports the target index requirement`, () => {
+    // Given / When
+    const command = parseInteractiveCommand("/undo --to 9007199254740992");
+
+    // Then
+    expect(command).toEqual({
+      kind: "invalid",
+      message: "Error: /undo --to requires a positive integer.",
+    });
+  });
+
+  test(`Given the user targets an undo checkpoint with an invalid inline integer,
+    When the interactive command is parsed,
+    Then the parser reports the target index requirement`, () => {
+    // Given / When
+    const command = parseInteractiveCommand("/undo --to=0");
+
+    // Then
+    expect(command).toEqual({
+      kind: "invalid",
+      message: "Error: /undo --to requires a positive integer.",
+    });
+  });
+
+  test.each([
+    ["/undo --to 1 extra", 'Error: unknown /undo option "extra".'],
+    ["/undo --to=1 extra", 'Error: unknown /undo option "extra".'],
+  ])(`Given the user passes extra arguments to %s,
+    When the interactive command is parsed,
+    Then the parser reports the extra argument`, (input, message) => {
+    // Given / When
+    const command = parseInteractiveCommand(input);
+
+    // Then
+    expect(command).toEqual({
+      kind: "invalid",
+      message,
+    });
+  });
+
   test(`Given undo checkpoints exist,
     When user enters /undo --list,
     Then the command reports checkpoints without starting a model turn`, async () => {
@@ -212,6 +295,79 @@ describe("Interactive Session - Undo", () => {
       );
       expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
         "after second\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given undo checkpoints exist,
+    When user enters /undo --to with a listed checkpoint index,
+    Then every newer checkpoint is restored without starting a model turn`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-interactive-undo-to-");
+    await commitFile(workspace, "first.txt", "before first\n");
+    await writeFile(join(workspace, "first.txt"), "after first\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath: join(workspace, "first.txt"),
+      beforeContent: "before first\n",
+      afterContent: "after first\n",
+    });
+    await commitFile(workspace, "second.txt", "before second\n");
+    await writeFile(join(workspace, "second.txt"), "after second\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath: join(workspace, "second.txt"),
+      beforeContent: "before second\n",
+      afterContent: "after second\n",
+    });
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("undo to should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("undo to should not start a model turn");
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.end("/undo --to 2\n");
+
+      // Then
+      await session;
+      expect(stdout).toBe("Restored 2 checkpoints\n");
+      expect(stderr).toBe("");
+      expect(providerResolved).toBe(false);
+      expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
+        "before first\n",
+      );
+      expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
+        "before second\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
