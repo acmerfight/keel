@@ -31,7 +31,7 @@ import type {
 
 function validateCreateTargetAfterMkdir(
   operation:
-    | Extract<PreparedPatchOperation, { readonly kind: "add" }>
+    | Extract<PreparedPatchOperation, { readonly kind: "add" | "copy" }>
     | {
         readonly workspacePath: string;
         readonly parentPath: string;
@@ -65,7 +65,7 @@ export function applyPreparedOperation(
   operation: PreparedPatchOperation,
   options: ExecuteApplyPatchOptions,
 ): AppliedPatchOperation {
-  if (operation.kind === "add") {
+  if (operation.kind === "add" || operation.kind === "copy") {
     const createdParentDirectories = createWorkspaceParentDirectories({
       workspacePath: operation.workspacePath,
       parentPath: operation.parentPath,
@@ -117,10 +117,17 @@ export function applyPreparedOperation(
         options.projectInstructions?.assertMutationAllowed([accessTargetPath]);
         publishedTargetPath = accessTargetPath;
       };
+      const createOptions =
+        operation.kind === "copy"
+          ? {
+              mode: operation.mode,
+            }
+          : {};
       const result = createTextFileAtomically(
         realTargetPath,
         operation.afterContent,
         {
+          ...createOptions,
           beforeAccess: validateTargetAtAccess,
           beforeWrite: validateOpenedTempAtAccess,
           beforePublish: validateTargetAtAccess,
@@ -142,7 +149,9 @@ export function applyPreparedOperation(
         throw new KeelError(
           "tool_file_exists",
           `apply_patch failed: file already exists: ${operation.path}`,
-          "Read the existing file and use an Update File hunk instead of Add File.",
+          operation.kind === "copy"
+            ? "Read the existing file and use an Update File hunk instead of copying over it."
+            : "Read the existing file and use an Update File hunk instead of Add File.",
         );
       }
       /* v8 ignore next 1: unknown atomic create errors are rethrown unchanged. */

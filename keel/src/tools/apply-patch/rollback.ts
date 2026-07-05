@@ -48,7 +48,7 @@ function restoreDeletedTextFileBestEffort(
 function rollbackTargetPaths(
   operation: Extract<
     AppliedPatchOperation,
-    { readonly kind: "add" | "update" }
+    { readonly kind: "add" | "copy" | "update" }
   >,
 ): readonly string[] {
   const identity = operation.appliedIdentity;
@@ -121,7 +121,7 @@ export function rollbackAppliedOperations(
     }
 
     const targetPaths = rollbackTargetPaths(operation);
-    if (operation.kind === "add") {
+    if (operation.kind === "add" || operation.kind === "copy") {
       for (const targetPath of targetPaths) {
         /* v8 ignore next 1: rollback skips files changed concurrently after the failed operation. */
         if (readFileIfPossible(targetPath) === operation.afterContent) {

@@ -144,7 +144,7 @@ describe("Tool Access", () => {
     }
   });
 
-  test(`Given apply_patch calls describe file additions, updates, deletes, and moves,
+  test(`Given apply_patch calls describe file additions, updates, deletes, moves, and copies,
     When scheduling access is derived,
     Then overlapping mutations conflict and unrelated files can still run independently`, async () => {
     // Given
@@ -200,11 +200,36 @@ describe("Tool Access", () => {
         path: "generated/child.txt",
         content: "child\n",
       });
+      const copyPatch = toolCallAccesses(workspace, {
+        id: "copy_patch",
+        tool: "apply_patch",
+        patch: [
+          "diff --git a/src/template.ts b/docs/copied.ts",
+          "similarity index 100%",
+          "copy from src/template.ts",
+          "copy to docs/copied.ts",
+        ].join("\n"),
+      });
+      const editTemplate = toolCallAccesses(workspace, {
+        id: "edit_template",
+        tool: "edit",
+        path: "src/template.ts",
+        edits: [{ oldText: "old", newText: "new" }],
+      });
+      const writeCopyDestination = toolCallAccesses(workspace, {
+        id: "write_copy_destination",
+        tool: "write",
+        path: "docs/copied.ts",
+        content: "copied\n",
+      });
 
       // Then
       expect(ToolAccesses.conflict(patchAccesses, editA)).toBe(true);
       expect(ToolAccesses.conflict(patchAccesses, writeOther)).toBe(false);
       expect(ToolAccesses.conflict(addParentPatch, writeChild)).toBe(true);
+      expect(ToolAccesses.conflict(copyPatch, editTemplate)).toBe(true);
+      expect(ToolAccesses.conflict(copyPatch, writeCopyDestination)).toBe(true);
+      expect(ToolAccesses.conflict(copyPatch, writeOther)).toBe(false);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -310,6 +335,10 @@ describe("Tool Access", () => {
         join(workspace, "src", "AGENTS.md"),
         join(workspace, "agents-link.md"),
       );
+      await symlink(
+        join(workspace, "src", "AGENTS.md"),
+        join(workspace, "docs", "rules-link.md"),
+      );
       const writeInstructions = toolCallAccesses(workspace, {
         id: "write_instructions",
         tool: "write",
@@ -332,6 +361,26 @@ describe("Tool Access", () => {
           "-rules",
           "+new rules",
           "*** End Patch",
+        ].join("\n"),
+      });
+      const copyFromInstructionsPatch = toolCallAccesses(workspace, {
+        id: "copy_from_instructions_patch",
+        tool: "apply_patch",
+        patch: [
+          "diff --git a/src/AGENTS.md b/docs/copied-rules.md",
+          "similarity index 100%",
+          "copy from src/AGENTS.md",
+          "copy to docs/copied-rules.md",
+        ].join("\n"),
+      });
+      const copyFromInstructionAliasPatch = toolCallAccesses(workspace, {
+        id: "copy_from_instruction_alias_patch",
+        tool: "apply_patch",
+        patch: [
+          "diff --git a/docs/rules-link.md b/docs/copied-rules.md",
+          "similarity index 100%",
+          "copy from docs/rules-link.md",
+          "copy to docs/copied-rules.md",
         ].join("\n"),
       });
       const addInstructionsPatch = toolCallAccesses(workspace, {
@@ -374,6 +423,12 @@ describe("Tool Access", () => {
       expect(ToolAccesses.conflict(readA, invalidPatch)).toBe(true);
       expect(ToolAccesses.conflict(readA, editInstructionAlias)).toBe(true);
       expect(ToolAccesses.conflict(readA, patchInstructionAlias)).toBe(true);
+      expect(ToolAccesses.conflict(readA, copyFromInstructionsPatch)).toBe(
+        true,
+      );
+      expect(ToolAccesses.conflict(readA, copyFromInstructionAliasPatch)).toBe(
+        true,
+      );
       expect(ToolAccesses.conflict(readA, addInstructionsPatch)).toBe(true);
       expect(ToolAccesses.conflict(readA, deleteInstructionAliasPatch)).toBe(
         true,
@@ -500,6 +555,26 @@ describe("Tool Access", () => {
           "*** End Patch",
         ].join("\n"),
       });
+      const outsideCopySourcePatch = toolCallAccesses(workspace, {
+        id: "outside_copy_source_patch",
+        tool: "apply_patch",
+        patch: [
+          `diff --git a/${outsidePath} b/docs/copied.txt`,
+          "similarity index 100%",
+          `copy from ${outsidePath}`,
+          "copy to docs/copied.txt",
+        ].join("\n"),
+      });
+      const outsideCopyDestinationPatch = toolCallAccesses(workspace, {
+        id: "outside_copy_destination_patch",
+        tool: "apply_patch",
+        patch: [
+          `diff --git a/src/a.txt b/${outsidePath}`,
+          "similarity index 100%",
+          "copy from src/a.txt",
+          `copy to ${outsidePath}`,
+        ].join("\n"),
+      });
       const moveOutsidePatch = toolCallAccesses(workspace, {
         id: "move_outside_patch",
         tool: "apply_patch",
@@ -543,6 +618,8 @@ describe("Tool Access", () => {
         outsideAddPatch,
         outsideDeletePatch,
         outsideUpdatePatch,
+        outsideCopySourcePatch,
+        outsideCopyDestinationPatch,
         moveOutsidePatch,
         moveToFileParentPatch,
       ]) {

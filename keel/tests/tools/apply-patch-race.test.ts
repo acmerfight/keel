@@ -776,6 +776,58 @@ describe("Apply Patch Tool Race Handling", () => {
     }
   });
 
+  test(`Given a copy source opens through an ignored workspace symlink,
+    When apply_patch rechecks the opened descriptor path,
+    Then it rejects before reading ignored content for copying`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-copy-open-ignore-"),
+    );
+    const sourcePath = join(workspace, "note.txt");
+    const copiedPath = join(workspace, "copied.txt");
+    const ignoredPath = join(workspace, "private");
+    const ignoredSourcePath = join(ignoredPath, "note.txt");
+    await mkdir(ignoredPath);
+    await writeFile(join(workspace, ".gitignore"), "private/\n", "utf8");
+    await writeFile(sourcePath, "old\n", "utf8");
+    await writeFile(ignoredSourcePath, "ignored\n", "utf8");
+    const patch = [
+      "diff --git a/note.txt b/copied.txt",
+      "similarity index 100%",
+      "copy from note.txt",
+      "copy to copied.txt",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let swapped = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      openSync: (path, flags, mode) => {
+        if (!swapped && String(path).endsWith("note.txt")) {
+          swapped = true;
+          actualFs.rmSync(sourcePath, { force: true });
+          actualFs.symlinkSync(ignoredSourcePath, sourcePath);
+        }
+        return actualFs.openSync(path, flags, mode);
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: () => true },
+          }),
+        "tool_path_ignored",
+        "ignored path",
+      );
+      expect(await readFile(ignoredSourcePath, "utf8")).toBe("ignored\n");
+      expect(await pathExists(copiedPath)).toBe(false);
+      expect(swapped).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a delete target opens through an ignored workspace symlink,
     When apply_patch rechecks the opened descriptor path,
     Then it rejects before recording or removing ignored content`, async () => {
@@ -914,6 +966,56 @@ describe("Apply Patch Tool Race Handling", () => {
         "file has not been read",
       );
       expect(await readFile(alternatePath, "utf8")).toBe("old\n");
+      expect(swapped).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a copy source opens as a different workspace file after initial read validation,
+    When apply_patch rechecks read-before-edit on the opened descriptor path,
+    Then it rejects without copying the unread file`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-copy-open-unread-"),
+    );
+    const sourcePath = join(workspace, "note.txt");
+    const alternatePath = join(workspace, "alternate.txt");
+    const copiedPath = join(workspace, "copied.txt");
+    await writeFile(sourcePath, "old\n", "utf8");
+    await writeFile(alternatePath, "alternate\n", "utf8");
+    const patch = [
+      "diff --git a/note.txt b/copied.txt",
+      "similarity index 100%",
+      "copy from note.txt",
+      "copy to copied.txt",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const readSourcePath = actualFs.realpathSync(sourcePath);
+    let swapped = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      openSync: (path, flags, mode) => {
+        if (!swapped && String(path) === readSourcePath) {
+          swapped = true;
+          actualFs.rmSync(sourcePath, { force: true });
+          actualFs.symlinkSync(alternatePath, sourcePath);
+        }
+        return actualFs.openSync(path, flags, mode);
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: (path) => path === readSourcePath },
+          }),
+        "tool_file_not_read",
+        "file has not been read",
+      );
+      expect(await readFile(alternatePath, "utf8")).toBe("alternate\n");
+      expect(await pathExists(copiedPath)).toBe(false);
       expect(swapped).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });

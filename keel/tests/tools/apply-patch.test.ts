@@ -722,6 +722,140 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a standard unified diff copies a read text file,
+    When apply_patch validates and applies the diff,
+    Then it preserves the source path, writes the new path, and records a create undo operation`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-copy-");
+    const workspacePath = await realpath(workspace);
+    const sourcePath = join(workspacePath, "src", "template.ts");
+    const targetPath = join(workspacePath, "src", "copied.ts");
+    await mkdir(join(workspacePath, "src"));
+    await writeFile(sourcePath, "export const value = 1;\n", "utf8");
+    const patch = [
+      "diff --git a/src/template.ts b/src/copied.ts",
+      "similarity index 100%",
+      "copy from src/template.ts",
+      "copy to src/copied.ts",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (path) => path === sourcePath,
+        },
+      });
+
+      // Then
+      expect(result.content).toBe(
+        "Applied patch:\nC src/template.ts -> src/copied.ts",
+      );
+      expect(result.targetPaths).toEqual([targetPath]);
+      expect(await readFile(sourcePath, "utf8")).toBe(
+        "export const value = 1;\n",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe(
+        "export const value = 1;\n",
+      );
+      expect(result.checkpointOperations).toEqual([
+        {
+          operation: "create",
+          filePath: targetPath,
+          afterContent: "export const value = 1;\n",
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff copies and edits a read text file,
+    When apply_patch validates and applies the diff,
+    Then it creates the copy with the text changes applied without mutating the source`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-copy-");
+    const workspacePath = await realpath(workspace);
+    const sourcePath = join(workspacePath, "src", "template.ts");
+    const targetPath = join(workspacePath, "src", "copied.ts");
+    await mkdir(join(workspacePath, "src"));
+    await writeFile(sourcePath, "export const value = 1;\n", "utf8");
+    const patch = [
+      "diff --git a/src/template.ts b/src/copied.ts",
+      "similarity index 80%",
+      "copy from src/template.ts",
+      "copy to src/copied.ts",
+      "index 1111111..2222222 100644",
+      "--- a/src/template.ts",
+      "+++ b/src/copied.ts",
+      "@@ -1 +1 @@",
+      "-export const value = 1;",
+      "+export const value = 2;",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (path) => path === sourcePath,
+        },
+      });
+
+      // Then
+      expect(result.content).toBe(
+        "Applied patch:\nC src/template.ts -> src/copied.ts",
+      );
+      expect(result.targetPaths).toEqual([targetPath]);
+      expect(await readFile(sourcePath, "utf8")).toBe(
+        "export const value = 1;\n",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe(
+        "export const value = 2;\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff copies an unread text file,
+    When apply_patch validates the diff,
+    Then it rejects the copy with the existing read-before-edit failure`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "src"));
+    await writeFile(
+      join(workspace, "src", "template.ts"),
+      "export const value = 1;\n",
+      "utf8",
+    );
+    const patch = [
+      "diff --git a/src/template.ts b/src/copied.ts",
+      "similarity index 100%",
+      "copy from src/template.ts",
+      "copy to src/copied.ts",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: () => false,
+            },
+          }),
+        "tool_file_not_read",
+        "file has not been read: src/template.ts",
+      );
+      expect(
+        await readFile(join(workspace, "src", "template.ts"), "utf8"),
+      ).toBe("export const value = 1;\n");
+      expect(await pathExists(join(workspace, "src", "copied.ts"))).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given unsupported or malformed standard unified diff syntax,
     When apply_patch parses the diff,
     Then it reports a recoverable patch error for the invalid diff`, async () => {
@@ -889,9 +1023,158 @@ describe("Apply Patch Tool", () => {
           "diff --git a/src.ts b/copied.ts",
           "similarity index 100%",
           "copy from src.ts",
+        ].join("\n"),
+        message: "copy diff is missing copy from/to metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/copied.ts",
+          "similarity index 100%",
           "copy to copied.ts",
         ].join("\n"),
-        message: "copy from src.ts",
+        message: "copy diff is missing copy from/to metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/copied.ts",
+          "copy from \tsrc.ts",
+          "copy to copied.ts",
+        ].join("\n"),
+        message: "copy metadata path is empty",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/wrong.ts",
+          "similarity index 80%",
+          "copy from src.ts",
+          "copy to copied.ts",
+          "--- a/src.ts",
+          "+++ b/copied.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "copy metadata does not match diff --git paths",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/copied.ts",
+          "similarity index 100%",
+          "copy from src.ts",
+          "--- a/src.ts",
+          "+++ b/copied.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "copy diff is missing copy from/to metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/copied.ts",
+          "similarity index 100%",
+          "copy from src.ts",
+          "copy to copied.ts",
+          "rename from src.ts",
+          "rename to renamed.ts",
+        ].join("\n"),
+        message: "copy metadata cannot be combined with rename metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/copied.ts",
+          "similarity index 100%",
+          "copy from src.ts",
+          "copy to copied.ts",
+          "rename from src.ts",
+          "rename to renamed.ts",
+          "--- a/src.ts",
+          "+++ b/copied.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "copy metadata cannot be combined with rename metadata",
+      },
+      {
+        patch: [
+          "diff --git a/new.txt b/new.txt",
+          "similarity index 100%",
+          "copy from old.txt",
+          "copy to new.txt",
+          "--- /dev/null",
+          "+++ b/new.txt",
+          "@@ -0,0 +1 @@",
+          "+new",
+        ].join("\n"),
+        message: "copy metadata cannot use /dev/null file headers",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "similarity index 100%",
+          "copy from src.ts",
+          "copy to src.ts",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "copy metadata does not copy a file",
+      },
+      {
+        patch: [
+          "diff --git a/header-old.ts b/copied.ts",
+          "similarity index 80%",
+          "copy from metadata-old.ts",
+          "copy to copied.ts",
+          "--- a/header-old.ts",
+          "+++ b/copied.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "copy metadata does not match file headers",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/header-new.ts",
+          "similarity index 80%",
+          "copy from src.ts",
+          "copy to metadata-new.ts",
+          "--- a/src.ts",
+          "+++ b/header-new.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "copy metadata does not match file headers",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/copied.ts",
+          "new file mode 100644",
+          "copy from src.ts",
+          "copy to copied.ts",
+        ].join("\n"),
+        message:
+          "copy metadata cannot be combined with file lifecycle metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/copied.ts",
+          "new file mode 100644",
+          "copy from src.ts",
+          "copy to copied.ts",
+          "--- a/src.ts",
+          "+++ b/copied.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message:
+          "copy metadata cannot be combined with file lifecycle metadata",
       },
       {
         patch: [
@@ -2171,6 +2454,38 @@ describe("Apply Patch Tool", () => {
         "file is too large: large.txt",
       );
       expect(await pathExists(targetPath)).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard copy diff source is too large,
+    When apply_patch reads the source as editable text,
+    Then it reports the apply_patch file size limit without creating the copy`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "large.txt"), "x".repeat(10_485_761));
+    const patch = [
+      "diff --git a/large.txt b/copied.txt",
+      "similarity index 100%",
+      "copy from large.txt",
+      "copy to copied.txt",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (path) => path === join(workspacePath, "large.txt"),
+            },
+          }),
+        "tool_file_too_large",
+        "file is too large: large.txt",
+      );
+      expect(await pathExists(join(workspace, "copied.txt"))).toBe(false);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

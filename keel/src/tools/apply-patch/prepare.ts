@@ -290,10 +290,100 @@ function prepareAddOperation(
   };
 }
 
+function prepareCopyOperation(
+  workspace: string,
+  operation: Extract<ParsedPatchOperation, { readonly kind: "copy" }>,
+  options: ExecuteApplyPatchOptions,
+): PreparedPatchOperation {
+  const { workspacePath, requestedPath, targetPath } = resolveWorkspaceTarget(
+    workspace,
+    operation.sourcePath,
+    "apply_patch",
+  );
+  const validatedTarget = validateUpdateTarget(
+    workspacePath,
+    requestedPath,
+    targetPath,
+    operation.sourcePath,
+  );
+  if (
+    options.readBeforeEdit !== undefined &&
+    !options.readBeforeEdit.hasRead(validatedTarget.targetPath)
+  ) {
+    throw new KeelError(
+      "tool_file_not_read",
+      `apply_patch failed: file has not been read: ${operation.sourcePath}`,
+      `Use read(path: "${operation.sourcePath}") to view the current file content, then retry apply_patch with copy hunks copied from the read output.`,
+    );
+  }
+
+  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  let openedMode = validatedTarget.mode;
+  const file = readEditableTextFileWithMetadata(
+    validatedTarget.targetPath,
+    operation.sourcePath,
+    {
+      command: "apply_patch",
+      maxBytes: MAX_PATCH_EDIT_FILE_BYTES,
+      tooLargeError: (observedBytes) =>
+        fileTooLargeError(operation.sourcePath, observedBytes),
+      validateOpenedFile: (fd) => {
+        const openedTargetPath = assertWorkspaceOpenTargetAtAccess({
+          fd,
+          workspacePath,
+          targetPath: validatedTarget.targetPath,
+          toolName: "apply_patch",
+          requestedPath: operation.sourcePath,
+        });
+        if (projectIgnorePolicy.isIgnored(openedTargetPath, false)) {
+          throw new KeelError(
+            "tool_path_ignored",
+            `apply_patch failed: ignored path: ${operation.sourcePath}`,
+            "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
+          );
+        }
+        if (
+          options.readBeforeEdit !== undefined &&
+          !options.readBeforeEdit.hasRead(openedTargetPath)
+        ) {
+          throw new KeelError(
+            "tool_file_not_read",
+            `apply_patch failed: file has not been read: ${operation.sourcePath}`,
+            `Use read(path: "${operation.sourcePath}") to view the current file content, then retry apply_patch with copy hunks copied from the read output.`,
+          );
+        }
+        openedMode = fstatSync(fd).mode & 0o7777;
+        return openedTargetPath;
+      },
+    },
+  );
+  const updated = applyUpdateHunks(
+    operation.sourcePath,
+    file.content,
+    operation.hunks,
+  );
+  const destination = resolveWorkspaceCreateTarget(
+    workspace,
+    operation.path,
+    "apply_patch",
+  );
+  return {
+    kind: "copy",
+    sourcePath: operation.sourcePath,
+    path: operation.path,
+    workspacePath: destination.workspacePath,
+    targetPath: destination.targetPath,
+    resolvedTargetPath: destination.resolvedTargetPath,
+    parentPath: destination.parentPath,
+    afterContent: withUtf8Bom(updated, file.hasUtf8Bom),
+    mode: openedMode,
+  };
+}
+
 export function preparedMutationTargetPaths(
   operation: PreparedPatchOperation,
 ): readonly string[] {
-  if (operation.kind === "add") {
+  if (operation.kind === "add" || operation.kind === "copy") {
     return [operation.targetPath, operation.resolvedTargetPath];
   }
   if (operation.kind === "move") {
@@ -319,7 +409,9 @@ export function preparePatchOperations(
         ? prepareAddOperation(workspace, operation)
         : operation.kind === "update"
           ? prepareUpdateOperation(workspace, operation, options)
-          : prepareDeleteOperation(workspace, operation, options);
+          : operation.kind === "copy"
+            ? prepareCopyOperation(workspace, operation, options)
+            : prepareDeleteOperation(workspace, operation, options);
     for (const targetPath of uniquePaths(preparedMutationTargetPaths(next))) {
       if (targetPaths.has(targetPath)) {
         throw patchError(

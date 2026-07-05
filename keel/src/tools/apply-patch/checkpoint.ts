@@ -46,7 +46,7 @@ export function checkpointOperationsFor(
   if (!pathHasIdentity(targetPath, operation.appliedIdentity)) {
     throw changedTargetError(operation);
   }
-  if (operation.kind === "add") {
+  if (operation.kind === "add" || operation.kind === "copy") {
     return [
       {
         operation: "create",
@@ -68,6 +68,9 @@ export function checkpointOperationsFor(
 export function summaryLine(operation: PreparedPatchOperation): string {
   if (operation.kind === "move") {
     return `R ${operation.path} -> ${operation.movePath}`;
+  }
+  if (operation.kind === "copy") {
+    return `C ${operation.sourcePath} -> ${operation.path}`;
   }
   const marker =
     operation.kind === "add" ? "A" : operation.kind === "update" ? "M" : "D";

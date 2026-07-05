@@ -204,6 +204,25 @@ function accessForParsedPatchOperation(
     const path = createAccessPath(workspace, operation.path, "apply_patch");
     return path === null ? null : ToolAccesses.writeTree(path);
   }
+  if (operation.kind === "copy") {
+    if (isProjectInstructionPath(operation.sourcePath)) return null;
+    const source = existingOrRequestedAccessPath(
+      workspace,
+      operation.sourcePath,
+    );
+    if (isProjectInstructionAccessPath(source)) return null;
+    if (source === null) return null;
+    const destination = createAccessPath(
+      workspace,
+      operation.path,
+      "apply_patch",
+    );
+    if (destination === null) return null;
+    return [
+      ...ToolAccesses.readFile(source),
+      ...ToolAccesses.writeTree(destination),
+    ];
+  }
   if (operation.kind === "delete") {
     const path = existingOrRequestedAccessPath(workspace, operation.path);
     if (isProjectInstructionAccessPath(path)) return null;
