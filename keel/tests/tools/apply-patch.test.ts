@@ -194,6 +194,220 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a standard unified diff adds and deletes text files,
+    When apply_patch validates and applies the diff,
+    Then it creates and removes files through the normal patch result`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-");
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "obsolete.txt"), "remove me\n", "utf8");
+    const patch = [
+      "diff --git a/docs/new.md b/docs/new.md",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/docs/new.md",
+      "@@ -0,0 +1,2 @@",
+      "+# New",
+      "+created by standard diff",
+      "diff --git a/obsolete.txt b/obsolete.txt",
+      "deleted file mode 100644",
+      "index 2222222..0000000",
+      "--- a/obsolete.txt",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-remove me",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "obsolete.txt"),
+        },
+      });
+
+      // Then
+      expect(result.content).toBe(
+        "Applied patch:\nA docs/new.md\nD obsolete.txt",
+      );
+      expect(result.targetPaths).toEqual([
+        join(workspacePath, "docs", "new.md"),
+        join(workspacePath, "obsolete.txt"),
+      ]);
+      expect(await readFile(join(workspace, "docs", "new.md"), "utf8")).toBe(
+        "# New\ncreated by standard diff\n",
+      );
+      await expect(
+        readFile(join(workspace, "obsolete.txt"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff deletes an unread file,
+    When apply_patch validates the diff,
+    Then it rejects the deletion with the existing read-before-edit failure`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "obsolete.txt"), "remove me\n", "utf8");
+    const patch = [
+      "diff --git a/obsolete.txt b/obsolete.txt",
+      "deleted file mode 100644",
+      "index 2222222..0000000",
+      "--- a/obsolete.txt",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-remove me",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: () => false,
+            },
+          }),
+        "tool_file_not_read",
+        "file has not been read: obsolete.txt",
+      );
+      expect(await readFile(join(workspace, "obsolete.txt"), "utf8")).toBe(
+        "remove me\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff deletion no longer matches the read file,
+    When apply_patch validates the diff,
+    Then it rejects the stale deletion without removing the file`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "obsolete.txt"), "current\n", "utf8");
+    const patch = [
+      "diff --git a/obsolete.txt b/obsolete.txt",
+      "deleted file mode 100644",
+      "index 2222222..0000000",
+      "--- a/obsolete.txt",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-old",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (targetPath) =>
+                targetPath === join(workspacePath, "obsolete.txt"),
+            },
+          }),
+        "tool_patch_hunk_not_found",
+        "expected lines not found in obsolete.txt",
+      );
+      expect(await readFile(join(workspace, "obsolete.txt"), "utf8")).toBe(
+        "current\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff adds files with blank content lines,
+    When apply_patch validates and applies the diff,
+    Then it preserves blank-only and trailing blank lines`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-");
+    const workspacePath = await realpath(workspace);
+    const patch = [
+      "diff --git a/blank.txt b/blank.txt",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/blank.txt",
+      "@@ -0,0 +1 @@",
+      "+",
+      "diff --git a/trailing.txt b/trailing.txt",
+      "new file mode 100644",
+      "index 0000000..2222222",
+      "--- /dev/null",
+      "+++ b/trailing.txt",
+      "@@ -0,0 +1,2 @@",
+      "+line",
+      "+",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch);
+
+      // Then
+      expect(result.content).toBe(
+        "Applied patch:\nA blank.txt\nA trailing.txt",
+      );
+      expect(result.targetPaths).toEqual([
+        join(workspacePath, "blank.txt"),
+        join(workspacePath, "trailing.txt"),
+      ]);
+      expect(await readFile(join(workspace, "blank.txt"), "utf8")).toBe("\n");
+      expect(await readFile(join(workspace, "trailing.txt"), "utf8")).toBe(
+        "line\n\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given standard unified diffs add and delete empty files without file headers,
+    When apply_patch validates and applies the diffs,
+    Then it creates and removes the empty files through the normal patch result`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-");
+    const workspacePath = await realpath(workspace);
+    await writeFile(join(workspace, "empty-old.txt"), "", "utf8");
+    const patch = [
+      "diff --git a/empty-new.txt b/empty-new.txt",
+      "new file mode 100644",
+      "index 0000000..e69de29",
+      "diff --git a/empty-old.txt b/empty-old.txt",
+      "deleted file mode 100644",
+      "index e69de29..0000000",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (targetPath) =>
+            targetPath === join(workspacePath, "empty-old.txt"),
+        },
+      });
+
+      // Then
+      expect(result.content).toBe(
+        "Applied patch:\nA empty-new.txt\nD empty-old.txt",
+      );
+      expect(result.targetPaths).toEqual([
+        join(workspacePath, "empty-new.txt"),
+        join(workspacePath, "empty-old.txt"),
+      ]);
+      expect(await readFile(join(workspace, "empty-new.txt"), "utf8")).toBe("");
+      await expect(
+        readFile(join(workspace, "empty-old.txt"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a standard unified diff carries no-newline markers,
     When apply_patch validates and applies the diff,
     Then it updates the file without adding a trailing newline`, async () => {
@@ -454,16 +668,129 @@ describe("Apply Patch Tool", () => {
       {
         patch: [
           "diff --git a/new.txt b/new.txt",
+          "new file mode 100755",
           "--- /dev/null",
           "+++ b/new.txt",
           "@@ -0,0 +1 @@",
           "+new",
         ].join("\n"),
-        message: "file additions and deletions are not supported",
+        message: "new file mode 100755",
       },
       {
         patch: ["diff --git a/src.ts b/src.ts", "index 111..222"].join("\n"),
         message: "missing --- file header",
+      },
+      {
+        patch: [
+          "diff --git a/new.txt b/new.txt",
+          "new file mode 100644",
+          "@@ -0,0 +1 @@",
+          "+new",
+        ].join("\n"),
+        message: "missing --- file header",
+      },
+      {
+        patch: [
+          "diff --git a/old.txt b/new.txt",
+          "new file mode 100644",
+          "index 0000000..1111111",
+        ].join("\n"),
+        message: "file lifecycle diff header must target one path",
+      },
+      {
+        patch: [
+          "diff --git a/new.txt b/new.txt",
+          "--- /dev/null",
+          "+++ /dev/null",
+        ].join("\n"),
+        message: "file headers cannot both use /dev/null",
+      },
+      {
+        patch: [
+          "diff --git a/new.txt b/new.txt",
+          "deleted file mode 100644",
+          "index 0000000..1111111",
+          "--- /dev/null",
+          "+++ b/new.txt",
+          "@@ -0,0 +1 @@",
+          "+new",
+        ].join("\n"),
+        message: "new file diff cannot use deleted file mode metadata",
+      },
+      {
+        patch: [
+          "diff --git a/old.txt b/old.txt",
+          "new file mode 100644",
+          "index 1111111..0000000",
+          "--- a/old.txt",
+          "+++ /dev/null",
+          "@@ -1 +0,0 @@",
+          "-old",
+        ].join("\n"),
+        message: "deleted file diff cannot use new file mode metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "new file mode 100644",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "file lifecycle metadata does not match file headers",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "deleted file mode 100644",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "file lifecycle metadata does not match file headers",
+      },
+      {
+        patch: [
+          "diff --git a/new.txt b/new.txt",
+          "new file mode 100644",
+          "index 0000000..1111111",
+          "--- /dev/null",
+          "+++ b/new.txt",
+          "@@ -0,0 +1 @@",
+          "+new",
+          "\\ No newline at end of file",
+        ].join("\n"),
+        message: "new file new.txt without a trailing newline is not supported",
+      },
+      {
+        patch: [
+          "diff --git a/new.txt b/new.txt",
+          "new file mode 100644",
+          "index 0000000..1111111",
+          "--- /dev/null",
+          "+++ b/new.txt",
+          "@@ -0,1 +1 @@",
+          "-",
+          "+new",
+        ].join("\n"),
+        message: "new file new.txt hunk contains old lines",
+      },
+      {
+        patch: [
+          "diff --git a/old.txt b/old.txt",
+          "deleted file mode 100644",
+          "index 1111111..0000000",
+          "--- a/old.txt",
+          "+++ /dev/null",
+          "@@ -1 +0,1 @@",
+          "-old",
+          "+",
+        ].join("\n"),
+        message: "deleted file old.txt hunk contains new lines",
       },
       {
         patch: ["diff --git a/src.ts b/src.ts", "--- a/src.ts"].join("\n"),
@@ -479,7 +806,7 @@ describe("Apply Patch Tool", () => {
           "-old",
           "+new",
         ].join("\n"),
-        message: "missing ---/+++ file headers",
+        message: "missing --- file header",
       },
       {
         patch: [
@@ -515,7 +842,7 @@ describe("Apply Patch Tool", () => {
       },
       {
         patch: [
-          "diff --git a/src.ts b/src.ts",
+          "diff --git a/src.ts b/other.ts",
           "--- a/src.ts",
           "+++ b/other.ts",
           "@@ -1 +1 @@",

@@ -1,5 +1,6 @@
 import { fstatSync, statSync } from "node:fs";
 import { KeelError } from "../../core/error.ts";
+import { normalizeLineEndings } from "../edit-match.ts";
 import { createProjectIgnorePolicy } from "../project-ignore.ts";
 import { readEditableTextFileWithMetadata } from "../text-file.ts";
 import {
@@ -250,6 +251,16 @@ function prepareDeleteOperation(
       },
     },
   );
+  if (
+    operation.expectedContent !== null &&
+    normalizeLineEndings(file.content) !== operation.expectedContent
+  ) {
+    throw patchError(
+      "tool_patch_hunk_not_found",
+      `apply_patch failed: expected lines not found in ${operation.path}`,
+      `Use read(path: "${operation.path}") to view the current content, then regenerate the deletion hunk with exact context.`,
+    );
+  }
 
   return {
     kind: "delete",

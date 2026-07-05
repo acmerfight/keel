@@ -640,6 +640,66 @@ describe("File Editing Multi Edit And Apply Patch", () => {
     }
   });
 
+  test(`Given the assistant proposes a standard unified diff that adds and deletes files,
+    When the agent handles the apply_patch tool call,
+    Then the file addition and deletion are visible before the assistant replies`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "obsolete.txt"), "remove me\n", "utf8");
+    const provider = createFakeProvider([
+      fakeToolResponse("read", { path: "obsolete.txt" }),
+      fakeToolResponse("apply_patch", {
+        patch: [
+          "diff --git a/docs/new.md b/docs/new.md",
+          "new file mode 100644",
+          "index 0000000..1111111",
+          "--- /dev/null",
+          "+++ b/docs/new.md",
+          "@@ -0,0 +1,2 @@",
+          "+# New",
+          "+created by standard diff",
+          "diff --git a/obsolete.txt b/obsolete.txt",
+          "deleted file mode 100644",
+          "index 2222222..0000000",
+          "--- a/obsolete.txt",
+          "+++ /dev/null",
+          "@@ -1 +0,0 @@",
+          "-remove me",
+        ].join("\n"),
+      }),
+      fakeResponse("Applied the standard add/delete diff."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "apply this standard diff that adds and deletes files",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(join(workspace, "docs", "new.md"), "utf8")).toBe(
+        "# New\ncreated by standard diff\n",
+      );
+      await expect(
+        readFile(join(workspace, "obsolete.txt"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Applied the standard add/delete diff.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a nested AGENTS.md applies to an apply_patch addition,
     When the assistant patches before seeing those instructions,
     Then the first patch is blocked and the retry can create the file`, async () => {
