@@ -119,8 +119,9 @@ What a user can do today:
   `keel eval compare --base <old.jsonl> --head <new.jsonl>` compares two
   result files by task, including pass, outcome, turn, token, cost, wall-time,
   harness-failure, and regression transcript-path deltas.
-- `keel /undo` — restore the last edit, created file, or apply_patch batch
-  checkpoint.
+- `keel /undo` / `keel /undo --list` / `keel /undo --to <index>` — restore
+  the last edit, created file, apply_patch batch, or every checkpoint through
+  a listed older checkpoint.
 - `keel --doctor` — environment check for bundled ripgrep plus the selected
   provider/model/API-key/base-url/context/cost-model state; by default it also
   verifies real provider auth with a low-cost online models endpoint, while
@@ -286,10 +287,11 @@ Codex/Claude Code — or directly moves the eval numbers.
   approving. Remaining work is deeper shell parsing, family-specific validators
   for additional commands where safe, and persistent approval rules. OS
   sandboxing remains P2.
-- **Whole-task undo** — ✅ Partial (2026-06): `/undo` restores the last edit,
-  created file, apply_patch batch, or multi-file task checkpoint. Remaining
-  work is broader command grouping and user-facing controls for choosing older
-  checkpoints.
+- **Whole-task undo** — ✅ Partial (2026-07): `/undo` restores the last edit,
+  created file, apply_patch batch, or multi-file task checkpoint, while
+  `/undo --list` and `/undo --to <index>` let users choose an older listed
+  checkpoint and restore through it atomically. Remaining work is broader
+  command grouping and richer checkpoint preview/redo controls.
 - **Local workflow skills** — ✅ Partial (2026-06): explicit, local,
   user-invoked workflows are available through `keel skills` and
   `keel --skill <name>` from `.agents/skills/<name>/SKILL.md`. Selected skills

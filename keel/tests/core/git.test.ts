@@ -21,6 +21,7 @@ import {
   recordLastEditCheckpoint,
   recordLastTaskCheckpoint,
   restoreLastEditCheckpoint,
+  restoreUndoCheckpointsThrough,
 } from "../../src/core/git.ts";
 import {
   createGitWorkspace,
@@ -140,6 +141,1008 @@ describe("Git Checkpoints", () => {
       expect(
         checkpoints.map((checkpoint) => checkpoint.restoredLabel),
       ).not.toContain("note-2.txt");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two consecutive edit checkpoints for the same file,
+    When restoring through the second listed checkpoint,
+    Then the file is restored to the oldest selected state atomically`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-undo-through-file-");
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "middle\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "before\n",
+      afterContent: "middle\n",
+    });
+    await writeFile(filePath, "after\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "middle\n",
+      afterContent: "after\n",
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 checkpoints",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("before\n");
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given fewer undo checkpoints exist than the requested list index,
+    When restoring through that checkpoint index,
+    Then no checkpoint is consumed and the user is told to list checkpoints`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-undo-through-range-");
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "after\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "before\n",
+      afterContent: "after\n",
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "none",
+        message:
+          "No undo checkpoint 2. Run keel /undo --list to choose an available checkpoint.",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("after\n");
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "note.txt" },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an invalid undo checkpoint index reaches core restore,
+    When restoring through that index,
+    Then the stack is preserved and the user is told to list checkpoints`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-invalid-index-",
+    );
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "after\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "before\n",
+      afterContent: "after\n",
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 0);
+
+      // Then
+      expect(restore).toEqual({
+        status: "none",
+        message:
+          "No undo checkpoint 0. Run keel /undo --list to choose an available checkpoint.",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("after\n");
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "note.txt" },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given create and delete checkpoints leave a file absent,
+    When restoring through both checkpoints,
+    Then the no-op file transition still consumes the selected checkpoints`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-undo-through-noop-");
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "created\n",
+      mode: 0o644,
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 checkpoints",
+      });
+      await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given create checkpoints are separated by the user deleting the file,
+    When restoring through both checkpoints,
+    Then the file remains absent and both create checkpoints are consumed`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-creates-",
+    );
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "first create\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "first create\n",
+    });
+    await rm(filePath);
+    await writeFile(filePath, "second create\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "second create\n",
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 checkpoints",
+      });
+      await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given create checkpoints are separated by deletion and the latest file is already absent,
+    When restoring through both checkpoints,
+    Then the file remains absent and both checkpoints are consumed`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-creates-missing-",
+    );
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "first create\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "first create\n",
+    });
+    await rm(filePath);
+    await writeFile(filePath, "second create\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "second create\n",
+    });
+    await rm(filePath);
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 checkpoints",
+      });
+      await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint is followed by an edit checkpoint and the user deletes the file,
+    When restoring through both checkpoints,
+    Then the restore blocks without consuming either checkpoint`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-create-edit-missing-",
+    );
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await writeFile(filePath, "edited\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "created\n",
+      afterContent: "edited\n",
+    });
+    await rm(filePath);
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "note.txt",
+        message: "Cannot undo note.txt: Refusing to overwrite user changes.",
+      });
+      await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "note.txt" },
+        { restoredLabel: "note.txt" },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint is followed by an edit checkpoint and the file changed again,
+    When restoring through both checkpoints,
+    Then the restore blocks without removing the user's changed file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-create-edit-change-",
+    );
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await writeFile(filePath, "edited\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "created\n",
+      afterContent: "edited\n",
+    });
+    await writeFile(filePath, "user change\n", "utf8");
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "note.txt",
+        message: "Cannot undo note.txt: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("user change\n");
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "note.txt" },
+        { restoredLabel: "note.txt" },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint is followed by an edit checkpoint and the target is a symlink,
+    When restoring through both checkpoints,
+    Then the restore blocks without removing the symlink`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-create-edit-symlink-",
+    );
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await writeFile(filePath, "edited\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "created\n",
+      afterContent: "edited\n",
+    });
+    await rm(filePath);
+    await writeFile(join(workspace, "target.txt"), "target\n", "utf8");
+    await symlink("target.txt", filePath);
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "note.txt",
+        message: "Cannot undo note.txt: Refusing to overwrite user changes.",
+      });
+      expect((await lstat(filePath)).isSymbolicLink()).toBe(true);
+      expect(await readFile(join(workspace, "target.txt"), "utf8")).toBe(
+        "target\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given create and delete checkpoints are followed by another create,
+    When restoring through all selected checkpoints,
+    Then the file returns to its pre-create missing state`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-create-delete-create-",
+    );
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "first\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "first\n",
+    });
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "first\n",
+      mode: 0o644,
+    });
+    await writeFile(filePath, "second\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "second\n",
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 3);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "3 checkpoints",
+      });
+      await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given create and delete checkpoints leave a file absent but the user recreated it,
+    When restoring through both checkpoints,
+    Then the user-created file blocks the restore and checkpoints remain`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-recreate-",
+    );
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "created\n",
+      mode: 0o644,
+    });
+    await writeFile(filePath, "user recreated\n", "utf8");
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "note.txt",
+        message: "Cannot undo note.txt: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("user recreated\n");
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "note.txt" },
+        { restoredLabel: "note.txt" },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given user changes break continuity between same-file checkpoints,
+    When restoring through those checkpoints,
+    Then the restore blocks before overwriting the user's intervening state`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-discontinuous-",
+    );
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "new\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "old\n",
+      afterContent: "new\n",
+    });
+    await rm(filePath);
+    await writeFile(filePath, "created after user deletion\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created after user deletion\n",
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "note.txt",
+        message: "Cannot undo note.txt: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(filePath, "utf8")).toBe(
+        "created after user deletion\n",
+      );
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "note.txt" },
+        { restoredLabel: "note.txt" },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete checkpoint is followed by a create checkpoint on the same path,
+    When restoring through both checkpoints,
+    Then the deleted file content and mode are restored`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-delete-create-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "old\n", "utf8");
+    await chmod(filePath, 0o755);
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "old\n",
+      mode: 0o755,
+    });
+    await writeFile(filePath, "created\n", "utf8");
+    await chmod(filePath, 0o644);
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 checkpoints",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
+      expect((await stat(filePath)).mode & 0o7777).toBe(0o755);
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit checkpoint is followed by a delete checkpoint on the same path,
+    When restoring through both checkpoints,
+    Then the file is restored to the pre-edit content`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-edit-delete-",
+    );
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "middle\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "before\n",
+      afterContent: "middle\n",
+    });
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "middle\n",
+      mode: 0o644,
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 checkpoints",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("before\n");
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a batch checkpoint is followed by an edit checkpoint,
+    When restoring through both checkpoints,
+    Then the batch and edit changes are restored atomically`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-batch-edit-",
+    );
+    const firstPath = join(workspace, "first.txt");
+    const secondPath = join(workspace, "second.txt");
+    await writeFile(firstPath, "first after batch\n", "utf8");
+    await writeFile(secondPath, "second after batch\n", "utf8");
+    recordLastBatchCheckpoint({
+      workspace,
+      operations: [
+        {
+          operation: "edit",
+          filePath: firstPath,
+          beforeContent: "first before\n",
+          afterContent: "first after batch\n",
+        },
+        {
+          operation: "create",
+          filePath: secondPath,
+          afterContent: "second after batch\n",
+        },
+      ],
+    });
+    await writeFile(secondPath, "second after edit\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath: secondPath,
+      beforeContent: "second after batch\n",
+      afterContent: "second after edit\n",
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 checkpoints",
+      });
+      expect(await readFile(firstPath, "utf8")).toBe("first before\n");
+      await expect(readFile(secondPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete checkpoint is followed by a create checkpoint already removed by the user,
+    When restoring through both checkpoints,
+    Then the older deleted file is restored and both checkpoints are consumed`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-delete-create-missing-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "old\n", "utf8");
+    await chmod(filePath, 0o755);
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "old\n",
+      mode: 0o755,
+    });
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await rm(filePath);
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 checkpoints",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
+      expect((await stat(filePath)).mode & 0o7777).toBe(0o755);
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete-create sequence is followed by another create after user deletion,
+    When restoring through all selected checkpoints,
+    Then the original deleted file is restored`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-delete-create-create-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "old\n", "utf8");
+    await chmod(filePath, 0o755);
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "old\n",
+      mode: 0o755,
+    });
+    await writeFile(filePath, "first create\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "first create\n",
+    });
+    await rm(filePath);
+    await writeFile(filePath, "second create\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "second create\n",
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 3);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "3 checkpoints",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
+      expect((await stat(filePath)).mode & 0o7777).toBe(0o755);
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete-create sequence is followed by a delete checkpoint,
+    When restoring through all selected checkpoints,
+    Then the original deleted file is restored`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-delete-create-delete-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "old\n", "utf8");
+    await chmod(filePath, 0o755);
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "old\n",
+      mode: 0o755,
+    });
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "created\n",
+      mode: 0o644,
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 3);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "3 checkpoints",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
+      expect((await stat(filePath)).mode & 0o7777).toBe(0o755);
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete checkpoint is followed by create and edit checkpoints before the user deletes the file,
+    When restoring through all selected checkpoints,
+    Then the restore blocks without consuming checkpoints`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-delete-create-edit-missing-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "old\n", "utf8");
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "old\n",
+      mode: 0o755,
+    });
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await writeFile(filePath, "edited\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "created\n",
+      afterContent: "edited\n",
+    });
+    await rm(filePath);
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 3);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "tool.sh",
+        message: "Cannot undo tool.sh: Refusing to overwrite user changes.",
+      });
+      await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "tool.sh" },
+        { restoredLabel: "tool.sh" },
+        { restoredLabel: "tool.sh" },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete checkpoint is followed by a create checkpoint and the file changed again,
+    When restoring through both checkpoints,
+    Then the restore blocks without overwriting the user's changed file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-delete-create-change-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "old\n", "utf8");
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "old\n",
+      mode: 0o755,
+    });
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await writeFile(filePath, "user change\n", "utf8");
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "tool.sh",
+        message: "Cannot undo tool.sh: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("user change\n");
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "tool.sh" },
+        { restoredLabel: "tool.sh" },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete checkpoint is followed by a create checkpoint and the target is a symlink,
+    When restoring through both checkpoints,
+    Then the restore blocks without modifying the symlink target`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-delete-create-symlink-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    const targetPath = join(workspace, "target.sh");
+    await writeFile(filePath, "old\n", "utf8");
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "old\n",
+      mode: 0o755,
+    });
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await rm(filePath);
+    await writeFile(targetPath, "target\n", "utf8");
+    await symlink("target.sh", filePath);
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "tool.sh",
+        message: "Cannot undo tool.sh: Refusing to overwrite user changes.",
+      });
+      expect((await lstat(filePath)).isSymbolicLink()).toBe(true);
+      expect(await readFile(targetPath, "utf8")).toBe("target\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete-create restore target parent now points outside the git root,
+    When restoring through both checkpoints,
+    Then undo is blocked before recreating the file outside the workspace`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-delete-create-parent-",
+    );
+    const outsideDirectory = await mkdtemp(join(tmpdir(), "keel-git-outside-"));
+    const parentPath = join(workspace, "nested");
+    const filePath = join(parentPath, "tool.sh");
+    const outsideFile = join(outsideDirectory, "tool.sh");
+    await mkdir(parentPath);
+    await writeFile(filePath, "old\n", "utf8");
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "old\n",
+      mode: 0o755,
+    });
+    await writeFile(filePath, "created\n", "utf8");
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+    });
+    await rm(parentPath, { recursive: true });
+    await symlink(outsideDirectory, parentPath);
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "nested/tool.sh",
+        message:
+          "Cannot undo nested/tool.sh: Refusing to overwrite user changes.",
+      });
+      await expect(readFile(outsideFile, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "nested/tool.sh" },
+        { restoredLabel: "nested/tool.sh" },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outsideDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a selected undo checkpoint no longer matches the workspace,
+    When restoring through multiple listed checkpoints,
+    Then no checkpoint is consumed and no earlier file is partially restored`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-undo-through-block-");
+    const firstPath = join(workspace, "first.txt");
+    const secondPath = join(workspace, "second.txt");
+    await writeFile(firstPath, "first after\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath: firstPath,
+      beforeContent: "first before\n",
+      afterContent: "first after\n",
+    });
+    await writeFile(secondPath, "second after\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath: secondPath,
+      beforeContent: "second before\n",
+      afterContent: "second after\n",
+    });
+    await writeFile(secondPath, "user change\n", "utf8");
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "second.txt",
+        message: "Cannot undo second.txt: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(firstPath, "utf8")).toBe("first after\n");
+      expect(await readFile(secondPath, "utf8")).toBe("user change\n");
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "second.txt" },
+        { restoredLabel: "first.txt" },
+      ]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

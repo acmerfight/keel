@@ -7,10 +7,16 @@ interface HelpCommand {
   readonly kind: "help";
 }
 
-interface UndoCommand {
-  readonly kind: "undo";
-  readonly mode: "restore" | "list";
-}
+type UndoCommand =
+  | {
+      readonly kind: "undo";
+      readonly mode: "restore" | "list";
+    }
+  | {
+      readonly kind: "undo";
+      readonly mode: "restore-through";
+      readonly checkpointIndex: number;
+    };
 
 export interface ManualCompactCommand {
   readonly kind: "compact";
@@ -62,6 +68,7 @@ export function formatInteractiveHelp(): string {
     "  /help              Show this help.",
     "  /undo              Restore the latest undo checkpoint.",
     "  /undo --list       List undo checkpoints.",
+    "  /undo --to <index> Restore through a listed undo checkpoint.",
     "  /model             Show the active provider/model.",
     "  /model <provider>/<model>",
     "                     Switch the active provider/model for later prompts.",
@@ -212,6 +219,23 @@ function parseForkCommandArgs(
   };
 }
 
+function parseUndoTargetIndex(raw: string | undefined): ParseResult<number> {
+  if (raw === undefined || !/^[1-9][0-9]*$/u.test(raw)) {
+    return {
+      ok: false,
+      message: "Error: /undo --to requires a positive integer.",
+    };
+  }
+  const checkpointIndex = Number(raw);
+  if (!Number.isSafeInteger(checkpointIndex)) {
+    return {
+      ok: false,
+      message: "Error: /undo --to requires a positive integer.",
+    };
+  }
+  return { ok: true, value: checkpointIndex };
+}
+
 export function parseInteractiveCommand(
   userMessage: string,
 ): InteractiveCommand | null {
@@ -229,6 +253,39 @@ export function parseInteractiveCommand(
     const undoArgs = extraArgs.split(/\s+/u);
     if (undoArgs.length === 1 && undoArgs[0] === "--list") {
       return { kind: "undo", mode: "list" };
+    }
+    if (undoArgs[0] === "--to") {
+      const parsed = parseUndoTargetIndex(undoArgs[1]);
+      if (!parsed.ok) return { kind: "invalid", message: parsed.message };
+      if (undoArgs.length > 2) {
+        return {
+          kind: "invalid",
+          message: `Error: unknown /undo option "${undoArgs[2]}".`,
+        };
+      }
+      return {
+        kind: "undo",
+        mode: "restore-through",
+        checkpointIndex: parsed.value,
+      };
+    }
+    const undoToPrefix = "--to=";
+    if (undoArgs[0]?.startsWith(undoToPrefix)) {
+      const parsed = parseUndoTargetIndex(
+        undoArgs[0].slice(undoToPrefix.length),
+      );
+      if (!parsed.ok) return { kind: "invalid", message: parsed.message };
+      if (undoArgs.length > 1) {
+        return {
+          kind: "invalid",
+          message: `Error: unknown /undo option "${undoArgs[1]}".`,
+        };
+      }
+      return {
+        kind: "undo",
+        mode: "restore-through",
+        checkpointIndex: parsed.value,
+      };
     }
     const unknownUndoOption =
       undoArgs[0] === "--list" ? undoArgs[1] : undoArgs[0];

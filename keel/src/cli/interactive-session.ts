@@ -14,6 +14,7 @@ import {
   type RecordLastBatchCheckpointOperation,
   recordLastTaskCheckpoint,
   restoreLastEditCheckpoint,
+  restoreUndoCheckpointsThrough,
 } from "../core/git.ts";
 import type { Message, Usage } from "../llm/types.ts";
 import { bashModeExposesTool } from "../permissions/bash.ts";
@@ -331,7 +332,13 @@ export async function runInteractiveSession(
           consumeQueuedInputLines([rawInput]);
           continue;
         }
-        const result = restoreLastEditCheckpoint(options.workspace);
+        const result =
+          interactiveCommand.mode === "restore-through"
+            ? restoreUndoCheckpointsThrough(
+                options.workspace,
+                interactiveCommand.checkpointIndex,
+              )
+            : restoreLastEditCheckpoint(options.workspace);
         switch (result.status) {
           case "restored":
             options.writeStdout(`Restored ${result.restoredLabel}\n`);

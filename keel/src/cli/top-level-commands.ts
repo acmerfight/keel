@@ -1,4 +1,8 @@
-import { listUndoCheckpoints, restoreLastEditCheckpoint } from "../core/git.ts";
+import {
+  listUndoCheckpoints,
+  restoreLastEditCheckpoint,
+  restoreUndoCheckpointsThrough,
+} from "../core/git.ts";
 import type { CliArgs } from "./args.ts";
 import { formatUndoCheckpointList } from "./output.ts";
 import type { CliRuntime } from "./runtime.ts";
@@ -82,7 +86,10 @@ export function runUndoCommand(
     return 0;
   }
 
-  const result = restoreLastEditCheckpoint(runtime.cwd());
+  const result =
+    cliArgs.mode === "restore-through"
+      ? restoreUndoCheckpointsThrough(runtime.cwd(), cliArgs.checkpointIndex)
+      : restoreLastEditCheckpoint(runtime.cwd());
   switch (result.status) {
     case "restored":
       runtime.writeStdout(`Restored ${result.restoredLabel}\n`);

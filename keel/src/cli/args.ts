@@ -5,13 +5,24 @@ import { parseDoctorArgs } from "./args/doctor.ts";
 import { parseEvalArgs } from "./args/eval.ts";
 import { parseRunArgs } from "./args/run.ts";
 import { parseSessionsArgs } from "./args/sessions.ts";
-import { parseError, parseOk } from "./args/shared.ts";
+import { type ParseResult, parseError, parseOk } from "./args/shared.ts";
 import type { CliArgs } from "./args/types.ts";
 import { USAGE } from "./args/usage.ts";
 
 type CliArgsParseResult =
   | { readonly ok: true; readonly value: CliArgs }
   | { readonly ok: false; readonly message: string };
+
+function parseUndoTargetIndex(raw: string | undefined): ParseResult<number> {
+  if (raw === undefined || !/^[1-9][0-9]*$/u.test(raw)) {
+    return parseError("Error: /undo --to requires a positive integer.");
+  }
+  const checkpointIndex = Number(raw);
+  if (!Number.isSafeInteger(checkpointIndex)) {
+    return parseError("Error: /undo --to requires a positive integer.");
+  }
+  return parseOk(checkpointIndex);
+}
 
 export function parseCliArgs(args: readonly string[]): CliArgsParseResult {
   if (args[0] === "--help" || args[0] === "-h") {
@@ -28,6 +39,31 @@ export function parseCliArgs(args: readonly string[]): CliArgsParseResult {
     }
     if (args.length === 2 && args[1] === "--list") {
       return parseOk({ command: "undo", mode: "list" });
+    }
+    if (args[1] === "--to") {
+      const parsed = parseUndoTargetIndex(args[2]);
+      if (!parsed.ok) return parsed;
+      if (args.length > 3) {
+        return parseError(`Error: unknown undo option "${args[3]}"`);
+      }
+      return parseOk({
+        command: "undo",
+        mode: "restore-through",
+        checkpointIndex: parsed.value,
+      });
+    }
+    const undoToPrefix = "--to=";
+    if (args[1]?.startsWith(undoToPrefix)) {
+      const parsed = parseUndoTargetIndex(args[1].slice(undoToPrefix.length));
+      if (!parsed.ok) return parsed;
+      if (args.length > 2) {
+        return parseError(`Error: unknown undo option "${args[2]}"`);
+      }
+      return parseOk({
+        command: "undo",
+        mode: "restore-through",
+        checkpointIndex: parsed.value,
+      });
     }
     const unknownUndoOption = args[1] === "--list" ? args[2] : args[1];
     return parseError(`Error: unknown undo option "${unknownUndoOption}"`);

@@ -62,6 +62,100 @@ describe("CLI Args", () => {
     expect(fixture.stderr()).toBe('Error: unknown undo option "--all"\n');
   });
 
+  test(`Given an invalid undo target index,
+    When the user runs the CLI,
+    Then the CLI rejects it before running undo`, async () => {
+    // Given
+    const fixture = createRuntime(["/undo", "--to", "0"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: /undo --to requires a positive integer.\n",
+    );
+  });
+
+  test(`Given an unsafe undo target index,
+    When the user runs the CLI,
+    Then the CLI rejects it before running undo`, async () => {
+    // Given
+    const fixture = createRuntime(["/undo", "--to", "9007199254740992"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: /undo --to requires a positive integer.\n",
+    );
+  });
+
+  test(`Given an invalid inline undo target index,
+    When the user runs the CLI,
+    Then the CLI rejects it before running undo`, async () => {
+    // Given
+    const fixture = createRuntime(["/undo", "--to=0"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: /undo --to requires a positive integer.\n",
+    );
+  });
+
+  test(`Given the undo target index uses inline option syntax,
+    When the user runs the CLI,
+    Then the command is parsed as undo before resolving a provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-args-undo-to-"));
+    const fixture = createRuntime(["/undo", "--to=1"], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "No earlier checkpoints. Ask me to undo more, or use git to reset.\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    [["/undo", "--to", "1", "extra"], 'Error: unknown undo option "extra"\n'],
+    [["/undo", "--to=1", "extra"], 'Error: unknown undo option "extra"\n'],
+  ])(`Given undo target command %j has an extra argument,
+    When the user runs the CLI,
+    Then the CLI rejects the extra argument before running undo`, async (args, message) => {
+    // Given
+    const fixture = createRuntime(args);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(message);
+  });
+
   test(`Given an extra undo list argument,
     When the user runs the CLI,
     Then the CLI reports the extra argument instead of listing checkpoints`, async () => {
