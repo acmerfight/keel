@@ -334,9 +334,9 @@ const applyPatchTool = defineTool({
   description: [
     "Apply one patch containing workspace file additions, updates, deletions, and Move to renames.",
     "Patch format: *** Begin Patch, then one or more *** Add File: <path>, *** Update File: <path> with optional *** Move to: <path>, or *** Delete File: <path> sections, then *** End Patch.",
-    "Also accepts standard Git-style unified diffs for text file updates, additions, deletions, rename diffs with rename from/to metadata, and copy diffs with copy from/to metadata.",
+    "Also accepts standard Git-style unified diffs for text file updates, additions, deletions, regular file mode changes between 100644 and 100755, rename diffs with rename from/to metadata, and copy diffs with copy from/to metadata.",
     "Use when: making coordinated changes across multiple files after reading every file that will be copied, updated, moved, or deleted.",
-    "Do not use when: changing file modes or editing binary files.",
+    "Do not use when: editing binary files, symlinks, submodules, directories, or special file modes.",
     "On failure: read the current target files and regenerate the patch with exact context.",
   ].join("\n"),
   args: toolArgs(applyPatchToolArgumentsSchema),

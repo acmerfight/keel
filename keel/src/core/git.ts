@@ -30,12 +30,15 @@ export interface RecordLastEditCheckpointOptions {
   readonly filePath: string;
   readonly beforeContent: string;
   readonly afterContent: string;
+  readonly beforeMode?: number;
+  readonly afterMode?: number;
 }
 
 export interface RecordLastCreateCheckpointOptions {
   readonly workspace: string;
   readonly filePath: string;
   readonly afterContent: string;
+  readonly mode?: number;
 }
 
 export interface RecordLastDeleteCheckpointOptions {
@@ -51,11 +54,14 @@ export type RecordLastBatchCheckpointOperation =
       readonly filePath: string;
       readonly beforeContent: string;
       readonly afterContent: string;
+      readonly beforeMode?: number;
+      readonly afterMode?: number;
     }
   | {
       readonly operation: "create";
       readonly filePath: string;
       readonly afterContent: string;
+      readonly mode?: number;
     }
   | {
       readonly operation: "delete";
@@ -101,6 +107,8 @@ const CHECKPOINT_METADATA_PATH = "keel/undo-checkpoints.json";
 const MAX_UNDO_CHECKPOINTS = 20;
 const NO_UNDO_CHECKPOINT_MESSAGE =
   "No earlier checkpoints. Ask me to undo more, or use git to reset.";
+// Checkpoints store filesystem mode bits for restore, not only Git regular-file modes.
+const checkpointModeSchema = z.number().int().min(0).max(0o7777);
 
 const gitOutputSchema = z
   .string()
@@ -115,6 +123,8 @@ const editCheckpointSchema = z
     relativePath: z.string().min(1),
     beforeContent: z.string(),
     afterContent: z.string(),
+    beforeMode: checkpointModeSchema.optional(),
+    afterMode: checkpointModeSchema.optional(),
     createdAt: z.string().min(1),
   })
   .strict();
@@ -126,6 +136,7 @@ const createCheckpointSchema = z
     gitRoot: z.string().min(1),
     relativePath: z.string().min(1),
     afterContent: z.string(),
+    mode: checkpointModeSchema.optional(),
     createdAt: z.string().min(1),
   })
   .strict();
@@ -137,7 +148,7 @@ const deleteCheckpointSchema = z
     gitRoot: z.string().min(1),
     relativePath: z.string().min(1),
     beforeContent: z.string(),
-    mode: z.number().int().min(0).max(0o7777),
+    mode: checkpointModeSchema,
     createdAt: z.string().min(1),
   })
   .strict();
@@ -149,6 +160,8 @@ const batchCheckpointOperationSchema = z.union([
       relativePath: z.string().min(1),
       beforeContent: z.string(),
       afterContent: z.string(),
+      beforeMode: checkpointModeSchema.optional(),
+      afterMode: checkpointModeSchema.optional(),
     })
     .strict(),
   z
@@ -156,6 +169,7 @@ const batchCheckpointOperationSchema = z.union([
       operation: z.literal("create"),
       relativePath: z.string().min(1),
       afterContent: z.string(),
+      mode: checkpointModeSchema.optional(),
     })
     .strict(),
   z
@@ -163,7 +177,7 @@ const batchCheckpointOperationSchema = z.union([
       operation: z.literal("delete"),
       relativePath: z.string().min(1),
       beforeContent: z.string(),
-      mode: z.number().int().min(0).max(0o7777),
+      mode: checkpointModeSchema,
     })
     .strict(),
 ]);
@@ -207,6 +221,7 @@ type CoalescableUndoCheckpointOperation =
       readonly operation: "create";
       readonly relativePath: string;
       readonly afterContent: string;
+      readonly mode?: number;
       readonly currentMissingAllowed: boolean;
     };
 type CoalescedUndoCheckpointOperation =
@@ -221,11 +236,16 @@ type CoalescedUndoCheckpointOperation =
       readonly beforeContent: string;
       readonly afterContent: string;
       readonly mode: number;
+      readonly afterMode?: number;
       readonly currentMissingAllowed: boolean;
     };
 type UndoCheckpointFileState =
   | { readonly status: "missing" }
-  | { readonly status: "file"; readonly content: string };
+  | {
+      readonly status: "file";
+      readonly content: string;
+      readonly mode?: number;
+    };
 type UndoCheckpointCoalesceResult =
   | {
       readonly status: "ok";
@@ -380,6 +400,59 @@ function lstatIfPossible(filePath: string): Stats | null {
   }
 }
 
+function fileMode(stat: Stats): number {
+  return stat.mode & 0o7777;
+}
+
+function modeMatches(stat: Stats, expectedMode: number | undefined): boolean {
+  return expectedMode === undefined || fileMode(stat) === expectedMode;
+}
+
+function checkpointEditModes(operation: {
+  readonly beforeMode?: number | undefined;
+  readonly afterMode?: number | undefined;
+}): { readonly beforeMode: number; readonly afterMode: number } | null {
+  if (operation.beforeMode === undefined && operation.afterMode === undefined) {
+    return null;
+  }
+  if (operation.beforeMode === undefined || operation.afterMode === undefined) {
+    invalidCheckpointError();
+  }
+  return {
+    beforeMode: operation.beforeMode,
+    afterMode: operation.afterMode,
+  };
+}
+
+function checkpointEditModeState(operation: {
+  readonly beforeMode?: number | undefined;
+  readonly afterMode?: number | undefined;
+}): { readonly beforeMode?: number; readonly afterMode?: number } {
+  const modes = checkpointEditModes(operation);
+  return modes === null
+    ? {}
+    : { beforeMode: modes.beforeMode, afterMode: modes.afterMode };
+}
+
+function modeState(mode: number | undefined): { readonly mode?: number } {
+  return mode === undefined ? {} : { mode };
+}
+
+function afterModeState(mode: number | undefined): {
+  readonly afterMode?: number;
+} {
+  return mode === undefined ? {} : { afterMode: mode };
+}
+
+function editModeState(
+  beforeMode: number | undefined,
+  afterMode: number | undefined,
+): { readonly beforeMode?: number; readonly afterMode?: number } {
+  return beforeMode === undefined || afterMode === undefined
+    ? {}
+    : { beforeMode, afterMode };
+}
+
 function skippedCheckpointRecord(
   options: { readonly workspace: string; readonly filePath: string },
   error: string,
@@ -427,6 +500,7 @@ export function recordLastEditCheckpoint(
       relativePath,
       beforeContent: options.beforeContent,
       afterContent: options.afterContent,
+      ...checkpointEditModeState(options),
       createdAt: new Date().toISOString(),
     });
 
@@ -462,6 +536,7 @@ export function recordLastCreateCheckpoint(
       gitRoot: gitWorkspace.root,
       relativePath,
       afterContent: options.afterContent,
+      ...modeState(options.mode),
       createdAt: new Date().toISOString(),
     });
 
@@ -535,6 +610,7 @@ export function recordLastBatchCheckpoint(
           relativePath,
           beforeContent: operation.beforeContent,
           afterContent: operation.afterContent,
+          ...checkpointEditModeState(operation),
         });
       } else if (operation.operation === "delete") {
         operations.push({
@@ -548,6 +624,7 @@ export function recordLastBatchCheckpoint(
           operation: "create",
           relativePath,
           afterContent: operation.afterContent,
+          ...modeState(operation.mode),
         });
       }
     }
@@ -581,16 +658,21 @@ function mergeTaskCheckpointOperations(
       operation: "create",
       filePath: existing.filePath,
       afterContent: next.afterContent,
+      ...(next.operation === "edit"
+        ? modeState(next.afterMode ?? existing.mode)
+        : modeState(next.mode ?? existing.mode)),
     };
   }
 
   if (existing.operation === "delete") {
     if (next.operation === "delete") return existing;
+    const nextMode = next.operation === "edit" ? next.afterMode : next.mode;
     return {
       operation: "edit",
       filePath: existing.filePath,
       beforeContent: existing.beforeContent,
       afterContent: next.afterContent,
+      ...editModeState(existing.mode, nextMode),
     };
   }
 
@@ -608,6 +690,9 @@ function mergeTaskCheckpointOperations(
     filePath: existing.filePath,
     beforeContent: existing.beforeContent,
     afterContent: next.afterContent,
+    ...(next.operation === "edit"
+      ? editModeState(existing.beforeMode, next.afterMode ?? existing.afterMode)
+      : editModeState(existing.beforeMode, next.mode ?? existing.afterMode)),
   };
 }
 
@@ -638,19 +723,46 @@ function undoCheckpointOperationBeforeState(
   operation: CoalescableUndoCheckpointOperation,
 ): UndoCheckpointFileState {
   if (operation.operation === "create") return { status: "missing" };
-  return { status: "file", content: operation.beforeContent };
+  if (operation.operation === "edit") {
+    const modes = checkpointEditModes(operation);
+    return {
+      status: "file",
+      content: operation.beforeContent,
+      ...modeState(modes?.beforeMode),
+    };
+  }
+  return {
+    status: "file",
+    content: operation.beforeContent,
+    mode: operation.mode,
+  };
 }
 
 function undoCheckpointOperationAfterState(
   operation: CoalescedUndoCheckpointOperation,
 ): UndoCheckpointFileState {
   if (operation.operation === "delete") return { status: "missing" };
-  if (
-    operation.operation === "create" ||
-    operation.operation === "edit" ||
-    operation.operation === "delete-create"
-  ) {
-    return { status: "file", content: operation.afterContent };
+  if (operation.operation === "create") {
+    return {
+      status: "file",
+      content: operation.afterContent,
+      ...modeState(operation.mode),
+    };
+  }
+  if (operation.operation === "delete-create") {
+    return {
+      status: "file",
+      content: operation.afterContent,
+      ...modeState(operation.afterMode),
+    };
+  }
+  if (operation.operation === "edit") {
+    const modes = checkpointEditModes(operation);
+    return {
+      status: "file",
+      content: operation.afterContent,
+      ...modeState(modes?.afterMode),
+    };
   }
   return { status: "missing" };
 }
@@ -663,7 +775,13 @@ function sameUndoCheckpointFileState(
   if (first.status === "missing") return true;
   /* v8 ignore next 1: status equality above makes this unreachable. */
   if (second.status === "missing") return false;
-  return first.content === second.content;
+  if (first.content !== second.content) return false;
+  // Undefined means this checkpoint did not own the file mode; it is a
+  // wildcard for continuity, while restore validation still checks owned modes.
+  if (first.mode !== undefined && second.mode !== undefined) {
+    return first.mode === second.mode;
+  }
+  return true;
 }
 
 function undoCheckpointOperationCanRestoreFromMissing(
@@ -704,6 +822,7 @@ function mergeUndoCheckpointOperations(
       operation: "create",
       relativePath: existing.relativePath,
       afterContent: next.afterContent,
+      ...modeState(next.mode),
       currentMissingAllowed: true,
     };
   }
@@ -719,6 +838,9 @@ function mergeUndoCheckpointOperations(
       operation: "create",
       relativePath: existing.relativePath,
       afterContent: next.afterContent,
+      ...(next.operation === "edit"
+        ? modeState(next.afterMode ?? existing.mode)
+        : modeState(next.mode ?? existing.mode)),
       currentMissingAllowed: next.operation === "create",
     };
   }
@@ -734,6 +856,7 @@ function mergeUndoCheckpointOperations(
       beforeContent: existing.beforeContent,
       afterContent: next.afterContent,
       mode: existing.mode,
+      ...afterModeState(next.mode),
       currentMissingAllowed: true,
     };
   }
@@ -754,15 +877,18 @@ function mergeUndoCheckpointOperations(
         beforeContent: existing.beforeContent,
         afterContent: next.afterContent,
         mode: existing.mode,
+        ...afterModeState(next.mode ?? existing.afterMode),
         currentMissingAllowed: true,
       };
     }
+    const nextModes = checkpointEditModes(next);
     return {
       operation: "delete-create",
       relativePath: existing.relativePath,
       beforeContent: existing.beforeContent,
       afterContent: next.afterContent,
       mode: existing.mode,
+      ...afterModeState(nextModes?.afterMode ?? existing.afterMode),
       currentMissingAllowed: false,
     };
   }
@@ -776,11 +902,20 @@ function mergeUndoCheckpointOperations(
     };
   }
 
+  /* v8 ignore next 3: continuity rejects create-after-edit before this merge path. */
+  if (next.operation !== "edit") {
+    invalidCheckpointError();
+  }
+  const existingModes = checkpointEditModes(existing);
   return {
     operation: "edit",
     relativePath: existing.relativePath,
     beforeContent: existing.beforeContent,
     afterContent: next.afterContent,
+    ...editModeState(
+      existingModes?.beforeMode,
+      next.afterMode ?? existingModes?.afterMode,
+    ),
   };
 }
 
@@ -796,6 +931,7 @@ function coalesceUndoCheckpointOperations(
             operation: "create",
             relativePath: operation.relativePath,
             afterContent: operation.afterContent,
+            ...modeState(operation.mode),
             currentMissingAllowed: true,
           }
         : operation;
@@ -824,6 +960,7 @@ function checkpointForwardOperations(
         relativePath: checkpoint.relativePath,
         beforeContent: checkpoint.beforeContent,
         afterContent: checkpoint.afterContent,
+        ...checkpointEditModeState(checkpoint),
       },
     ];
   }
@@ -842,6 +979,7 @@ function checkpointForwardOperations(
       operation: "create",
       relativePath: checkpoint.relativePath,
       afterContent: checkpoint.afterContent,
+      ...modeState(checkpoint.mode),
     },
   ];
 }
@@ -861,6 +999,7 @@ export function recordLastTaskCheckpoint(
           workspace: options.workspace,
           filePath: operation.filePath,
           afterContent: operation.afterContent,
+          ...modeState(operation.mode),
         });
       }
       if (operation.operation === "delete") {
@@ -876,6 +1015,7 @@ export function recordLastTaskCheckpoint(
         filePath: operation.filePath,
         beforeContent: operation.beforeContent,
         afterContent: operation.afterContent,
+        ...checkpointEditModeState(operation),
       });
     }
   }
@@ -911,6 +1051,8 @@ type ResolvedBatchRestoreOperation =
       readonly relativePath: string;
       readonly beforeContent: string;
       readonly afterContent: string;
+      readonly beforeMode?: number;
+      readonly afterMode?: number;
     }
   | {
       readonly operation: "create";
@@ -991,6 +1133,9 @@ function validateBatchRestoreOperation(
     if (currentContent !== operation.afterContent) {
       return blockedRestore(operation);
     }
+    if (!modeMatches(targetStat, operation.mode)) {
+      return blockedRestore(operation);
+    }
     return {
       operation: "create",
       filePath,
@@ -1001,12 +1146,21 @@ function validateBatchRestoreOperation(
     };
   }
 
+  const modes = checkpointEditModes(operation);
+  const targetStat = lstatIfPossible(filePath);
+  if (targetStat === null || targetStat.isSymbolicLink()) {
+    return blockedRestore(operation);
+  }
   const restorePath = realpathIfPossible(filePath);
+  /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
   if (restorePath === null || !isInside(gitRoot, restorePath)) {
     return blockedRestore(operation);
   }
   const currentContent = readFileIfPossible(restorePath);
   if (currentContent !== operation.afterContent) {
+    return blockedRestore(operation);
+  }
+  if (!modeMatches(targetStat, modes?.afterMode)) {
     return blockedRestore(operation);
   }
   return {
@@ -1015,6 +1169,7 @@ function validateBatchRestoreOperation(
     relativePath: operation.relativePath,
     beforeContent: operation.beforeContent,
     afterContent: operation.afterContent,
+    ...editModeState(modes?.beforeMode, modes?.afterMode),
   };
 }
 
@@ -1152,12 +1307,17 @@ function restoreBatchCheckpoint(
     } else {
       try {
         writeFileSync(operation.restorePath, operation.beforeContent, "utf8");
+        if (operation.beforeMode !== undefined) {
+          chmodSync(operation.restorePath, operation.beforeMode);
+        }
         applied.push({
           operation: "edit",
           restorePath: operation.restorePath,
           afterContent: operation.afterContent,
+          ...modeState(operation.afterMode),
         });
       } catch {
+        /* v8 ignore next 12: filesystem races or permissions can still block after validation. */
         return blockedBatchRestore(
           [
             ...applied,
@@ -1165,6 +1325,7 @@ function restoreBatchCheckpoint(
               operation: "edit",
               restorePath: operation.restorePath,
               afterContent: operation.afterContent,
+              ...modeState(operation.afterMode),
             },
           ],
           operation,
@@ -1237,6 +1398,9 @@ function validateCoalescedCreateRestoreOperation(
   if (currentContent !== operation.afterContent) {
     return blockedRestore(operation);
   }
+  if (!modeMatches(targetStat, operation.mode)) {
+    return blockedRestore(operation);
+  }
   return {
     operation: "create",
     filePath,
@@ -1285,6 +1449,9 @@ function validateDeleteCreateRestoreOperation(
   }
   const currentContent = readFileIfPossible(restorePath);
   if (currentContent !== operation.afterContent) {
+    return blockedRestore(operation);
+  }
+  if (!modeMatches(targetStat, operation.afterMode)) {
     return blockedRestore(operation);
   }
 
@@ -1377,10 +1544,14 @@ function restoreResolvedCoalescedOperations(
     } else {
       try {
         writeFileSync(operation.restorePath, operation.beforeContent, "utf8");
+        if (operation.beforeMode !== undefined) {
+          chmodSync(operation.restorePath, operation.beforeMode);
+        }
         applied.push({
           operation: "edit",
           restorePath: operation.restorePath,
           afterContent: operation.afterContent,
+          ...modeState(operation.afterMode),
         });
       } catch {
         /* v8 ignore next 12: filesystem races or permissions can still block after validation. */
@@ -1391,6 +1562,7 @@ function restoreResolvedCoalescedOperations(
               operation: "edit",
               restorePath: operation.restorePath,
               afterContent: operation.afterContent,
+              ...modeState(operation.afterMode),
             },
           ],
           operation,
@@ -1437,6 +1609,9 @@ function restoreCheckpoint(
     if (currentContent !== checkpoint.afterContent) {
       return blockedRestore(checkpoint);
     }
+    if (!modeMatches(targetStat, checkpoint.mode)) {
+      return blockedRestore(checkpoint);
+    }
 
     rmSync(filePath);
     return {
@@ -1465,7 +1640,13 @@ function restoreCheckpoint(
     };
   }
 
+  const modes = checkpointEditModes(checkpoint);
+  const targetStat = lstatIfPossible(filePath);
+  if (targetStat === null || targetStat.isSymbolicLink()) {
+    return blockedRestore(checkpoint);
+  }
   const restorePath = realpathIfPossible(filePath);
+  /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
   if (restorePath === null || !isInside(gitWorkspace.root, restorePath)) {
     return blockedRestore(checkpoint);
   }
@@ -1474,8 +1655,14 @@ function restoreCheckpoint(
   if (currentContent !== checkpoint.afterContent) {
     return blockedRestore(checkpoint);
   }
+  if (!modeMatches(targetStat, modes?.afterMode)) {
+    return blockedRestore(checkpoint);
+  }
 
   writeFileSync(restorePath, checkpoint.beforeContent, "utf8");
+  if (modes !== null) {
+    chmodSync(restorePath, modes.beforeMode);
+  }
   return {
     status: "restored",
     restoredLabel: checkpoint.relativePath,

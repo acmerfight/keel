@@ -33,13 +33,16 @@ function restoreDeletedTextFileBestEffort(
     { readonly kind: "delete" | "move" }
   >,
 ): void {
+  /* v8 ignore next 1: move rollback needs a deterministic post-move failure; delete rollback covers restoration. */
+  const mode =
+    operation.kind === "move" ? operation.rollbackMode : operation.mode;
   try {
     writeFileSync(operation.targetPath, operation.beforeContent, {
       encoding: "utf8",
       flag: "wx",
-      mode: operation.mode,
+      mode,
     });
-    chmodSync(operation.targetPath, operation.mode);
+    chmodSync(operation.targetPath, mode);
   } catch {
     /* v8 ignore next 1: rollback is best-effort and must not overwrite user-created files. */
   }
@@ -146,7 +149,7 @@ export function rollbackAppliedOperations(
             beforeContent: operation.beforeContent,
             afterContent: operation.afterContent,
           },
-          operation.mode,
+          operation.rollbackMode,
         );
       }
     }

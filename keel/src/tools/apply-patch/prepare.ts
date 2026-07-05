@@ -20,10 +20,48 @@ import { uniquePaths } from "./filesystem.ts";
 import { addFileContent, applyUpdateHunks, withUtf8Bom } from "./hunks.ts";
 import type {
   ExecuteApplyPatchOptions,
+  GitRegularFileMode,
+  ParsedPatchModeChange,
   ParsedPatchOperation,
+  PreparedPatchModeChange,
   PreparedPatchOperation,
   ValidatedUpdateTarget,
 } from "./model.ts";
+
+function gitRegularFileModeFromFileMode(mode: number): GitRegularFileMode {
+  return (mode & 0o111) === 0 ? 0o644 : 0o755;
+}
+
+function formatGitRegularFileMode(mode: GitRegularFileMode): string {
+  return mode === 0o755 ? "100755" : "100644";
+}
+
+function assertExpectedGitRegularFileMode(
+  displayPath: string,
+  actualMode: number,
+  expectedMode: GitRegularFileMode,
+): void {
+  const actualGitMode = gitRegularFileModeFromFileMode(actualMode);
+  if (actualGitMode === expectedMode) return;
+  throw patchError(
+    "tool_patch_hunk_not_found",
+    `apply_patch failed: expected file mode ${formatGitRegularFileMode(expectedMode)} for ${displayPath}`,
+    `Use read(path: "${displayPath}") to inspect the current file, then regenerate the diff from the current file mode.`,
+  );
+}
+
+function preparedModeChange(
+  displayPath: string,
+  openedMode: number,
+  modeChange: ParsedPatchModeChange | null,
+): PreparedPatchModeChange | null {
+  if (modeChange === null) return null;
+  assertExpectedGitRegularFileMode(displayPath, openedMode, modeChange.oldMode);
+  return {
+    beforeMode: openedMode,
+    afterMode: modeChange.newMode,
+  };
+}
 
 function validateUpdateTarget(
   workspacePath: string,
@@ -141,6 +179,12 @@ function prepareUpdateOperation(
     file.content,
     operation.hunks,
   );
+  const modeChange = preparedModeChange(
+    operation.path,
+    openedMode,
+    operation.modeChange,
+  );
+  const writeMode = modeChange?.afterMode ?? openedMode;
   if (operation.movePath !== null) {
     const destination = resolveWorkspaceCreateTarget(
       workspace,
@@ -155,7 +199,9 @@ function prepareUpdateOperation(
       targetPath: file.targetPath,
       beforeContent: withUtf8Bom(file.content, file.hasUtf8Bom),
       afterContent: withUtf8Bom(updated, file.hasUtf8Bom),
-      mode: openedMode,
+      mode: writeMode,
+      rollbackMode: openedMode,
+      modeChange,
       targetIdentity: openedFileIdentity(targetIdentity),
       destinationTargetPath: destination.targetPath,
       destinationResolvedTargetPath: destination.resolvedTargetPath,
@@ -169,7 +215,9 @@ function prepareUpdateOperation(
     targetPath: file.targetPath,
     beforeContent: withUtf8Bom(file.content, file.hasUtf8Bom),
     afterContent: withUtf8Bom(updated, file.hasUtf8Bom),
-    mode: openedMode,
+    mode: writeMode,
+    rollbackMode: openedMode,
+    modeChange,
   };
 }
 
@@ -261,6 +309,13 @@ function prepareDeleteOperation(
       `Use read(path: "${operation.path}") to view the current content, then regenerate the deletion hunk with exact context.`,
     );
   }
+  if (operation.mode !== null) {
+    assertExpectedGitRegularFileMode(
+      operation.path,
+      openedMode,
+      operation.mode,
+    );
+  }
 
   return {
     kind: "delete",
@@ -287,6 +342,7 @@ function prepareAddOperation(
     resolvedTargetPath,
     parentPath,
     afterContent: addFileContent(operation.lines),
+    mode: operation.mode,
   };
 }
 
@@ -362,6 +418,12 @@ function prepareCopyOperation(
     file.content,
     operation.hunks,
   );
+  const modeChange = preparedModeChange(
+    operation.sourcePath,
+    openedMode,
+    operation.modeChange,
+  );
+  const writeMode = modeChange?.afterMode ?? openedMode;
   const destination = resolveWorkspaceCreateTarget(
     workspace,
     operation.path,
@@ -376,7 +438,8 @@ function prepareCopyOperation(
     resolvedTargetPath: destination.resolvedTargetPath,
     parentPath: destination.parentPath,
     afterContent: withUtf8Bom(updated, file.hasUtf8Bom),
-    mode: openedMode,
+    mode: writeMode,
+    modeChange,
   };
 }
 

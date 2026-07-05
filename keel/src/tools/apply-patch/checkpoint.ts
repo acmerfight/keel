@@ -12,12 +12,13 @@ export function checkpointOperationsFor(
         operation: "delete",
         filePath: operation.targetPath,
         beforeContent: operation.beforeContent,
-        mode: operation.mode,
+        mode: operation.rollbackMode,
       },
       {
         operation: "create",
         filePath: operation.destinationTargetPath,
         afterContent: operation.afterContent,
+        ...(operation.modeChange === null ? {} : { mode: operation.mode }),
       },
     ];
   }
@@ -47,11 +48,18 @@ export function checkpointOperationsFor(
     throw changedTargetError(operation);
   }
   if (operation.kind === "add" || operation.kind === "copy") {
+    const mode =
+      operation.kind === "add"
+        ? operation.mode
+        : operation.modeChange === null
+          ? null
+          : operation.mode;
     return [
       {
         operation: "create",
         filePath: targetPath,
         afterContent: operation.afterContent,
+        ...(mode === null ? {} : { mode }),
       },
     ];
   }
@@ -61,6 +69,12 @@ export function checkpointOperationsFor(
       filePath: targetPath,
       beforeContent: operation.beforeContent,
       afterContent: operation.afterContent,
+      ...(operation.modeChange === null
+        ? {}
+        : {
+            beforeMode: operation.modeChange.beforeMode,
+            afterMode: operation.modeChange.afterMode,
+          }),
     },
   ];
 }

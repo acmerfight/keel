@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { runAgent } from "../../../src/agent/loop.ts";
@@ -814,6 +814,57 @@ describe("File Editing Multi Edit And Apply Patch", () => {
       expect(events).toContainEqual({
         type: "text",
         text: "Applied the standard add/delete diff.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the assistant proposes a standard unified diff that changes an executable bit,
+    When the agent handles the apply_patch tool call,
+    Then the file mode changes before the assistant replies`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    await mkdir(join(workspace, "scripts"));
+    const scriptPath = join(workspace, "scripts", "run.sh");
+    await writeFile(scriptPath, "#!/bin/sh\necho hi\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(scriptPath, 0o644);
+    }
+    const provider = createFakeProvider([
+      fakeToolResponse("read", { path: "scripts/run.sh" }),
+      fakeToolResponse("apply_patch", {
+        patch: [
+          "diff --git a/scripts/run.sh b/scripts/run.sh",
+          "old mode 100644",
+          "new mode 100755",
+        ].join("\n"),
+      }),
+      fakeResponse("Made the script executable."),
+    ]);
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "make this script executable using the standard diff",
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(await readFile(scriptPath, "utf8")).toBe("#!/bin/sh\necho hi\n");
+      if (process.platform !== "win32") {
+        expect((await stat(scriptPath)).mode & 0o777).toBe(0o755);
+      }
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Made the script executable.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

@@ -122,7 +122,9 @@ export function applyPreparedOperation(
           ? {
               mode: operation.mode,
             }
-          : {};
+          : operation.mode === null
+            ? {}
+            : { mode: operation.mode };
       const result = createTextFileAtomically(
         realTargetPath,
         operation.afterContent,
@@ -370,6 +372,7 @@ export function applyPreparedOperation(
     operation.afterContent,
     {
       mode: operation.mode,
+      rollbackMode: operation.rollbackMode,
       beforeAccess: validateTargetAtAccess,
       beforeWrite: validateOpenedTempAtAccess,
       beforePublish: validateTargetAtAccess,

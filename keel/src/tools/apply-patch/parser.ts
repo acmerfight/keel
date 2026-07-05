@@ -1,5 +1,10 @@
 import { patchError } from "./errors.ts";
-import type { ParsedPatchHunk, ParsedPatchOperation } from "./model.ts";
+import type {
+  GitRegularFileMode,
+  ParsedPatchHunk,
+  ParsedPatchModeChange,
+  ParsedPatchOperation,
+} from "./model.ts";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";
@@ -16,8 +21,6 @@ const STANDARD_NEW_PATH_PREFIX = "b/";
 const STANDARD_NULL_FILE = "/dev/null";
 const NO_NEWLINE_MARKER = "\\ No newline at end of file";
 const UNSUPPORTED_STANDARD_DIFF_METADATA_PREFIXES = [
-  "old mode ",
-  "new mode ",
   "dissimilarity index ",
   "Binary files ",
 ] as const;
@@ -25,8 +28,10 @@ const UNSUPPORTED_STANDARD_DIFF_METADATA_PREFIXES = [
 interface StandardFileHeaders {
   readonly oldPath: string | null;
   readonly newPath: string | null;
-  readonly sawNewFileMode: boolean;
-  readonly sawDeletedFileMode: boolean;
+  readonly newFileMode: GitRegularFileMode | null;
+  readonly deletedFileMode: GitRegularFileMode | null;
+  readonly oldMode: GitRegularFileMode | null;
+  readonly newMode: GitRegularFileMode | null;
   readonly sawSimilarityIndex: boolean;
   readonly renameFrom: string | null;
   readonly renameTo: string | null;
@@ -97,7 +102,7 @@ function unsupportedStandardDiff(message: string): never {
   throw patchError(
     "tool_invalid_patch",
     `apply_patch failed: unsupported standard unified diff: ${message}`,
-    "Use a standard unified diff that updates, adds, deletes, renames, or copies text files without file mode changes or binary patches.",
+    "Use a standard unified diff that updates, adds, deletes, renames, or copies text files. Regular file modes 100644 and 100755 are supported; binary, symlink, submodule, tree, and special modes are not.",
   );
 }
 
@@ -222,14 +227,46 @@ function parseStandardFileHeaderPath(
   return workspacePath;
 }
 
-function isStandardFileLifecycleMetadata(line: string): boolean {
-  if (line.startsWith("new file mode ")) {
-    if (line !== "new file mode 100644") {
-      unsupportedStandardDiff(line);
-    }
-    return true;
+function parseStandardGitRegularFileMode(
+  line: string,
+  prefix: string,
+): GitRegularFileMode {
+  const mode = line.slice(prefix.length);
+  if (mode === "100644") return 0o644;
+  if (mode === "100755") return 0o755;
+  unsupportedStandardDiff(line);
+}
+
+function formatStandardGitRegularFileMode(mode: GitRegularFileMode): string {
+  return mode === 0o755 ? "100755" : "100644";
+}
+
+function hasStandardFileLifecycleMetadata(
+  headers: StandardFileHeaders,
+): boolean {
+  return headers.newFileMode !== null || headers.deletedFileMode !== null;
+}
+
+function hasStandardModeChangeMetadata(headers: StandardFileHeaders): boolean {
+  return headers.oldMode !== null || headers.newMode !== null;
+}
+
+function standardModeChangeFromHeaders(
+  headers: StandardFileHeaders,
+): ParsedPatchModeChange | null {
+  if (headers.oldMode === null && headers.newMode === null) return null;
+  if (headers.oldMode === null) {
+    invalidStandardDiff("mode change is missing old mode metadata");
   }
-  return line.startsWith("deleted file mode ");
+  if (headers.newMode === null) {
+    invalidStandardDiff("mode change is missing new mode metadata");
+  }
+  if (headers.oldMode === headers.newMode) {
+    invalidStandardDiff(
+      `mode change does not change mode ${formatStandardGitRegularFileMode(headers.oldMode)}`,
+    );
+  }
+  return { oldMode: headers.oldMode, newMode: headers.newMode };
 }
 
 function isStandardSimilarityIndexMetadata(line: string): boolean {
@@ -266,8 +303,10 @@ function parseStandardFileHeaders(
   diffHeader: string,
 ): StandardFileHeaders {
   let index = start;
-  let sawNewFileMode = false;
-  let sawDeletedFileMode = false;
+  let newFileMode: GitRegularFileMode | null = null;
+  let deletedFileMode: GitRegularFileMode | null = null;
+  let oldMode: GitRegularFileMode | null = null;
+  let newMode: GitRegularFileMode | null = null;
   let sawSimilarityIndex = false;
   let renameFrom: string | null = null;
   let renameTo: string | null = null;
@@ -285,8 +324,10 @@ function parseStandardFileHeaders(
       return parseStandardLifecycleHeadersWithoutFileHeaders(
         diffHeader,
         index,
-        sawNewFileMode,
-        sawDeletedFileMode,
+        newFileMode,
+        deletedFileMode,
+        oldMode,
+        newMode,
         sawSimilarityIndex,
         renameFrom,
         renameTo,
@@ -319,15 +360,43 @@ function parseStandardFileHeaders(
       index++;
       continue;
     }
-    if (isUnsupportedStandardDiffMetadata(line)) {
-      unsupportedStandardDiff(line);
-    }
-    if (isStandardFileLifecycleMetadata(line)) {
-      sawNewFileMode = sawNewFileMode || line.startsWith("new file mode ");
-      sawDeletedFileMode =
-        sawDeletedFileMode || line.startsWith("deleted file mode ");
+    if (line.startsWith("new file mode ")) {
+      if (newFileMode !== null) {
+        invalidStandardDiff("duplicate new file mode metadata");
+      }
+      newFileMode = parseStandardGitRegularFileMode(line, "new file mode ");
       index++;
       continue;
+    }
+    if (line.startsWith("deleted file mode ")) {
+      if (deletedFileMode !== null) {
+        invalidStandardDiff("duplicate deleted file mode metadata");
+      }
+      deletedFileMode = parseStandardGitRegularFileMode(
+        line,
+        "deleted file mode ",
+      );
+      index++;
+      continue;
+    }
+    if (line.startsWith("old mode ")) {
+      if (oldMode !== null) {
+        invalidStandardDiff("duplicate old mode metadata");
+      }
+      oldMode = parseStandardGitRegularFileMode(line, "old mode ");
+      index++;
+      continue;
+    }
+    if (line.startsWith("new mode ")) {
+      if (newMode !== null) {
+        invalidStandardDiff("duplicate new mode metadata");
+      }
+      newMode = parseStandardGitRegularFileMode(line, "new mode ");
+      index++;
+      continue;
+    }
+    if (isUnsupportedStandardDiffMetadata(line)) {
+      unsupportedStandardDiff(line);
     }
     index++;
   }
@@ -336,8 +405,10 @@ function parseStandardFileHeaders(
     return parseStandardLifecycleHeadersWithoutFileHeaders(
       diffHeader,
       index,
-      sawNewFileMode,
-      sawDeletedFileMode,
+      newFileMode,
+      deletedFileMode,
+      oldMode,
+      newMode,
       sawSimilarityIndex,
       renameFrom,
       renameTo,
@@ -362,8 +433,10 @@ function parseStandardFileHeaders(
   return {
     oldPath,
     newPath,
-    sawNewFileMode,
-    sawDeletedFileMode,
+    newFileMode,
+    deletedFileMode,
+    oldMode,
+    newMode,
     sawSimilarityIndex,
     renameFrom,
     renameTo,
@@ -376,14 +449,18 @@ function parseStandardFileHeaders(
 function parseStandardLifecycleHeadersWithoutFileHeaders(
   diffHeader: string,
   next: number,
-  sawNewFileMode: boolean,
-  sawDeletedFileMode: boolean,
+  newFileMode: GitRegularFileMode | null,
+  deletedFileMode: GitRegularFileMode | null,
+  oldMode: GitRegularFileMode | null,
+  newMode: GitRegularFileMode | null,
   sawSimilarityIndex: boolean,
   renameFrom: string | null,
   renameTo: string | null,
   copyFrom: string | null,
   copyTo: string | null,
 ): StandardFileHeaders {
+  const sawNewFileMode = newFileMode !== null;
+  const sawDeletedFileMode = deletedFileMode !== null;
   if (copyFrom !== null || copyTo !== null) {
     if (copyFrom === null || copyTo === null) {
       invalidStandardDiff("copy diff is missing copy from/to metadata");
@@ -401,8 +478,10 @@ function parseStandardLifecycleHeadersWithoutFileHeaders(
     return {
       oldPath: copyFrom,
       newPath: copyTo,
-      sawNewFileMode,
-      sawDeletedFileMode,
+      newFileMode,
+      deletedFileMode,
+      oldMode,
+      newMode,
       sawSimilarityIndex,
       renameFrom,
       renameTo,
@@ -423,8 +502,32 @@ function parseStandardLifecycleHeadersWithoutFileHeaders(
     return {
       oldPath: renameFrom,
       newPath: renameTo,
-      sawNewFileMode,
-      sawDeletedFileMode,
+      newFileMode,
+      deletedFileMode,
+      oldMode,
+      newMode,
+      sawSimilarityIndex,
+      renameFrom,
+      renameTo,
+      copyFrom,
+      copyTo,
+      next,
+    };
+  }
+  if (oldMode !== null || newMode !== null) {
+    if (sawNewFileMode || sawDeletedFileMode) {
+      invalidStandardDiff(
+        "file lifecycle metadata cannot be combined with mode change metadata",
+      );
+    }
+    const path = standardDiffGitSameTargetPath(diffHeader);
+    return {
+      oldPath: path,
+      newPath: path,
+      newFileMode,
+      deletedFileMode,
+      oldMode,
+      newMode,
       sawSimilarityIndex,
       renameFrom,
       renameTo,
@@ -442,8 +545,10 @@ function parseStandardLifecycleHeadersWithoutFileHeaders(
   return {
     oldPath: sawNewFileMode ? null : path,
     newPath: sawNewFileMode ? path : null,
-    sawNewFileMode,
-    sawDeletedFileMode,
+    newFileMode,
+    deletedFileMode,
+    oldMode,
+    newMode,
     sawSimilarityIndex,
     renameFrom,
     renameTo,
@@ -565,7 +670,7 @@ function validateStandardFileMetadata(
     if (headers.oldPath === headers.newPath) {
       invalidStandardDiff("copy metadata does not copy a file");
     }
-    if (headers.sawNewFileMode || headers.sawDeletedFileMode) {
+    if (hasStandardFileLifecycleMetadata(headers)) {
       invalidStandardDiff(
         "copy metadata cannot be combined with file lifecycle metadata",
       );
@@ -576,6 +681,7 @@ function validateStandardFileMetadata(
     ) {
       invalidStandardDiff("copy metadata does not match file headers");
     }
+    standardModeChangeFromHeaders(headers);
     return {
       kind: "copy",
       sourcePath: headers.oldPath,
@@ -592,6 +698,11 @@ function validateStandardFileMetadata(
     if (headers.oldPath === headers.newPath) {
       invalidStandardDiff("rename metadata does not rename a file");
     }
+    if (hasStandardFileLifecycleMetadata(headers)) {
+      invalidStandardDiff(
+        "rename metadata cannot be combined with file lifecycle metadata",
+      );
+    }
     if (
       headers.renameFrom !== headers.oldPath ||
       headers.renameTo !== headers.newPath
@@ -600,24 +711,31 @@ function validateStandardFileMetadata(
     }
   }
   if (headers.oldPath === null) {
-    if (headers.sawDeletedFileMode) {
+    if (headers.deletedFileMode !== null) {
       invalidStandardDiff(
         "new file diff cannot use deleted file mode metadata",
       );
     }
+    if (hasStandardModeChangeMetadata(headers)) {
+      invalidStandardDiff("new file diff cannot use mode change metadata");
+    }
     return null;
   }
   if (headers.newPath === null) {
-    if (headers.sawNewFileMode) {
+    if (headers.newFileMode !== null) {
       invalidStandardDiff(
         "deleted file diff cannot use new file mode metadata",
       );
     }
+    if (hasStandardModeChangeMetadata(headers)) {
+      invalidStandardDiff("deleted file diff cannot use mode change metadata");
+    }
     return null;
   }
-  if (headers.sawNewFileMode || headers.sawDeletedFileMode) {
+  if (hasStandardFileLifecycleMetadata(headers)) {
     invalidStandardDiff("file lifecycle metadata does not match file headers");
   }
+  standardModeChangeFromHeaders(headers);
   return null;
 }
 
@@ -643,6 +761,7 @@ function standardPatchOperationFromHunks(
   parsedHunks: readonly ParsedStandardHunk[],
 ): ParsedPatchOperation {
   const metadata = validateStandardFileMetadata(headers);
+  const modeChange = standardModeChangeFromHeaders(headers);
   if (headers.oldPath === null) {
     const path = standardFileHeaderTargetPath(headers);
     let content = "";
@@ -661,6 +780,7 @@ function standardPatchOperationFromHunks(
       kind: "add",
       path,
       lines: addFileLinesFromStandardContent(content),
+      mode: headers.newFileMode,
     };
   }
   if (headers.newPath === null) {
@@ -672,7 +792,12 @@ function standardPatchOperationFromHunks(
       }
       expectedContent += parsed.oldContent;
     }
-    return { kind: "delete", path, expectedContent };
+    return {
+      kind: "delete",
+      path,
+      expectedContent,
+      mode: headers.deletedFileMode,
+    };
   }
   if (metadata?.kind === "copy") {
     return {
@@ -680,6 +805,7 @@ function standardPatchOperationFromHunks(
       sourcePath: metadata.sourcePath,
       path: metadata.targetPath,
       hunks: standardUpdateHunksFromParsed(metadata.sourcePath, parsedHunks),
+      modeChange,
     };
   }
   if (headers.oldPath !== headers.newPath) {
@@ -691,6 +817,7 @@ function standardPatchOperationFromHunks(
       path: headers.oldPath,
       movePath: headers.newPath,
       hunks: standardUpdateHunksFromParsed(headers.oldPath, parsedHunks),
+      modeChange,
     };
   }
   return {
@@ -698,6 +825,7 @@ function standardPatchOperationFromHunks(
     path: headers.oldPath,
     movePath: null,
     hunks: standardUpdateHunksFromParsed(headers.oldPath, parsedHunks),
+    modeChange,
   };
 }
 
@@ -728,7 +856,8 @@ function parseStandardFileDiff(
     headers.oldPath !== null &&
     headers.newPath !== null &&
     !hasStandardRenameMetadata(headers) &&
-    !hasStandardCopyMetadata(headers)
+    !hasStandardCopyMetadata(headers) &&
+    !hasStandardModeChangeMetadata(headers)
   ) {
     invalidStandardDiff(`file ${targetPath} has no hunks`);
   }
@@ -783,7 +912,10 @@ function parseAddOperation(
       "Add at least one + line for the new file content.",
     );
   }
-  return { operation: { kind: "add", path, lines: contentLines }, next: index };
+  return {
+    operation: { kind: "add", path, lines: contentLines, mode: null },
+    next: index,
+  };
 }
 
 function parseDeleteOperation(
@@ -795,7 +927,7 @@ function parseDeleteOperation(
     DELETE_FILE_MARKER,
   );
   return {
-    operation: { kind: "delete", path, expectedContent: null },
+    operation: { kind: "delete", path, expectedContent: null, mode: null },
     next: start + 1,
   };
 }
@@ -883,7 +1015,10 @@ function parseUpdateOperation(
       "Add at least one @@ hunk to update this file.",
     );
   }
-  return { operation: { kind: "update", path, movePath, hunks }, next: index };
+  return {
+    operation: { kind: "update", path, movePath, hunks, modeChange: null },
+    next: index,
+  };
 }
 
 export function parsePatch(patch: string): readonly ParsedPatchOperation[] {
