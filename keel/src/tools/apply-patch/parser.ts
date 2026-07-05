@@ -13,10 +13,9 @@ const STANDARD_OLD_FILE_MARKER = "--- ";
 const STANDARD_NEW_FILE_MARKER = "+++ ";
 const STANDARD_OLD_PATH_PREFIX = "a/";
 const STANDARD_NEW_PATH_PREFIX = "b/";
+const STANDARD_NULL_FILE = "/dev/null";
 const NO_NEWLINE_MARKER = "\\ No newline at end of file";
 const UNSUPPORTED_STANDARD_DIFF_METADATA_PREFIXES = [
-  "new file mode ",
-  "deleted file mode ",
   "old mode ",
   "new mode ",
   "similarity index ",
@@ -29,8 +28,10 @@ const UNSUPPORTED_STANDARD_DIFF_METADATA_PREFIXES = [
 ] as const;
 
 interface StandardFileHeaders {
-  readonly oldPath: string;
-  readonly newPath: string;
+  readonly oldPath: string | null;
+  readonly newPath: string | null;
+  readonly sawNewFileMode: boolean;
+  readonly sawDeletedFileMode: boolean;
   readonly next: number;
 }
 
@@ -41,6 +42,9 @@ interface ParsedStandardFileDiff {
 
 interface ParsedStandardHunk {
   readonly hunk: ParsedPatchHunk;
+  readonly oldContent: string;
+  readonly newContent: string;
+  readonly newHasNoFinalNewline: boolean;
   readonly next: number;
 }
 
@@ -87,7 +91,7 @@ function unsupportedStandardDiff(message: string): never {
   throw patchError(
     "tool_invalid_patch",
     `apply_patch failed: unsupported standard unified diff: ${message}`,
-    "Use a standard unified diff that updates an existing file without renames, file mode changes, binary patches, additions, or deletions.",
+    "Use a standard unified diff that updates, adds, or deletes text files without renames, file mode changes, or binary patches.",
   );
 }
 
@@ -126,23 +130,57 @@ function assertStandardDiffGitMatchesFileHeaders(
   headers: StandardFileHeaders,
 ): void {
   const paths = standardDiffGitPathText(line);
-  const expected = `${STANDARD_OLD_PATH_PREFIX}${headers.oldPath} ${STANDARD_NEW_PATH_PREFIX}${headers.newPath}`;
+  const targetPath = standardFileHeaderTargetPath(headers);
+  const oldDiffPath = headers.oldPath ?? targetPath;
+  const newDiffPath = headers.newPath ?? targetPath;
+  const expected = `${STANDARD_OLD_PATH_PREFIX}${oldDiffPath} ${STANDARD_NEW_PATH_PREFIX}${newDiffPath}`;
   if (paths !== expected) {
     invalidStandardDiff("diff --git paths do not match ---/+++ file headers");
   }
+}
+
+function standardDiffGitSameTargetPath(line: string): string {
+  const paths = standardDiffGitPathText(line);
+  const candidates: string[] = [];
+  let searchStart = 0;
+  while (searchStart < paths.length) {
+    const separator = paths.indexOf(
+      ` ${STANDARD_NEW_PATH_PREFIX}`,
+      searchStart,
+    );
+    if (separator === -1) break;
+    const oldPath = paths.slice(0, separator);
+    const newPath = paths.slice(separator + 1);
+    const oldWorkspacePath = oldPath.slice(STANDARD_OLD_PATH_PREFIX.length);
+    const newWorkspacePath = newPath.slice(STANDARD_NEW_PATH_PREFIX.length);
+    if (oldWorkspacePath === newWorkspacePath) {
+      candidates.push(oldWorkspacePath);
+    }
+    searchStart = separator + 1;
+  }
+  if (candidates.length === 1) return candidates.join("");
+  invalidStandardDiff("file lifecycle diff header must target one path");
+}
+
+function standardFileHeaderTargetPath(headers: StandardFileHeaders): string {
+  const targetPath = headers.newPath ?? headers.oldPath;
+  if (targetPath === null) {
+    invalidStandardDiff("file headers cannot both use /dev/null");
+  }
+  return targetPath;
 }
 
 function parseStandardFileHeaderPath(
   line: string,
   marker: string,
   pathPrefix: string,
-): string {
+): string | null {
   if (!line.startsWith(marker)) {
     invalidStandardDiff(`expected ${marker}<path> file header`);
   }
   const path = metadataFreePath(line.slice(marker.length));
-  if (path === "/dev/null") {
-    unsupportedStandardDiff("file additions and deletions are not supported");
+  if (path === STANDARD_NULL_FILE) {
+    return null;
   }
   if (!path.startsWith(pathPrefix)) {
     invalidStandardDiff(`expected ${marker}${pathPrefix}<path>`);
@@ -152,6 +190,16 @@ function parseStandardFileHeaderPath(
     invalidStandardDiff("file header path is empty");
   }
   return workspacePath;
+}
+
+function isStandardFileLifecycleMetadata(line: string): boolean {
+  if (line.startsWith("new file mode ")) {
+    if (line !== "new file mode 100644") {
+      unsupportedStandardDiff(line);
+    }
+    return true;
+  }
+  return line.startsWith("deleted file mode ");
 }
 
 function isUnsupportedStandardDiffMetadata(line: string): boolean {
@@ -165,23 +213,47 @@ function isUnsupportedStandardDiffMetadata(line: string): boolean {
 function parseStandardFileHeaders(
   lines: readonly string[],
   start: number,
-  diffPathHint: string,
+  diffHeader: string,
 ): StandardFileHeaders {
   let index = start;
+  let sawNewFileMode = false;
+  let sawDeletedFileMode = false;
   while (index < lines.length) {
     const line = parserLine(lines, index);
     if (line.startsWith(STANDARD_OLD_FILE_MARKER)) break;
+    if (line.startsWith(HUNK_MARKER)) {
+      invalidStandardDiff(
+        `missing --- file header for ${diffHeader.slice(STANDARD_DIFF_MARKER.length)}`,
+      );
+    }
     if (line.startsWith(STANDARD_DIFF_MARKER)) {
-      invalidStandardDiff(`missing ---/+++ file headers for ${diffPathHint}`);
+      return parseStandardLifecycleHeadersWithoutFileHeaders(
+        diffHeader,
+        index,
+        sawNewFileMode,
+        sawDeletedFileMode,
+      );
     }
     if (isUnsupportedStandardDiffMetadata(line)) {
       unsupportedStandardDiff(line);
+    }
+    if (isStandardFileLifecycleMetadata(line)) {
+      sawNewFileMode = sawNewFileMode || line.startsWith("new file mode ");
+      sawDeletedFileMode =
+        sawDeletedFileMode || line.startsWith("deleted file mode ");
+      index++;
+      continue;
     }
     index++;
   }
 
   if (index >= lines.length) {
-    invalidStandardDiff(`missing --- file header for ${diffPathHint}`);
+    return parseStandardLifecycleHeadersWithoutFileHeaders(
+      diffHeader,
+      index,
+      sawNewFileMode,
+      sawDeletedFileMode,
+    );
   }
   const oldPath = parseStandardFileHeaderPath(
     parserLine(lines, index),
@@ -197,7 +269,34 @@ function parseStandardFileHeaders(
     STANDARD_NEW_FILE_MARKER,
     STANDARD_NEW_PATH_PREFIX,
   );
-  return { oldPath, newPath, next: index + 1 };
+  return {
+    oldPath,
+    newPath,
+    sawNewFileMode,
+    sawDeletedFileMode,
+    next: index + 1,
+  };
+}
+
+function parseStandardLifecycleHeadersWithoutFileHeaders(
+  diffHeader: string,
+  next: number,
+  sawNewFileMode: boolean,
+  sawDeletedFileMode: boolean,
+): StandardFileHeaders {
+  if (sawNewFileMode === sawDeletedFileMode) {
+    invalidStandardDiff(
+      `missing --- file header for ${diffHeader.slice(STANDARD_DIFF_MARKER.length)}`,
+    );
+  }
+  const path = standardDiffGitSameTargetPath(diffHeader);
+  return {
+    oldPath: sawNewFileMode ? null : path,
+    newPath: sawNewFileMode ? path : null,
+    sawNewFileMode,
+    sawDeletedFileMode,
+    next,
+  };
 }
 
 function appendStandardHunkSideLine(
@@ -240,6 +339,7 @@ function parseStandardHunk(
   };
   let lastLineSide: StandardHunkLineSide | null = null;
   let sawNoNewlineMarker = false;
+  let newHasNoFinalNewline = false;
   let index = start + 1;
   while (index < lines.length) {
     const line = parserLine(lines, index);
@@ -256,6 +356,7 @@ function parseStandardHunk(
       }
       if (lastLineSide === "new" || lastLineSide === "both") {
         markStandardHunkSideNoNewline(newSide);
+        newHasNoFinalNewline = true;
       }
       lastLineSide = null;
       index++;
@@ -279,10 +380,98 @@ function parseStandardHunk(
 
   const oldLines = standardHunkSideLines(oldSide, sawNoNewlineMarker);
   const newLines = standardHunkSideLines(newSide, sawNoNewlineMarker);
-  if (oldLines.length === 0 || oldLines.every((line) => line === "")) {
-    invalidStandardDiff(`hunk for ${path} has no effective old lines`);
+  return {
+    hunk: { oldLines, newLines },
+    oldContent: oldSide.text,
+    newContent: newSide.text,
+    newHasNoFinalNewline,
+    next: index,
+  };
+}
+
+function hasEffectiveStandardLines(lines: readonly string[]): boolean {
+  return lines.some((line) => line !== "");
+}
+
+function validateStandardLifecycleMetadata(headers: StandardFileHeaders): void {
+  if (headers.oldPath === null) {
+    if (headers.sawDeletedFileMode) {
+      invalidStandardDiff(
+        "new file diff cannot use deleted file mode metadata",
+      );
+    }
+    return;
   }
-  return { hunk: { oldLines, newLines }, next: index };
+  if (headers.newPath === null) {
+    if (headers.sawNewFileMode) {
+      invalidStandardDiff(
+        "deleted file diff cannot use new file mode metadata",
+      );
+    }
+    return;
+  }
+  if (headers.sawNewFileMode || headers.sawDeletedFileMode) {
+    invalidStandardDiff("file lifecycle metadata does not match file headers");
+  }
+}
+
+function addFileLinesFromStandardContent(content: string): readonly string[] {
+  if (content === "") return [];
+  return content.split("\n");
+}
+
+function standardPatchOperationFromHunks(
+  headers: StandardFileHeaders,
+  parsedHunks: readonly ParsedStandardHunk[],
+): ParsedPatchOperation {
+  validateStandardLifecycleMetadata(headers);
+  if (headers.oldPath === null) {
+    const path = standardFileHeaderTargetPath(headers);
+    let content = "";
+    for (const parsed of parsedHunks) {
+      if (parsed.oldContent !== "") {
+        invalidStandardDiff(`new file ${path} hunk contains old lines`);
+      }
+      if (parsed.newHasNoFinalNewline) {
+        unsupportedStandardDiff(
+          `new file ${path} without a trailing newline is not supported`,
+        );
+      }
+      content += parsed.newContent;
+    }
+    return {
+      kind: "add",
+      path,
+      lines: addFileLinesFromStandardContent(content),
+    };
+  }
+  if (headers.newPath === null) {
+    const path = standardFileHeaderTargetPath(headers);
+    let expectedContent = "";
+    for (const parsed of parsedHunks) {
+      if (parsed.newContent !== "") {
+        invalidStandardDiff(`deleted file ${path} hunk contains new lines`);
+      }
+      expectedContent += parsed.oldContent;
+    }
+    return { kind: "delete", path, expectedContent };
+  }
+  if (headers.oldPath !== headers.newPath) {
+    unsupportedStandardDiff("renames and copies are not supported");
+  }
+  return {
+    kind: "update",
+    path: headers.oldPath,
+    movePath: null,
+    hunks: parsedHunks.map((parsed) => {
+      if (!hasEffectiveStandardLines(parsed.hunk.oldLines)) {
+        invalidStandardDiff(
+          `hunk for ${headers.oldPath} has no effective old lines`,
+        );
+      }
+      return parsed.hunk;
+    }),
+  };
 }
 
 function parseStandardFileDiff(
@@ -291,33 +480,31 @@ function parseStandardFileDiff(
 ): ParsedStandardFileDiff {
   const diffHeader = parserLine(lines, start);
   standardDiffGitPathText(diffHeader);
-  const headers = parseStandardFileHeaders(
-    lines,
-    start + 1,
-    diffHeader.slice(STANDARD_DIFF_MARKER.length),
-  );
-  if (headers.oldPath !== headers.newPath) {
-    unsupportedStandardDiff("renames and copies are not supported");
-  }
+  const headers = parseStandardFileHeaders(lines, start + 1, diffHeader);
   assertStandardDiffGitMatchesFileHeaders(diffHeader, headers);
 
   let index = headers.next;
-  const hunks: ParsedPatchHunk[] = [];
+  const parsedHunks: ParsedStandardHunk[] = [];
+  const targetPath = standardFileHeaderTargetPath(headers);
   while (index < lines.length) {
     const line = parserLine(lines, index);
     if (line.startsWith(STANDARD_DIFF_MARKER)) break;
     if (!line.startsWith(HUNK_MARKER)) {
-      invalidStandardDiff(`expected @@ hunk header for ${headers.oldPath}`);
+      invalidStandardDiff(`expected @@ hunk header for ${targetPath}`);
     }
-    const parsed = parseStandardHunk(headers.oldPath, lines, index);
-    hunks.push(parsed.hunk);
+    const parsed = parseStandardHunk(targetPath, lines, index);
+    parsedHunks.push(parsed);
     index = parsed.next;
   }
-  if (hunks.length === 0) {
-    invalidStandardDiff(`file ${headers.oldPath} has no hunks`);
+  if (
+    parsedHunks.length === 0 &&
+    headers.oldPath !== null &&
+    headers.newPath !== null
+  ) {
+    invalidStandardDiff(`file ${targetPath} has no hunks`);
   }
   return {
-    operation: { kind: "update", path: headers.oldPath, movePath: null, hunks },
+    operation: standardPatchOperationFromHunks(headers, parsedHunks),
     next: index,
   };
 }
@@ -378,7 +565,10 @@ function parseDeleteOperation(
     parserLine(lines, start),
     DELETE_FILE_MARKER,
   );
-  return { operation: { kind: "delete", path }, next: start + 1 };
+  return {
+    operation: { kind: "delete", path, expectedContent: null },
+    next: start + 1,
+  };
 }
 
 function parseUpdateHunk(

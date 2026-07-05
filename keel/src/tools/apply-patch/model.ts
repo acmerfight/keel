@@ -29,6 +29,7 @@ export type ParsedPatchOperation =
   | {
       readonly kind: "delete";
       readonly path: string;
+      readonly expectedContent: string | null;
     };
 
 export interface ParsedPatchHunk {
