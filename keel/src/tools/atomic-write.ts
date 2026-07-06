@@ -25,6 +25,7 @@ import {
 
 export interface AtomicWriteTextFileOptions {
   readonly mode: number;
+  readonly rollbackMode?: number;
   readonly beforeAccess?: () => void;
   readonly beforeWrite?: (tempPath: string, fd: number) => void;
   readonly beforePublish?: () => void;
@@ -203,7 +204,7 @@ export function writeTextFileAtomically(
         targetPath,
         identity,
         options.rollbackOnPublishFailure,
-        options.mode,
+        options.rollbackMode ?? options.mode,
       );
       throw error;
     }

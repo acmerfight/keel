@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
+import { restoreLastEditCheckpoint } from "../../src/core/git.ts";
 import {
   createGitWorkspace,
   runGit as git,
@@ -242,6 +243,239 @@ describe("Apply Patch Tool", () => {
       await expect(
         readFile(join(workspace, "obsolete.txt"), "utf8"),
       ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff adds an executable text file,
+    When apply_patch validates and applies the diff,
+    Then it creates the file with the requested mode and records it for undo`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-mode-add-");
+    const workspacePath = await realpath(workspace);
+    const targetPath = join(workspacePath, "scripts", "run.sh");
+    const patch = [
+      "diff --git a/scripts/run.sh b/scripts/run.sh",
+      "new file mode 100755",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/scripts/run.sh",
+      "@@ -0,0 +1,2 @@",
+      "+#!/bin/sh",
+      "+echo hi",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch);
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nA scripts/run.sh");
+      expect(result.targetPaths).toEqual([targetPath]);
+      expect(await readFile(targetPath, "utf8")).toBe("#!/bin/sh\necho hi\n");
+      if (process.platform !== "win32") {
+        expect((await stat(targetPath)).mode & 0o777).toBe(0o755);
+      }
+      expect(result.checkpointOperations).toEqual([
+        {
+          operation: "create",
+          filePath: targetPath,
+          afterContent: "#!/bin/sh\necho hi\n",
+          mode: 0o755,
+        },
+      ]);
+      expect(restoreLastEditCheckpoint(workspace)).toEqual({
+        status: "restored",
+        restoredLabel: "1 files",
+      });
+      await expect(readFile(targetPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff changes only a read file mode,
+    When apply_patch applies it and undo restores the checkpoint,
+    Then the executable bit is applied and undo restores the old mode`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-mode-only-");
+    const workspacePath = await realpath(workspace);
+    const targetPath = join(workspacePath, "scripts", "run.sh");
+    await mkdir(join(workspacePath, "scripts"));
+    await writeFile(targetPath, "#!/bin/sh\necho hi\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(targetPath, 0o644);
+    }
+    const patch = [
+      "diff --git a/scripts/run.sh b/scripts/run.sh",
+      "old mode 100644",
+      "new mode 100755",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (path) => path === targetPath,
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nM scripts/run.sh");
+      expect(result.targetPaths).toEqual([targetPath]);
+      expect(await readFile(targetPath, "utf8")).toBe("#!/bin/sh\necho hi\n");
+      if (process.platform !== "win32") {
+        expect((await stat(targetPath)).mode & 0o777).toBe(0o755);
+      }
+      expect(result.checkpointOperations).toEqual([
+        {
+          operation: "edit",
+          filePath: targetPath,
+          beforeContent: "#!/bin/sh\necho hi\n",
+          afterContent: "#!/bin/sh\necho hi\n",
+          beforeMode: 0o644,
+          afterMode: 0o755,
+        },
+      ]);
+      expect(restoreLastEditCheckpoint(workspace)).toEqual({
+        status: "restored",
+        restoredLabel: "1 files",
+      });
+      expect(await readFile(targetPath, "utf8")).toBe("#!/bin/sh\necho hi\n");
+      if (process.platform !== "win32") {
+        expect((await stat(targetPath)).mode & 0o777).toBe(0o644);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff expects the wrong old file mode,
+    When apply_patch validates the mode change,
+    Then it rejects the patch without changing the file mode`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-apply-patch-mode-mismatch-",
+    );
+    const workspacePath = await realpath(workspace);
+    const targetPath = join(workspacePath, "scripts", "run.sh");
+    await mkdir(join(workspacePath, "scripts"));
+    await writeFile(targetPath, "#!/bin/sh\necho hi\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(targetPath, 0o644);
+    }
+    const patch = [
+      "diff --git a/scripts/run.sh b/scripts/run.sh",
+      "old mode 100755",
+      "new mode 100644",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (path) => path === targetPath,
+            },
+          }),
+        "tool_patch_hunk_not_found",
+        "expected file mode 100755 for scripts/run.sh",
+        "regenerate the diff from the current file mode",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe("#!/bin/sh\necho hi\n");
+      if (process.platform !== "win32") {
+        expect((await stat(targetPath)).mode & 0o777).toBe(0o644);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff expects a non-executable old mode for an executable file,
+    When apply_patch validates the mode change,
+    Then it reports the expected Git mode without mutating the file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-apply-patch-mode-mismatch-exec-",
+    );
+    const workspacePath = await realpath(workspace);
+    const targetPath = join(workspacePath, "scripts", "run.sh");
+    await mkdir(join(workspacePath, "scripts"));
+    await writeFile(targetPath, "#!/bin/sh\necho hi\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(targetPath, 0o755);
+    }
+    const patch = [
+      "diff --git a/scripts/run.sh b/scripts/run.sh",
+      "old mode 100644",
+      "new mode 100755",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (path) => path === targetPath,
+            },
+          }),
+        "tool_patch_hunk_not_found",
+        "expected file mode 100644 for scripts/run.sh",
+        "regenerate the diff from the current file mode",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe("#!/bin/sh\necho hi\n");
+      if (process.platform !== "win32") {
+        expect((await stat(targetPath)).mode & 0o777).toBe(0o755);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff changes a read file's content and mode,
+    When apply_patch validates and applies the diff,
+    Then it updates the content and the executable bit together`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-mode-edit-");
+    const workspacePath = await realpath(workspace);
+    const targetPath = join(workspacePath, "scripts", "run.sh");
+    await mkdir(join(workspacePath, "scripts"));
+    await writeFile(targetPath, "#!/bin/sh\necho old\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(targetPath, 0o644);
+    }
+    const patch = [
+      "diff --git a/scripts/run.sh b/scripts/run.sh",
+      "old mode 100644",
+      "new mode 100755",
+      "index 1111111..2222222",
+      "--- a/scripts/run.sh",
+      "+++ b/scripts/run.sh",
+      "@@ -1,2 +1,2 @@",
+      " #!/bin/sh",
+      "-echo old",
+      "+echo new",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (path) => path === targetPath,
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nM scripts/run.sh");
+      expect(await readFile(targetPath, "utf8")).toBe("#!/bin/sh\necho new\n");
+      if (process.platform !== "win32") {
+        expect((await stat(targetPath)).mode & 0o777).toBe(0o755);
+      }
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -677,6 +911,64 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a standard unified diff renames a read text file and changes its mode,
+    When apply_patch validates and applies the diff,
+    Then it moves the file and applies the requested mode`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-rename-mode-");
+    const workspacePath = await realpath(workspace);
+    const sourcePath = join(workspacePath, "src", "old.sh");
+    const targetPath = join(workspacePath, "src", "new.sh");
+    await mkdir(join(workspacePath, "src"));
+    await writeFile(sourcePath, "#!/bin/sh\necho hi\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(sourcePath, 0o644);
+    }
+    const patch = [
+      "diff --git a/src/old.sh b/src/new.sh",
+      "old mode 100644",
+      "new mode 100755",
+      "similarity index 100%",
+      "rename from src/old.sh",
+      "rename to src/new.sh",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (path) => path === sourcePath,
+        },
+      });
+
+      // Then
+      expect(result.content).toBe("Applied patch:\nR src/old.sh -> src/new.sh");
+      await expect(readFile(sourcePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await readFile(targetPath, "utf8")).toBe("#!/bin/sh\necho hi\n");
+      if (process.platform !== "win32") {
+        expect((await stat(targetPath)).mode & 0o777).toBe(0o755);
+      }
+      expect(result.checkpointOperations).toEqual([
+        {
+          operation: "delete",
+          filePath: sourcePath,
+          beforeContent: "#!/bin/sh\necho hi\n",
+          mode: 0o644,
+        },
+        {
+          operation: "create",
+          filePath: targetPath,
+          afterContent: "#!/bin/sh\necho hi\n",
+          mode: 0o755,
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a standard unified diff renames and edits a read text file,
     When apply_patch validates and applies the diff,
     Then it moves the file through the normal patch result with the text changes applied`, async () => {
@@ -717,6 +1009,59 @@ describe("Apply Patch Tool", () => {
       expect(await readFile(targetPath, "utf8")).toBe(
         "export const value = 2;\n",
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard unified diff copies a read text file and changes its mode,
+    When apply_patch validates and applies the diff,
+    Then it preserves the source mode and creates the copy with the requested mode`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-apply-patch-copy-mode-");
+    const workspacePath = await realpath(workspace);
+    const sourcePath = join(workspacePath, "src", "template.sh");
+    const targetPath = join(workspacePath, "src", "copied.sh");
+    await mkdir(join(workspacePath, "src"));
+    await writeFile(sourcePath, "#!/bin/sh\necho hi\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(sourcePath, 0o644);
+    }
+    const patch = [
+      "diff --git a/src/template.sh b/src/copied.sh",
+      "old mode 100644",
+      "new mode 100755",
+      "similarity index 100%",
+      "copy from src/template.sh",
+      "copy to src/copied.sh",
+    ].join("\n");
+
+    try {
+      // When
+      const result = executeApplyPatch(workspace, patch, {
+        readBeforeEdit: {
+          hasRead: (path) => path === sourcePath,
+        },
+      });
+
+      // Then
+      expect(result.content).toBe(
+        "Applied patch:\nC src/template.sh -> src/copied.sh",
+      );
+      expect(await readFile(sourcePath, "utf8")).toBe("#!/bin/sh\necho hi\n");
+      expect(await readFile(targetPath, "utf8")).toBe("#!/bin/sh\necho hi\n");
+      if (process.platform !== "win32") {
+        expect((await stat(sourcePath)).mode & 0o777).toBe(0o644);
+        expect((await stat(targetPath)).mode & 0o777).toBe(0o755);
+      }
+      expect(result.checkpointOperations).toEqual([
+        {
+          operation: "create",
+          filePath: targetPath,
+          afterContent: "#!/bin/sh\necho hi\n",
+          mode: 0o755,
+        },
+      ]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1185,14 +1530,137 @@ describe("Apply Patch Tool", () => {
       },
       {
         patch: [
+          "diff --git a/link b/link",
+          "new file mode 120000",
+          "--- /dev/null",
+          "+++ b/link",
+          "@@ -0,0 +1 @@",
+          "+target",
+        ].join("\n"),
+        message: "new file mode 120000",
+      },
+      {
+        patch: [
+          "diff --git a/submodule b/submodule",
+          "new file mode 160000",
+          "--- /dev/null",
+          "+++ b/submodule",
+          "@@ -0,0 +1 @@",
+          "+0000000000000000000000000000000000000000",
+        ].join("\n"),
+        message: "new file mode 160000",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "old mode 100644",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "mode change is missing new mode metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "new mode 100755",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "mode change is missing old mode metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "old mode 100644",
+          "new mode 100644",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "mode change does not change mode 100644",
+      },
+      {
+        patch: [
+          "diff --git a/script.sh b/script.sh",
+          "old mode 100755",
+          "new mode 100755",
+          "--- a/script.sh",
+          "+++ b/script.sh",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "mode change does not change mode 100755",
+      },
+      {
+        patch: [
           "diff --git a/new.txt b/new.txt",
+          "new file mode 100644",
           "new file mode 100755",
           "--- /dev/null",
           "+++ b/new.txt",
           "@@ -0,0 +1 @@",
           "+new",
         ].join("\n"),
-        message: "new file mode 100755",
+        message: "duplicate new file mode metadata",
+      },
+      {
+        patch: [
+          "diff --git a/old.txt b/old.txt",
+          "deleted file mode 100644",
+          "deleted file mode 100755",
+          "--- a/old.txt",
+          "+++ /dev/null",
+          "@@ -1 +0,0 @@",
+          "-old",
+        ].join("\n"),
+        message: "duplicate deleted file mode metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "old mode 100644",
+          "old mode 100755",
+          "new mode 100755",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "duplicate old mode metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "old mode 100644",
+          "new mode 100755",
+          "new mode 100644",
+          "--- a/src.ts",
+          "+++ b/src.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message: "duplicate new mode metadata",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/src.ts",
+          "new file mode 100644",
+          "old mode 100644",
+          "new mode 100755",
+        ].join("\n"),
+        message:
+          "file lifecycle metadata cannot be combined with mode change metadata",
       },
       {
         patch: ["diff --git a/src.ts b/src.ts", "index 111..222"].join("\n"),
@@ -1237,6 +1705,18 @@ describe("Apply Patch Tool", () => {
       },
       {
         patch: [
+          "diff --git a/new.txt b/new.txt",
+          "old mode 100644",
+          "new mode 100755",
+          "--- /dev/null",
+          "+++ b/new.txt",
+          "@@ -0,0 +1 @@",
+          "+new",
+        ].join("\n"),
+        message: "new file diff cannot use mode change metadata",
+      },
+      {
+        patch: [
           "diff --git a/old.txt b/old.txt",
           "new file mode 100644",
           "index 1111111..0000000",
@@ -1246,6 +1726,18 @@ describe("Apply Patch Tool", () => {
           "-old",
         ].join("\n"),
         message: "deleted file diff cannot use new file mode metadata",
+      },
+      {
+        patch: [
+          "diff --git a/old.txt b/old.txt",
+          "old mode 100644",
+          "new mode 100755",
+          "--- a/old.txt",
+          "+++ /dev/null",
+          "@@ -1 +0,0 @@",
+          "-old",
+        ].join("\n"),
+        message: "deleted file diff cannot use mode change metadata",
       },
       {
         patch: [
@@ -1270,6 +1762,22 @@ describe("Apply Patch Tool", () => {
           "+new",
         ].join("\n"),
         message: "file lifecycle metadata does not match file headers",
+      },
+      {
+        patch: [
+          "diff --git a/src.ts b/renamed.ts",
+          "similarity index 100%",
+          "rename from src.ts",
+          "rename to renamed.ts",
+          "new file mode 100644",
+          "--- a/src.ts",
+          "+++ b/renamed.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        message:
+          "rename metadata cannot be combined with file lifecycle metadata",
       },
       {
         patch: [
@@ -2966,6 +3474,121 @@ describe("Apply Patch Tool", () => {
         readFile(join(workspace, "private", "secret.txt"), "utf8"),
       ).rejects.toMatchObject({ code: "ENOENT" });
       expect(await readFile(checkpoint, "utf8")).toBe(previousCheckpoint);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard diff deletes an executable file before a later operation fails,
+    When apply_patch rolls back the applied delete,
+    Then it restores the deleted file content and mode`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-apply-patch-delete-rollback-",
+    );
+    const workspacePath = await realpath(workspace);
+    const targetPath = join(workspacePath, "scripts", "run.sh");
+    await mkdir(join(workspacePath, "scripts"));
+    await mkdir(join(workspacePath, "private"));
+    await writeFile(join(workspacePath, ".gitignore"), "private/\n", "utf8");
+    await writeFile(targetPath, "#!/bin/sh\necho hi\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(targetPath, 0o755);
+    }
+    await symlink("private", join(workspacePath, "link"));
+    const patch = [
+      "diff --git a/scripts/run.sh b/scripts/run.sh",
+      "deleted file mode 100755",
+      "index 1111111..0000000",
+      "--- a/scripts/run.sh",
+      "+++ /dev/null",
+      "@@ -1,2 +0,0 @@",
+      "-#!/bin/sh",
+      "-echo hi",
+      "diff --git a/link/secret.txt b/link/secret.txt",
+      "new file mode 100644",
+      "index 0000000..2222222",
+      "--- /dev/null",
+      "+++ b/link/secret.txt",
+      "@@ -0,0 +1 @@",
+      "+secret",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (path) => path === targetPath,
+            },
+          }),
+        "tool_path_ignored",
+        "ignored path: link/secret.txt",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe("#!/bin/sh\necho hi\n");
+      if (process.platform !== "win32") {
+        expect((await stat(targetPath)).mode & 0o777).toBe(0o755);
+      }
+      await expect(
+        readFile(join(workspacePath, "private", "secret.txt"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard diff renames an executable file before a later operation fails,
+    When apply_patch rolls back the applied move,
+    Then it restores the source path content and mode`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-apply-patch-move-rollback-",
+    );
+    const workspacePath = await realpath(workspace);
+    const sourcePath = join(workspacePath, "scripts", "run.sh");
+    const targetPath = join(workspacePath, "scripts", "renamed.sh");
+    await mkdir(join(workspacePath, "scripts"));
+    await mkdir(join(workspacePath, "private"));
+    await writeFile(join(workspacePath, ".gitignore"), "private/\n", "utf8");
+    await writeFile(sourcePath, "#!/bin/sh\necho hi\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(sourcePath, 0o755);
+    }
+    await symlink("private", join(workspacePath, "link"));
+    const patch = [
+      "diff --git a/scripts/run.sh b/scripts/renamed.sh",
+      "similarity index 100%",
+      "rename from scripts/run.sh",
+      "rename to scripts/renamed.sh",
+      "diff --git a/link/secret.txt b/link/secret.txt",
+      "new file mode 100644",
+      "index 0000000..2222222",
+      "--- /dev/null",
+      "+++ b/link/secret.txt",
+      "@@ -0,0 +1 @@",
+      "+secret",
+    ].join("\n");
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: {
+              hasRead: (path) => path === sourcePath,
+            },
+          }),
+        "tool_path_ignored",
+        "ignored path: link/secret.txt",
+      );
+      expect(await readFile(sourcePath, "utf8")).toBe("#!/bin/sh\necho hi\n");
+      await expect(readFile(targetPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      if (process.platform !== "win32") {
+        expect((await stat(sourcePath)).mode & 0o777).toBe(0o755);
+      }
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

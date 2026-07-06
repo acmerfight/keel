@@ -183,6 +183,149 @@ describe("Git Checkpoints", () => {
     }
   });
 
+  test(`Given two consecutive edit checkpoints for the same file record modes,
+    When restoring through the second listed checkpoint,
+    Then the file is restored to the oldest selected content and mode`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-file-mode-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "middle\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "before\n",
+      afterContent: "middle\n",
+      beforeMode: 0o644,
+      afterMode: 0o755,
+    });
+    await writeFile(filePath, "after\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "middle\n",
+      afterContent: "after\n",
+      beforeMode: 0o755,
+      afterMode: 0o755,
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 checkpoints",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("before\n");
+      if (process.platform !== "win32") {
+        expect((await stat(filePath)).mode & 0o777).toBe(0o644);
+      }
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given selected edit checkpoints have matching content but discontinuous modes,
+    When restoring through both checkpoints,
+    Then restore blocks without consuming either checkpoint`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-file-mode-gap-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "after\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "before\n",
+      afterContent: "middle\n",
+      beforeMode: 0o644,
+      afterMode: 0o755,
+    });
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "middle\n",
+      afterContent: "after\n",
+      beforeMode: 0o644,
+      afterMode: 0o755,
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "tool.sh",
+        message: "Cannot undo tool.sh: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("after\n");
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "tool.sh" },
+        { restoredLabel: "tool.sh" },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given selected edit checkpoints have discontinuous content,
+    When restoring through both checkpoints,
+    Then restore blocks without consuming either checkpoint`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-file-content-gap-",
+    );
+    const filePath = join(workspace, "note.txt");
+    await writeFile(filePath, "after\n", "utf8");
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "before\n",
+      afterContent: "middle\n",
+    });
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "different\n",
+      afterContent: "after\n",
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "note.txt",
+        message: "Cannot undo note.txt: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("after\n");
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "note.txt" },
+        { restoredLabel: "note.txt" },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given fewer undo checkpoints exist than the requested list index,
     When restoring through that checkpoint index,
     Then no checkpoint is consumed and the user is told to list checkpoints`, async () => {
@@ -458,6 +601,97 @@ describe("Git Checkpoints", () => {
     }
   });
 
+  test(`Given a mode-owning create checkpoint is followed by a content-only edit,
+    When restoring through both checkpoints while the file mode still matches,
+    Then the unowned edit mode is treated as continuous and the file is removed`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-create-edit-unowned-mode-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "final\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "initial\n",
+      mode: 0o755,
+    });
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "initial\n",
+      afterContent: "final\n",
+    });
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 checkpoints",
+      });
+      await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint with a mode is followed by a content-only edit,
+    When the user changes only the current file mode before restoring both,
+    Then the restore blocks without deleting the file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-create-edit-mode-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "final\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "initial\n",
+      mode: 0o755,
+    });
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "initial\n",
+      afterContent: "final\n",
+    });
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o644);
+    }
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "tool.sh",
+        message: "Cannot undo tool.sh: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("final\n");
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "tool.sh" },
+        { restoredLabel: "tool.sh" },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a create checkpoint is followed by an edit checkpoint and the target is a symlink,
     When restoring through both checkpoints,
     Then the restore blocks without removing the symlink`, async () => {
@@ -659,6 +893,7 @@ describe("Git Checkpoints", () => {
       workspace,
       filePath,
       afterContent: "created\n",
+      mode: 0o644,
     });
 
     try {
@@ -673,6 +908,54 @@ describe("Git Checkpoints", () => {
       expect(await readFile(filePath, "utf8")).toBe("old\n");
       expect((await stat(filePath)).mode & 0o7777).toBe(0o755);
       expect(listUndoCheckpoints(workspace)).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delete checkpoint is followed by a mode-owning create checkpoint,
+    When the user changes only the current file mode before restoring both,
+    Then restore blocks without replacing the file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-undo-through-delete-create-mode-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "old\n", "utf8");
+    await chmod(filePath, 0o644);
+    await rm(filePath);
+    recordLastDeleteCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "old\n",
+      mode: 0o644,
+    });
+    await writeFile(filePath, "created\n", "utf8");
+    await chmod(filePath, 0o755);
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "created\n",
+      mode: 0o755,
+    });
+    await chmod(filePath, 0o644);
+
+    try {
+      // When
+      const restore = restoreUndoCheckpointsThrough(workspace, 2);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "tool.sh",
+        message: "Cannot undo tool.sh: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("created\n");
+      expect((await stat(filePath)).mode & 0o777).toBe(0o644);
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "tool.sh" },
+        { restoredLabel: "tool.sh" },
+      ]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1270,6 +1553,151 @@ describe("Git Checkpoints", () => {
     }
   });
 
+  test(`Given a batch checkpoint records modes for an edit and a create,
+    When the checkpoint is restored,
+    Then it restores the edited file mode and removes the created file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-batch-modes-");
+    const editedPath = join(workspace, "tool.sh");
+    const createdPath = join(workspace, "created.sh");
+    await writeFile(editedPath, "after\n", "utf8");
+    await writeFile(createdPath, "created\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(editedPath, 0o755);
+      await chmod(createdPath, 0o755);
+    }
+
+    try {
+      // When
+      const record = recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath: editedPath,
+            beforeContent: "before\n",
+            afterContent: "after\n",
+            beforeMode: 0o644,
+            afterMode: 0o755,
+          },
+          {
+            operation: "create",
+            filePath: createdPath,
+            afterContent: "created\n",
+            mode: 0o755,
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "2 files",
+      });
+      expect(await readFile(editedPath, "utf8")).toBe("before\n");
+      if (process.platform !== "win32") {
+        expect((await stat(editedPath)).mode & 0o777).toBe(0o644);
+      }
+      await expect(readFile(createdPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a batch checkpoint created file has the expected content but a changed mode,
+    When the checkpoint is restored,
+    Then undo blocks before removing the user's file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-batch-create-mode-blocked-",
+    );
+    const createdPath = join(workspace, "created.sh");
+    await writeFile(createdPath, "created\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(createdPath, 0o755);
+    }
+
+    try {
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "create",
+            filePath: createdPath,
+            afterContent: "created\n",
+            mode: 0o755,
+          },
+        ],
+      });
+      if (process.platform !== "win32") {
+        await chmod(createdPath, 0o644);
+      }
+
+      // When
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "created.sh",
+        message: "Cannot undo created.sh: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(createdPath, "utf8")).toBe("created\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a batch checkpoint edit has the expected content but a changed mode,
+    When the checkpoint is restored,
+    Then undo blocks before overwriting the user's file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-batch-edit-mode-blocked-",
+    );
+    const editedPath = join(workspace, "tool.sh");
+    await writeFile(editedPath, "after\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(editedPath, 0o755);
+    }
+
+    try {
+      recordLastBatchCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath: editedPath,
+            beforeContent: "before\n",
+            afterContent: "after\n",
+            beforeMode: 0o644,
+            afterMode: 0o755,
+          },
+        ],
+      });
+      if (process.platform !== "win32") {
+        await chmod(editedPath, 0o644);
+      }
+
+      // When
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restore).toEqual({
+        status: "blocked",
+        filePath: "tool.sh",
+        message: "Cannot undo tool.sh: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(editedPath, "utf8")).toBe("after\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a batch checkpoint records a deleted file,
     When the checkpoint is restored,
     Then the deleted file is recreated from its pre-delete content`, async () => {
@@ -1594,6 +2022,57 @@ describe("Git Checkpoints", () => {
     }
   });
 
+  test(`Given one task edits the same file twice with modes,
+    When the task checkpoint is restored,
+    Then the file returns to its original content and mode`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-task-edit-mode-");
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "final\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+
+    try {
+      // When
+      const record = recordLastTaskCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath,
+            beforeContent: "old\n",
+            afterContent: "middle\n",
+            beforeMode: 0o644,
+            afterMode: 0o755,
+          },
+          {
+            operation: "edit",
+            filePath,
+            beforeContent: "middle\n",
+            afterContent: "final\n",
+            beforeMode: 0o755,
+            afterMode: 0o755,
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "tool.sh",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
+      if (process.platform !== "win32") {
+        expect((await stat(filePath)).mode & 0o777).toBe(0o644);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given one task edits and then deletes the same file,
     When the task checkpoint is restored,
     Then the file returns to its original pre-task content`, async () => {
@@ -1753,6 +2232,158 @@ describe("Git Checkpoints", () => {
     }
   });
 
+  test(`Given one task deletes and then edits the same file after it reappears,
+    When the task checkpoint is restored,
+    Then the file returns to its original content and mode`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-task-delete-edit-mode-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "final\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+
+    try {
+      // When
+      const record = recordLastTaskCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "delete",
+            filePath,
+            beforeContent: "old\n",
+            mode: 0o644,
+          },
+          {
+            operation: "edit",
+            filePath,
+            beforeContent: "recreated\n",
+            afterContent: "final\n",
+            beforeMode: 0o644,
+            afterMode: 0o755,
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "tool.sh",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
+      if (process.platform !== "win32") {
+        expect((await stat(filePath)).mode & 0o777).toBe(0o644);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one task edits and then recreates the same file with a mode,
+    When the task checkpoint is restored,
+    Then the file returns to its original content and mode`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-task-edit-create-mode-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "replacement\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+
+    try {
+      // When
+      const record = recordLastTaskCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath,
+            beforeContent: "old\n",
+            afterContent: "middle\n",
+            beforeMode: 0o644,
+            afterMode: 0o644,
+          },
+          {
+            operation: "create",
+            filePath,
+            afterContent: "replacement\n",
+            mode: 0o755,
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "tool.sh",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
+      if (process.platform !== "win32") {
+        expect((await stat(filePath)).mode & 0o777).toBe(0o644);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one task edits and then recreates the same file without a new mode,
+    When the task checkpoint is restored,
+    Then the edit mode still protects the recreated file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-task-edit-create-inherit-mode-",
+    );
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "replacement\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+
+    try {
+      // When
+      const record = recordLastTaskCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "edit",
+            filePath,
+            beforeContent: "old\n",
+            afterContent: "middle\n",
+            beforeMode: 0o644,
+            afterMode: 0o755,
+          },
+          {
+            operation: "create",
+            filePath,
+            afterContent: "replacement\n",
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "tool.sh",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("old\n");
+      if (process.platform !== "win32") {
+        expect((await stat(filePath)).mode & 0o777).toBe(0o644);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given one task creates and then edits the same file,
     When the task checkpoint is restored,
     Then the file is removed`, async () => {
@@ -1786,6 +2417,101 @@ describe("Git Checkpoints", () => {
       expect(restore).toEqual({
         status: "restored",
         restoredLabel: "created.txt",
+      });
+      await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one task creates the same file twice and the final create omits a mode,
+    When the task checkpoint is restored,
+    Then the first create mode still protects the final file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-task-create-create-inherit-mode-",
+    );
+    const filePath = join(workspace, "created.sh");
+    await writeFile(filePath, "final\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+
+    try {
+      // When
+      const record = recordLastTaskCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "create",
+            filePath,
+            afterContent: "initial\n",
+            mode: 0o755,
+          },
+          {
+            operation: "create",
+            filePath,
+            afterContent: "final\n",
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "created.sh",
+      });
+      await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one task creates the same file twice with different modes,
+    When the task checkpoint is restored,
+    Then the final created file is removed only when its final mode still matches`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-task-create-create-mode-",
+    );
+    const filePath = join(workspace, "created.sh");
+    await writeFile(filePath, "final\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+
+    try {
+      // When
+      const record = recordLastTaskCheckpoint({
+        workspace,
+        operations: [
+          {
+            operation: "create",
+            filePath,
+            afterContent: "initial\n",
+            mode: 0o644,
+          },
+          {
+            operation: "create",
+            filePath,
+            afterContent: "final\n",
+            mode: 0o755,
+          },
+        ],
+      });
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(record).toEqual({ written: true });
+      expect(restore).toEqual({
+        status: "restored",
+        restoredLabel: "created.sh",
       });
       await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
         code: "ENOENT",
@@ -2295,6 +3021,84 @@ describe("Git Checkpoints", () => {
     }
   });
 
+  test(`Given an edit checkpoint records file modes,
+    When current content and mode still match Keel's post-edit state,
+    Then restoring the checkpoint writes the old content and restores the old mode`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "after\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "before\n",
+      afterContent: "after\n",
+      beforeMode: 0o644,
+      afterMode: 0o755,
+    });
+
+    try {
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "restored",
+        restoredLabel: "tool.sh",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("before\n");
+      if (process.platform !== "win32") {
+        expect((await stat(filePath)).mode & 0o777).toBe(0o644);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit checkpoint records file modes and the user changes the mode,
+    When restoring the checkpoint,
+    Then restore blocks without overwriting the file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "after\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+    recordLastEditCheckpoint({
+      workspace,
+      filePath,
+      beforeContent: "before\n",
+      afterContent: "after\n",
+      beforeMode: 0o644,
+      afterMode: 0o755,
+    });
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o644);
+    }
+
+    try {
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toEqual({
+        status: "blocked",
+        filePath: "tool.sh",
+        message: "Cannot undo tool.sh: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("after\n");
+      if (process.platform !== "win32") {
+        expect((await stat(filePath)).mode & 0o777).toBe(0o644);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a create checkpoint was written by Keel,
     When current file content still matches Keel's created content,
     Then restoring the checkpoint deletes the created file`, async () => {
@@ -2320,6 +3124,43 @@ describe("Git Checkpoints", () => {
       await expect(stat(filePath)).rejects.toMatchObject({
         code: "ENOENT",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a create checkpoint records a mode and the user changes that mode,
+    When restoring the checkpoint,
+    Then restore blocks without deleting the user's file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    const filePath = join(workspace, "tool.sh");
+    await writeFile(filePath, "#!/bin/sh\n", "utf8");
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o755);
+    }
+    recordLastCreateCheckpoint({
+      workspace,
+      filePath,
+      afterContent: "#!/bin/sh\n",
+      mode: 0o755,
+    });
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o644);
+    }
+
+    try {
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toEqual({
+        status: "blocked",
+        filePath: "tool.sh",
+        message: "Cannot undo tool.sh: Refusing to overwrite user changes.",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("#!/bin/sh\n");
+      await stat(filePath);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -2643,6 +3484,32 @@ describe("Git Checkpoints", () => {
       beforeContent: "old\n",
       afterContent: "new\n",
       createdAt: "",
+    });
+
+    try {
+      // When / Then
+      expect(() => restoreLastEditCheckpoint(workspace)).toThrow(
+        "undo failed: checkpoint is invalid",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an edit checkpoint records only one file mode,
+    When restoring the checkpoint,
+    Then Keel reports the checkpoint as invalid`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    await writeRawCheckpoint(workspace, {
+      version: 1,
+      operation: "edit",
+      gitRoot: await realpath(workspace),
+      relativePath: "tool.sh",
+      beforeContent: "old\n",
+      afterContent: "new\n",
+      beforeMode: 0o644,
+      createdAt: "2026-01-01T00:00:00.000Z",
     });
 
     try {
