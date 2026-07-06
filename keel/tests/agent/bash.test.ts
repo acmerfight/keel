@@ -13,7 +13,10 @@ import {
   fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
-import { createSessionBashPermissionPolicy } from "../../src/permissions/bash.ts";
+import {
+  type BashApprovalGrant,
+  createSessionBashPermissionPolicy,
+} from "../../src/permissions/bash.ts";
 
 async function collect(
   source: AsyncIterable<AgentEvent>,
@@ -506,6 +509,204 @@ describe("Bash Commands", () => {
         type: "text",
         text: "Ran twice.",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given duplicate initial session approvals,
+    When the matching command is reviewed,
+    Then the policy deduplicates grants and allows the command without prompting`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const command = "pnpm test";
+    const grant = {
+      type: "exact",
+      cwd: workspace,
+      command,
+    } satisfies BashApprovalGrant;
+    let promptCount = 0;
+    const bashPermission = createSessionBashPermissionPolicy({
+      initialGrants: [grant, grant],
+      prompt: () => {
+        promptCount++;
+        return { type: "deny", message: "should already be approved" };
+      },
+    });
+
+    try {
+      // When
+      const decision = await bashPermission.review({
+        command,
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(decision).toEqual({ type: "allow", scope: "session" });
+      expect(bashPermission.grants()).toEqual([grant]);
+      expect(promptCount).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given identical exact command approvals resolve concurrently,
+    When both prompts approve the command for the session,
+    Then the policy records one active grant and emits one grant notification`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const command = "pnpm test";
+    const decisions: Array<
+      (decision: { readonly type: "allow"; readonly scope: "session" }) => void
+    > = [];
+    const granted: BashApprovalGrant[] = [];
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: () =>
+        new Promise((resolve) => {
+          decisions.push(resolve);
+        }),
+      onGrant: (grant) => {
+        granted.push(grant);
+      },
+    });
+
+    try {
+      // When
+      const first = bashPermission.review({
+        command,
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+      const second = bashPermission.review({
+        command,
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+      for (const resolve of decisions) {
+        resolve({ type: "allow", scope: "session" });
+      }
+      await Promise.all([first, second]);
+
+      // Then
+      const grant = {
+        type: "exact",
+        cwd: workspace,
+        command,
+      } satisfies BashApprovalGrant;
+      expect(granted).toEqual([grant]);
+      expect(bashPermission.grants()).toEqual([grant]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given identical command-family approvals resolve concurrently,
+    When both prompts approve the family for the session,
+    Then the policy records one active family grant and emits one grant notification`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const command = "git status --short";
+    const decisions: Array<
+      (decision: {
+        readonly type: "allow";
+        readonly scope: "session-prefix";
+      }) => void
+    > = [];
+    const granted: BashApprovalGrant[] = [];
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: () =>
+        new Promise((resolve) => {
+          decisions.push(resolve);
+        }),
+      onGrant: (grant) => {
+        granted.push(grant);
+      },
+    });
+
+    try {
+      // When
+      const first = bashPermission.review({
+        command,
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+      const second = bashPermission.review({
+        command,
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+      for (const resolve of decisions) {
+        resolve({ type: "allow", scope: "session-prefix" });
+      }
+      await Promise.all([first, second]);
+
+      // Then
+      const grant = {
+        type: "prefix",
+        cwd: workspace,
+        argvPrefix: ["git", "status"],
+      } satisfies BashApprovalGrant;
+      expect(granted).toEqual([grant]);
+      expect(bashPermission.grants()).toEqual([grant]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given exact and family approvals are active,
+    When the family approval is revoked and an unknown approval is revoked,
+    Then only the matching family is removed from later decisions`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const exactGrant = {
+      type: "exact",
+      cwd: workspace,
+      command: "pnpm test",
+    } satisfies BashApprovalGrant;
+    const familyGrant = {
+      type: "prefix",
+      cwd: workspace,
+      argvPrefix: ["git", "status"],
+    } satisfies BashApprovalGrant;
+    let promptCount = 0;
+    const bashPermission = createSessionBashPermissionPolicy({
+      initialGrants: [exactGrant, familyGrant],
+      prompt: () => {
+        promptCount++;
+        return { type: "deny", message: "family revoked" };
+      },
+    });
+
+    try {
+      // When
+      const missingRevoked = bashPermission.revokeGrant({
+        type: "exact",
+        cwd: workspace,
+        command: "pnpm build",
+      });
+      const familyRevoked = bashPermission.revokeGrant(familyGrant);
+      const exactDecision = await bashPermission.review({
+        command: "pnpm test",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+      const familyDecision = await bashPermission.review({
+        command: "git status --short",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(missingRevoked).toBe(false);
+      expect(familyRevoked).toBe(true);
+      expect(exactDecision).toEqual({ type: "allow", scope: "session" });
+      expect(familyDecision).toEqual({
+        type: "deny",
+        message: "family revoked",
+      });
+      expect(promptCount).toBe(1);
+      expect(bashPermission.grants()).toEqual([exactGrant]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

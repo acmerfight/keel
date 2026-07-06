@@ -71,7 +71,7 @@ What a user can do today:
   the next model request. Real TTY sessions render a stable terminal display
   with a session intro, `keel>` prompts, `status:` progress lines, and an
   `assistant:` header. Local commands include `/help`, `/undo`, `/model`,
-  `/skill`, `/compact`, `/fork`, and `/fork-points`.
+  `/skill`, `/status`, `/approvals`, `/compact`, `/fork`, and `/fork-points`.
 - `keel --session <id>` / `keel --resume <id>` / `keel sessions` /
   `keel sessions fork <source-id> <target-id> [--before-message <id>]` —
   persist, resume, list, and fork interactive transcripts as JSONL session
@@ -97,9 +97,11 @@ What a user can do today:
   mode (all-or-nothing).
 - `keel --bash-policy ask` — expose bash while requiring per-command
   approval in interactive sessions, with exact command + cwd approval and
-  conservative command-family + cwd approval remembered for the
-  process-local session. Approval prompts include deterministic risk labels
-  for workspace-read, project-verification, workspace-write, and
+  conservative command-family + cwd approval remembered for the active session
+  and restored by named-session resume. Interactive `/approvals` lists active
+  bash approvals and can revoke one approval or clear all approvals before
+  later matching commands run. Approval prompts include deterministic risk
+  labels for workspace-read, project-verification, workspace-write, and
   unknown/dangerous commands, and verification-family approvals cover common
   project checks such as `pnpm test`, `pnpm typecheck`, `pnpm lint`, and
   `pnpm build`. One-shot runs fail closed because there is no approval UI;
@@ -282,13 +284,14 @@ Codex/Claude Code — or directly moves the eval numbers.
   UI and future sub-agent state.
 - **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
   prompts in interactive sessions, fails closed without an approval UI, records
-  exact command + cwd approvals, and supports conservative process-local
-  command-family approvals. Prompts now show deterministic risk labels so users
-  can distinguish workspace-read commands, project verification commands,
-  workspace-writing commands, and unknown/dangerous shell syntax before
-  approving. Remaining work is deeper shell parsing, family-specific validators
-  for additional commands where safe, and persistent approval rules. OS
-  sandboxing remains P2.
+  exact command + cwd approvals, supports conservative command-family
+  approvals, restores active grants for named-session resume, and exposes
+  `/approvals` to list, revoke, or clear active grants. Prompts now show
+  deterministic risk labels so users can distinguish workspace-read commands,
+  project verification commands, workspace-writing commands, and
+  unknown/dangerous shell syntax before approving. Remaining work is deeper
+  shell parsing, family-specific validators for additional commands where safe,
+  and persistent user/project approval rules. OS sandboxing remains P2.
 - **Whole-task undo** — ✅ Partial (2026-07): `/undo` restores the last edit,
   created file, apply_patch batch, or multi-file task checkpoint, while
   `/undo --list` and `/undo --to <index>` let users choose an older listed

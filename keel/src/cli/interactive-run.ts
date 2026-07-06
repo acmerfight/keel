@@ -37,6 +37,8 @@ import {
   ensureSessionCanBeCreated,
   forkSessionStore,
   persistSessionBashApprovalGrant,
+  persistSessionBashApprovalRevoked,
+  persistSessionBashApprovalsCleared,
   persistSessionMessages,
   persistSessionModelSwitch,
   persistSessionQueuedInput,
@@ -217,6 +219,13 @@ export async function runInteractiveCli(
             readonly persistBashApprovalGrant: (
               grant: BashApprovalGrant,
             ) => void;
+            readonly persistBashApprovalRevoked: (revocation: {
+              readonly grant: BashApprovalGrant;
+              readonly consumedInputIds: readonly string[];
+            }) => void;
+            readonly persistBashApprovalsCleared: (clear: {
+              readonly consumedInputIds: readonly string[];
+            }) => void;
           }
         | undefined;
       if (activeSessionId !== undefined) {
@@ -344,6 +353,26 @@ export async function runInteractiveCli(
               session: ensureActiveSession(),
               grant,
               runtime,
+            });
+          },
+          persistBashApprovalRevoked: (revocation: {
+            readonly grant: BashApprovalGrant;
+            readonly consumedInputIds: readonly string[];
+          }) => {
+            persistSessionBashApprovalRevoked({
+              session: ensureActiveSession(),
+              grant: revocation.grant,
+              runtime,
+              consumedInputIds: revocation.consumedInputIds,
+            });
+          },
+          persistBashApprovalsCleared: (clear: {
+            readonly consumedInputIds: readonly string[];
+          }) => {
+            persistSessionBashApprovalsCleared({
+              session: ensureActiveSession(),
+              runtime,
+              consumedInputIds: clear.consumedInputIds,
             });
           },
         };
