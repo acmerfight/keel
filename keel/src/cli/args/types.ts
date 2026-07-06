@@ -1,4 +1,4 @@
-import type { ProviderId } from "../../core/provider-id.ts";
+import type { ApiKeyProviderId, ProviderId } from "../../core/provider-id.ts";
 import type { BashMode } from "../../permissions/bash.ts";
 
 export interface EvalRunCliArgs {
@@ -29,6 +29,35 @@ export interface DoctorCliArgs {
   readonly providerId?: ProviderId;
   readonly model?: string;
 }
+
+export type AuthCliArgs =
+  | {
+      readonly command: "auth";
+      readonly mode: "login";
+      readonly providerId: ApiKeyProviderId;
+    }
+  | {
+      readonly command: "auth";
+      readonly mode: "logout";
+      readonly providerId: ApiKeyProviderId;
+    }
+  | {
+      readonly command: "auth";
+      readonly mode: "status";
+    };
+
+export type ConfigCliArgs =
+  | {
+      readonly command: "config";
+      readonly mode: "set-provider";
+      readonly providerId: ProviderId;
+      readonly model?: string;
+      readonly baseUrl?: string;
+    }
+  | {
+      readonly command: "config";
+      readonly mode: "show";
+    };
 
 type UndoCliArgs =
   | {
@@ -93,6 +122,8 @@ export interface RunCliArgs {
 
 export type CliArgs =
   | { readonly command: "help" }
+  | AuthCliArgs
+  | ConfigCliArgs
   | DoctorCliArgs
   | UndoCliArgs
   | { readonly command: "skills" }

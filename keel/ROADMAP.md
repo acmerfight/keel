@@ -141,10 +141,16 @@ Known limits that shape the priorities below:
 - Provider selection supports DeepSeek, Kimi, and Qwen through one-shot and
   interactive `--provider` / `--model` overrides plus environment
   configuration (`KEEL_PROVIDER`, provider-specific API keys, base URLs, and
-  model env vars). Interactive `/model <provider>/<model>` switches later
-  prompts, persists the active selection for named sessions, and compacts when
-  moving to a smaller known context window. A model metadata registry supplies
-  context windows, capabilities, pricing, doctor diagnostics, and a
+  model env vars). Users can also run `keel auth login <provider>
+  --with-api-key` to store a provider API key in `KEEL_HOME/auth.json` and
+  `keel config set-provider <provider> [--model <id>] [--base-url <url>]` to
+  persist non-secret provider defaults in `KEEL_HOME/config.json`; CLI flags
+  override environment, environment overrides user config/auth, and
+  `keel --doctor` reports the effective source without printing secrets.
+  Interactive `/model <provider>/<model>` switches later prompts, persists the
+  active selection for named sessions, and compacts when moving to a smaller
+  known context window. A model metadata registry supplies context windows,
+  capabilities, pricing, doctor diagnostics, and a
   `pnpm check:model-metadata` drift check against models.dev. Cost tracking
   fail-closes when a selected model has unknown pricing. Remaining provider
   work is richer profile metadata and additional frontier providers when
@@ -196,16 +202,17 @@ Known limits that shape the priorities below:
    including while a run is in progress. Daily use also generates the real-task
    corpus the eval suite needs.
 2. **General provider/model configuration.**
-   ✅ Baseline done (2026-06): DeepSeek, Kimi, and Qwen are wired through
+   ✅ Baseline done (2026-07): DeepSeek, Kimi, and Qwen are wired through
    one-shot and interactive `--provider` / `--model` overrides,
    `KEEL_PROVIDER`, provider-specific API keys, base URLs, provider-specific
-   model env vars, interactive `/model` switching, persisted active
-   session model state, and reports that identify provider/model for one-shot
-   and interactive runs. The model metadata registry now drives context-window,
-   capability, pricing, doctor, cost, and model-switch compaction behavior, with
-   `pnpm check:model-metadata` guarding drift for monitored models. Remaining
-   work is additional frontier providers and richer provider profiles when a
-   daily-use need appears, not basic provider/model configuration.
+   model env vars, persisted `KEEL_HOME` auth/config files, interactive
+   `/model` switching, persisted active session model state, and reports that
+   identify provider/model for one-shot and interactive runs. The model metadata
+   registry now drives context-window, capability, pricing, doctor, cost, and
+   model-switch compaction behavior, with `pnpm check:model-metadata` guarding
+   drift for monitored models. Remaining work is additional frontier providers
+   and richer provider profiles when a daily-use need appears, not basic
+   provider/model configuration.
 3. **Context compaction and overflow recovery.** ✅ Partial (2026-06):
    automatic compaction can trigger before oversized requests, summarizes old
    turns without cutting inside a current tool-call/result suffix, compacts

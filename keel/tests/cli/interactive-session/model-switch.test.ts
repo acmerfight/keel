@@ -284,6 +284,7 @@ describe("Interactive Session - Model Switch", () => {
             providerId: "qwen",
             model: selection.model ?? "qwen-future",
             costModel: null,
+            modelSource: selection.model === undefined ? "default" : "--model",
           };
         }
         return resolvedProvider("fake", "fake", oldProvider);

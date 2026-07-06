@@ -138,6 +138,10 @@ function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 409 || status === 429 || status >= 500;
 }
 
+function chatCompletionsUrl(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/u, "")}/chat/completions`;
+}
+
 function parseRetryAfterMs(headers: Headers, nowMs: number): number | null {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs !== null) {
@@ -368,7 +372,7 @@ export async function* requestChatCompletions(
   for (;;) {
     let response: Response;
     try {
-      response = await fetch(`${config.baseUrl}/chat/completions`, {
+      response = await fetch(chatCompletionsUrl(config.baseUrl), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -15,6 +15,7 @@ import {
   type ProviderConfigDiagnostic,
   type ProviderConfigRuntime,
   type ProviderSelection,
+  providerDiagnosticApiKey,
   validateProviderBaseUrl,
 } from "./provider-config.ts";
 import { TOOL_OUTPUT_ARTIFACT_RETENTION_DESCRIPTION } from "./tool-output-artifacts.ts";
@@ -208,9 +209,20 @@ function apiKeyLine(apiKey: ApiKeyDiagnostic): string {
     case "not-required":
       return "api key: not required";
     case "present":
-      return `api key: present (${apiKey.presentEnvKey})`;
+      return `api key: present (${apiKeySourceLabel(apiKey.source)})`;
     case "missing":
       return `api key: missing (expected ${apiKey.expectedEnvKeys.join(" or ")})`;
+  }
+}
+
+function apiKeySourceLabel(
+  source: Extract<ApiKeyDiagnostic, { readonly status: "present" }>["source"],
+): string {
+  switch (source.type) {
+    case "env":
+      return source.envKey;
+    case "auth":
+      return `auth: ${source.providerId}`;
   }
 }
 
@@ -412,8 +424,8 @@ async function readProviderAuthDiagnostic(
     return { status: "skipped", reason: "not required" };
   }
 
-  const apiKey = options.runtime.env(diagnostic.apiKey.presentEnvKey);
-  if (apiKey === undefined || apiKey === "") {
+  const apiKey = providerDiagnosticApiKey(options.runtime, diagnostic);
+  if (apiKey === null) {
     return {
       status: "failed",
       message: "API key changed before auth probe",

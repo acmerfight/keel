@@ -1006,6 +1006,7 @@ describe("Interactive Session - Manual Compact Success", () => {
         providerId: "deepseek",
         model: "deepseek-v4-flash",
         costModel: ZERO_COST_MODEL,
+        modelSource: "default",
         contextCompaction: { keepRecentTokens: 1 },
       }),
       requireKnownCostModel: () => ZERO_COST_MODEL,

@@ -669,8 +669,10 @@ describe("module boundaries", () => {
       ),
     ).toEqual([
       "./provider-diagnostics.ts",
+      "./provider-profiles.ts",
       "./provider-resolver.ts",
       "./provider-selection.ts",
+      "./provider-user-config.ts",
     ]);
 
     expect(providerConfigSource).not.toMatch(/export\s+\*/u);
@@ -692,6 +694,7 @@ describe("module boundaries", () => {
     expect(selectionSpecifiers).toEqual([
       "../core/provider-id.ts",
       "./provider-profiles.ts",
+      "./provider-user-config.ts",
     ]);
 
     const diagnosticsSpecifiers = importSpecifiers(
@@ -736,6 +739,7 @@ describe("module boundaries", () => {
       "src/cli/provider-profiles.ts",
       "src/cli/provider-resolver.ts",
       "src/cli/provider-selection.ts",
+      "src/cli/provider-user-config.ts",
     ]);
     const internalTargets = new Set(
       [...internalFiles].filter(

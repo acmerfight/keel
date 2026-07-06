@@ -5,23 +5,25 @@ export type ModelSource =
   | "DEEPSEEK_MODEL"
   | "KIMI_MODEL"
   | "QWEN_MODEL"
+  | "config"
   | "default";
 
 export type BaseUrlSource =
   | "DEEPSEEK_BASE_URL"
   | "KIMI_BASE_URL"
   | "QWEN_BASE_URL"
+  | "config"
   | "default";
 
 interface ProviderProfileBase {
   readonly defaultModel: string;
-  readonly modelEnvKey?: Exclude<ModelSource, "--model" | "default">;
+  readonly modelEnvKey?: Exclude<ModelSource, "--model" | "config" | "default">;
   readonly apiKeyEnvKeys: readonly string[];
   readonly missingApiKeyMessage: string;
 }
 
 type ProviderProfileWithBaseUrl = ProviderProfileBase & {
-  readonly baseUrlEnvKey: Exclude<BaseUrlSource, "default">;
+  readonly baseUrlEnvKey: Exclude<BaseUrlSource, "config" | "default">;
   readonly defaultBaseUrl: string;
 };
 

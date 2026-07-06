@@ -14,6 +14,8 @@ import {
 import { runSessionsCommand } from "./sessions-command.ts";
 import {
   runArtifactsCommand,
+  runAuthCommand,
+  runConfigCommand,
   runDoctorCommand,
   runEvalCommand,
   runSkillsCommand,
@@ -35,6 +37,14 @@ async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
 
   if (cliArgs.command === "doctor") {
     return await runDoctorCommand(cliArgs, runtime);
+  }
+
+  if (cliArgs.command === "auth") {
+    return await runAuthCommand(cliArgs, runtime);
+  }
+
+  if (cliArgs.command === "config") {
+    return runConfigCommand(cliArgs, runtime);
   }
 
   if (cliArgs.command === "eval") {

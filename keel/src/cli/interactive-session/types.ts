@@ -8,7 +8,7 @@ import type { ProviderId } from "../../core/provider-id.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
 import type { BashApprovalGrant, BashMode } from "../../permissions/bash.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
-import type { ProviderSelection } from "../provider-config.ts";
+import type { ModelSource, ProviderSelection } from "../provider-config.ts";
 import type {
   SessionModelSelection,
   SessionPersistenceReason,
@@ -47,14 +47,17 @@ export type InteractiveResolvedProvider =
   | (InteractiveResolvedProviderBase & {
       readonly providerId: "deepseek";
       readonly costModel: CostModel | null;
+      readonly modelSource: ModelSource;
     })
   | (InteractiveResolvedProviderBase & {
       readonly providerId: "kimi";
       readonly costModel: CostModel | null;
+      readonly modelSource: ModelSource;
     })
   | (InteractiveResolvedProviderBase & {
       readonly providerId: "qwen";
       readonly costModel: CostModel | null;
+      readonly modelSource: ModelSource;
     });
 
 export interface InteractiveSessionOptions {

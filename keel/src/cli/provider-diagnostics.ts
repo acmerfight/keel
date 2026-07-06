@@ -16,9 +16,10 @@ import {
   type ProviderSelection,
   type ProviderSource,
   readPositiveIntegerEnv,
+  selectedApiKey,
+  selectedBaseUrlFromProfile,
   selectedModelFromProfile,
   selectedProvider,
-  selectPresentApiKeyEnvKey,
 } from "./provider-selection.ts";
 
 type ContextWindowSource = "KEEL_CONTEXT_WINDOW_TOKENS" | "registry";
@@ -52,7 +53,9 @@ export type ApiKeyDiagnostic =
   | {
       readonly status: "present";
       readonly expectedEnvKeys: readonly string[];
-      readonly presentEnvKey: string;
+      readonly source:
+        | { readonly type: "env"; readonly envKey: string }
+        | { readonly type: "auth"; readonly providerId: ProviderId };
     }
   | {
       readonly status: "missing";
@@ -135,21 +138,19 @@ export interface ProviderConfigDiagnostic {
 
 function inspectApiKey(
   runtime: ProviderConfigRuntime,
+  providerId: ProviderId,
   profile: ProviderProfile,
 ): ApiKeyDiagnostic {
   if (profile.apiKeyEnvKeys.length === 0) {
     return { status: "not-required", expectedEnvKeys: [] };
   }
 
-  const presentEnvKey = selectPresentApiKeyEnvKey(
-    runtime,
-    profile.apiKeyEnvKeys,
-  );
-  if (presentEnvKey !== null) {
+  const apiKey = selectedApiKey(runtime, providerId, profile);
+  if (apiKey !== null) {
     return {
       status: "present",
       expectedEnvKeys: profile.apiKeyEnvKeys,
-      presentEnvKey,
+      source: apiKey.source,
     };
   }
 
@@ -158,26 +159,10 @@ function inspectApiKey(
 
 function inspectBaseUrl(
   runtime: ProviderConfigRuntime,
+  providerId: ProviderId,
   profile: ProviderProfile,
 ): BaseUrlDiagnostic {
-  if (profile.baseUrlEnvKey === undefined) {
-    return { status: "none" };
-  }
-
-  const configuredBaseUrl = runtime.env(profile.baseUrlEnvKey);
-  if (configuredBaseUrl !== undefined) {
-    return {
-      status: "configured",
-      value: configuredBaseUrl,
-      source: profile.baseUrlEnvKey,
-    };
-  }
-
-  return {
-    status: "configured",
-    value: profile.defaultBaseUrl,
-    source: "default",
-  };
+  return selectedBaseUrlFromProfile(runtime, providerId, profile);
 }
 
 function inspectContextWindow(
@@ -243,10 +228,15 @@ export function inspectProviderConfig(
 ): ProviderConfigDiagnostic {
   const provider = selectedProvider(runtime, selection);
   const profile = providerProfile(provider.providerId);
-  const selected = selectedModelFromProfile(runtime, selection, profile);
-  const apiKey = inspectApiKey(runtime, profile);
+  const selected = selectedModelFromProfile(
+    runtime,
+    selection,
+    provider.providerId,
+    profile,
+  );
+  const apiKey = inspectApiKey(runtime, provider.providerId, profile);
   const metadata = modelMetadata(provider.providerId, selected.model);
-  const baseUrl = inspectBaseUrl(runtime, profile);
+  const baseUrl = inspectBaseUrl(runtime, provider.providerId, profile);
   const contextWindow = inspectContextWindow(runtime, metadata);
   const costModel =
     modelCostModel(provider.providerId, selected.model) === null
@@ -304,4 +294,16 @@ export function inspectProviderConfig(
     costModel,
     issues,
   };
+}
+
+export function providerDiagnosticApiKey(
+  runtime: ProviderConfigRuntime,
+  diagnostic: ProviderConfigDiagnostic,
+): string | null {
+  const apiKey = selectedApiKey(
+    runtime,
+    diagnostic.providerId,
+    providerProfile(diagnostic.providerId),
+  );
+  return apiKey?.apiKey ?? null;
 }

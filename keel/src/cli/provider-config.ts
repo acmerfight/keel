@@ -5,8 +5,10 @@ export {
   inspectProviderConfig,
   type ModelMetadataDiagnostic,
   type ProviderConfigDiagnostic,
+  providerDiagnosticApiKey,
   validateProviderBaseUrl,
 } from "./provider-diagnostics.ts";
+export type { ModelSource } from "./provider-profiles.ts";
 export {
   type ResolvedProvider,
   requireKnownCostModel,
@@ -18,3 +20,11 @@ export {
   type ProviderConfigRuntime,
   type ProviderSelection,
 } from "./provider-selection.ts";
+export {
+  ProviderUserConfigError,
+  providerAuthStatus,
+  readUserProviderConfig,
+  removeProviderAuthApiKey,
+  writeProviderAuthApiKey,
+  writeUserProviderConfig,
+} from "./provider-user-config.ts";

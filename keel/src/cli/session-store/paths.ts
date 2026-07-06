@@ -8,7 +8,7 @@ import {
   type SessionStoreRuntime,
 } from "./model.ts";
 
-export function sessionHome(runtime: SessionStoreRuntime): string {
+export function sessionHome(runtime: Pick<SessionStoreRuntime, "env">): string {
   return runtime.env("KEEL_HOME") ?? join(homedir(), ".keel");
 }
 
