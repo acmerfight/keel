@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -99,6 +99,45 @@ async function createMetadataHeavyGitWorkspace(): Promise<string> {
   return workspace;
 }
 
+async function createSemanticMetadataGitWorkspace(): Promise<string> {
+  const workspace = await mkdtemp(
+    join(tmpdir(), "keel-agent-git-diff-semantic-"),
+  );
+  execFileSync("git", ["init"], { cwd: workspace });
+  execFileSync("git", ["config", "user.email", "keel@example.test"], {
+    cwd: workspace,
+  });
+  execFileSync("git", ["config", "user.name", "Keel Test"], {
+    cwd: workspace,
+  });
+
+  await mkdir(join(workspace, "assets"));
+  await mkdir(join(workspace, "scripts"));
+  await mkdir(join(workspace, "src"));
+  await writeFile(join(workspace, "src", "old.ts"), "export const old = 1;\n");
+  await writeFile(join(workspace, "scripts", "run.sh"), "#!/bin/sh\necho hi\n");
+  await writeFile(
+    join(workspace, "assets", "blob.bin"),
+    Buffer.from([0, 1, 2, 3]),
+  );
+  execFileSync("git", ["add", "."], { cwd: workspace });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: workspace });
+
+  execFileSync("git", ["mv", "src/old.ts", "src/new.ts"], {
+    cwd: workspace,
+  });
+  await chmod(join(workspace, "scripts", "run.sh"), 0o755);
+  await writeFile(
+    join(workspace, "assets", "blob.bin"),
+    Buffer.from([0, 4, 5, 6]),
+  );
+  execFileSync("git", ["add", "scripts/run.sh", "assets/blob.bin"], {
+    cwd: workspace,
+  });
+
+  return workspace;
+}
+
 describe("Agent git diff tool use", () => {
   test(`Given bash is disabled and the user asks to inspect current changes,
     When the assistant calls git_diff,
@@ -154,6 +193,73 @@ describe("Agent git diff tool use", () => {
       );
       expect(toolMessage?.content).toContain("diff --git a/app.ts b/app.ts");
       expect(toolMessage?.content).toContain("+export const value = 2;");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given staged rename mode and binary changes,
+    When the assistant calls git_diff with bash disabled,
+    Then semantic diff metadata is returned to the model`, async () => {
+    // Given
+    const workspace = await createSemanticMetadataGitWorkspace();
+    const provider: LLMProvider = {
+      id: "agent-git-diff-semantic-metadata",
+      async *stream(options) {
+        if (options.messages.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "inspect_semantic_changes",
+            tool: "git_diff",
+            mode: "all",
+          };
+        } else {
+          const toolMessage = options.messages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.toolCallId === "inspect_semantic_changes",
+          );
+          const metadataVisible =
+            toolMessage?.content.includes(
+              "diff --git a/src/old.ts b/src/new.ts",
+            ) === true &&
+            toolMessage.content.includes("rename from src/old.ts") &&
+            toolMessage.content.includes("rename to src/new.ts") &&
+            toolMessage.content.includes("old mode 100644") &&
+            toolMessage.content.includes("new mode 100755") &&
+            toolMessage.content.includes(
+              "Binary files a/assets/blob.bin and b/assets/blob.bin differ",
+            );
+          yield {
+            type: "text",
+            text: metadataVisible
+              ? "Semantic metadata found."
+              : "Semantic metadata missing.",
+          };
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "review the current diff",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Semantic metadata found.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

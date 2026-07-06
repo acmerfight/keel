@@ -505,6 +505,7 @@ type GitDiffFileStatus =
   | "added"
   | "deleted"
   | "renamed"
+  | "copied"
   | "binary"
   | "mode-only";
 
@@ -705,6 +706,12 @@ function gitDiffFileStatus(
   );
   if (hasRename) {
     return "renamed";
+  }
+  const hasCopy = metadataLines.some(
+    (line) => line.startsWith("copy from ") || line.startsWith("copy to "),
+  );
+  if (hasCopy) {
+    return "copied";
   }
   const hasNewFile = metadataLines.some(
     (line) => line.startsWith("new file mode ") || line === "--- /dev/null",

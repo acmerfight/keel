@@ -1,6 +1,6 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve, win32 } from "node:path";
+import { isAbsolute, posix, relative, resolve, win32 } from "node:path";
 import type { Readable } from "node:stream";
 import { KeelError } from "../core/error.ts";
 import {
@@ -24,14 +24,15 @@ const UNTRACKED_FILE_LIMIT = 50;
 const GIT_OPTIONAL_LOCKS_ENV = "GIT_OPTIONAL_LOCKS";
 const GIT_PAGER_ENV = "GIT_PAGER";
 
-const DIFF_SAFETY_ARGS = [
+const DIFF_BASE_ARGS = [
   "--no-color",
   "--no-ext-diff",
   "--no-textconv",
-  "--no-renames",
   "--submodule=short",
   "--ignore-submodules=dirty",
 ];
+const TRACKED_DIFF_ARGS = [...DIFF_BASE_ARGS, "--find-renames"];
+const UNTRACKED_DIFF_ARGS = [...DIFF_BASE_ARGS, "--no-renames"];
 
 type GitDiffMode = "all" | "unstaged" | "staged";
 type GitProcessCaptureMode = "artifact" | "metadata";
@@ -60,9 +61,20 @@ interface RunGitOptions {
   readonly captureMode?: GitProcessCaptureMode;
 }
 
-interface ChangedTrackedEntry {
-  readonly diffPath: string;
+interface SingleChangedTrackedEntry {
+  readonly kind: "single";
+  readonly path: string;
 }
+
+interface PairedChangedTrackedEntry {
+  readonly kind: "paired";
+  readonly oldPath: string;
+  readonly newPath: string;
+}
+
+type ChangedTrackedEntry =
+  | SingleChangedTrackedEntry
+  | PairedChangedTrackedEntry;
 
 interface GitProcessOutputCapture {
   readonly append: (chunk: Buffer) => void;
@@ -415,13 +427,14 @@ function normalizePathFilter(
   if (normalizedPath.split("/").includes("..")) {
     throw pathFilterError(requestedPath);
   }
+  const canonicalPath = posix.normalize(normalizedPath);
 
-  const absolutePath = resolve(workspacePath, normalizedPath);
+  const absolutePath = resolve(workspacePath, canonicalPath);
   /* v8 ignore next 3: lexical validation above constrains normalized relative paths inside the workspace. */
   if (!isInsideWorkspace(workspacePath, absolutePath)) {
     throw pathFilterError(requestedPath);
   }
-  return normalizedPath;
+  return canonicalPath;
 }
 
 function normalizePathFilters(
@@ -459,14 +472,16 @@ function assertPathFiltersAllowed(
 }
 
 function pathspecArgs(paths: readonly string[]): readonly string[] {
-  return paths.length === 0 ? [] : ["--", ...paths];
+  return paths.length === 0
+    ? []
+    : ["--", ...paths.map((path) => `:(literal)${path}`)];
 }
 
 function safeDiffArgs(
   extraArgs: readonly string[],
   paths: readonly string[],
 ): readonly string[] {
-  return ["diff", ...DIFF_SAFETY_ARGS, ...extraArgs, ...pathspecArgs(paths)];
+  return ["diff", ...TRACKED_DIFF_ARGS, ...extraArgs, ...pathspecArgs(paths)];
 }
 
 function filterDriverFromKey(key: string): string | null {
@@ -602,13 +617,34 @@ function parseChangedTrackedEntries(
   const entries: ChangedTrackedEntry[] = [];
   let index = 0;
 
-  while (index + 1 < tokens.length && tokens[index] !== "") {
+  while (index < tokens.length) {
+    const status = tokens[index];
     index += 1;
+    if (status === undefined || status === "") break;
+
+    const statusKind = status[0];
+    if (statusKind === "R" || statusKind === "C") {
+      const oldPath = tokens[index];
+      const newPath = tokens[index + 1];
+      index += 2;
+      /* v8 ignore next: git --name-status -z emits old/new paths for rename/copy entries. */
+      if (
+        oldPath === undefined ||
+        oldPath === "" ||
+        newPath === undefined ||
+        newPath === ""
+      ) {
+        continue;
+      }
+      entries.push({ kind: "paired", oldPath, newPath });
+      continue;
+    }
+
     const path = tokens[index];
     index += 1;
-    /* v8 ignore next: git --name-status -z emits status/path pairs; this guards malformed output. */
+    /* v8 ignore next: git --name-status -z emits status/path pairs for non-rename entries. */
     if (path === undefined || path === "") continue;
-    entries.push({ diffPath: path });
+    entries.push({ kind: "single", path });
   }
 
   return entries;
@@ -617,17 +653,45 @@ function parseChangedTrackedEntries(
 async function changedTrackedEntries(
   workspacePath: string,
   args: readonly string[],
-  paths: readonly string[],
   config: readonly string[],
   signal: AbortSignal | undefined,
 ): Promise<readonly ChangedTrackedEntry[]> {
   const result = await runGitProcess(
     workspacePath,
-    safeDiffArgs([...args, "--name-status", "-z"], paths),
+    safeDiffArgs([...args, "--name-status", "-z"], []),
     runOptions(config, signal, "metadata"),
   );
   expectExitCode("diff --name-status", result, new Set([0, 1]));
   return parseChangedTrackedEntries(result.artifactStdout.text);
+}
+
+function pathMatchesFilter(path: string, filter: string): boolean {
+  if (filter === ".") return true;
+  return path === filter || path.startsWith(`${filter}/`);
+}
+
+function pathMatchesAnyFilter(
+  path: string,
+  filters: readonly string[],
+): boolean {
+  return filters.some((filter) => pathMatchesFilter(path, filter));
+}
+
+function trackedEntryPaths(entry: ChangedTrackedEntry): readonly string[] {
+  if (entry.kind === "paired") {
+    return [entry.oldPath, entry.newPath];
+  }
+  return [entry.path];
+}
+
+function trackedEntryMatchesPathFilters(
+  entry: ChangedTrackedEntry,
+  paths: readonly string[],
+): boolean {
+  if (paths.length === 0) return true;
+  return trackedEntryPaths(entry).some((path) =>
+    pathMatchesAnyFilter(path, paths),
+  );
 }
 
 function pathVisibleToProvider(
@@ -652,17 +716,20 @@ async function trackedDiffPaths(
   const entries = await changedTrackedEntries(
     workspacePath,
     args,
-    paths,
     config,
     signal,
   );
   const visiblePaths = new Set<string>();
 
   for (const entry of entries) {
-    if (
-      pathVisibleToProvider(workspacePath, projectIgnorePolicy, entry.diffPath)
-    ) {
-      visiblePaths.add(entry.diffPath);
+    const entryPaths = trackedEntryPaths(entry);
+    const entryVisible = entryPaths.every((path) =>
+      pathVisibleToProvider(workspacePath, projectIgnorePolicy, path),
+    );
+    if (entryVisible && trackedEntryMatchesPathFilters(entry, paths)) {
+      for (const path of entryPaths) {
+        visiblePaths.add(path);
+      }
     }
   }
 
@@ -738,7 +805,14 @@ async function appendUntrackedDiffs(
   for (const file of visibleFiles.items) {
     const result = await runGitProcess(
       workspacePath,
-      ["diff", ...DIFF_SAFETY_ARGS, "--no-index", "--", nullDevicePath(), file],
+      [
+        "diff",
+        ...UNTRACKED_DIFF_ARGS,
+        "--no-index",
+        "--",
+        nullDevicePath(),
+        file,
+      ],
       runOptions(config, signal),
     );
     appendProcessSections(
