@@ -1,8 +1,9 @@
 import { isProviderId, type ProviderId } from "../core/provider-id.ts";
-import type {
-  BaseUrlSource,
-  ModelSource,
-  ProviderProfile,
+import {
+  type BaseUrlSource,
+  type ModelSource,
+  missingProviderApiKeyMessage,
+  type ProviderProfile,
 } from "./provider-profiles.ts";
 import {
   ProviderUserConfigError,
@@ -235,7 +236,15 @@ export function requireApiKey(
   if (selected !== null) {
     return selected.apiKey;
   }
-  providerConfigError(profile.missingApiKeyMessage);
+  providerConfigError(missingProviderApiKeyMessage(providerId));
+}
+
+function usableApiKey(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
 }
 
 export function selectedApiKey(
@@ -244,13 +253,13 @@ export function selectedApiKey(
   profile: ProviderProfile,
 ): SelectedApiKey | null {
   for (const envKey of profile.apiKeyEnvKeys) {
-    const value = runtime.env(envKey);
-    if (value !== undefined && value !== "") {
+    const value = usableApiKey(runtime.env(envKey));
+    if (value !== null) {
       return { apiKey: value, source: { type: "env", envKey } };
     }
   }
-  const authApiKey = providerAuthApiKey(runtime, providerId);
-  if (authApiKey !== null && authApiKey !== "") {
+  const authApiKey = usableApiKey(providerAuthApiKey(runtime, providerId));
+  if (authApiKey !== null) {
     return { apiKey: authApiKey, source: { type: "auth", providerId } };
   }
   return null;

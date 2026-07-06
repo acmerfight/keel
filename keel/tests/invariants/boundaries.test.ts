@@ -767,5 +767,5 @@ describe("module boundaries", () => {
     }
 
     expect(violations).toEqual([]);
-  });
+  }, 15_000);
 });

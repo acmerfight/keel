@@ -270,7 +270,7 @@ describe("CLI Main - Doctor Command", () => {
 
   test(`Given offline diagnostics are missing a provider API key,
     When the CLI main dispatches the doctor command,
-    Then it reports the missing key as the auth skip reason`, async () => {
+    Then it reports the setup commands and auth skip reason`, async () => {
     // Given
     const fixture = createRuntime(["--doctor", "--offline"], {
       env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
@@ -287,6 +287,15 @@ describe("CLI Main - Doctor Command", () => {
     expect(fixture.stdout()).toContain(
       "api key: missing (expected DEEPSEEK_API_KEY)",
     );
+    expect(fixture.stdout()).toContain("provider setup:");
+    expect(fixture.stdout()).toContain(
+      "Set DEEPSEEK_API_KEY for this run, or store it:",
+    );
+    expect(fixture.stdout()).toContain(
+      "  printf '%s\\n' \"$DEEPSEEK_API_KEY\" | keel auth login deepseek --with-api-key",
+    );
+    expect(fixture.stdout()).toContain("  keel config set-provider deepseek");
+    expect(fixture.stdout()).toContain("  keel --doctor");
     expect(fixture.stdout()).toContain(
       "provider auth: skipped (missing API key)",
     );

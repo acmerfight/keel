@@ -210,7 +210,7 @@ describe("CLI Main - Report Edit And Provider Env", () => {
 
   test(`Given an interactive turn uses the default provider without an API key,
     When the CLI main runs in-process,
-    Then it reports the provider configuration error`, async () => {
+    Then it reports setup guidance for the default provider`, async () => {
     // Given
     const input = new PassThrough();
     const fixture = createRuntime([], {
@@ -227,9 +227,15 @@ describe("CLI Main - Report Edit And Provider Env", () => {
     // Then
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.\n",
+    expect(fixture.stderr()).toContain("Error: missing API key for deepseek.");
+    expect(fixture.stderr()).toContain(
+      "Set DEEPSEEK_API_KEY for this run, or store it:",
     );
+    expect(fixture.stderr()).toContain(
+      "  printf '%s\\n' \"$DEEPSEEK_API_KEY\" | keel auth login deepseek --with-api-key",
+    );
+    expect(fixture.stderr()).toContain("  keel config set-provider deepseek");
+    expect(fixture.stderr()).toContain("  keel --doctor");
   });
 
   test(`Given Qwen is configured with only QWEN_API_KEY,

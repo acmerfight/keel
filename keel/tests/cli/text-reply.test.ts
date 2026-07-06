@@ -883,7 +883,7 @@ describe("CLI Text Reply", () => {
 
   test(`Given Kimi is configured without an API key,
     When user runs the CLI,
-    Then the CLI exits with a Kimi API key error`, async () => {
+    Then the CLI exits with Kimi setup guidance`, async () => {
     // Given
     const env = {
       KEEL_PROVIDER: "kimi",
@@ -895,14 +895,20 @@ describe("CLI Text Reply", () => {
 
     // Then
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toBe(
-      "Error: KIMI_API_KEY is required. Set the API key to use Kimi.\n",
+    expect(result.stderr).toContain("Error: missing API key for kimi.");
+    expect(result.stderr).toContain(
+      "Set KIMI_API_KEY for this run, or store it:",
     );
+    expect(result.stderr).toContain(
+      "  printf '%s\\n' \"$KIMI_API_KEY\" | keel auth login kimi --with-api-key",
+    );
+    expect(result.stderr).toContain("  keel config set-provider kimi");
+    expect(result.stderr).toContain("  keel --doctor");
   });
 
   test(`Given Qwen is configured without an API key,
     When user runs the CLI,
-    Then the CLI exits with a Qwen API key error`, async () => {
+    Then the CLI exits with Qwen setup guidance`, async () => {
     // Given
     const env = {
       KEEL_PROVIDER: "qwen",
@@ -914,8 +920,17 @@ describe("CLI Text Reply", () => {
 
     // Then
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toBe(
-      "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.\n",
+    expect(result.stderr).toContain("Error: missing API key for qwen.");
+    expect(result.stderr).toContain(
+      "Set DASHSCOPE_API_KEY or QWEN_API_KEY for this run, or store it:",
+    );
+    expect(result.stderr).toContain(
+      `  printf '%s\\n' "\${DASHSCOPE_API_KEY:-$QWEN_API_KEY}" | keel auth login qwen --with-api-key`,
+    );
+    expect(result.stderr).toContain("  keel config set-provider qwen");
+    expect(result.stderr).toContain("  keel --doctor");
+    expect(result.stderr).toContain(
+      "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
     );
   });
 
