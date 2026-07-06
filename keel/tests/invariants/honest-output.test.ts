@@ -339,6 +339,128 @@ const limitedOutputBoundaryMatrix = [
       },
     ],
   },
+  {
+    tool: "git_process",
+    sourcePath: "src/tools/git-process.ts",
+    evidence: [
+      {
+        case: "under",
+        testPath: "tests/tools/git-process.test.ts",
+        evidence: {
+          bodyStrings: ["keel-git-process-under-"],
+          testEachValues: [],
+          expectations: [
+            {
+              matcher: "toHaveLength",
+              argument: { kind: "literal", value: 99999 },
+              negated: false,
+            },
+          ],
+        },
+      },
+      {
+        case: "exact",
+        testPath: "tests/tools/git-process.test.ts",
+        evidence: {
+          bodyStrings: ["keel-git-process-exact-"],
+          testEachValues: [],
+          expectations: [
+            {
+              matcher: "toHaveLength",
+              argument: { kind: "literal", value: 100000 },
+              negated: false,
+            },
+          ],
+        },
+      },
+      {
+        case: "overflow",
+        testPath: "tests/tools/git-process.test.ts",
+        evidence: {
+          bodyStrings: ["keel-git-process-overflow-"],
+          testEachValues: [],
+          expectations: [
+            {
+              matcher: "toHaveLength",
+              argument: { kind: "literal", value: 100001 },
+              negated: false,
+            },
+          ],
+        },
+      },
+    ],
+  },
+  {
+    tool: "git_status",
+    sourcePath: "src/tools/git-status.ts",
+    evidence: [
+      {
+        case: "under",
+        testPath: "tests/tools/git-status.test.ts",
+        evidence: {
+          bodyStrings: ["inspect_status"],
+          testEachValues: [],
+          expectations: [
+            {
+              matcher: "toContain",
+              argument: { kind: "literal", value: "- untracked.txt" },
+              negated: false,
+            },
+            {
+              matcher: "toContain",
+              argument: {
+                kind: "literal",
+                value: "[git_status output truncated",
+              },
+              negated: true,
+            },
+          ],
+        },
+      },
+      {
+        case: "exact",
+        testPath: "tests/tools/git-status.test.ts",
+        evidence: {
+          bodyStrings: ["exact_status"],
+          testEachValues: [],
+          expectations: [
+            {
+              matcher: "toContain",
+              argument: { kind: "literal", value: "untracked-199.txt" },
+              negated: false,
+            },
+            {
+              matcher: "toContain",
+              argument: {
+                kind: "literal",
+                value: "[git_status output truncated",
+              },
+              negated: true,
+            },
+          ],
+        },
+      },
+      {
+        case: "overflow",
+        testPath: "tests/tools/git-status.test.ts",
+        evidence: {
+          bodyStrings: ["many_status"],
+          testEachValues: [],
+          expectations: [
+            {
+              matcher: "toContain",
+              argument: {
+                kind: "literal",
+                value:
+                  "[git_status output truncated: showing first 200 entries. Use paths to narrow output.]",
+              },
+              negated: false,
+            },
+          ],
+        },
+      },
+    ],
+  },
 ] satisfies readonly LimitedOutputBoundaryMatrixEntry[];
 
 const nonDiscardingTruncationEmitters = new Map([

@@ -121,6 +121,26 @@ export const gitDiffToolArgumentsSchema = z
   })
   .strict();
 
+export const gitStatusToolArgumentsSchema = z
+  .object({
+    paths: optionalToolArgument(
+      z
+        .array(
+          z
+            .string()
+            .describe(
+              "Workspace-relative literal path filter. Absolute paths, '..', NUL bytes, and git pathspec magic are rejected.",
+            ),
+        )
+        .min(1)
+        .max(100)
+        .describe(
+          "Optional path filters to narrow the status to specific workspace-relative files or directories.",
+        ),
+    ),
+  })
+  .strict();
+
 const editReplacementArgumentsSchema = z
   .object({
     oldText: z

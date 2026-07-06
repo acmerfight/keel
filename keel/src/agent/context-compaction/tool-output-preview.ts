@@ -173,6 +173,10 @@ function sourceLineForToolCall(
       return toolCall.path === undefined
         ? "ls source: ."
         : `ls source: ${toolCall.path}`;
+    case "git_status":
+      return toolCall.paths === undefined || toolCall.paths.length === 0
+        ? "git_status source: all changes"
+        : `git_status source: ${toolCall.paths.join(" ")}`;
     case "git_diff": {
       const pathLabel =
         toolCall.paths === undefined || toolCall.paths.length === 0
@@ -1174,6 +1178,13 @@ function projectToolOutputPreview(
         maxChars,
         context,
         noticePrefixes: ["[ls output truncated:"],
+      });
+    case "git_status":
+      return projectListedOutput({
+        text,
+        maxChars,
+        context,
+        noticePrefixes: ["[git_status output truncated:"],
       });
     case "git_diff":
       return projectGitDiffOutput(text, maxChars, context, purpose);

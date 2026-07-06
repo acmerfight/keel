@@ -361,6 +361,7 @@ describe("Qwen Provider", () => {
       "ls",
       "glob",
       "grep",
+      "git_status",
       "git_diff",
       "edit",
       "write",

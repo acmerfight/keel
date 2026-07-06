@@ -66,6 +66,10 @@ function sourceHandleForToolCall(toolCall: ToolCall): string | null {
         : `glob:${toolCall.pattern} in ${toolCall.path}`;
     case "ls":
       return toolCall.path === undefined ? "ls:." : `ls:${toolCall.path}`;
+    case "git_status":
+      return toolCall.paths === undefined || toolCall.paths.length === 0
+        ? "git_status:all changes"
+        : `git_status:${toolCall.paths.join(" ")}`;
     case "git_diff": {
       const pathLabel =
         toolCall.paths === undefined || toolCall.paths.length === 0

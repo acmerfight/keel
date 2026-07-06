@@ -288,6 +288,7 @@ export function toolCallAccesses(
       const path = scopedSearchPath(workspace, toolCall.path);
       return path === null ? ToolAccesses.all() : ToolAccesses.searchTree(path);
     }
+    case "git_status":
     case "git_diff": {
       const paths = toolCall.paths ?? ["."];
       const accesses: ToolResourceAccess[] = [];
