@@ -1,7 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { requestWithMessagesSchema } from "../../../src/testing/cli-main-schemas.ts";
@@ -485,7 +487,211 @@ describe("CLI Main - Tool Smoke", () => {
     }
   });
 
-  test(`Given ask bash policy is enabled for a one-shot run,
+  test(`Given ask bash policy is enabled for a one-shot run in a real terminal,
+    When the user approves a command family,
+    Then the command runs and later matching commands run without another approval prompt`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-bash-ask-"));
+    execFileSync("git", ["init"], { cwd: workspace, stdio: "ignore" });
+    await writeFile(join(workspace, "note.txt"), "hello\n", "utf8");
+    const capturedBodies: unknown[] = [];
+    const firstCommand = "git status --short";
+    const secondCommand = "git status --porcelain";
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_bash_first", "bash", { command: firstCommand }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (capturedBodies.length === 2) {
+          res.write(
+            sseToolCall("call_bash_second", "bash", { command: secondCommand }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Status checked."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    let approvalPrompts = 0;
+    const fixture = createRuntime(["--bash-policy", "ask", "check status"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input,
+      inputIsTTY: true,
+      onStderr: (text) => {
+        if (text.includes("Approve bash command?")) {
+          approvalPrompts++;
+          input.write("p\n");
+          input.end();
+        }
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Status checked.\n");
+      expect(approvalPrompts).toBe(1);
+      expect(fixture.stderr()).toContain(
+        "[p] allow command family for this run: git status",
+      );
+      expect(fixture.stderr()).toContain(
+        "Approved command output may be sent to the provider unredacted.",
+      );
+      expect(fixture.stderr()).toContain("Tool: bash git status --short\n");
+      expect(fixture.stderr()).toContain("Tool: bash git status --porcelain\n");
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_bash_first",
+          content: expect.stringContaining("stdout:\n?? note.txt"),
+        }),
+      );
+      const thirdRequest = requestWithMessagesSchema.parse(capturedBodies[2]);
+      expect(thirdRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_bash_second",
+          content: expect.stringContaining("stdout:\n?? note.txt"),
+        }),
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given ask bash policy is enabled for a one-shot run in a real terminal,
+    When the user approves an exact command for the run,
+    Then repeated matching commands run without another approval prompt`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-bash-ask-"));
+    const capturedBodies: unknown[] = [];
+    const command =
+      "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1 || capturedBodies.length === 2) {
+          const toolCallId =
+            capturedBodies.length === 1
+              ? "call_bash_first"
+              : "call_bash_second";
+          res.write(sseToolCall(toolCallId, "bash", { command }));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Ran twice."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    let approvalPrompts = 0;
+    const fixture = createRuntime(["--bash-policy", "ask", "run twice"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input,
+      inputIsTTY: true,
+      onStderr: (text) => {
+        if (text.includes("Approve bash command?")) {
+          approvalPrompts++;
+          input.write("s\n");
+          input.end();
+        }
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Ran twice.\n");
+      expect(approvalPrompts).toBe(1);
+      expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
+      expect(fixture.stderr()).toContain(
+        "[y] allow once, [s] allow exact command for this run, [n] deny; any other input denies: ",
+      );
+      expect(fixture.stderr()).not.toContain("[p] allow");
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_bash_first",
+          content: expect.stringContaining("Exit code: 0"),
+        }),
+      );
+      const thirdRequest = requestWithMessagesSchema.parse(capturedBodies[2]);
+      expect(thirdRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_bash_second",
+          content: expect.stringContaining("Exit code: 0"),
+        }),
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given ask bash policy is enabled for a non-TTY one-shot run,
     When the provider requests a shell command,
     Then the command is denied without changing the workspace`, async () => {
     // Given

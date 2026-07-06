@@ -1,3 +1,4 @@
+import { createInterface } from "node:readline/promises";
 import { runAgent } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
@@ -9,6 +10,8 @@ import {
   bashModeExposesTool,
 } from "../permissions/bash.ts";
 import type { CliArgs } from "./args.ts";
+import { createPromptedBashPermissionPolicy } from "./interactive-session/bash-approval.ts";
+import { createLineReader } from "./interactive-session/line-reader.ts";
 import { formatCostReport, printAgentEvents } from "./output.ts";
 import {
   loadProjectInstructions,
@@ -33,19 +36,41 @@ import { loadWorkflowSkill, WorkflowSkillError } from "./workflow-skills.ts";
 
 type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
 
+function denyOneShotBashPermissionPolicy(): BashPermissionPolicy {
+  return {
+    review: () => ({
+      type: "deny",
+      message:
+        "Shell command requires terminal approval; non-TTY one-shot runs cannot approve bash commands.",
+    }),
+  };
+}
+
 function oneShotBashPermissionPolicy(
   bashMode: BashMode,
-): BashPermissionPolicy | undefined {
-  if (bashMode === "ask") {
-    return {
-      review: () => ({
-        type: "deny",
-        message:
-          "Shell command requires interactive approval; one-shot runs cannot approve bash commands.",
-      }),
-    };
+  runtime: CliRuntime,
+): {
+  readonly policy?: BashPermissionPolicy;
+  readonly close?: () => void;
+} {
+  if (bashMode !== "ask") {
+    return {};
   }
-  return undefined;
+  if (runtime.input.isTTY !== true) {
+    return { policy: denyOneShotBashPermissionPolicy() };
+  }
+
+  const input = createInterface({
+    input: runtime.input,
+    crlfDelay: Number.POSITIVE_INFINITY,
+  });
+  const lineReader = createLineReader(input, {});
+  const policy = createPromptedBashPermissionPolicy(
+    lineReader,
+    runtime.writeStderr,
+    { scopeLabel: "this run" },
+  );
+  return { policy, close: () => input.close() };
 }
 
 export async function runOneShotCli(
@@ -57,6 +82,7 @@ export async function runOneShotCli(
   const abort = () => {
     abortController.abort();
   };
+  let closeBashApprovalInput: (() => void) | undefined;
   try {
     const workspace = runtime.cwd();
     const projectInstructions = loadProjectInstructions(workspace);
@@ -73,7 +99,11 @@ export async function runOneShotCli(
     runtime.onSigint(abort);
 
     const startedAt = runtime.now();
-    const bashPermission = oneShotBashPermissionPolicy(cliArgs.bashMode);
+    const bashPermission = oneShotBashPermissionPolicy(
+      cliArgs.bashMode,
+      runtime,
+    );
+    closeBashApprovalInput = bashPermission.close;
     await cleanupExpiredToolOutputArtifacts({ runtime });
     const toolOutputArtifacts = {
       store: createToolOutputArtifactStore({
@@ -97,7 +127,9 @@ export async function runOneShotCli(
       allowBash: bashModeExposesTool(cliArgs.bashMode),
       stopPolicy: defaultStopPolicy(),
       toolOutputArtifacts,
-      ...(bashPermission !== undefined ? { bashPermission } : {}),
+      ...(bashPermission.policy !== undefined
+        ? { bashPermission: bashPermission.policy }
+        : {}),
       ...(cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
         ? {
             costTracking: {
@@ -174,6 +206,7 @@ export async function runOneShotCli(
     runtime.writeStderr(formatCliRuntimeError(error));
     return 1;
   } finally {
+    closeBashApprovalInput?.();
     runtime.offSigint(abort);
   }
   return 0;
