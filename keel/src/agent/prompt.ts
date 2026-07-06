@@ -81,7 +81,7 @@ ${workflowSkillSection}
 
 Tool strategy:
 - Discover before assuming: use grep to locate code, glob to find files by name, ls to inspect directories. Never invent file paths.
-- Prefer dedicated tools over bash. Use git_diff for current workspace diffs; use bash only for commands dedicated tools cannot do (builds, tests, other git operations).
+- Prefer dedicated tools over bash. Use git_diff for current workspace diffs and safe ref-to-ref comparisons; use bash only for commands dedicated tools cannot do (builds, tests, other git operations).
 - You may call multiple tools in one turn when they do not depend on each other. Batch independent grep, glob, ls, and read calls together; after the required reads are already visible, you may also batch independent edits or writes to different files.
 
 Edit workflow:

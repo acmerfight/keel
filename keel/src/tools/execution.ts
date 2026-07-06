@@ -213,6 +213,11 @@ async function executeGitDiffTool(
 ): Promise<ToolExecution> {
   const result = await executeGitDiff(workspace, {
     ...(toolCall.mode !== undefined ? { mode: toolCall.mode } : {}),
+    ...(toolCall.baseRef !== undefined ? { baseRef: toolCall.baseRef } : {}),
+    ...(toolCall.headRef !== undefined ? { headRef: toolCall.headRef } : {}),
+    ...(toolCall.mergeBase !== undefined
+      ? { mergeBase: toolCall.mergeBase }
+      : {}),
     ...(toolCall.paths !== undefined ? { paths: toolCall.paths } : {}),
     signal,
   });

@@ -45,6 +45,13 @@ async function createGitWorkspace(): Promise<string> {
   return workspace;
 }
 
+async function createRefComparisonGitWorkspace(): Promise<string> {
+  const workspace = await createGitWorkspace();
+  execFileSync("git", ["add", "app.ts"], { cwd: workspace });
+  execFileSync("git", ["commit", "-m", "update app"], { cwd: workspace });
+  return workspace;
+}
+
 async function createMetadataHeavyGitWorkspace(): Promise<string> {
   const workspace = await mkdtemp(
     join(tmpdir(), "keel-agent-git-diff-metadata-"),
@@ -191,6 +198,68 @@ describe("Agent git diff tool use", () => {
         (message) =>
           message.role === "tool" && message.toolCallId === "inspect_changes",
       );
+      expect(toolMessage?.content).toContain("diff --git a/app.ts b/app.ts");
+      expect(toolMessage?.content).toContain("+export const value = 2;");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given bash is disabled and the user asks to compare committed refs,
+    When the assistant calls git_diff with baseRef and headRef,
+    Then the committed diff is returned to the model without bash approval`, async () => {
+    // Given
+    const workspace = await createRefComparisonGitWorkspace();
+    let secondTurnMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "agent-git-diff-refs",
+      async *stream(options) {
+        if (options.messages.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "compare_refs",
+            tool: "git_diff",
+            baseRef: "HEAD~1",
+            headRef: "HEAD",
+          };
+        } else {
+          secondTurnMessages = options.messages;
+          yield { type: "text", text: "Reviewed committed changes." };
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "review the last commit diff",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "tool_end",
+        toolCall: {
+          id: "compare_refs",
+          tool: "git_diff",
+          baseRef: "HEAD~1",
+          headRef: "HEAD",
+        },
+        ok: true,
+      });
+      const toolMessage = secondTurnMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "compare_refs",
+      );
+      expect(toolMessage?.content).toContain("Ref comparison (HEAD~1..HEAD):");
       expect(toolMessage?.content).toContain("diff --git a/app.ts b/app.ts");
       expect(toolMessage?.content).toContain("+export const value = 2;");
     } finally {
