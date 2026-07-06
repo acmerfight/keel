@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -153,6 +153,98 @@ describe("git_diff tool", () => {
     }
   });
 
+  test(`Given a staged rename and a target path filter,
+    When git_diff inspects the filtered staged changes,
+    Then it preserves the rename metadata instead of reporting an add-only file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-rename-filter-");
+    await mkdir(join(workspace, "src"));
+    await writeFile(join(workspace, "src", "old.ts"), "export const x = 1;\n");
+    execFileSync("git", ["add", "src/old.ts"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "add old path"], { cwd: workspace });
+    execFileSync("git", ["mv", "src/old.ts", "src/new.ts"], {
+      cwd: workspace,
+    });
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "staged_rename_path_diff",
+          tool: "git_diff",
+          mode: "staged",
+          paths: ["src/new.ts"],
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toContain("diff --git a/src/old.ts b/src/new.ts");
+      expect(result.content).toContain("similarity index 100%");
+      expect(result.content).toContain("rename from src/old.ts");
+      expect(result.content).toContain("rename to src/new.ts");
+      expect(result.content).not.toContain("new file mode");
+      expect(result.content).not.toContain("deleted file mode");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given root and dot-prefixed path filters,
+    When git_diff inspects tracked changes,
+    Then the filters still match workspace-relative diff paths`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-dot-filter-");
+    await mkdir(join(workspace, "src"));
+    await writeFile(join(workspace, "src", "app.ts"), "before\n", "utf8");
+    execFileSync("git", ["add", "src/app.ts"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "add src file"], { cwd: workspace });
+    await writeFile(join(workspace, "src", "app.ts"), "after\n", "utf8");
+
+    try {
+      // When
+      const rootResult = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "root_filter_diff",
+          tool: "git_diff",
+          mode: "unstaged",
+          paths: ["."],
+        },
+      });
+      const dotPrefixedResult = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "dot_prefixed_filter_diff",
+          tool: "git_diff",
+          mode: "unstaged",
+          paths: ["./src"],
+        },
+      });
+
+      // Then
+      expect(rootResult.ok).toBe(true);
+      expect(rootResult.content).toContain(
+        "diff --git a/src/app.ts b/src/app.ts",
+      );
+      expect(rootResult.content).toContain("+after");
+      expect(dotPrefixedResult.ok).toBe(true);
+      expect(dotPrefixedResult.content).toContain(
+        "diff --git a/src/app.ts b/src/app.ts",
+      );
+      expect(dotPrefixedResult.content).toContain("+after");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given tracked files later become ignored,
     When git_diff inspects visible changes,
     Then ignored tracked and untracked content is not exposed`, async () => {
@@ -265,6 +357,105 @@ describe("git_diff tool", () => {
       });
       expect(missingPathResult.ok).toBe(true);
       expect(missingPathResult.content).toBe("No git changes found.");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a tracked rename has an ignored source path,
+    When git_diff inspects visible staged changes,
+    Then it hides the whole rename instead of exposing the visible target as a new file`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-ignored-rename-");
+    await writeFile(join(workspace, "secret.env"), "TOKEN=hidden\n", "utf8");
+    execFileSync("git", ["add", "secret.env"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "track secret"], { cwd: workspace });
+    await writeFile(join(workspace, ".gitignore"), "secret.env\n", "utf8");
+    execFileSync("git", ["add", ".gitignore"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "ignore secret path"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["mv", "secret.env", "visible.txt"], {
+      cwd: workspace,
+    });
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "hidden_source_rename_diff",
+          tool: "git_diff",
+          mode: "staged",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toBe("No git changes found.");
+      expect(result.content).not.toContain("secret.env");
+      expect(result.content).not.toContain("visible.txt");
+      expect(result.content).not.toContain("TOKEN=hidden");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a visible tracked filename contains pathspec metacharacters and an ignored rename exists,
+    When git_diff reruns the staged diff for visible paths,
+    Then it treats the visible filename literally and does not leak the ignored rename`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-diff-literal-pathspec-",
+    );
+    await mkdir(join(workspace, "src"));
+    await writeFile(
+      join(workspace, "src", "*.txt"),
+      "visible before\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "src", "secret-old.txt"),
+      "TOKEN=hidden\n",
+      "utf8",
+    );
+    execFileSync("git", ["add", "src"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "track wildcard and secret"], {
+      cwd: workspace,
+    });
+    await writeFile(join(workspace, ".gitignore"), "src/secret-old.txt\n");
+    execFileSync("git", ["add", ".gitignore"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "ignore old secret path"], {
+      cwd: workspace,
+    });
+    await writeFile(join(workspace, "src", "*.txt"), "visible after\n", "utf8");
+    execFileSync("git", ["mv", "src/secret-old.txt", "src/secret-new.txt"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["add", "src/*.txt"], { cwd: workspace });
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "literal_pathspec_diff",
+          tool: "git_diff",
+          mode: "staged",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toContain("diff --git a/src/*.txt b/src/*.txt");
+      expect(result.content).toContain("+visible after");
+      expect(result.content).not.toContain("secret-old.txt");
+      expect(result.content).not.toContain("secret-new.txt");
+      expect(result.content).not.toContain("TOKEN=hidden");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

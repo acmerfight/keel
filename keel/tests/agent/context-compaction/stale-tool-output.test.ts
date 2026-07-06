@@ -1236,11 +1236,15 @@ describe("Context Compaction Stale Tool Output", () => {
     expect(preview).not.toContain("SECOND_OMITTED_NEW");
   });
 
-  test(`Given retained git_diff output has rename-only binary and mode-only diffs,
+  test(`Given retained git_diff output has copy rename-only binary and mode-only diffs,
     When context compaction projects the tool output,
     Then the preview keeps useful file summaries without empty snippets`, async () => {
     // Given
     const diffOutput = [
+      "diff --git a/src/source.ts b/src/copied.ts",
+      "similarity index 100%",
+      "copy from src/source.ts",
+      "copy to src/copied.ts",
       "diff --git a/src/renamed.ts b/src/renamed.ts",
       "similarity index 100%",
       "rename from src/old.ts",
@@ -1267,8 +1271,9 @@ describe("Context Compaction Stale Tool Output", () => {
     // Then
     const preview = previewBeforeStaleCompactionMarker(compacted.content);
     expect(preview).toContain(
-      "git_diff compacted preview: 3 files, 0 hunks, +0/-0; full output artifact is referenced below",
+      "git_diff compacted preview: 4 files, 0 hunks, +0/-0; full output artifact is referenced below",
     );
+    expect(preview).toContain("- src/copied.ts: copied, 0 hunks, +0/-0");
     expect(preview).toContain("- src/renamed.ts: renamed, 0 hunks, +0/-0");
     expect(preview).toContain("- assets/logo.png: binary, 0 hunks, +0/-0");
     expect(preview).toContain("- scripts/run.sh: mode-only, 0 hunks, +0/-0");
