@@ -36,6 +36,17 @@ interface StatusCommand {
   readonly kind: "status";
 }
 
+type ApprovalsCommand =
+  | {
+      readonly kind: "approvals";
+      readonly action: "list" | "clear";
+    }
+  | {
+      readonly kind: "approvals";
+      readonly action: "revoke";
+      readonly index: number;
+    };
+
 interface ForkCommand {
   readonly kind: "fork";
   readonly targetSessionId: string;
@@ -58,6 +69,7 @@ export type InteractiveCommand =
   | ModelCommand
   | SkillCommand
   | StatusCommand
+  | ApprovalsCommand
   | ManualCompactCommand
   | ForkPointsCommand
   | ForkCommand
@@ -79,6 +91,10 @@ export function formatInteractiveHelp(): string {
     "                     Switch the active provider/model for later prompts.",
     "  /skill             Show the active workflow skill.",
     "  /status            Show session state and recovery commands.",
+    "  /approvals         List active bash approvals.",
+    "  /approvals revoke <index>",
+    "                     Revoke one active bash approval.",
+    "  /approvals clear   Clear active bash approvals.",
     "  /compact [focus]   Summarize older conversation context with optional focus.",
     "  /fork <target-id> [--before-message <id>]",
     "                     Fork this named or resumed session without switching to it.",
@@ -242,6 +258,61 @@ function parseUndoTargetIndex(raw: string | undefined): ParseResult<number> {
   return { ok: true, value: checkpointIndex };
 }
 
+function parseApprovalIndex(raw: string | undefined): ParseResult<number> {
+  if (raw === undefined || !/^[1-9][0-9]*$/u.test(raw)) {
+    return {
+      ok: false,
+      message: "Error: /approvals revoke requires a positive integer.",
+    };
+  }
+  const approvalIndex = Number(raw);
+  if (!Number.isSafeInteger(approvalIndex)) {
+    return {
+      ok: false,
+      message: "Error: /approvals revoke requires a positive integer.",
+    };
+  }
+  return { ok: true, value: approvalIndex };
+}
+
+function parseApprovalsCommandArgs(
+  rawArgs: string | undefined,
+): ApprovalsCommand | InvalidInteractiveCommand {
+  const trimmedArgs = rawArgs?.trim() ?? "";
+  if (trimmedArgs === "") {
+    return { kind: "approvals", action: "list" };
+  }
+
+  const args = trimmedArgs.split(/\s+/u);
+  if (args[0] === "clear") {
+    if (args.length > 1) {
+      return {
+        kind: "invalid",
+        message: `Error: unknown /approvals argument "${args[1]}".`,
+      };
+    }
+    return { kind: "approvals", action: "clear" };
+  }
+  if (args[0] === "revoke") {
+    const parsed = parseApprovalIndex(args[1]);
+    if (!parsed.ok) {
+      return { kind: "invalid", message: parsed.message };
+    }
+    if (args.length > 2) {
+      return {
+        kind: "invalid",
+        message: `Error: unknown /approvals argument "${args[2]}".`,
+      };
+    }
+    return { kind: "approvals", action: "revoke", index: parsed.value };
+  }
+
+  return {
+    kind: "invalid",
+    message: `Error: unknown /approvals argument "${args[0]}".`,
+  };
+}
+
 export function parseInteractiveCommand(
   userMessage: string,
 ): InteractiveCommand | null {
@@ -260,6 +331,11 @@ export function parseInteractiveCommand(
       };
     }
     return { kind: "status" };
+  }
+
+  const approvalsMatch = /^\/approvals(?:\s+(.*))?$/u.exec(trimmed);
+  if (approvalsMatch !== null) {
+    return parseApprovalsCommandArgs(approvalsMatch[1]);
   }
 
   const undoMatch = /^\/undo(?:\s+(.*))?$/u.exec(trimmed);

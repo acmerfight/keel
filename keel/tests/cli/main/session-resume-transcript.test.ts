@@ -355,6 +355,93 @@ describe("CLI Main - Session Resume Transcript", () => {
     }
   });
 
+  test(`Given a resumed named session has active bash approvals,
+    When the user revokes and clears approvals with local commands,
+    Then the resumed CLI run persists the approval audit mutations`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-approvals-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const exactGrant = {
+      type: "exact",
+      cwd: ledgerWorkspace,
+      command: "pnpm test",
+    };
+    const prefixGrant = {
+      type: "prefix",
+      cwd: ledgerWorkspace,
+      argvPrefix: ["git", "status"],
+    };
+    await writeSessionLedger({
+      home,
+      id: "approval-management",
+      workspace: ledgerWorkspace,
+      createdAt: "1970-01-01T00:00:00.000Z",
+      records: [
+        JSON.stringify({
+          schemaVersion: 2,
+          type: "bash_approval_granted",
+          timestamp: "1970-01-01T00:00:00.001Z",
+          grant: exactGrant,
+        }),
+        JSON.stringify({
+          schemaVersion: 2,
+          type: "bash_approval_granted",
+          timestamp: "1970-01-01T00:00:00.002Z",
+          grant: prefixGrant,
+        }),
+      ],
+    });
+    const input = new PassThrough();
+    input.end("/approvals revoke 1\n/approvals clear\n");
+    const fixture = createRuntime(["--resume", "approval-management"], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe(
+        "Revoked bash approval 1.\nCleared 1 bash approval.\n",
+      );
+      expect(fixture.stderr()).toBe("");
+      const ledgerLines = (
+        await readFile(
+          join(home, "sessions", "approval-management", "ledger.jsonl"),
+          "utf8",
+        )
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerLines).toContainEqual({
+        schemaVersion: 2,
+        type: "bash_approval_revoked",
+        timestamp: "1970-01-01T00:00:00.000Z",
+        grant: exactGrant,
+      });
+      expect(ledgerLines).toContainEqual(
+        expect.objectContaining({
+          schemaVersion: 2,
+          type: "bash_approvals_cleared",
+          timestamp: "1970-01-01T00:00:00.000Z",
+          consumedInputIds: expect.any(Array),
+        }),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a named session has queued input from an interrupted process,
     When the user resumes with no new stdin,
     Then the queued input runs once and is marked consumed`, async () => {

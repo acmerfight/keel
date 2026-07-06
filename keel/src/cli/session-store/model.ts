@@ -136,6 +136,21 @@ interface BashApprovalGrantedSessionRecord {
   readonly grant: BashApprovalGrant;
 }
 
+interface BashApprovalRevokedSessionRecord {
+  readonly schemaVersion: 2;
+  readonly type: "bash_approval_revoked";
+  readonly timestamp: string;
+  readonly grant: BashApprovalGrant;
+  readonly consumedInputIds?: readonly string[];
+}
+
+interface BashApprovalsClearedSessionRecord {
+  readonly schemaVersion: 2;
+  readonly type: "bash_approvals_cleared";
+  readonly timestamp: string;
+  readonly consumedInputIds?: readonly string[];
+}
+
 export interface SnapshotSessionRecord {
   readonly schemaVersion: 2;
   readonly type: "snapshot";
@@ -155,6 +170,8 @@ export type SessionMutationRecord =
   | InputAdmittedSessionRecord
   | InputConsumedSessionRecord
   | BashApprovalGrantedSessionRecord
+  | BashApprovalRevokedSessionRecord
+  | BashApprovalsClearedSessionRecord
   | SnapshotSessionRecord;
 
 export interface SessionRecords {

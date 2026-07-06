@@ -28,6 +28,8 @@ export {
   createSessionStore,
   forkSessionStore,
   persistSessionBashApprovalGrant,
+  persistSessionBashApprovalRevoked,
+  persistSessionBashApprovalsCleared,
   persistSessionMessages,
   persistSessionModelSwitch,
   persistSessionQueuedInput,

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import type { Message } from "../../llm/types.ts";
-import type { BashApprovalGrant } from "../../permissions/bash.ts";
+import {
+  type BashApprovalGrant,
+  bashApprovalGrantKey,
+} from "../../permissions/bash.ts";
 import { sessionStoreError } from "./errors.ts";
 import {
   endForkPoint,
@@ -112,6 +115,29 @@ function sessionModelSelectionsEqual(
   right: SessionModelSelection,
 ): boolean {
   return left.providerId === right.providerId && left.model === right.model;
+}
+
+function appendBashApprovalGrant(
+  grants: readonly BashApprovalGrant[],
+  grant: BashApprovalGrant,
+): BashApprovalGrant[] {
+  const key = bashApprovalGrantKey(grant);
+  if (
+    grants.some((existingGrant) => bashApprovalGrantKey(existingGrant) === key)
+  ) {
+    return [...grants];
+  }
+  return [...grants, copyBashApprovalGrant(grant)];
+}
+
+function removeBashApprovalGrant(
+  grants: readonly BashApprovalGrant[],
+  grant: BashApprovalGrant,
+): BashApprovalGrant[] {
+  const key = bashApprovalGrantKey(grant);
+  return grants.filter(
+    (existingGrant) => bashApprovalGrantKey(existingGrant) !== key,
+  );
 }
 
 function modelSwitchesForForkPoint(options: {
@@ -318,11 +344,24 @@ export function resumeSessionStore(options: {
         break;
       case "bash_approval_granted":
         if (!bashApprovalGrantHasRedactionMarker(record.grant)) {
-          bashApprovalGrants = [
-            ...bashApprovalGrants,
-            copyBashApprovalGrant(record.grant),
-          ];
+          bashApprovalGrants = appendBashApprovalGrant(
+            bashApprovalGrants,
+            record.grant,
+          );
         }
+        break;
+      case "bash_approval_revoked":
+        if (!bashApprovalGrantHasRedactionMarker(record.grant)) {
+          bashApprovalGrants = removeBashApprovalGrant(
+            bashApprovalGrants,
+            record.grant,
+          );
+        }
+        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
+        break;
+      case "bash_approvals_cleared":
+        bashApprovalGrants = [];
+        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         break;
       case "snapshot": {
         storedMessages = record.messages.map(copyStoredMessage);
@@ -528,8 +567,64 @@ export function persistSessionBashApprovalGrant(options: {
     grant,
   });
   if (!bashApprovalGrantHasRedactionMarker(grant)) {
-    replayStateForSession(options.session).bashApprovalGrants.push(grant);
+    const replayState = replayStateForSession(options.session);
+    replayState.bashApprovalGrants.splice(
+      0,
+      replayState.bashApprovalGrants.length,
+      ...appendBashApprovalGrant(replayState.bashApprovalGrants, grant),
+    );
   }
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+}
+
+export function persistSessionBashApprovalRevoked(options: {
+  readonly session: SessionState;
+  readonly grant: BashApprovalGrant;
+  readonly runtime: SessionStoreRuntime;
+  readonly consumedInputIds?: readonly string[];
+}): void {
+  const grant = redactBashApprovalGrantForPersistence(options.grant);
+  const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "bash_approval_revoked",
+    timestamp: isoTimestamp(options.runtime),
+    grant,
+    ...(consumedInputIds.length > 0 ? { consumedInputIds } : {}),
+  });
+  const replayState = replayStateForSession(options.session);
+  if (!bashApprovalGrantHasRedactionMarker(grant)) {
+    replayState.bashApprovalGrants.splice(
+      0,
+      replayState.bashApprovalGrants.length,
+      ...removeBashApprovalGrant(replayState.bashApprovalGrants, grant),
+    );
+  }
+  consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+}
+
+export function persistSessionBashApprovalsCleared(options: {
+  readonly session: SessionState;
+  readonly runtime: SessionStoreRuntime;
+  readonly consumedInputIds?: readonly string[];
+}): void {
+  const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "bash_approvals_cleared",
+    timestamp: isoTimestamp(options.runtime),
+    ...(consumedInputIds.length > 0 ? { consumedInputIds } : {}),
+  });
+  const replayState = replayStateForSession(options.session);
+  replayState.bashApprovalGrants.splice(0);
+  consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
   appendSessionSnapshotIfNeeded({
     session: options.session,
     runtime: options.runtime,

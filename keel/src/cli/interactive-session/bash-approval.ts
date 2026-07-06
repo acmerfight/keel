@@ -1,12 +1,12 @@
 import {
   type BashApprovalGrant,
   type BashMode,
-  type BashPermissionPolicy,
   createSessionBashPermissionPolicy,
+  type SessionBashPermissionPolicy,
 } from "../../permissions/bash.ts";
 import type { LineReader } from "./line-reader.ts";
 
-function escapeApprovalText(text: string): string {
+export function escapeApprovalText(text: string): string {
   return text.replace(
     // biome-ignore lint/suspicious/noControlCharactersInRegex: approval prompts must render model-controlled bytes visibly.
     /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2060\u202a-\u202e\u2066-\u2069\ufeff]/g,
@@ -37,7 +37,7 @@ export function interactiveBashPermissionPolicy(
     readonly initialGrants?: readonly BashApprovalGrant[];
     readonly onGrant?: (grant: BashApprovalGrant) => void;
   },
-): BashPermissionPolicy | undefined {
+): SessionBashPermissionPolicy | undefined {
   if (mode !== "ask") {
     return undefined;
   }

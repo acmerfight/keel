@@ -72,8 +72,44 @@ export interface BashPermissionPolicy {
   ) => BashPermissionDecision | Promise<BashPermissionDecision>;
 }
 
+export interface SessionBashPermissionPolicy extends BashPermissionPolicy {
+  readonly grants: () => readonly BashApprovalGrant[];
+  readonly revokeGrant: (grant: BashApprovalGrant) => boolean;
+  readonly clearGrants: () => readonly BashApprovalGrant[];
+}
+
 function sessionKey(request: BashPermissionReviewRequest): string {
-  return JSON.stringify([request.cwd, request.command]);
+  return exactApprovalKey(request.cwd, request.command);
+}
+
+function exactApprovalKey(cwd: string, command: string): string {
+  return JSON.stringify([cwd, command]);
+}
+
+export function bashApprovalGrantKey(grant: BashApprovalGrant): string {
+  switch (grant.type) {
+    case "exact":
+      return JSON.stringify(["exact", grant.cwd, grant.command]);
+    case "prefix":
+      return JSON.stringify(["prefix", grant.cwd, grant.argvPrefix]);
+  }
+}
+
+function copyBashApprovalGrant(grant: BashApprovalGrant): BashApprovalGrant {
+  switch (grant.type) {
+    case "exact":
+      return {
+        type: "exact",
+        cwd: grant.cwd,
+        command: grant.command,
+      };
+    case "prefix":
+      return {
+        type: "prefix",
+        cwd: grant.cwd,
+        argvPrefix: [...grant.argvPrefix],
+      };
+  }
 }
 
 interface PrefixApprovalRule {
@@ -323,23 +359,69 @@ export function createSessionBashPermissionPolicy(options: {
   ) => BashPermissionDecision | Promise<BashPermissionDecision>;
   readonly initialGrants?: readonly BashApprovalGrant[];
   readonly onGrant?: (grant: BashApprovalGrant) => void;
-}): BashPermissionPolicy {
+}): SessionBashPermissionPolicy {
   const approved = new Set<string>();
   const approvedPrefixes = new Set<string>();
-  for (const grant of options.initialGrants ?? []) {
-    switch (grant.type) {
+  const grantsByKey = new Map<string, BashApprovalGrant>();
+  const addGrant = (grant: BashApprovalGrant): boolean => {
+    const key = bashApprovalGrantKey(grant);
+    if (grantsByKey.has(key)) {
+      return false;
+    }
+    const copiedGrant = copyBashApprovalGrant(grant);
+    grantsByKey.set(key, copiedGrant);
+    switch (copiedGrant.type) {
       case "exact":
-        approved.add(JSON.stringify([grant.cwd, grant.command]));
+        approved.add(exactApprovalKey(copiedGrant.cwd, copiedGrant.command));
         break;
       case "prefix":
         approvedPrefixes.add(
-          prefixKey({ cwd: grant.cwd, argvPrefix: grant.argvPrefix }),
+          prefixKey({
+            cwd: copiedGrant.cwd,
+            argvPrefix: copiedGrant.argvPrefix,
+          }),
         );
         break;
     }
+    return true;
+  };
+  for (const grant of options.initialGrants ?? []) {
+    addGrant(grant);
   }
 
   return {
+    grants: () => [...grantsByKey.values()].map(copyBashApprovalGrant),
+    revokeGrant: (grant) => {
+      const key = bashApprovalGrantKey(grant);
+      const activeGrant = grantsByKey.get(key);
+      if (activeGrant === undefined) {
+        return false;
+      }
+      grantsByKey.delete(key);
+      switch (activeGrant.type) {
+        case "exact":
+          approved.delete(
+            exactApprovalKey(activeGrant.cwd, activeGrant.command),
+          );
+          break;
+        case "prefix":
+          approvedPrefixes.delete(
+            prefixKey({
+              cwd: activeGrant.cwd,
+              argvPrefix: activeGrant.argvPrefix,
+            }),
+          );
+          break;
+      }
+      return true;
+    },
+    clearGrants: () => {
+      const cleared = [...grantsByKey.values()].map(copyBashApprovalGrant);
+      grantsByKey.clear();
+      approved.clear();
+      approvedPrefixes.clear();
+      return cleared;
+    },
     review: async (request) => {
       const key = sessionKey(request);
       if (approved.has(key)) {
@@ -367,12 +449,14 @@ export function createSessionBashPermissionPolicy(options: {
           : { ...request, assessment, prefixApproval };
       const decision = await options.prompt(promptRequest);
       if (decision.type === "allow" && decision.scope === "session") {
-        options.onGrant?.({
+        const grant = {
           type: "exact",
           cwd: request.cwd,
           command: request.command,
-        });
-        approved.add(key);
+        } satisfies BashApprovalGrant;
+        if (addGrant(grant)) {
+          options.onGrant?.(grant);
+        }
       } else if (
         decision.type === "allow" &&
         decision.scope === "session-prefix"
@@ -388,13 +472,9 @@ export function createSessionBashPermissionPolicy(options: {
           cwd: request.cwd,
           argvPrefix: [...prefixApproval.argvPrefix],
         } satisfies BashApprovalGrant;
-        options.onGrant?.(grant);
-        approvedPrefixes.add(
-          prefixKey({
-            cwd: request.cwd,
-            argvPrefix: prefixApproval.argvPrefix,
-          }),
-        );
+        if (addGrant(grant)) {
+          options.onGrant?.(grant);
+        }
       }
       return decision;
     },

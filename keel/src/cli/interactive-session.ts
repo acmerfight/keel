@@ -17,13 +17,22 @@ import {
   restoreUndoCheckpointsThrough,
 } from "../core/git.ts";
 import type { Message, Usage } from "../llm/types.ts";
-import { bashModeExposesTool } from "../permissions/bash.ts";
+import {
+  type BashApprovalGrant,
+  bashApprovalGrantKey,
+  bashModeExposesTool,
+} from "../permissions/bash.ts";
 import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
 import {
   formatInteractiveForkPicker,
   formatInteractiveSessionForkPoints,
 } from "./fork-points.ts";
 import { interactiveBashPermissionPolicy } from "./interactive-session/bash-approval.ts";
+import {
+  formatBashApprovalClearResult,
+  formatBashApprovalList,
+  formatBashApprovalRevoked,
+} from "./interactive-session/bash-approvals.ts";
 import {
   formatForkRequiresNamedSession,
   formatInteractiveCommandFailure,
@@ -142,7 +151,9 @@ export async function runInteractiveSession(
   });
   const messages: Message[] = [...(options.initialMessages ?? [])];
   let resolved: InteractiveResolvedProvider | null = null;
-  let bashApprovalGrantCount = options.initialBashApprovalGrants?.length ?? 0;
+  let inactiveBashApprovalGrants: BashApprovalGrant[] = [
+    ...(options.initialBashApprovalGrants ?? []),
+  ];
   const input = createInterface({
     input: options.input,
     crlfDelay: Number.POSITIVE_INFINITY,
@@ -164,11 +175,30 @@ export async function runInteractiveSession(
         ? { initialGrants: options.initialBashApprovalGrants }
         : {}),
       onGrant: (grant) => {
-        bashApprovalGrantCount++;
         options.persistBashApprovalGrant?.(grant);
       },
     },
   );
+  const activeBashApprovalGrants = (): readonly BashApprovalGrant[] =>
+    bashPermission?.grants() ?? inactiveBashApprovalGrants;
+  const revokeBashApprovalGrant = (grant: BashApprovalGrant): void => {
+    if (bashPermission !== undefined) {
+      bashPermission.revokeGrant(grant);
+      return;
+    }
+    const key = bashApprovalGrantKey(grant);
+    inactiveBashApprovalGrants = inactiveBashApprovalGrants.filter(
+      (approvalGrant) => bashApprovalGrantKey(approvalGrant) !== key,
+    );
+  };
+  const clearBashApprovalGrants = (): readonly BashApprovalGrant[] => {
+    if (bashPermission !== undefined) {
+      return bashPermission.clearGrants();
+    }
+    const cleared = inactiveBashApprovalGrants;
+    inactiveBashApprovalGrants = [];
+    return cleared;
+  };
   let activeAbortController: AbortController | null = null;
   let sessionUsage = EMPTY_USAGE;
   let sessionTurns = 0;
@@ -375,13 +405,60 @@ export async function runInteractiveSession(
             messages,
             messageCount: messages.length,
             pendingInputCount: lineReader.pendingInputCount(),
-            bashApprovalCount: bashApprovalGrantCount,
+            bashApprovalCount: activeBashApprovalGrants().length,
             modelSwitchCount,
             undoCheckpoints: listUndoCheckpoints(options.workspace),
             recoveryActions: statusRecoveryActions(),
           }),
         );
         consumeQueuedInputLines([rawInput]);
+        continue;
+      }
+      if (interactiveCommand?.kind === "approvals") {
+        switch (interactiveCommand.action) {
+          case "list":
+            options.writeStdout(
+              formatBashApprovalList(activeBashApprovalGrants()),
+            );
+            consumeQueuedInputLines([rawInput]);
+            break;
+          case "clear": {
+            const cleared = clearBashApprovalGrants();
+            if (options.persistBashApprovalsCleared !== undefined) {
+              options.persistBashApprovalsCleared({
+                consumedInputIds: queuedInputIds([rawInput]),
+              });
+            } else {
+              consumeQueuedInputLines([rawInput]);
+            }
+            options.writeStdout(formatBashApprovalClearResult(cleared.length));
+            break;
+          }
+          case "revoke": {
+            const grants = activeBashApprovalGrants();
+            const grant = grants[interactiveCommand.index - 1];
+            if (grant === undefined) {
+              options.writeStderr(
+                `Error: no bash approval at index ${interactiveCommand.index}.\n`,
+              );
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            revokeBashApprovalGrant(grant);
+            if (options.persistBashApprovalRevoked !== undefined) {
+              options.persistBashApprovalRevoked({
+                grant,
+                consumedInputIds: queuedInputIds([rawInput]),
+              });
+            } else {
+              consumeQueuedInputLines([rawInput]);
+            }
+            options.writeStdout(
+              formatBashApprovalRevoked(interactiveCommand.index),
+            );
+            break;
+          }
+        }
         continue;
       }
       if (interactiveCommand?.kind === "invalid") {

@@ -88,6 +88,13 @@ export interface InteractiveSessionOptions {
   readonly forkSession?: (request: InteractiveForkSessionRequest) => string;
   readonly listForkPoints?: () => SessionForkPoints;
   readonly persistBashApprovalGrant?: (grant: BashApprovalGrant) => void;
+  readonly persistBashApprovalRevoked?: (revocation: {
+    readonly grant: BashApprovalGrant;
+    readonly consumedInputIds: readonly string[];
+  }) => void;
+  readonly persistBashApprovalsCleared?: (clear: {
+    readonly consumedInputIds: readonly string[];
+  }) => void;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly input: NodeJS.ReadableStream;
   readonly writeStdout: (text: string) => void;

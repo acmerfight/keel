@@ -36,6 +36,15 @@ import {
 
 const toolCallSchema = builtinToolCallSchema;
 
+type BashApprovalRevokedSessionRecord = Extract<
+  SessionMutationRecord,
+  { readonly type: "bash_approval_revoked" }
+>;
+type BashApprovalsClearedSessionRecord = Extract<
+  SessionMutationRecord,
+  { readonly type: "bash_approvals_cleared" }
+>;
+
 const userMessageContextCompactionEvidenceSchema = z
   .object({
     handle: z.string(),
@@ -277,6 +286,25 @@ const bashApprovalGrantedRecordSchema = z
   })
   .strict();
 
+const bashApprovalRevokedRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("bash_approval_revoked"),
+    timestamp: z.string(),
+    grant: bashApprovalGrantSchema,
+    consumedInputIds: consumedInputIdsSchema.optional(),
+  })
+  .strict();
+
+const bashApprovalsClearedRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("bash_approvals_cleared"),
+    timestamp: z.string(),
+    consumedInputIds: consumedInputIdsSchema.optional(),
+  })
+  .strict();
+
 const queuedInputSchema = z
   .object({
     id: z.string(),
@@ -313,6 +341,8 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   inputAdmittedRecordSchema,
   inputConsumedRecordSchema,
   bashApprovalGrantedRecordSchema,
+  bashApprovalRevokedRecordSchema,
+  bashApprovalsClearedRecordSchema,
   snapshotRecordSchema,
 ]);
 
@@ -589,9 +619,27 @@ function appendConsumedInputIds(
   inputIds: readonly string[] | undefined,
 ): ModelSwitchSessionRecord;
 function appendConsumedInputIds(
-  record: AppendSessionRecord | ReplaceSessionRecord | ModelSwitchSessionRecord,
+  record: BashApprovalRevokedSessionRecord,
   inputIds: readonly string[] | undefined,
-): AppendSessionRecord | ReplaceSessionRecord | ModelSwitchSessionRecord {
+): BashApprovalRevokedSessionRecord;
+function appendConsumedInputIds(
+  record: BashApprovalsClearedSessionRecord,
+  inputIds: readonly string[] | undefined,
+): BashApprovalsClearedSessionRecord;
+function appendConsumedInputIds(
+  record:
+    | AppendSessionRecord
+    | ReplaceSessionRecord
+    | ModelSwitchSessionRecord
+    | BashApprovalRevokedSessionRecord
+    | BashApprovalsClearedSessionRecord,
+  inputIds: readonly string[] | undefined,
+):
+  | AppendSessionRecord
+  | ReplaceSessionRecord
+  | ModelSwitchSessionRecord
+  | BashApprovalRevokedSessionRecord
+  | BashApprovalsClearedSessionRecord {
   if (inputIds === undefined) {
     return record;
   }
@@ -732,6 +780,25 @@ function toSessionMutationRecord(
         timestamp: record.timestamp,
         grant: toBashApprovalGrant(record.grant),
       };
+    case "bash_approval_revoked":
+      return appendConsumedInputIds(
+        {
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          type: "bash_approval_revoked",
+          timestamp: record.timestamp,
+          grant: toBashApprovalGrant(record.grant),
+        },
+        record.consumedInputIds,
+      );
+    case "bash_approvals_cleared":
+      return appendConsumedInputIds(
+        {
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          type: "bash_approvals_cleared",
+          timestamp: record.timestamp,
+        },
+        record.consumedInputIds,
+      );
     case "snapshot":
       return {
         schemaVersion: SESSION_SCHEMA_VERSION,

@@ -146,6 +146,8 @@ function applySessionCatalogMutation(
     case "input_admitted":
     case "input_consumed":
     case "bash_approval_granted":
+    case "bash_approval_revoked":
+    case "bash_approvals_cleared":
     case "model_switch":
       return {
         ...state,
