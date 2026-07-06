@@ -59,6 +59,14 @@ export type ConfigCliArgs =
       readonly mode: "show";
     };
 
+export interface SetupCliArgs {
+  readonly command: "setup";
+  readonly providerId: ApiKeyProviderId;
+  readonly offline: boolean;
+  readonly model?: string;
+  readonly baseUrl?: string;
+}
+
 type UndoCliArgs =
   | {
       readonly command: "undo";
@@ -124,6 +132,7 @@ export type CliArgs =
   | { readonly command: "help" }
   | AuthCliArgs
   | ConfigCliArgs
+  | SetupCliArgs
   | DoctorCliArgs
   | UndoCliArgs
   | { readonly command: "skills" }

@@ -7,6 +7,7 @@ import { parseDoctorArgs } from "./args/doctor.ts";
 import { parseEvalArgs } from "./args/eval.ts";
 import { parseRunArgs } from "./args/run.ts";
 import { parseSessionsArgs } from "./args/sessions.ts";
+import { parseSetupArgs } from "./args/setup.ts";
 import { type ParseResult, parseError, parseOk } from "./args/shared.ts";
 import type { CliArgs } from "./args/types.ts";
 import { USAGE } from "./args/usage.ts";
@@ -41,6 +42,10 @@ export function parseCliArgs(args: readonly string[]): CliArgsParseResult {
 
   if (args[0] === "config") {
     return parseConfigArgs(args.slice(1));
+  }
+
+  if (args[0] === "setup") {
+    return parseSetupArgs(args.slice(1));
   }
 
   if (args[0] === "/undo") {

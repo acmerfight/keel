@@ -8,6 +8,7 @@ import { formatUndoCheckpointList } from "./output.ts";
 import {
   runAuthCommand as runProviderAuthCommand,
   runConfigCommand as runProviderConfigCommand,
+  runSetupCommand as runProviderSetupCommand,
 } from "./provider-setup-command.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { showToolOutputArtifact } from "./tool-output-artifacts.ts";
@@ -24,6 +25,7 @@ type UndoCliArgs = Extract<CliArgs, { readonly command: "undo" }>;
 type ArtifactsCliArgs = Extract<CliArgs, { readonly command: "artifacts" }>;
 type AuthCliArgs = Extract<CliArgs, { readonly command: "auth" }>;
 type ConfigCliArgs = Extract<CliArgs, { readonly command: "config" }>;
+type SetupCliArgs = Extract<CliArgs, { readonly command: "setup" }>;
 
 export async function runAuthCommand(
   cliArgs: AuthCliArgs,
@@ -37,6 +39,13 @@ export function runConfigCommand(
   runtime: CliRuntime,
 ): number {
   return runProviderConfigCommand(cliArgs, runtime);
+}
+
+export async function runSetupCommand(
+  cliArgs: SetupCliArgs,
+  runtime: CliRuntime,
+): Promise<number> {
+  return await runProviderSetupCommand(cliArgs, runtime);
 }
 
 export async function runDoctorCommand(

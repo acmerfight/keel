@@ -18,6 +18,7 @@ import {
   runConfigCommand,
   runDoctorCommand,
   runEvalCommand,
+  runSetupCommand,
   runSkillsCommand,
   runUndoCommand,
 } from "./top-level-commands.ts";
@@ -45,6 +46,10 @@ async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
 
   if (cliArgs.command === "config") {
     return runConfigCommand(cliArgs, runtime);
+  }
+
+  if (cliArgs.command === "setup") {
+    return await runSetupCommand(cliArgs, runtime);
   }
 
   if (cliArgs.command === "eval") {
