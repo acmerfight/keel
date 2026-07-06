@@ -27,6 +27,7 @@ import {
   collectCompactionSummary,
 } from "./context-compaction/summary.ts";
 
+export { conversationCheckpointSummaryFromMessage } from "./context-compaction/checkpoint.ts";
 export { currentToolRound } from "./context-compaction/current-tool-round.ts";
 export {
   contextCompactionRequestTargetTokens,

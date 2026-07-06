@@ -32,6 +32,10 @@ interface SkillCommand {
   readonly kind: "skill";
 }
 
+interface StatusCommand {
+  readonly kind: "status";
+}
+
 interface ForkCommand {
   readonly kind: "fork";
   readonly targetSessionId: string;
@@ -53,6 +57,7 @@ export type InteractiveCommand =
   | UndoCommand
   | ModelCommand
   | SkillCommand
+  | StatusCommand
   | ManualCompactCommand
   | ForkPointsCommand
   | ForkCommand
@@ -73,6 +78,7 @@ export function formatInteractiveHelp(): string {
     "  /model <provider>/<model>",
     "                     Switch the active provider/model for later prompts.",
     "  /skill             Show the active workflow skill.",
+    "  /status            Show session state and recovery commands.",
     "  /compact [focus]   Summarize older conversation context with optional focus.",
     "  /fork <target-id> [--before-message <id>]",
     "                     Fork this named or resumed session without switching to it.",
@@ -242,6 +248,18 @@ export function parseInteractiveCommand(
   const trimmed = userMessage.trim();
   if (trimmed === "/help") {
     return { kind: "help" };
+  }
+
+  const statusMatch = /^\/status(?:\s+(.*))?$/u.exec(trimmed);
+  if (statusMatch !== null) {
+    const extraArgs = statusMatch[1]?.trim();
+    if (extraArgs !== undefined && extraArgs !== "") {
+      return {
+        kind: "invalid",
+        message: "Error: /status does not accept arguments.",
+      };
+    }
+    return { kind: "status" };
   }
 
   const undoMatch = /^\/undo(?:\s+(.*))?$/u.exec(trimmed);

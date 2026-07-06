@@ -148,6 +148,12 @@ export function serializeCheckpointMessageForSummaryPrompt(
     : serializeCheckpointForSummaryPrompt(checkpoint);
 }
 
+export function conversationCheckpointSummaryFromMessage(
+  message: Extract<Message, { readonly role: "user" }>,
+): string | null {
+  return parseConversationCheckpointMessage(message)?.summary ?? null;
+}
+
 export function checkpointEvidenceFromMessage(
   message: Extract<Message, { readonly role: "user" }>,
 ): readonly CompactionEvidence[] {

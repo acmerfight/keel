@@ -61,10 +61,13 @@ export interface InteractiveSessionOptions {
   readonly cliArgs: InteractiveSessionArgs;
   readonly workspace: string;
   readonly platform: NodeJS.Platform;
+  readonly sessionId?: string;
   readonly projectInstructions?: ProjectInstructions;
   readonly workflowSkill?: WorkflowSkill;
   readonly initialMessages?: readonly Message[];
   readonly initialModelSelection?: SessionModelSelection;
+  readonly configuredModelSelection?: ProviderSelection;
+  readonly initialModelSwitchCount?: number;
   readonly initialQueuedInputs?: readonly SessionQueuedInput[];
   readonly initialBashApprovalGrants?: readonly BashApprovalGrant[];
   readonly persistQueuedInput?: (input: {

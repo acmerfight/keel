@@ -1,3 +1,4 @@
+import { listUndoCheckpoints } from "../core/git.ts";
 import type { CliArgs } from "./args.ts";
 import type { CliRuntime } from "./runtime.ts";
 import {
@@ -40,6 +41,7 @@ export function runSessionsCommand(
           entry,
           session,
           timelineLimit: cliArgs.timelineLimit,
+          undoCheckpoints: listUndoCheckpoints(entry.workspace),
         }),
       );
       return 0;
