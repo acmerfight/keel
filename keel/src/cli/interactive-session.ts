@@ -59,6 +59,7 @@ import type {
   ProviderSelection,
 } from "./interactive-session/types.ts";
 import { formatUndoCheckpointList } from "./output.ts";
+import { formatSessionStatusSnapshot } from "./session-status-format.ts";
 import type { SessionModelSelection } from "./session-store.ts";
 
 export type {
@@ -71,6 +72,16 @@ export type {
 
 function formatActiveModel(resolved: InteractiveResolvedProvider): string {
   return `${resolved.providerId}/${resolved.model}`;
+}
+
+function formatModelSelection(selection: SessionModelSelection): string {
+  return `${selection.providerId}/${selection.model}`;
+}
+
+function formatConfiguredModelSelection(selection: ProviderSelection): string {
+  const provider = selection.providerId ?? "(default provider)";
+  const model = selection.model ?? "(default model)";
+  return `${provider}/${model}`;
 }
 
 function formatActiveWorkflowSkill(
@@ -131,6 +142,7 @@ export async function runInteractiveSession(
   });
   const messages: Message[] = [...(options.initialMessages ?? [])];
   let resolved: InteractiveResolvedProvider | null = null;
+  let bashApprovalGrantCount = options.initialBashApprovalGrants?.length ?? 0;
   const input = createInterface({
     input: options.input,
     crlfDelay: Number.POSITIVE_INFINITY,
@@ -151,9 +163,10 @@ export async function runInteractiveSession(
       ...(options.initialBashApprovalGrants !== undefined
         ? { initialGrants: options.initialBashApprovalGrants }
         : {}),
-      ...(options.persistBashApprovalGrant !== undefined
-        ? { onGrant: options.persistBashApprovalGrant }
-        : {}),
+      onGrant: (grant) => {
+        bashApprovalGrantCount++;
+        options.persistBashApprovalGrant?.(grant);
+      },
     },
   );
   let activeAbortController: AbortController | null = null;
@@ -161,6 +174,7 @@ export async function runInteractiveSession(
   let sessionTurns = 0;
   let sessionCostUsd = 0;
   let sessionStopReason = "completed";
+  let modelSwitchCount = options.initialModelSwitchCount ?? 0;
   const reportUsageByModel = new Map<string, InteractiveReportModelUsage>();
   const reportModelKey = (selection: SessionModelSelection): string =>
     `${selection.providerId}/${selection.model}`;
@@ -254,6 +268,36 @@ export async function runInteractiveSession(
     }
     return Math.max(0, options.cliArgs.maxCostUsd - sessionCostUsd);
   };
+  const activeModelStatus = (): string =>
+    resolved === null
+      ? options.initialModelSelection === undefined
+        ? options.configuredModelSelection === undefined
+          ? "(default for next prompt)"
+          : formatConfiguredModelSelection(options.configuredModelSelection)
+        : formatModelSelection(options.initialModelSelection)
+      : formatActiveModel(resolved);
+  const statusRecoveryActions = () => [
+    ...(options.sessionId === undefined
+      ? []
+      : [
+          {
+            label: "resume",
+            command: `keel --resume ${options.sessionId}`,
+          },
+        ]),
+    ...(options.listForkPoints === undefined
+      ? []
+      : [
+          {
+            label: "fork-points",
+            command: "/fork-points",
+          },
+        ]),
+    {
+      label: "undo-list",
+      command: "/undo --list",
+    },
+  ];
   const recordCompactionCost = (
     usage: Usage,
     costModel: CostModel,
@@ -316,6 +360,27 @@ export async function runInteractiveSession(
       const interactiveCommand = parseInteractiveCommand(rawLine);
       if (interactiveCommand?.kind === "help") {
         options.writeStdout(formatInteractiveHelp());
+        consumeQueuedInputLines([rawInput]);
+        continue;
+      }
+      if (interactiveCommand?.kind === "status") {
+        options.writeStdout(
+          formatSessionStatusSnapshot({
+            session: options.sessionId ?? "(interactive, not persisted)",
+            workspace: options.workspace,
+            activeModel: activeModelStatus(),
+            ...(options.workflowSkill !== undefined
+              ? { workflowSkill: options.workflowSkill }
+              : {}),
+            messages,
+            messageCount: messages.length,
+            pendingInputCount: lineReader.pendingInputCount(),
+            bashApprovalCount: bashApprovalGrantCount,
+            modelSwitchCount,
+            undoCheckpoints: listUndoCheckpoints(options.workspace),
+            recoveryActions: statusRecoveryActions(),
+          }),
+        );
         consumeQueuedInputLines([rawInput]);
         continue;
       }
@@ -473,6 +538,7 @@ export async function runInteractiveSession(
             });
             consumedByPersistence = true;
           }
+          modelSwitchCount++;
           options.writeStdout(
             `Model switched to ${formatActiveModel(resolved)}\n`,
           );

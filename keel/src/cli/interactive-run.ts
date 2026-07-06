@@ -190,6 +190,7 @@ export async function runInteractiveCli(
         | {
             readonly initialMessages: readonly Message[];
             readonly initialModelSelection?: SessionModelSelection;
+            readonly initialModelSwitchCount: number;
             readonly initialQueuedInputs: readonly SessionQueuedInput[];
             readonly persistQueuedInput: (input: {
               readonly sequence: number;
@@ -288,6 +289,7 @@ export async function runInteractiveCli(
           ...(initialModelSelection !== undefined
             ? { initialModelSelection }
             : {}),
+          initialModelSwitchCount: initialSession?.modelSwitches.length ?? 0,
           initialQueuedInputs: initialSession?.pendingInputs ?? [],
           initialBashApprovalGrants: initialSession?.bashApprovalGrants ?? [],
           persistQueuedInput: (input: {
@@ -371,6 +373,21 @@ export async function runInteractiveCli(
         cliArgs,
         workspace,
         platform: runtime.platform,
+        ...(activeSessionId !== undefined
+          ? { sessionId: activeSessionId }
+          : {}),
+        ...(cliArgs.providerId !== undefined || cliArgs.model !== undefined
+          ? {
+              configuredModelSelection: {
+                ...(cliArgs.providerId !== undefined
+                  ? { providerId: cliArgs.providerId }
+                  : {}),
+                ...(cliArgs.model !== undefined
+                  ? { model: cliArgs.model }
+                  : {}),
+              },
+            }
+          : {}),
         ...(projectInstructions !== undefined ? { projectInstructions } : {}),
         ...(workflowSkill !== undefined ? { workflowSkill } : {}),
         ...(sessionPersistence !== undefined ? sessionPersistence : {}),

@@ -76,6 +76,61 @@ describe("CLI Main - Interactive Entrypoint", () => {
     expect(fixture.stderr()).toBe("");
   });
 
+  test(`Given provider and model flags are used before the first prompt,
+    When the user asks for status,
+    Then the snapshot reports the configured model without starting a provider turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    input.end("/status\n");
+    const fixture = createRuntime(
+      ["--provider=fake", "--model=configured-model", "--bash-policy=deny"],
+      {
+        env: { KEEL_PROVIDER: "deepseek", KEEL_FORCE_INTERACTIVE: "1" },
+        input,
+      },
+    );
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toContain(
+      "  active model: fake/configured-model\n",
+    );
+    expect(fixture.stdout()).not.toContain("Remembered:");
+    expect(fixture.stderr()).toBe("");
+  });
+
+  test.each([
+    {
+      args: ["--provider=fake", "--bash-policy=deny"],
+      expected: "  active model: fake/(default model)\n",
+    },
+    {
+      args: ["--model=configured-model", "--bash-policy=deny"],
+      expected: "  active model: (default provider)/configured-model\n",
+    },
+  ])(`Given partial provider or model flags are used before the first prompt,
+    When the user asks for status,
+    Then the snapshot reports the configured selection`, async (testCase) => {
+    // Given
+    const input = new PassThrough();
+    input.end("/status\n");
+    const fixture = createRuntime(testCase.args, {
+      env: { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
+      input,
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(fixture.stdout()).toContain(testCase.expected);
+    expect(fixture.stderr()).toBe("");
+  });
+
   test(`Given the fake provider runs interactively,
     When the user sends two prompts on stdin,
     Then the second reply can use the first prompt as context`, async () => {

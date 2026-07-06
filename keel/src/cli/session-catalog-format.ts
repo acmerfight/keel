@@ -1,6 +1,7 @@
 import { type ToolCall, toolCallLabel } from "../tools/registry.ts";
 import { sanitizeStatusLineText } from "./output.ts";
 import { redactTextForPersistence } from "./persistence-redaction.ts";
+import { formatSessionStatusSnapshot } from "./session-status-format.ts";
 import type {
   SessionCatalog,
   SessionCatalogEntry,
@@ -241,6 +242,7 @@ export function formatSessionDetail(options: {
   readonly entry: SessionCatalogEntry;
   readonly session: SessionState;
   readonly timelineLimit: number | null;
+  readonly undoCheckpoints: readonly { readonly restoredLabel: string }[];
 }): string {
   const lines = [
     `Session "${options.entry.id}":`,
@@ -265,6 +267,38 @@ export function formatSessionDetail(options: {
         ]
       : []),
     `preview: ${formatSessionDetailText(options.entry.preview)}`,
+    formatSessionStatusSnapshot({
+      session: options.entry.id,
+      workspace: options.entry.workspace,
+      activeModel: formatSessionDetailActiveModel(options.session),
+      ...(options.entry.workflowSkill !== undefined
+        ? { workflowSkill: options.entry.workflowSkill }
+        : {}),
+      messages: options.session.messages,
+      messageCount: options.session.storedMessages.length,
+      pendingInputCount: options.session.pendingInputs.length,
+      bashApprovalCount: options.session.bashApprovalGrants.length,
+      modelSwitchCount: options.session.modelSwitches.length,
+      undoCheckpoints: options.undoCheckpoints,
+      recoveryActions: [
+        {
+          label: "resume",
+          command: `keel --resume ${options.entry.id}`,
+        },
+        {
+          label: "fork-points",
+          command: `keel --resume ${options.entry.id} --fork-points`,
+        },
+        {
+          label: "fork",
+          command: `keel sessions fork ${options.entry.id} <new-id>`,
+        },
+        {
+          label: "undo-list",
+          command: "keel /undo --list",
+        },
+      ],
+    }).trimEnd(),
     "state:",
     `  messages: ${options.session.storedMessages.length}`,
     `  pending inputs: ${options.session.pendingInputs.length}`,

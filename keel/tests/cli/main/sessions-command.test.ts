@@ -320,6 +320,26 @@ describe("CLI Main - Sessions Command", () => {
         "fork policy: transcript=copy_prefix, pendingInputs=drop, queuedInputs=drop, bashApprovalGrants=drop\n",
       );
       expect(stdout).toContain("preview: Use [REDACTED_SECRET]");
+      expect(stdout).toContain("status:\n");
+      expect(stdout).toContain("  session: detail\n");
+      expect(stdout).toContain(`  workspace: ${ledgerWorkspace}\n`);
+      expect(stdout).toContain("  active model: qwen/qwen3.7-max\n");
+      expect(stdout).toContain(
+        "  workflow skill: review (.agents/skills/review/SKILL.md)\n",
+      );
+      expect(stdout).toContain("  messages: 4\n");
+      expect(stdout).toContain("  pending inputs: 1\n");
+      expect(stdout).toContain("  bash approvals: 1\n");
+      expect(stdout).toContain("  model switches: 1\n");
+      expect(stdout).toContain("  latest checkpoint: none\n");
+      expect(stdout).toContain("  undo checkpoints: 0\n");
+      expect(stdout).toContain("recovery:\n");
+      expect(stdout).toContain("  resume: keel --resume detail\n");
+      expect(stdout).toContain(
+        "  fork-points: keel --resume detail --fork-points\n",
+      );
+      expect(stdout).toContain("  fork: keel sessions fork detail <new-id>\n");
+      expect(stdout).toContain("  undo-list: keel /undo --list\n");
       expect(stdout).toContain("state:\n");
       expect(stdout).toContain("  messages: 4\n");
       expect(stdout).toContain("  pending inputs: 1\n");
@@ -349,6 +369,106 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).not.toContain(githubToken);
       expect(stdout).not.toContain("\u001b");
       expect(stdout).not.toContain("Do not print this workflow body.");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a persisted session starts from a compaction checkpoint,
+    When the user shows the session detail,
+    Then the status snapshot reports the latest checkpoint summary`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "compacted-detail",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-02-06T00:00:00.000Z",
+      records: [
+        replaceSessionRecordLine("2026-02-06T00:00:01.000Z", [
+          {
+            role: "user",
+            content: conversationCheckpoint("Old task summarized."),
+          },
+          { role: "user", content: "continue from the summary" },
+          {
+            role: "assistant",
+            content: "Continuing.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    const fixture = createRuntime(
+      ["sessions", "show", "compacted-detail", "--all"],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("status:\n");
+      expect(fixture.stdout()).toContain(
+        "  latest checkpoint: Old task summarized.\n",
+      );
+      expect(fixture.stdout()).toContain("  messages: 3\n");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a persisted session id makes recovery commands long,
+    When the user shows the session detail,
+    Then the status snapshot prints copy-pasteable recovery commands`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sessionId = `long-${"a".repeat(230)}`;
+    await writeSessionLedger({
+      home,
+      id: sessionId,
+      workspace: ledgerWorkspace,
+      createdAt: "2026-02-07T00:00:00.000Z",
+    });
+    const fixture = createRuntime(["sessions", "show", sessionId], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      const statusStart = stdout.indexOf("status:\n");
+      const stateStart = stdout.indexOf("state:\n");
+      expect(statusStart).toBeGreaterThanOrEqual(0);
+      expect(stateStart).toBeGreaterThan(statusStart);
+      const statusSection = stdout.slice(statusStart, stateStart);
+      expect(statusSection).toContain(`  resume: keel --resume ${sessionId}\n`);
+      expect(statusSection).toContain(
+        `  fork: keel sessions fork ${sessionId} <new-id>\n`,
+      );
+      expect(statusSection).not.toContain("...");
       expect(fixture.stderr()).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });

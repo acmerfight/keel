@@ -11,6 +11,7 @@ export interface LineReader {
   readonly restoreLines: (lines: readonly QueuedLine[]) => void;
   readonly sequence: () => number;
   readonly needsInput: () => boolean;
+  readonly pendingInputCount: () => number;
 }
 
 export interface QueuedLine {
@@ -201,5 +202,7 @@ export function createLineReader(
     },
     sequence: () => currentSequence,
     needsInput: () => queued.length === 0 && !closed,
+    pendingInputCount: () =>
+      queued.filter((queuedLine) => queuedLine.line.trim() !== "").length,
   };
 }
