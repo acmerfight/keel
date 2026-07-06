@@ -8,7 +8,10 @@ export {
   providerDiagnosticApiKey,
   validateProviderBaseUrl,
 } from "./provider-diagnostics.ts";
-export type { ModelSource } from "./provider-profiles.ts";
+export {
+  type ModelSource,
+  providerApiKeySetupLines,
+} from "./provider-profiles.ts";
 export {
   type ResolvedProvider,
   requireKnownCostModel,

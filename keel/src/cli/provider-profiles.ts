@@ -19,7 +19,7 @@ interface ProviderProfileBase {
   readonly defaultModel: string;
   readonly modelEnvKey?: Exclude<ModelSource, "--model" | "config" | "default">;
   readonly apiKeyEnvKeys: readonly string[];
-  readonly missingApiKeyMessage: string;
+  readonly apiKeySetupNotes?: readonly string[];
 }
 
 type ProviderProfileWithBaseUrl = ProviderProfileBase & {
@@ -45,14 +45,11 @@ const PROVIDER_PROFILES = {
   fake: {
     defaultModel: "fake",
     apiKeyEnvKeys: [],
-    missingApiKeyMessage: "Error: fake provider does not require an API key.",
   },
   deepseek: {
     defaultModel: "deepseek-v4-flash",
     modelEnvKey: "DEEPSEEK_MODEL",
     apiKeyEnvKeys: ["DEEPSEEK_API_KEY"],
-    missingApiKeyMessage:
-      "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.",
     baseUrlEnvKey: "DEEPSEEK_BASE_URL",
     defaultBaseUrl: "https://api.deepseek.com",
   },
@@ -60,8 +57,6 @@ const PROVIDER_PROFILES = {
     defaultModel: "kimi-k2.6",
     modelEnvKey: "KIMI_MODEL",
     apiKeyEnvKeys: ["KIMI_API_KEY"],
-    missingApiKeyMessage:
-      "Error: KIMI_API_KEY is required. Set the API key to use Kimi.",
     baseUrlEnvKey: "KIMI_BASE_URL",
     defaultBaseUrl: "https://api.moonshot.cn/v1",
   },
@@ -69,8 +64,9 @@ const PROVIDER_PROFILES = {
     defaultModel: "qwen3.7-max",
     modelEnvKey: "QWEN_MODEL",
     apiKeyEnvKeys: ["DASHSCOPE_API_KEY", "QWEN_API_KEY"],
-    missingApiKeyMessage:
-      "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
+    apiKeySetupNotes: [
+      "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
+    ],
     baseUrlEnvKey: "QWEN_BASE_URL",
     defaultBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
   },
@@ -80,4 +76,42 @@ export function providerProfile<Id extends ProviderId>(
   providerId: Id,
 ): ProviderProfiles[Id] {
   return PROVIDER_PROFILES[providerId];
+}
+
+function apiKeyEnvLabel(apiKeyEnvKeys: readonly string[]): string {
+  return apiKeyEnvKeys.join(" or ");
+}
+
+function apiKeyShellValue(apiKeyEnvKeys: readonly string[]): string | null {
+  let expression: string | null = null;
+  for (const envKey of [...apiKeyEnvKeys].reverse()) {
+    expression =
+      expression === null ? `$${envKey}` : `\${${envKey}:-${expression}}`;
+  }
+  return expression === null ? null : `"${expression}"`;
+}
+
+export function providerApiKeySetupLines(
+  providerId: ProviderId,
+): readonly string[] {
+  const profile = providerProfile(providerId);
+  const stdinValue = apiKeyShellValue(profile.apiKeyEnvKeys);
+  if (stdinValue === null) {
+    return [];
+  }
+
+  return [
+    `Set ${apiKeyEnvLabel(profile.apiKeyEnvKeys)} for this run, or store it:`,
+    `  printf '%s\\n' ${stdinValue} | keel auth login ${providerId} --with-api-key`,
+    `  keel config set-provider ${providerId}`,
+    "  keel --doctor",
+    ...(profile.apiKeySetupNotes ?? []),
+  ];
+}
+
+export function missingProviderApiKeyMessage(providerId: ProviderId): string {
+  const setupLines = providerApiKeySetupLines(providerId);
+  return [`Error: missing API key for ${providerId}.`, ...setupLines].join(
+    "\n",
+  );
 }

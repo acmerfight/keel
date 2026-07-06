@@ -15,6 +15,7 @@ import {
   type ProviderConfigDiagnostic,
   type ProviderConfigRuntime,
   type ProviderSelection,
+  providerApiKeySetupLines,
   providerDiagnosticApiKey,
   validateProviderBaseUrl,
 } from "./provider-config.ts";
@@ -370,6 +371,18 @@ function providerDiagnosticHasError(
   return diagnostic.issues.some((issue) => issue.severity === "error");
 }
 
+function providerSetupLines(
+  diagnostic: ProviderConfigDiagnostic,
+): readonly string[] {
+  if (diagnostic.apiKey.status !== "missing") {
+    return [];
+  }
+  return [
+    "provider setup:",
+    ...providerApiKeySetupLines(diagnostic.providerId),
+  ];
+}
+
 function providerDiagnosticLines(
   diagnostic: ProviderConfigDiagnostic,
 ): readonly string[] {
@@ -382,6 +395,7 @@ function providerDiagnosticLines(
     ...modelMetadataLines(diagnostic.modelMetadata),
     `cost model: ${diagnostic.costModel}`,
     ...diagnostic.issues.map((issue) => `${issue.severity}: ${issue.message}`),
+    ...providerSetupLines(diagnostic),
     "",
     ...contextPolicyLines(diagnostic.contextWindow),
   ];

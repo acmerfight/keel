@@ -709,7 +709,7 @@ describe("CLI Doctor", () => {
 
   test(`Given the selected real provider is missing its API key,
     When user runs the doctor command,
-    Then the CLI reports the missing env var without printing a secret`, async () => {
+    Then the CLI reports setup commands without printing a secret`, async () => {
     // Given
     const env = {
       KEEL_PROVIDER: "deepseek",
@@ -743,6 +743,43 @@ describe("CLI Doctor", () => {
       "model capabilities: text-input, tool-calls, reasoning",
     );
     expect(result.stdout).toContain("cost model: known");
+    expect(result.stdout).toContain("provider setup:");
+    expect(result.stdout).toContain(
+      "Set DEEPSEEK_API_KEY for this run, or store it:",
+    );
+    expect(result.stdout).toContain(
+      "  printf '%s\\n' \"$DEEPSEEK_API_KEY\" | keel auth login deepseek --with-api-key",
+    );
+    expect(result.stdout).toContain("  keel config set-provider deepseek");
+    expect(result.stdout).toContain("  keel --doctor");
+    expect(result.stdout).toContain("provider auth: skipped (missing API key)");
+    expect(result.stderr).toBe("");
+  });
+
+  test(`Given the selected real provider has a whitespace-only API key,
+    When user runs the doctor command,
+    Then the CLI reports setup commands instead of probing auth`, async () => {
+    // Given
+    const env = {
+      KEEL_PROVIDER: "deepseek",
+      DEEPSEEK_API_KEY: "   ",
+    };
+
+    // When
+    const result = await runCli(["--doctor"], { env });
+
+    // Then
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain(
+      "api key: missing (expected DEEPSEEK_API_KEY)",
+    );
+    expect(result.stdout).toContain("provider setup:");
+    expect(result.stdout).toContain(
+      "Set DEEPSEEK_API_KEY for this run, or store it:",
+    );
+    expect(result.stdout).toContain(
+      "  printf '%s\\n' \"$DEEPSEEK_API_KEY\" | keel auth login deepseek --with-api-key",
+    );
     expect(result.stdout).toContain("provider auth: skipped (missing API key)");
     expect(result.stderr).toBe("");
   });

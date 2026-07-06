@@ -83,25 +83,53 @@ describe("CLI Main - One Shot Cost And Edit", () => {
     {
       provider: "deepseek",
       env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
-      stderr:
-        "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.\n",
+      expectedLines: [
+        "Error: missing API key for deepseek.",
+        "Set DEEPSEEK_API_KEY for this run, or store it:",
+        "  printf '%s\\n' \"$DEEPSEEK_API_KEY\" | keel auth login deepseek --with-api-key",
+        "  keel config set-provider deepseek",
+        "  keel --doctor",
+      ],
+    },
+    {
+      provider: "deepseek",
+      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "   " },
+      expectedLines: [
+        "Error: missing API key for deepseek.",
+        "Set DEEPSEEK_API_KEY for this run, or store it:",
+        "  printf '%s\\n' \"$DEEPSEEK_API_KEY\" | keel auth login deepseek --with-api-key",
+        "  keel config set-provider deepseek",
+        "  keel --doctor",
+      ],
     },
     {
       provider: "kimi",
       env: { KEEL_PROVIDER: "kimi", KIMI_API_KEY: "" },
-      stderr: "Error: KIMI_API_KEY is required. Set the API key to use Kimi.\n",
+      expectedLines: [
+        "Error: missing API key for kimi.",
+        "Set KIMI_API_KEY for this run, or store it:",
+        "  printf '%s\\n' \"$KIMI_API_KEY\" | keel auth login kimi --with-api-key",
+        "  keel config set-provider kimi",
+        "  keel --doctor",
+      ],
     },
     {
       provider: "qwen",
       env: { KEEL_PROVIDER: "qwen", DASHSCOPE_API_KEY: "" },
-      stderr:
-        "Error: DASHSCOPE_API_KEY or QWEN_API_KEY is required. Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.\n",
+      expectedLines: [
+        "Error: missing API key for qwen.",
+        "Set DASHSCOPE_API_KEY or QWEN_API_KEY for this run, or store it:",
+        `  printf '%s\\n' "\${DASHSCOPE_API_KEY:-$QWEN_API_KEY}" | keel auth login qwen --with-api-key`,
+        "  keel config set-provider qwen",
+        "  keel --doctor",
+        "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
+      ],
     },
   ])(`Given $provider is configured without an API key,
     When the CLI main resolves the provider,
-    Then it returns the provider-specific API key error`, async ({
+    Then it tells the user how to configure provider credentials`, async ({
     env,
-    stderr,
+    expectedLines,
   }) => {
     // Given
     const fixture = createRuntime(["hello"], { env });
@@ -112,7 +140,9 @@ describe("CLI Main - One Shot Cost And Edit", () => {
     // Then
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(stderr);
+    for (const line of expectedLines) {
+      expect(fixture.stderr()).toContain(line);
+    }
   });
 
   test(`Given the fake provider is selected with a max cost,

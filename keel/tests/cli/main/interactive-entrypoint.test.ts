@@ -27,6 +27,14 @@ import {
   sseToolFinish,
 } from "../../../src/testing/provider-sse-fixtures.ts";
 
+const DEEPSEEK_MISSING_API_KEY_GUIDANCE = [
+  "Error: missing API key for deepseek.",
+  "Set DEEPSEEK_API_KEY for this run, or store it:",
+  "  printf '%s\\n' \"$DEEPSEEK_API_KEY\" | keel auth login deepseek --with-api-key",
+  "  keel config set-provider deepseek",
+  "  keel --doctor",
+];
+
 async function waitForCondition(
   condition: () => boolean,
   message: string,
@@ -916,7 +924,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
 
   test(`Given interactive mode resolves a provider configuration error,
     When the user sends a prompt,
-    Then the CLI main returns the user-facing error`, async () => {
+    Then the CLI main tells the user how to configure provider credentials`, async () => {
     // Given
     const input = new PassThrough();
     input.end("hello\n");
@@ -935,9 +943,9 @@ describe("CLI Main - Interactive Entrypoint", () => {
     // Then
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.\n",
-    );
+    for (const line of DEEPSEEK_MISSING_API_KEY_GUIDANCE) {
+      expect(fixture.stderr()).toContain(line);
+    }
   });
 
   test(`Given a named session fails before the first completed turn,
@@ -964,9 +972,9 @@ describe("CLI Main - Interactive Entrypoint", () => {
       // Then
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toBe(
-        "Error: DEEPSEEK_API_KEY is required. Set the API key to use DeepSeek.\n",
-      );
+      for (const line of DEEPSEEK_MISSING_API_KEY_GUIDANCE) {
+        expect(fixture.stderr()).toContain(line);
+      }
       await expect(
         access(join(home, "sessions", "provider-fails", "ledger.jsonl")),
       ).rejects.toThrow();

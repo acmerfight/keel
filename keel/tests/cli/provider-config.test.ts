@@ -6,6 +6,7 @@ import type {
 import {
   inspectProviderConfig,
   ProviderConfigError,
+  providerApiKeySetupLines,
   requireKnownCostModel,
   resolveInteractiveProvider,
   resolveProvider,
@@ -358,6 +359,26 @@ describe("Provider Config", () => {
     // Then
     expect(resolved.providerId).toBe("fake");
     expect(resolved.contextCompaction).toBeUndefined();
+  });
+
+  test(`Given provider API key setup lines are formatted,
+    When providers have zero, one, or multiple API key env vars,
+    Then the shell guidance matches the provider credential contract`, () => {
+    // Given / When / Then
+    expect(providerApiKeySetupLines("fake")).toEqual([]);
+    expect(providerApiKeySetupLines("deepseek")).toEqual([
+      "Set DEEPSEEK_API_KEY for this run, or store it:",
+      "  printf '%s\\n' \"$DEEPSEEK_API_KEY\" | keel auth login deepseek --with-api-key",
+      "  keel config set-provider deepseek",
+      "  keel --doctor",
+    ]);
+    expect(providerApiKeySetupLines("qwen")).toEqual([
+      "Set DASHSCOPE_API_KEY or QWEN_API_KEY for this run, or store it:",
+      `  printf '%s\\n' "\${DASHSCOPE_API_KEY:-$QWEN_API_KEY}" | keel auth login qwen --with-api-key`,
+      "  keel config set-provider qwen",
+      "  keel --doctor",
+      "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
+    ]);
   });
 
   test(`Given a real provider uses a catalogued default model,
