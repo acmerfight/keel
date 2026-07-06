@@ -733,6 +733,57 @@ describe("Context Compaction Stale Tool Output", () => {
     expect(compacted.content).toContain("full output artifact: tool-output:");
   });
 
+  test(`Given retained git_status output is scoped or unscoped,
+    When context compaction projects the tool output,
+    Then the preview keeps source labels and status truncation guidance`, async () => {
+    // Given
+    const statusOutput = [
+      "Branch: main",
+      "",
+      "Staged changes:",
+      "- A src/status.ts",
+      "",
+      "Untracked files:",
+      "- scratch.txt",
+      ...numberedLines("extra status entry", 30),
+      "[git_status output truncated: showing first 200 entries. Use paths to narrow output.]",
+    ].join("\n");
+
+    // When
+    const scoped = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_status_src",
+        tool: "git_status",
+        paths: ["src"],
+      },
+      content: statusOutput,
+      toolOutputMaxChars: 240,
+    });
+    const allChanges = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_status_all",
+        tool: "git_status",
+      },
+      content: statusOutput,
+      toolOutputMaxChars: 200,
+    });
+
+    // Then
+    expect(scoped.content).toContain("git_status source: src");
+    expect(scoped.content).toContain("Branch: main");
+    expect(scoped.content).toContain("- A src/status.ts");
+    expect(scoped.content).toContain(
+      "[git_status output truncated: showing first 200 entries. Use paths to narrow output.]",
+    );
+    expect(
+      previewBeforeStaleCompactionMarker(scoped.content).length,
+    ).toBeLessThanOrEqual(240);
+    expect(allChanges.content).toContain("git_status source: all changes");
+    expect(allChanges.content).toContain(
+      "[git_status output truncated: showing first 200 entries. Use paths to narrow output.]",
+    );
+  });
+
   test(`Given retained glob output is truncated,
     When context compaction projects the tool output,
     Then the preview keeps complete paths and narrowing guidance`, async () => {

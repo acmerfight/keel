@@ -4,6 +4,7 @@ import {
   bashToolArgumentsSchema,
   editToolArgumentsSchema,
   gitDiffToolArgumentsSchema,
+  gitStatusToolArgumentsSchema,
   globToolArgumentsSchema,
   grepToolArgumentsSchema,
   lsToolArgumentsSchema,
@@ -302,6 +303,26 @@ const gitDiffTool = defineTool({
   risk: { kind: "workspace-read" },
 });
 
+const gitStatusTool = defineTool({
+  name: "git_status",
+  description: [
+    "Read the current git working tree status without using a shell. Output is grouped and capped; git hooks, fsmonitor helpers, and unsafe git environment overrides are disabled.",
+    "Use when: checking branch, staged, unstaged, unmerged, or untracked file status before committing, reviewing work, or deciding which files changed, especially when bash is disabled.",
+    "Do not use when: inspecting patch contents or committed ref-to-ref diffs (use git_diff); committing, inspecting logs, or performing other git operations (use bash if enabled and appropriate).",
+    "On failure: if the workspace is not a git repository, inspect files with read/grep; if output is truncated, pass paths to narrow the status.",
+  ].join("\n"),
+  args: toolArgs(gitStatusToolArgumentsSchema),
+  permission: { kind: "none" },
+  output: { kind: "text" },
+  display: {
+    formatLabel: (args) =>
+      args.paths === undefined || args.paths.length === 0
+        ? "git_status"
+        : `git_status ${args.paths.join(" ")}`,
+  },
+  risk: { kind: "workspace-read" },
+});
+
 const editTool = defineTool({
   name: "edit",
   description: [
@@ -362,8 +383,8 @@ const bashTool = defineTool({
   name: "bash",
   description: [
     "Run a trusted shell command in the workspace. Commands use the current OS user's permissions and are not constrained by Keel's gitignore file-tool policy. Output is capped to the last 20KB per stream.",
-    "Use when: the task needs commands the dedicated tools cannot do, such as running builds, tests, or git operations other than inspecting current diffs and safe ref-to-ref diffs.",
-    "Do not use when: a dedicated tool can do the job - prefer read, ls, glob, grep, git_diff, edit, and write for file inspection and changes.",
+    "Use when: the task needs commands the dedicated tools cannot do, such as running builds, tests, commits, logs, or other git operations beyond current status, current diffs, and safe ref-to-ref diffs.",
+    "Do not use when: a dedicated tool can do the job - prefer read, ls, glob, grep, git_status, git_diff, edit, and write for file inspection and changes.",
     "On failure: a non-zero exit code returns stdout/stderr for diagnosis - fix the command rather than retrying it unchanged; if the command timed out, raise timeoutMs (up to 60000) or run a narrower command.",
   ].join("\n"),
   args: toolArgs(bashToolArgumentsSchema),
@@ -383,6 +404,7 @@ export const builtinTools = [
   lsTool,
   globTool,
   grepTool,
+  gitStatusTool,
   gitDiffTool,
   editTool,
   writeTool,
@@ -395,6 +417,7 @@ const rawBuiltinToolCallSchema = z.discriminatedUnion("tool", [
   lsTool.toolCallSchema,
   globTool.toolCallSchema,
   grepTool.toolCallSchema,
+  gitStatusTool.toolCallSchema,
   gitDiffTool.toolCallSchema,
   editTool.toolCallSchema,
   writeTool.toolCallSchema,

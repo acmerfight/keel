@@ -45,8 +45,8 @@ const processLifecycleCatalog = [
     lifecycle: "exit-drain",
   },
   {
-    tool: "git_diff",
-    sourcePath: "src/tools/git-diff.ts",
+    tool: "git_process",
+    sourcePath: "src/tools/git-process.ts",
     lifecycle: "close-settle",
   },
   {

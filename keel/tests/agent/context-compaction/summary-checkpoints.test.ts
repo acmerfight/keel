@@ -1609,6 +1609,15 @@ describe("Context Compaction Summary Checkpoints", () => {
             tool: "ls",
           },
           {
+            id: "git_status_paths",
+            tool: "git_status",
+            paths: ["src/status.ts"],
+          },
+          {
+            id: "git_status_all",
+            tool: "git_status",
+          },
+          {
             id: "git_diff_paths",
             tool: "git_diff",
             paths: ["src/a.ts", "src/b.ts"],
@@ -1677,6 +1686,16 @@ describe("Context Compaction Summary Checkpoints", () => {
       },
       {
         role: "tool",
+        toolCallId: "git_status_paths",
+        content: "git status path output ".repeat(20),
+      },
+      {
+        role: "tool",
+        toolCallId: "git_status_all",
+        content: "git status all output ".repeat(20),
+      },
+      {
+        role: "tool",
         toolCallId: "git_diff_paths",
         content: "git diff output ".repeat(20),
       },
@@ -1733,7 +1752,7 @@ describe("Context Compaction Summary Checkpoints", () => {
       contextCompaction: {
         keepRecentTokens: 1,
         toolOutputMaxChars: 24,
-        summaryInputMaxChars: 8_000,
+        summaryInputMaxChars: 12_000,
       },
     });
 
@@ -1747,6 +1766,8 @@ describe("Context Compaction Summary Checkpoints", () => {
     expect(summaryPrompt).toContain("glob:**/*.md");
     expect(summaryPrompt).toContain("ls:src");
     expect(summaryPrompt).toContain("ls:.");
+    expect(summaryPrompt).toContain("git_status:src/status.ts");
+    expect(summaryPrompt).toContain("git_status:all changes");
     expect(summaryPrompt).toContain("git_diff:src/a.ts src/b.ts");
     expect(summaryPrompt).toContain("git_diff:HEAD~1..HEAD");
     expect(summaryPrompt).toContain("git_diff:origin/main...HEAD src/ref.ts");
@@ -1756,6 +1777,8 @@ describe("Context Compaction Summary Checkpoints", () => {
     expect(summaryPrompt).toContain("artifact storage failed: disk full");
     expect(summaryPrompt).toContain("...");
     expect(summaryPrompt).not.toContain("tool-call:small_complete_bash");
+    expect(messages[0]?.content).toContain("git_status:src/status.ts");
+    expect(messages[0]?.content).toContain("git_status:all changes");
     expect(messages[0]?.content).toContain("git_diff:src/a.ts src/b.ts");
     expect(messages[0]?.content).toContain("git_diff:HEAD~1..HEAD");
     expect(messages[0]?.content).toContain(

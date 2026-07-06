@@ -114,6 +114,11 @@ describe("Tool Access", () => {
         pattern: "old",
         path: "src",
       });
+      const gitStatusSrc = toolCallAccesses(workspace, {
+        id: "git_status_src",
+        tool: "git_status",
+        paths: ["src"],
+      });
       const gitDiffSrc = toolCallAccesses(workspace, {
         id: "git_diff_src",
         tool: "git_diff",
@@ -135,6 +140,8 @@ describe("Tool Access", () => {
       expect(ToolAccesses.conflict(writeSrc, writeDocs)).toBe(false);
       expect(ToolAccesses.conflict(writeParent, writeChild)).toBe(true);
       expect(ToolAccesses.conflict(editA, grepSrc)).toBe(true);
+      expect(ToolAccesses.conflict(editA, gitStatusSrc)).toBe(true);
+      expect(ToolAccesses.conflict(writeDocs, gitStatusSrc)).toBe(false);
       expect(ToolAccesses.conflict(editA, gitDiffSrc)).toBe(true);
       expect(ToolAccesses.conflict(writeDocs, gitDiffSrc)).toBe(false);
       expect(ToolAccesses.conflict(editA, lsRoot)).toBe(true);
