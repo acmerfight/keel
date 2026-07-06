@@ -368,12 +368,14 @@ describe("Provider Config", () => {
     expect(providerApiKeySetupLines("fake")).toEqual([]);
     expect(providerApiKeySetupLines("deepseek")).toEqual([
       "Set DEEPSEEK_API_KEY for this run, or store it:",
+      `  printf '%s\\n' "$DEEPSEEK_API_KEY" | keel setup deepseek --with-api-key`,
       "  printf '%s\\n' \"$DEEPSEEK_API_KEY\" | keel auth login deepseek --with-api-key",
       "  keel config set-provider deepseek",
       "  keel --doctor",
     ]);
     expect(providerApiKeySetupLines("qwen")).toEqual([
       "Set DASHSCOPE_API_KEY or QWEN_API_KEY for this run, or store it:",
+      `  printf '%s\\n' "\${DASHSCOPE_API_KEY:-$QWEN_API_KEY}" | keel setup qwen --with-api-key`,
       `  printf '%s\\n' "\${DASHSCOPE_API_KEY:-$QWEN_API_KEY}" | keel auth login qwen --with-api-key`,
       "  keel config set-provider qwen",
       "  keel --doctor",

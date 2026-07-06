@@ -27,6 +27,10 @@ type ProviderProfileWithBaseUrl = ProviderProfileBase & {
   readonly defaultBaseUrl: string;
 };
 
+type ApiKeyProviderProfile = ProviderProfileWithBaseUrl & {
+  readonly modelEnvKey: Exclude<ModelSource, "--model" | "config" | "default">;
+};
+
 type ProviderProfileWithoutBaseUrl = ProviderProfileBase & {
   readonly baseUrlEnvKey?: never;
   readonly defaultBaseUrl?: never;
@@ -34,9 +38,9 @@ type ProviderProfileWithoutBaseUrl = ProviderProfileBase & {
 
 interface ProviderProfiles {
   readonly fake: ProviderProfileWithoutBaseUrl;
-  readonly deepseek: ProviderProfileWithBaseUrl;
-  readonly kimi: ProviderProfileWithBaseUrl;
-  readonly qwen: ProviderProfileWithBaseUrl;
+  readonly deepseek: ApiKeyProviderProfile;
+  readonly kimi: ApiKeyProviderProfile;
+  readonly qwen: ApiKeyProviderProfile;
 }
 
 export type ProviderProfile = ProviderProfiles[ProviderId];
@@ -102,6 +106,7 @@ export function providerApiKeySetupLines(
 
   return [
     `Set ${apiKeyEnvLabel(profile.apiKeyEnvKeys)} for this run, or store it:`,
+    `  printf '%s\\n' ${stdinValue} | keel setup ${providerId} --with-api-key`,
     `  printf '%s\\n' ${stdinValue} | keel auth login ${providerId} --with-api-key`,
     `  keel config set-provider ${providerId}`,
     "  keel --doctor",

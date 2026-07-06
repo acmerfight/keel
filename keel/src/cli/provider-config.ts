@@ -11,6 +11,7 @@ export {
 export {
   type ModelSource,
   providerApiKeySetupLines,
+  providerProfile,
 } from "./provider-profiles.ts";
 export {
   type ResolvedProvider,

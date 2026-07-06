@@ -35,6 +35,308 @@ function stringInputText(text: string): PassThrough {
 }
 
 describe("CLI Main - Provider Auth Setup", () => {
+  test(`Given a fresh provider home,
+    When the user runs setup with an API key and provider defaults,
+    Then Keel stores the provider configuration and verifies auth without printing the secret`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-provider-setup-home-"));
+    const secret = "setup-deepseek-secret";
+    const requests: string[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/models") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      requests.push(req.headers.authorization ?? "");
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: [] }));
+    });
+    await listen(server);
+
+    try {
+      const setup = createRuntime(
+        [
+          "setup",
+          "deepseek",
+          "--with-api-key",
+          "--model",
+          "deepseek-v4-flash",
+          "--base-url",
+          `http://127.0.0.1:${getPort(server)}`,
+        ],
+        {
+          env: { KEEL_HOME: home },
+          input: inputText(`${secret}\n`),
+        },
+      );
+
+      // When
+      const exitCode = await runCliMain(setup.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(setup.stdout()).toContain("Stored API key for deepseek.\n");
+      expect(setup.stdout()).toContain("Configured provider deepseek.\n");
+      expect(setup.stdout()).toContain("Keel doctor\n");
+      expect(setup.stdout()).toContain("provider: deepseek (source: config)");
+      expect(setup.stdout()).toContain(
+        "model: deepseek-v4-flash (source: config)",
+      );
+      expect(setup.stdout()).toContain("api key: present (auth: deepseek)");
+      expect(setup.stdout()).toContain(
+        `base url: http://127.0.0.1:${getPort(server)} (source: config)`,
+      );
+      expect(setup.stdout()).toContain("provider auth: ok (GET /models)");
+      expect(setup.stdout()).not.toContain(secret);
+      expect(setup.stderr()).toBe("");
+      expect(requests).toEqual([`Bearer ${secret}`]);
+      expect((await stat(join(home, "auth.json"))).mode & 0o777).toBe(0o600);
+    } finally {
+      await close(server);
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a user wants to finish setup without an online probe,
+    When the user runs setup offline,
+    Then Keel stores provider defaults and reports the skipped auth check`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-provider-setup-offline-"));
+    const secret = "offline-kimi-secret";
+    const setup = createRuntime(
+      [
+        "setup",
+        "kimi",
+        "--with-api-key",
+        "--model=kimi-k2.6",
+        "--base-url=https://api.moonshot.cn/v1",
+        "--offline",
+      ],
+      {
+        env: { KEEL_HOME: home },
+        input: inputText(`${secret}\n`),
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(setup.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(setup.stdout()).toContain("Stored API key for kimi.\n");
+      expect(setup.stdout()).toContain("Configured provider kimi.\n");
+      expect(setup.stdout()).toContain("provider: kimi (source: config)");
+      expect(setup.stdout()).toContain("model: kimi-k2.6 (source: config)");
+      expect(setup.stdout()).toContain("api key: present (auth: kimi)");
+      expect(setup.stdout()).toContain(
+        "base url: https://api.moonshot.cn/v1 (source: config)",
+      );
+      expect(setup.stdout()).toContain("provider auth: skipped (--offline)");
+      expect(setup.stdout()).not.toContain(secret);
+      expect(setup.stderr()).toBe("");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      stdin: "   \n",
+      message: "Error: setup requires an API key on stdin.\n",
+    },
+    {
+      stdin: "first-line\nsecond-line\n",
+      message: "Error: setup requires a single-line API key on stdin.\n",
+    },
+  ])(`Given setup receives invalid API key input %#,
+    When the user tries to configure a provider,
+    Then Keel rejects it before writing provider state`, async ({
+    stdin,
+    message,
+  }) => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-provider-setup-invalid-"));
+    const setup = createRuntime(["setup", "deepseek", "--with-api-key"], {
+      env: { KEEL_HOME: home },
+      input: inputText(stdin),
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(setup.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(setup.stdout()).toBe("");
+      expect(setup.stderr()).toBe(message);
+      await expect(readFile(join(home, "auth.json"), "utf8")).rejects.toThrow(
+        /ENOENT/u,
+      );
+      await expect(readFile(join(home, "config.json"), "utf8")).rejects.toThrow(
+        /ENOENT/u,
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a user accepts provider defaults during setup,
+    When the user runs minimal setup offline,
+    Then Keel stores the provider without model or base URL overrides`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-provider-setup-minimal-"));
+    const secret = "minimal-qwen-secret";
+    const setup = createRuntime(
+      ["setup", "qwen", "--with-api-key", "--offline"],
+      {
+        env: { KEEL_HOME: home },
+        input: inputText(`${secret}\n`),
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(setup.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(setup.stdout()).toContain("Stored API key for qwen.\n");
+      expect(setup.stdout()).toContain("Configured provider qwen.\n");
+      expect(setup.stdout()).toContain("provider: qwen (source: config)");
+      expect(setup.stdout()).toContain("model: qwen3.7-max (source: default)");
+      expect(setup.stdout()).toContain(
+        "base url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1 (source: default)",
+      );
+      expect(setup.stdout()).toContain("api key: present (auth: qwen)");
+      expect(setup.stdout()).toContain("provider auth: skipped (--offline)");
+      expect(setup.stdout()).not.toContain(secret);
+      expect(setup.stderr()).toBe("");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given setup receives a secret-bearing invalid base URL,
+    When the user tries to configure a provider,
+    Then Keel rejects it before reading or writing the API key`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-provider-setup-base-url-"));
+    const secret = "setup-invalid-base-url-secret";
+    const setup = createRuntime(
+      [
+        "setup",
+        "deepseek",
+        "--with-api-key",
+        "--base-url",
+        "https://user:secret@example.test/v1?token=secret#secret",
+      ],
+      {
+        env: { KEEL_HOME: home },
+        input: inputText(`${secret}\n`),
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(setup.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(setup.stdout()).toBe("");
+      expect(setup.stderr()).toBe(
+        "Error: --base-url base URL must not include credentials, query, or fragment.\n",
+      );
+      expect(setup.stderr()).not.toContain(secret);
+      await expect(readFile(join(home, "auth.json"), "utf8")).rejects.toThrow(
+        /ENOENT/u,
+      );
+      await expect(readFile(join(home, "config.json"), "utf8")).rejects.toThrow(
+        /ENOENT/u,
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given KEEL_HOME is not a directory,
+    When the user runs setup,
+    Then Keel reports the provider setup storage failure without printing the secret`, async () => {
+    // Given
+    const homeParent = await mkdtemp(join(tmpdir(), "keel-setup-blocked-"));
+    const blockedHome = join(homeParent, "blocked-home");
+    const secret = "setup-blocked-secret";
+    await writeFile(blockedHome, "not a directory", "utf8");
+    const setup = createRuntime(["setup", "deepseek", "--with-api-key"], {
+      env: { KEEL_HOME: blockedHome },
+      input: inputText(`${secret}\n`),
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(setup.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(setup.stdout()).toBe("");
+      expect(setup.stderr()).toContain("cannot read provider auth");
+      expect(setup.stderr()).not.toContain(secret);
+    } finally {
+      await rm(homeParent, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    [["setup"], "Error: setup requires <provider>.\n"],
+    [
+      ["setup", "unknown", "--with-api-key"],
+      "Error: <provider> must be one of: fake, deepseek, kimi, qwen.\n",
+    ],
+    [
+      ["setup", "fake", "--with-api-key"],
+      "Error: <provider> must be one of: deepseek, kimi, qwen.\n",
+    ],
+    [["setup", "deepseek"], "Error: setup requires --with-api-key.\n"],
+    [
+      ["setup", "deepseek", "--with-api-key", "extra"],
+      'Error: unknown setup option "extra"\n',
+    ],
+    [
+      ["setup", "deepseek", "--with-api-key", "--model"],
+      "Error: --model requires a value.\n",
+    ],
+    [
+      ["setup", "deepseek", "--with-api-key", "--model="],
+      "Error: --model requires a value.\n",
+    ],
+    [
+      ["setup", "deepseek", "--with-api-key", "--base-url", "--offline"],
+      'Error: --base-url requires a value, but got option "--offline".\n',
+    ],
+    [
+      ["setup", "deepseek", "--with-api-key", "--base-url="],
+      "Error: --base-url requires a value.\n",
+    ],
+    [
+      ["setup", "deepseek", "--with-api-key", "--offline=1"],
+      'Error: unknown setup option "--offline=1"\n',
+    ],
+  ])(`Given invalid setup command syntax %j,
+    When the user runs Keel,
+    Then Keel reports the setup syntax problem`, async (args, message) => {
+    // Given
+    const fixture = createRuntime(args);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(message);
+  });
+
   test(`Given a user stores a provider key and default provider,
     When the user runs doctor without provider env,
     Then Keel reports config-selected provider auth without printing the secret`, async () => {
