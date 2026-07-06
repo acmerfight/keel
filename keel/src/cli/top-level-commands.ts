@@ -5,6 +5,10 @@ import {
 } from "../core/git.ts";
 import type { CliArgs } from "./args.ts";
 import { formatUndoCheckpointList } from "./output.ts";
+import {
+  runAuthCommand as runProviderAuthCommand,
+  runConfigCommand as runProviderConfigCommand,
+} from "./provider-setup-command.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { showToolOutputArtifact } from "./tool-output-artifacts.ts";
 import {
@@ -18,6 +22,22 @@ type DoctorCliArgs = Extract<CliArgs, { readonly command: "doctor" }>;
 type EvalCliArgs = Extract<CliArgs, { readonly command: "eval" }>;
 type UndoCliArgs = Extract<CliArgs, { readonly command: "undo" }>;
 type ArtifactsCliArgs = Extract<CliArgs, { readonly command: "artifacts" }>;
+type AuthCliArgs = Extract<CliArgs, { readonly command: "auth" }>;
+type ConfigCliArgs = Extract<CliArgs, { readonly command: "config" }>;
+
+export async function runAuthCommand(
+  cliArgs: AuthCliArgs,
+  runtime: CliRuntime,
+): Promise<number> {
+  return await runProviderAuthCommand(cliArgs, runtime);
+}
+
+export function runConfigCommand(
+  cliArgs: ConfigCliArgs,
+  runtime: CliRuntime,
+): number {
+  return runProviderConfigCommand(cliArgs, runtime);
+}
 
 export async function runDoctorCommand(
   cliArgs: DoctorCliArgs,

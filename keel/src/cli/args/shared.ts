@@ -69,12 +69,19 @@ export function parseBashPolicy(
 export function parseProviderId(
   raw: string | undefined,
 ): ParseResult<ProviderId> {
-  const parsedValue = requireOptionValue("--provider", raw);
+  return parseProviderIdValue("--provider", raw);
+}
+
+export function parseProviderIdValue(
+  label: string,
+  raw: string | undefined,
+): ParseResult<ProviderId> {
+  const parsedValue = requireOptionValue(label, raw);
   if (!parsedValue.ok) return parsedValue;
   const result = providerIdSchema.safeParse(parsedValue.value);
   if (!result.success) {
     return parseError(
-      "Error: --provider must be one of: fake, deepseek, kimi, qwen.",
+      `Error: ${label} must be one of: fake, deepseek, kimi, qwen.`,
     );
   }
   return parseOk(result.data);

@@ -7,6 +7,7 @@ import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
 import type { AgentEvent } from "../agent/events.ts";
 import type { InteractiveResolvedProvider } from "../cli/interactive-session/types.ts";
 import { runInteractiveSession } from "../cli/interactive-session.ts";
+import type { ModelSource } from "../cli/provider-config.ts";
 import type { CostModel } from "../core/cost.ts";
 import type { ModelMetadata } from "../core/model-metadata.ts";
 import type { ProviderId } from "../core/provider-id.ts";
@@ -103,6 +104,7 @@ export function resolvedProvider(
   costModel: CostModel | null = ZERO_COST_MODEL,
   contextCompaction?: ContextCompactionOptions,
   modelMetadata: InteractiveResolvedProvider["modelMetadata"] = TEST_MODEL_METADATA,
+  modelSource: ModelSource = "default",
 ): InteractiveResolvedProvider {
   switch (providerId) {
     case "fake":
@@ -120,6 +122,7 @@ export function resolvedProvider(
         providerId: "deepseek",
         model,
         costModel,
+        modelSource,
         modelMetadata,
         ...(contextCompaction !== undefined ? { contextCompaction } : {}),
       };
@@ -129,6 +132,7 @@ export function resolvedProvider(
         providerId: "kimi",
         model,
         costModel,
+        modelSource,
         modelMetadata,
         ...(contextCompaction !== undefined ? { contextCompaction } : {}),
       };
@@ -138,6 +142,7 @@ export function resolvedProvider(
         providerId: "qwen",
         model,
         costModel,
+        modelSource,
         modelMetadata,
         ...(contextCompaction !== undefined ? { contextCompaction } : {}),
       };

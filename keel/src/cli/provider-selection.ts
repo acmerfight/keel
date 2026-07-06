@@ -1,5 +1,14 @@
 import { isProviderId, type ProviderId } from "../core/provider-id.ts";
-import type { ModelSource, ProviderProfile } from "./provider-profiles.ts";
+import type {
+  BaseUrlSource,
+  ModelSource,
+  ProviderProfile,
+} from "./provider-profiles.ts";
+import {
+  ProviderUserConfigError,
+  readOptionalUserProviderConfig,
+  readProviderAuthApiKey,
+} from "./provider-user-config.ts";
 
 export interface ProviderConfigRuntime {
   readonly env: (key: string) => string | undefined;
@@ -10,7 +19,25 @@ export interface ProviderSelection {
   readonly model?: string;
 }
 
-export type ProviderSource = "--provider" | "KEEL_PROVIDER" | "default";
+export type ProviderSource =
+  | "--provider"
+  | "KEEL_PROVIDER"
+  | "config"
+  | "default";
+
+type ApiKeySource =
+  | { readonly type: "env"; readonly envKey: string }
+  | { readonly type: "auth"; readonly providerId: ProviderId };
+
+export interface SelectedApiKey {
+  readonly apiKey: string;
+  readonly source: ApiKeySource;
+}
+
+export interface SelectedBaseUrl {
+  readonly value: string;
+  readonly source: BaseUrlSource;
+}
 
 type PositiveIntegerEnv =
   | { readonly status: "unset" }
@@ -69,12 +96,45 @@ export function selectedProvider(
   }
   const configuredProviderId = runtime.env("KEEL_PROVIDER");
   if (configuredProviderId === undefined) {
+    const config = userProviderConfig(runtime);
+    if (config !== null) {
+      return { providerId: config.providerId, source: "config" };
+    }
     return { providerId: "deepseek", source: "default" };
   }
   if (isProviderId(configuredProviderId)) {
     return { providerId: configuredProviderId, source: "KEEL_PROVIDER" };
   }
   providerConfigError(`Error: unknown provider "${configuredProviderId}"`);
+}
+
+function userProviderConfig(runtime: ProviderConfigRuntime) {
+  try {
+    return readOptionalUserProviderConfig(runtime);
+  } catch (error) {
+    /* v8 ignore else: user config readers throw ProviderUserConfigError for expected failures. */
+    if (error instanceof ProviderUserConfigError) {
+      providerConfigError(error.message);
+    }
+    /* v8 ignore next: unexpected non-config errors should escape to the caller. */
+    throw error;
+  }
+}
+
+function providerAuthApiKey(
+  runtime: ProviderConfigRuntime,
+  providerId: ProviderId,
+): string | null {
+  try {
+    return readProviderAuthApiKey(runtime, providerId);
+  } catch (error) {
+    /* v8 ignore else: user auth readers throw ProviderUserConfigError for expected failures. */
+    if (error instanceof ProviderUserConfigError) {
+      providerConfigError(error.message);
+    }
+    /* v8 ignore next: unexpected non-config errors should escape to the caller. */
+    throw error;
+  }
 }
 
 export function selectedProviderId(
@@ -87,7 +147,8 @@ export function selectedProviderId(
 function selectedModel(
   runtime: ProviderConfigRuntime,
   selection: ProviderSelection | undefined,
-  envKey: Exclude<ModelSource, "--model" | "default">,
+  providerId: ProviderId,
+  envKey: Exclude<ModelSource, "--model" | "config" | "default">,
   defaultModel: string,
 ): { readonly model: string; readonly source: ModelSource } {
   if (selection?.model !== undefined) {
@@ -97,12 +158,17 @@ function selectedModel(
   if (envModel !== undefined) {
     return { model: envModel, source: envKey };
   }
+  const config = userProviderConfig(runtime);
+  if (config?.providerId === providerId && config.model !== undefined) {
+    return { model: config.model, source: "config" };
+  }
   return { model: defaultModel, source: "default" };
 }
 
 export function selectedModelFromProfile(
   runtime: ProviderConfigRuntime,
   selection: ProviderSelection | undefined,
+  providerId: ProviderId,
   profile: ProviderProfile,
 ): { readonly model: string; readonly source: ModelSource } {
   if (profile.modelEnvKey === undefined) {
@@ -111,33 +177,81 @@ export function selectedModelFromProfile(
   return selectedModel(
     runtime,
     selection,
+    providerId,
     profile.modelEnvKey,
     profile.defaultModel,
   );
 }
 
-export function selectPresentApiKeyEnvKey(
+export function selectedBaseUrlFromProfile(
   runtime: ProviderConfigRuntime,
-  envKeys: readonly string[],
-): string | null {
-  for (const envKey of envKeys) {
-    const value = runtime.env(envKey);
-    if (value !== undefined && value !== "") {
-      return envKey;
-    }
+  providerId: ProviderId,
+  profile: ProviderProfile,
+):
+  | { readonly status: "none" }
+  | ({ readonly status: "configured" } & SelectedBaseUrl) {
+  if (profile.baseUrlEnvKey === undefined) {
+    return { status: "none" };
   }
-  return null;
+  return {
+    status: "configured",
+    ...selectedConfiguredBaseUrlFromProfile(runtime, providerId, profile),
+  };
+}
+
+export function selectedConfiguredBaseUrlFromProfile(
+  runtime: ProviderConfigRuntime,
+  providerId: ProviderId,
+  profile: {
+    readonly baseUrlEnvKey: Exclude<BaseUrlSource, "config" | "default">;
+    readonly defaultBaseUrl: string;
+  },
+): SelectedBaseUrl {
+  const envBaseUrl = runtime.env(profile.baseUrlEnvKey);
+  if (envBaseUrl !== undefined) {
+    return {
+      value: envBaseUrl,
+      source: profile.baseUrlEnvKey,
+    };
+  }
+
+  const config = userProviderConfig(runtime);
+  if (config?.providerId === providerId && config.baseUrl !== undefined) {
+    return { value: config.baseUrl, source: "config" };
+  }
+
+  return {
+    value: profile.defaultBaseUrl,
+    source: "default",
+  };
 }
 
 export function requireApiKey(
   runtime: ProviderConfigRuntime,
+  providerId: ProviderId,
   profile: ProviderProfile,
 ): string {
+  const selected = selectedApiKey(runtime, providerId, profile);
+  if (selected !== null) {
+    return selected.apiKey;
+  }
+  providerConfigError(profile.missingApiKeyMessage);
+}
+
+export function selectedApiKey(
+  runtime: ProviderConfigRuntime,
+  providerId: ProviderId,
+  profile: ProviderProfile,
+): SelectedApiKey | null {
   for (const envKey of profile.apiKeyEnvKeys) {
     const value = runtime.env(envKey);
     if (value !== undefined && value !== "") {
-      return value;
+      return { apiKey: value, source: { type: "env", envKey } };
     }
   }
-  providerConfigError(profile.missingApiKeyMessage);
+  const authApiKey = providerAuthApiKey(runtime, providerId);
+  if (authApiKey !== null && authApiKey !== "") {
+    return { apiKey: authApiKey, source: { type: "auth", providerId } };
+  }
+  return null;
 }

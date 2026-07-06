@@ -21,6 +21,7 @@ import {
   positiveIntegerEnv,
   providerConfigError,
   requireApiKey,
+  selectedConfiguredBaseUrlFromProfile,
   selectedModelFromProfile,
   selectedProviderId,
 } from "./provider-selection.ts";
@@ -54,21 +55,23 @@ function contextCompactionOptions(
   return { contextWindowTokens: metadata.contextWindowTokens };
 }
 
-type ResolvedProviderBase<
-  Id extends InteractiveResolvedProvider["providerId"],
-  Cost extends CostModel | null,
-> = InteractiveResolvedProvider & {
-  readonly providerId: Id;
+type ResolvedProviderBase<Cost extends CostModel | null> = {
   readonly provider: LLMProvider;
   readonly costModel: Cost;
-  readonly modelSource?: ModelSource;
+} & Omit<InteractiveResolvedProvider, "costModel" | "provider">;
+
+type ResolvedApiProvider<
+  Id extends Exclude<InteractiveResolvedProvider["providerId"], "fake">,
+> = ResolvedProviderBase<CostModel | null> & {
+  readonly providerId: Id;
+  readonly modelSource: ModelSource;
 };
 
 export type ResolvedProvider =
-  | ResolvedProviderBase<"fake", CostModel>
-  | ResolvedProviderBase<"deepseek", CostModel | null>
-  | ResolvedProviderBase<"kimi", CostModel | null>
-  | ResolvedProviderBase<"qwen", CostModel | null>;
+  | (ResolvedProviderBase<CostModel> & { readonly providerId: "fake" })
+  | ResolvedApiProvider<"deepseek">
+  | ResolvedApiProvider<"kimi">
+  | ResolvedApiProvider<"qwen">;
 
 export function resolveProvider(
   userMessage: string,
@@ -93,15 +96,25 @@ export function resolveProvider(
 
     case "deepseek": {
       const profile = providerProfile("deepseek");
-      const apiKey = requireApiKey(runtime, profile);
-      const selected = selectedModelFromProfile(runtime, selection, profile);
+      const apiKey = requireApiKey(runtime, "deepseek", profile);
+      const selected = selectedModelFromProfile(
+        runtime,
+        selection,
+        "deepseek",
+        profile,
+      );
+      const baseUrl = selectedConfiguredBaseUrlFromProfile(
+        runtime,
+        "deepseek",
+        profile,
+      );
       const metadata = modelMetadata("deepseek", selected.model);
       const contextCompaction = contextCompactionOptions(runtime, metadata);
       return {
         providerId: "deepseek",
         provider: createDeepseekProvider({
           apiKey,
-          baseUrl: runtime.env(profile.baseUrlEnvKey) ?? profile.defaultBaseUrl,
+          baseUrl: baseUrl.value,
           model: selected.model,
         }),
         model: selected.model,
@@ -114,15 +127,25 @@ export function resolveProvider(
 
     case "kimi": {
       const profile = providerProfile("kimi");
-      const apiKey = requireApiKey(runtime, profile);
-      const selected = selectedModelFromProfile(runtime, selection, profile);
+      const apiKey = requireApiKey(runtime, "kimi", profile);
+      const selected = selectedModelFromProfile(
+        runtime,
+        selection,
+        "kimi",
+        profile,
+      );
+      const baseUrl = selectedConfiguredBaseUrlFromProfile(
+        runtime,
+        "kimi",
+        profile,
+      );
       const metadata = modelMetadata("kimi", selected.model);
       const contextCompaction = contextCompactionOptions(runtime, metadata);
       return {
         providerId: "kimi",
         provider: createKimiProvider({
           apiKey,
-          baseUrl: runtime.env(profile.baseUrlEnvKey) ?? profile.defaultBaseUrl,
+          baseUrl: baseUrl.value,
           model: selected.model,
         }),
         model: selected.model,
@@ -135,15 +158,25 @@ export function resolveProvider(
 
     case "qwen": {
       const profile = providerProfile("qwen");
-      const apiKey = requireApiKey(runtime, profile);
-      const selected = selectedModelFromProfile(runtime, selection, profile);
+      const apiKey = requireApiKey(runtime, "qwen", profile);
+      const selected = selectedModelFromProfile(
+        runtime,
+        selection,
+        "qwen",
+        profile,
+      );
+      const baseUrl = selectedConfiguredBaseUrlFromProfile(
+        runtime,
+        "qwen",
+        profile,
+      );
       const metadata = modelMetadata("qwen", selected.model);
       const contextCompaction = contextCompactionOptions(runtime, metadata);
       return {
         providerId: "qwen",
         provider: createQwenProvider({
           apiKey,
-          baseUrl: runtime.env(profile.baseUrlEnvKey) ?? profile.defaultBaseUrl,
+          baseUrl: baseUrl.value,
           model: selected.model,
         }),
         model: selected.model,
@@ -179,15 +212,33 @@ export function resolveInteractiveProvider(
 }
 
 function configuredModelLabel(
-  resolved: ResolvedProvider,
+  resolved: ResolvedApiProvider<"deepseek" | "kimi" | "qwen">,
   fallbackEnvKey: Exclude<ModelSource, "--model" | "default">,
 ): string {
   if (resolved.modelSource === "default") {
     return `default model "${resolved.model}"`;
   }
-  const source =
-    resolved.modelSource === "--model" ? "--model" : fallbackEnvKey;
+  const source = configuredModelSourceLabel(
+    resolved.modelSource,
+    fallbackEnvKey,
+  );
   return `configured ${source}="${resolved.model}"`;
+}
+
+function configuredModelSourceLabel(
+  source: Exclude<ModelSource, "default">,
+  fallbackEnvKey: Exclude<ModelSource, "--model" | "default">,
+): string {
+  switch (source) {
+    case "--model":
+      return "--model";
+    case "config":
+      return "config model";
+    case "DEEPSEEK_MODEL":
+    case "KIMI_MODEL":
+    case "QWEN_MODEL":
+      return fallbackEnvKey;
+  }
 }
 
 export function requireKnownCostModel(resolved: ResolvedProvider): CostModel {
