@@ -66,10 +66,21 @@ function sourceHandleForToolCall(toolCall: ToolCall): string | null {
         : `glob:${toolCall.pattern} in ${toolCall.path}`;
     case "ls":
       return toolCall.path === undefined ? "ls:." : `ls:${toolCall.path}`;
-    case "git_diff":
+    case "git_diff": {
+      const pathLabel =
+        toolCall.paths === undefined || toolCall.paths.length === 0
+          ? ""
+          : ` ${toolCall.paths.join(" ")}`;
+      if (toolCall.baseRef !== undefined) {
+        const separator = toolCall.mergeBase === true ? "..." : "..";
+        return `git_diff:${toolCall.baseRef}${separator}${
+          toolCall.headRef ?? "HEAD"
+        }${pathLabel}`;
+      }
       return toolCall.paths === undefined || toolCall.paths.length === 0
         ? "git_diff:all changes"
         : `git_diff:${toolCall.paths.join(" ")}`;
+    }
     case "bash":
     case "edit":
     case "write":

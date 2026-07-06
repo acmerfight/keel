@@ -1614,6 +1614,19 @@ describe("Context Compaction Summary Checkpoints", () => {
             paths: ["src/a.ts", "src/b.ts"],
           },
           {
+            id: "git_diff_ref_default",
+            tool: "git_diff",
+            baseRef: "HEAD~1",
+          },
+          {
+            id: "git_diff_ref_merge_path",
+            tool: "git_diff",
+            baseRef: "origin/main",
+            headRef: "HEAD",
+            mergeBase: true,
+            paths: ["src/ref.ts"],
+          },
+          {
             id: "long_bash_failure",
             tool: "bash",
             command: longCommand,
@@ -1666,6 +1679,16 @@ describe("Context Compaction Summary Checkpoints", () => {
         role: "tool",
         toolCallId: "git_diff_paths",
         content: "git diff output ".repeat(20),
+      },
+      {
+        role: "tool",
+        toolCallId: "git_diff_ref_default",
+        content: "git diff ref default output ".repeat(20),
+      },
+      {
+        role: "tool",
+        toolCallId: "git_diff_ref_merge_path",
+        content: "git diff ref merge path output ".repeat(20),
       },
       {
         role: "tool",
@@ -1725,6 +1748,8 @@ describe("Context Compaction Summary Checkpoints", () => {
     expect(summaryPrompt).toContain("ls:src");
     expect(summaryPrompt).toContain("ls:.");
     expect(summaryPrompt).toContain("git_diff:src/a.ts src/b.ts");
+    expect(summaryPrompt).toContain("git_diff:HEAD~1..HEAD");
+    expect(summaryPrompt).toContain("git_diff:origin/main...HEAD src/ref.ts");
     expect(summaryPrompt).toContain("tool-call:long_bash_failure");
     expect(summaryPrompt).toContain("tool-call:unmatched_large_result");
     expect(summaryPrompt).toContain("source-truncated/lossy before artifact");
@@ -1732,6 +1757,10 @@ describe("Context Compaction Summary Checkpoints", () => {
     expect(summaryPrompt).toContain("...");
     expect(summaryPrompt).not.toContain("tool-call:small_complete_bash");
     expect(messages[0]?.content).toContain("git_diff:src/a.ts src/b.ts");
+    expect(messages[0]?.content).toContain("git_diff:HEAD~1..HEAD");
+    expect(messages[0]?.content).toContain(
+      "git_diff:origin/main...HEAD src/ref.ts",
+    );
     expect(messages[0]?.content).not.toContain("tool-call:small_complete_bash");
   });
 

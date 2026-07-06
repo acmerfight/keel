@@ -287,6 +287,22 @@ describe("tool registry", () => {
       "git_diff src",
     );
     expect(
+      gitDiffTool.display.formatLabel({
+        baseRef: "origin/main",
+        headRef: "HEAD",
+        mergeBase: true,
+      }),
+    ).toBe("git_diff origin/main...HEAD");
+    expect(gitDiffTool.display.formatLabel({ baseRef: "HEAD~1" })).toBe(
+      "git_diff HEAD~1..HEAD",
+    );
+    expect(
+      gitDiffTool.display.formatLabel({
+        baseRef: "HEAD~1",
+        paths: ["src/app.ts"],
+      }),
+    ).toBe("git_diff HEAD~1..HEAD src/app.ts");
+    expect(
       editTool.display.formatLabel({
         path: "a.ts",
         edits: [{ oldText: "old", newText: "new" }],
@@ -602,7 +618,10 @@ describe("tool registry", () => {
       ls: { fields: ["path", "limit"], required: [] },
       glob: { fields: ["pattern", "path"], required: ["pattern"] },
       grep: { fields: ["pattern", "path"], required: ["pattern"] },
-      git_diff: { fields: ["mode", "paths"], required: [] },
+      git_diff: {
+        fields: ["mode", "baseRef", "headRef", "mergeBase", "paths"],
+        required: [],
+      },
       edit: {
         fields: ["path", "edits"],
         required: ["path", "edits"],

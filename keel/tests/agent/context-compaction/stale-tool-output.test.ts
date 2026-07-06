@@ -1347,6 +1347,45 @@ describe("Context Compaction Stale Tool Output", () => {
     expect(compacted.content).toContain("full output artifact: tool-output:");
   });
 
+  test(`Given retained git_diff output comes from ref comparisons,
+    When context compaction projects the tool output,
+    Then the preview records the compared refs as source context`, async () => {
+    // Given
+    const diffOutput = [
+      "No tracked changes matched the requested ref comparison.",
+      ...numberedLines("ref diff diagnostic", 20),
+    ].join("\n");
+
+    // When
+    const defaultHead = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_ref_default_head",
+        tool: "git_diff",
+        baseRef: "HEAD~1",
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 220,
+    });
+    const mergeBasePath = await compactRetainedToolOutput({
+      toolCall: {
+        id: "git_diff_ref_merge_path",
+        tool: "git_diff",
+        baseRef: "origin/main",
+        headRef: "HEAD",
+        mergeBase: true,
+        paths: ["src/app.ts"],
+      },
+      content: diffOutput,
+      toolOutputMaxChars: 220,
+    });
+
+    // Then
+    expect(defaultHead.content).toContain("git_diff source: HEAD~1..HEAD");
+    expect(mergeBasePath.content).toContain(
+      "git_diff source: origin/main...HEAD src/app.ts",
+    );
+  });
+
   test(`Given retained path-filtered git_diff output has a tight source budget,
     When context compaction projects the tool output,
     Then the global diff summary is kept before long source detail`, async () => {

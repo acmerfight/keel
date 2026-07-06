@@ -9,6 +9,7 @@ const recoverableToolErrorCodes = [
   "tool_edit_overlap",
   "tool_edit_no_op",
   "tool_file_too_large",
+  "tool_invalid_git_ref",
   "tool_invalid_pattern",
   "tool_invalid_ls_options",
   "tool_invalid_patch",

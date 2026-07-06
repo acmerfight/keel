@@ -23,6 +23,8 @@ const ARTIFACT_OUTPUT_MAX_BYTES = 10_000_000;
 const UNTRACKED_FILE_LIMIT = 50;
 const GIT_OPTIONAL_LOCKS_ENV = "GIT_OPTIONAL_LOCKS";
 const GIT_PAGER_ENV = "GIT_PAGER";
+const SAFE_GIT_REF_PATTERN = /^[A-Za-z0-9_./@{}~^+-]+$/u;
+const GIT_COMMIT_OID_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
 
 const DIFF_BASE_ARGS = [
   "--no-color",
@@ -39,6 +41,9 @@ type GitProcessCaptureMode = "artifact" | "metadata";
 
 export interface GitDiffOptions {
   readonly mode?: GitDiffMode;
+  readonly baseRef?: string;
+  readonly headRef?: string;
+  readonly mergeBase?: boolean;
   readonly paths?: readonly string[];
   readonly signal?: AbortSignal;
 }
@@ -75,6 +80,17 @@ interface PairedChangedTrackedEntry {
 type ChangedTrackedEntry =
   | SingleChangedTrackedEntry
   | PairedChangedTrackedEntry;
+
+interface GitDiffRefComparison {
+  readonly baseRef: string;
+  readonly headRef: string;
+  readonly mergeBase: boolean;
+}
+
+interface ResolvedGitDiffRefComparison extends GitDiffRefComparison {
+  readonly baseCommit: string;
+  readonly headCommit: string;
+}
 
 interface GitProcessOutputCapture {
   readonly append: (chunk: Buffer) => void;
@@ -409,6 +425,30 @@ function pathIgnoredError(requestedPath: string): KeelError {
   );
 }
 
+function gitRefError(message: string): KeelError {
+  return new KeelError(
+    "tool_invalid_git_ref",
+    `git_diff failed: ${message}`,
+    "Use separate safe refs such as HEAD, HEAD~1, or origin/main. Do not include ranges, whitespace, blob specs, or option prefixes.",
+  );
+}
+
+function unsafeGitRefError(requestedRef: string): KeelError {
+  return gitRefError(`unsafe git ref: ${requestedRef}`);
+}
+
+function gitRefDoesNotResolveToCommitError(requestedRef: string): KeelError {
+  return gitRefError(`git ref does not resolve to a commit: ${requestedRef}`);
+}
+
+function noCommonAncestorError(comparison: GitDiffRefComparison): KeelError {
+  return new KeelError(
+    "tool_invalid_git_ref",
+    `git_diff failed: no common ancestor between ${comparison.baseRef} and ${comparison.headRef}`,
+    "Choose refs that share a common ancestor, or compare explicit commits without mergeBase.",
+  );
+}
+
 function normalizePathFilter(
   workspacePath: string,
   requestedPath: string,
@@ -435,6 +475,51 @@ function normalizePathFilter(
     throw pathFilterError(requestedPath);
   }
   return canonicalPath;
+}
+
+function normalizeGitRef(requestedRef: string): string {
+  if (
+    requestedRef === "" ||
+    requestedRef.trim() !== requestedRef ||
+    requestedRef.includes("\0") ||
+    requestedRef.startsWith("-") ||
+    requestedRef.startsWith("/") ||
+    requestedRef.includes("..") ||
+    requestedRef.includes(":") ||
+    !SAFE_GIT_REF_PATTERN.test(requestedRef)
+  ) {
+    throw unsafeGitRefError(requestedRef);
+  }
+  return requestedRef;
+}
+
+function normalizeRefComparison(
+  options: GitDiffOptions,
+): GitDiffRefComparison | null {
+  if (options.baseRef === undefined) {
+    if (options.headRef !== undefined) {
+      throw gitRefError("headRef requires baseRef");
+    }
+    if (options.mergeBase === true) {
+      throw gitRefError("mergeBase requires baseRef");
+    }
+    return null;
+  }
+
+  if (options.mode !== undefined) {
+    throw gitRefError("ref comparison cannot be combined with mode");
+  }
+
+  return {
+    baseRef: normalizeGitRef(options.baseRef),
+    headRef: normalizeGitRef(options.headRef ?? "HEAD"),
+    mergeBase: options.mergeBase === true,
+  };
+}
+
+function refComparisonLabel(comparison: GitDiffRefComparison): string {
+  const separator = comparison.mergeBase ? "..." : "..";
+  return `Ref comparison (${comparison.baseRef}${separator}${comparison.headRef})`;
 }
 
 function normalizePathFilters(
@@ -608,6 +693,90 @@ async function runDiff(
     runOptions(config, signal),
   );
   return expectExitCode("diff", result, new Set([0, 1]));
+}
+
+async function resolveGitCommitRef(
+  workspacePath: string,
+  requestedRef: string,
+  config: readonly string[],
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  const result = await runGitProcess(
+    workspacePath,
+    ["rev-parse", "--verify", "--end-of-options", `${requestedRef}^{commit}`],
+    runOptions(config, signal, "metadata"),
+  );
+  /* v8 ignore next 3: rev-parse timeout/null exit is an OS process-control failure, not deterministic tool behavior. */
+  if (result.exitCode === null || result.timedOut) {
+    throw gitCommandFailure("rev-parse", result);
+  }
+  if (result.exitCode !== 0) {
+    throw gitRefDoesNotResolveToCommitError(requestedRef);
+  }
+
+  const commit = result.artifactStdout.text.trim();
+  /* v8 ignore next 3: git rev-parse --verify <ref>^{commit} emits a commit OID on success. */
+  if (!GIT_COMMIT_OID_PATTERN.test(commit)) {
+    throw gitRefDoesNotResolveToCommitError(requestedRef);
+  }
+  return commit;
+}
+
+async function resolveRefComparison(
+  workspacePath: string,
+  comparison: GitDiffRefComparison,
+  config: readonly string[],
+  signal: AbortSignal | undefined,
+): Promise<ResolvedGitDiffRefComparison> {
+  const [baseCommit, headCommit] = await Promise.all([
+    resolveGitCommitRef(workspacePath, comparison.baseRef, config, signal),
+    resolveGitCommitRef(workspacePath, comparison.headRef, config, signal),
+  ]);
+  return { ...comparison, baseCommit, headCommit };
+}
+
+async function mergeBaseRef(
+  workspacePath: string,
+  comparison: ResolvedGitDiffRefComparison,
+  config: readonly string[],
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  const result = await runGitProcess(
+    workspacePath,
+    ["merge-base", comparison.baseCommit, comparison.headCommit],
+    runOptions(config, signal, "metadata"),
+  );
+  /* v8 ignore next 3: merge-base timeout/null exit is an OS process-control failure, not deterministic tool behavior. */
+  if (result.exitCode === null || result.timedOut) {
+    throw gitCommandFailure("merge-base", result);
+  }
+  if (result.exitCode === 1) {
+    throw noCommonAncestorError(comparison);
+  }
+  /* v8 ignore next 3: git merge-base returns 0 for success and 1 for no common ancestor; other exits are environment faults. */
+  if (result.exitCode !== 0) {
+    throw gitCommandFailure("merge-base", result);
+  }
+  const mergeBase = result.artifactStdout.text.trim();
+  /* v8 ignore next 3: successful git merge-base emits the selected ancestor commit. */
+  if (mergeBase === "") {
+    throw noCommonAncestorError(comparison);
+  }
+  return mergeBase;
+}
+
+async function refComparisonDiffArgs(
+  workspacePath: string,
+  comparison: ResolvedGitDiffRefComparison,
+  config: readonly string[],
+  signal: AbortSignal | undefined,
+): Promise<readonly string[]> {
+  if (!comparison.mergeBase)
+    return [comparison.baseCommit, comparison.headCommit];
+  return [
+    await mergeBaseRef(workspacePath, comparison, config, signal),
+    comparison.headCommit,
+  ];
 }
 
 function parseChangedTrackedEntries(
@@ -847,7 +1016,7 @@ export async function executeGitDiff(
   options: GitDiffOptions = {},
 ): Promise<ToolResult> {
   const workspacePath = realpathSync(workspace);
-  const mode = options.mode ?? "all";
+  const refComparison = normalizeRefComparison(options);
   const paths = normalizePathFilters(workspacePath, options.paths);
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
   assertPathFiltersAllowed(workspacePath, paths, projectIgnorePolicy);
@@ -855,7 +1024,7 @@ export async function executeGitDiff(
   if (!(await isGitWorkspace(workspacePath, options.signal))) {
     return {
       content:
-        "Not in a git work tree. git_diff can only inspect current changes inside a Git repository.",
+        "Not in a git work tree. git_diff can only inspect changes inside a Git repository.",
     };
   }
 
@@ -863,54 +1032,86 @@ export async function executeGitDiff(
   const sections: string[] = [];
   const artifactSections: string[] = [];
 
-  if (mode === "all" || mode === "unstaged") {
-    const unstagedDiff = await runTrackedDiff(
+  if (refComparison !== null) {
+    const resolvedComparison = await resolveRefComparison(
       workspacePath,
-      [],
+      refComparison,
+      config,
+      options.signal,
+    );
+    const refDiff = await runTrackedDiff(
+      workspacePath,
+      await refComparisonDiffArgs(
+        workspacePath,
+        resolvedComparison,
+        config,
+        options.signal,
+      ),
       paths,
       config,
       options.signal,
       projectIgnorePolicy,
     );
-    if (unstagedDiff !== null) {
+    if (refDiff !== null) {
       appendProcessSections(
         sections,
         artifactSections,
-        "Unstaged changes",
-        unstagedDiff,
+        refComparisonLabel(refComparison),
+        refDiff,
       );
     }
-  }
+  } else {
+    const mode = options.mode ?? "all";
 
-  if (mode === "all" || mode === "staged") {
-    const stagedDiff = await runTrackedDiff(
-      workspacePath,
-      ["--cached"],
-      paths,
-      config,
-      options.signal,
-      projectIgnorePolicy,
-    );
-    if (stagedDiff !== null) {
-      appendProcessSections(
+    if (mode === "all" || mode === "unstaged") {
+      const unstagedDiff = await runTrackedDiff(
+        workspacePath,
+        [],
+        paths,
+        config,
+        options.signal,
+        projectIgnorePolicy,
+      );
+      if (unstagedDiff !== null) {
+        appendProcessSections(
+          sections,
+          artifactSections,
+          "Unstaged changes",
+          unstagedDiff,
+        );
+      }
+    }
+
+    if (mode === "all" || mode === "staged") {
+      const stagedDiff = await runTrackedDiff(
+        workspacePath,
+        ["--cached"],
+        paths,
+        config,
+        options.signal,
+        projectIgnorePolicy,
+      );
+      if (stagedDiff !== null) {
+        appendProcessSections(
+          sections,
+          artifactSections,
+          "Staged changes",
+          stagedDiff,
+        );
+      }
+    }
+
+    if (mode === "all" || mode === "unstaged") {
+      await appendUntrackedDiffs(
         sections,
         artifactSections,
-        "Staged changes",
-        stagedDiff,
+        workspacePath,
+        paths,
+        config,
+        options.signal,
+        projectIgnorePolicy,
       );
     }
-  }
-
-  if (mode === "all" || mode === "unstaged") {
-    await appendUntrackedDiffs(
-      sections,
-      artifactSections,
-      workspacePath,
-      paths,
-      config,
-      options.signal,
-      projectIgnorePolicy,
-    );
   }
 
   const content =

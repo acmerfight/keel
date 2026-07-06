@@ -275,19 +275,29 @@ const grepTool = defineTool({
 const gitDiffTool = defineTool({
   name: "git_diff",
   description: [
-    "Read current git changes in the workspace without using a shell. Output is capped and external diff/textconv/filter helpers are disabled.",
-    "Use when: inspecting staged, unstaged, or untracked workspace changes before review, summary, or verification, especially when bash is disabled.",
-    "Do not use when: comparing arbitrary refs, running git status, committing, or performing other git operations (use bash if enabled and appropriate).",
+    "Read git changes in the workspace without using a shell. Output is capped and external diff/textconv/filter helpers are disabled.",
+    "Use when: inspecting staged, unstaged, untracked, or committed ref-to-ref changes before review, summary, or verification, especially when bash is disabled.",
+    "For committed comparisons, pass baseRef and optional headRef instead of a range string; set mergeBase true for PR-style base...head diffs.",
+    "Do not use when: running git status, committing, inspecting logs, or performing other git operations (use bash if enabled and appropriate).",
     "On failure: if the workspace is not a git repository, inspect files with read/grep; if output is truncated, pass paths to narrow the diff.",
   ].join("\n"),
   args: toolArgs(gitDiffToolArgumentsSchema),
   permission: { kind: "none" },
   output: { kind: "text" },
   display: {
-    formatLabel: (args) =>
-      args.paths === undefined || args.paths.length === 0
-        ? "git_diff"
-        : `git_diff ${args.paths.join(" ")}`,
+    formatLabel: (args) => {
+      const pathSuffix =
+        args.paths === undefined || args.paths.length === 0
+          ? ""
+          : ` ${args.paths.join(" ")}`;
+      if (args.baseRef !== undefined) {
+        const separator = args.mergeBase === true ? "..." : "..";
+        return `git_diff ${args.baseRef}${separator}${
+          args.headRef ?? "HEAD"
+        }${pathSuffix}`;
+      }
+      return `git_diff${pathSuffix}`;
+    },
   },
   risk: { kind: "workspace-read" },
 });
@@ -352,7 +362,7 @@ const bashTool = defineTool({
   name: "bash",
   description: [
     "Run a trusted shell command in the workspace. Commands use the current OS user's permissions and are not constrained by Keel's gitignore file-tool policy. Output is capped to the last 20KB per stream.",
-    "Use when: the task needs commands the dedicated tools cannot do, such as running builds, tests, or git operations other than inspecting current diffs.",
+    "Use when: the task needs commands the dedicated tools cannot do, such as running builds, tests, or git operations other than inspecting current diffs and safe ref-to-ref diffs.",
     "Do not use when: a dedicated tool can do the job - prefer read, ls, glob, grep, git_diff, edit, and write for file inspection and changes.",
     "On failure: a non-zero exit code returns stdout/stderr for diagnosis - fix the command rather than retrying it unchanged; if the command timed out, raise timeoutMs (up to 60000) or run a narrower command.",
   ].join("\n"),

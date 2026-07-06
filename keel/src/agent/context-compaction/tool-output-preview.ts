@@ -173,10 +173,21 @@ function sourceLineForToolCall(
       return toolCall.path === undefined
         ? "ls source: ."
         : `ls source: ${toolCall.path}`;
-    case "git_diff":
+    case "git_diff": {
+      const pathLabel =
+        toolCall.paths === undefined || toolCall.paths.length === 0
+          ? ""
+          : ` ${toolCall.paths.join(" ")}`;
+      if (toolCall.baseRef !== undefined) {
+        const separator = toolCall.mergeBase === true ? "..." : "..";
+        return `git_diff source: ${toolCall.baseRef}${separator}${
+          toolCall.headRef ?? "HEAD"
+        }${pathLabel}`;
+      }
       return toolCall.paths === undefined || toolCall.paths.length === 0
         ? "git_diff source: all changes"
         : `git_diff source: ${toolCall.paths.join(" ")}`;
+    }
   }
   /* v8 ignore next: generic edit/write/apply_patch projections do not request source lines. */
   return null;

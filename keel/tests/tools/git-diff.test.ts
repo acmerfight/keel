@@ -46,6 +46,59 @@ function restoreEnv(
   }
 }
 
+interface ExecutableGitDiffHelperFixture {
+  readonly marker: string;
+  readonly restore: () => void;
+}
+
+async function configureExecutableGitDiffHelpers(
+  workspace: string,
+): Promise<ExecutableGitDiffHelperFixture> {
+  const marker = join(workspace, "helper-ran");
+  const helper = join(workspace, "helper.sh");
+  await writeFile(
+    helper,
+    ["#!/bin/sh", `printf ran > ${JSON.stringify(marker)}`, "exit 0", ""].join(
+      "\n",
+    ),
+    "utf8",
+  );
+  await chmod(helper, 0o755);
+  execFileSync("git", ["config", "diff.external", helper], {
+    cwd: workspace,
+  });
+  execFileSync("git", ["config", "core.fsmonitor", helper], {
+    cwd: workspace,
+  });
+  execFileSync("git", ["config", "filter.keel.clean", helper], {
+    cwd: workspace,
+  });
+  execFileSync("git", ["config", "filter.keel.process", helper], {
+    cwd: workspace,
+  });
+  execFileSync("git", ["config", "filter.keel.required", "true"], {
+    cwd: workspace,
+  });
+  const previousEnv = new Map<string, string | undefined>([
+    [GIT_EXTERNAL_DIFF_ENV, process.env[GIT_EXTERNAL_DIFF_ENV]],
+    [GIT_CONFIG_COUNT_ENV, process.env[GIT_CONFIG_COUNT_ENV]],
+    [GIT_CONFIG_KEY_0_ENV, process.env[GIT_CONFIG_KEY_0_ENV]],
+    [GIT_CONFIG_VALUE_0_ENV, process.env[GIT_CONFIG_VALUE_0_ENV]],
+    [GIT_CONFIG_PARAMETERS_ENV, process.env[GIT_CONFIG_PARAMETERS_ENV]],
+    [GIT_CONFIG_GLOBAL_ENV, process.env[GIT_CONFIG_GLOBAL_ENV]],
+    [GIT_CONFIG_SYSTEM_ENV, process.env[GIT_CONFIG_SYSTEM_ENV]],
+  ]);
+  process.env[GIT_EXTERNAL_DIFF_ENV] = helper;
+  process.env[GIT_CONFIG_COUNT_ENV] = "1";
+  process.env[GIT_CONFIG_KEY_0_ENV] = "core.fsmonitor";
+  process.env[GIT_CONFIG_VALUE_0_ENV] = helper;
+  process.env[GIT_CONFIG_PARAMETERS_ENV] = `core.fsmonitor=${helper}`;
+  process.env[GIT_CONFIG_GLOBAL_ENV] = helper;
+  process.env[GIT_CONFIG_SYSTEM_ENV] = helper;
+
+  return { marker, restore: () => restoreEnv(previousEnv) };
+}
+
 describe("git_diff tool", () => {
   test(`Given staged unstaged and untracked changes,
     When git_diff inspects the workspace with bash disabled,
@@ -113,6 +166,158 @@ describe("git_diff tool", () => {
       await expect(executeGitDiff(workspace)).resolves.toEqual({
         content: "No git changes found.",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two committed refs in a clean workspace,
+    When git_diff compares the refs,
+    Then it returns the committed diff without shell approval`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-refs-");
+    await writeFile(join(workspace, "tracked.txt"), "after\n", "utf8");
+    execFileSync("git", ["add", "tracked.txt"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "update tracked"], {
+      cwd: workspace,
+    });
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "compare_refs",
+          tool: "git_diff",
+          baseRef: "HEAD~1",
+          headRef: "HEAD",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toContain("Ref comparison (HEAD~1..HEAD):");
+      expect(result.content).toContain(
+        "diff --git a/tracked.txt b/tracked.txt",
+      );
+      expect(result.content).toContain("-before");
+      expect(result.content).toContain("+after");
+      expect(result.content).not.toContain("Unstaged changes:");
+      expect(result.content).not.toContain("Staged changes:");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given baseRef is set without headRef,
+    When git_diff compares the ref to the default head,
+    Then it uses HEAD as the newer side`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-default-head-");
+    await writeFile(join(workspace, "tracked.txt"), "after\n", "utf8");
+    execFileSync("git", ["add", "tracked.txt"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "update tracked"], {
+      cwd: workspace,
+    });
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "compare_default_head",
+          tool: "git_diff",
+          baseRef: "HEAD~1",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toContain("Ref comparison (HEAD~1..HEAD):");
+      expect(result.content).toContain("+after");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a ref comparison has no file changes,
+    When git_diff compares the same commit,
+    Then it reports that no changes were found`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-empty-refs-");
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "empty_ref_diff",
+          tool: "git_diff",
+          baseRef: "HEAD",
+          headRef: "HEAD",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toBe("No git changes found.");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given divergent branches and a requested merge-base comparison,
+    When git_diff compares baseRef to headRef with mergeBase enabled,
+    Then it returns the head branch diff from the merge base`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-merge-base-");
+    execFileSync("git", ["branch", "target"], { cwd: workspace });
+    execFileSync("git", ["checkout", "-q", "-b", "feature"], {
+      cwd: workspace,
+    });
+    await writeFile(join(workspace, "tracked.txt"), "feature\n", "utf8");
+    execFileSync("git", ["add", "tracked.txt"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "feature change"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["checkout", "-q", "target"], { cwd: workspace });
+    await writeFile(join(workspace, "tracked.txt"), "target\n", "utf8");
+    execFileSync("git", ["add", "tracked.txt"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "target change"], {
+      cwd: workspace,
+    });
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "compare_merge_base",
+          tool: "git_diff",
+          baseRef: "target",
+          headRef: "feature",
+          mergeBase: true,
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toContain("Ref comparison (target...feature):");
+      expect(result.content).toContain(
+        "diff --git a/tracked.txt b/tracked.txt",
+      );
+      expect(result.content).toContain("-before");
+      expect(result.content).toContain("+feature");
+      expect(result.content).not.toContain("+target");
+      expect(result.content).not.toContain("-target");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -657,52 +862,9 @@ describe("git_diff tool", () => {
     Then external helpers are disabled before the diff runs`, async () => {
     // Given
     const workspace = await createGitWorkspace("keel-git-diff-helpers-");
-    const marker = join(workspace, "helper-ran");
-    const helper = join(workspace, "helper.sh");
-    await writeFile(
-      helper,
-      [
-        "#!/bin/sh",
-        `printf ran > ${JSON.stringify(marker)}`,
-        "exit 0",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(helper, 0o755);
-    execFileSync("git", ["config", "diff.external", helper], {
-      cwd: workspace,
-    });
-    execFileSync("git", ["config", "core.fsmonitor", helper], {
-      cwd: workspace,
-    });
-    execFileSync("git", ["config", "filter.keel.clean", helper], {
-      cwd: workspace,
-    });
-    execFileSync("git", ["config", "filter.keel.process", helper], {
-      cwd: workspace,
-    });
-    execFileSync("git", ["config", "filter.keel.required", "true"], {
-      cwd: workspace,
-    });
+    const helperFixture = await configureExecutableGitDiffHelpers(workspace);
     await writeFile(join(workspace, ".gitattributes"), "*.txt filter=keel\n");
     await writeFile(join(workspace, "tracked.txt"), "after helper\n", "utf8");
-    const previousEnv = new Map<string, string | undefined>([
-      [GIT_EXTERNAL_DIFF_ENV, process.env[GIT_EXTERNAL_DIFF_ENV]],
-      [GIT_CONFIG_COUNT_ENV, process.env[GIT_CONFIG_COUNT_ENV]],
-      [GIT_CONFIG_KEY_0_ENV, process.env[GIT_CONFIG_KEY_0_ENV]],
-      [GIT_CONFIG_VALUE_0_ENV, process.env[GIT_CONFIG_VALUE_0_ENV]],
-      [GIT_CONFIG_PARAMETERS_ENV, process.env[GIT_CONFIG_PARAMETERS_ENV]],
-      [GIT_CONFIG_GLOBAL_ENV, process.env[GIT_CONFIG_GLOBAL_ENV]],
-      [GIT_CONFIG_SYSTEM_ENV, process.env[GIT_CONFIG_SYSTEM_ENV]],
-    ]);
-    process.env[GIT_EXTERNAL_DIFF_ENV] = helper;
-    process.env[GIT_CONFIG_COUNT_ENV] = "1";
-    process.env[GIT_CONFIG_KEY_0_ENV] = "core.fsmonitor";
-    process.env[GIT_CONFIG_VALUE_0_ENV] = helper;
-    process.env[GIT_CONFIG_PARAMETERS_ENV] = `core.fsmonitor=${helper}`;
-    process.env[GIT_CONFIG_GLOBAL_ENV] = helper;
-    process.env[GIT_CONFIG_SYSTEM_ENV] = helper;
 
     try {
       // When
@@ -720,9 +882,247 @@ describe("git_diff tool", () => {
       // Then
       expect(result.ok).toBe(true);
       expect(result.content).toContain("+after helper");
-      expect(existsSync(marker)).toBe(false);
+      expect(existsSync(helperFixture.marker)).toBe(false);
     } finally {
-      restoreEnv(previousEnv);
+      helperFixture.restore();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given executable git diff helpers are configured,
+    When git_diff compares committed refs,
+    Then external helpers are disabled before the diff runs`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-ref-helpers-");
+    await writeFile(join(workspace, "tracked.txt"), "after helper\n", "utf8");
+    execFileSync("git", ["add", "tracked.txt"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "update tracked"], {
+      cwd: workspace,
+    });
+
+    const helperFixture = await configureExecutableGitDiffHelpers(workspace);
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "safe_ref_diff",
+          tool: "git_diff",
+          baseRef: "HEAD~1",
+          headRef: "HEAD",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toContain("+after helper");
+      expect(existsSync(helperFixture.marker)).toBe(false);
+    } finally {
+      helperFixture.restore();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a ref comparison tries to pass options ranges or blob specs,
+    When git_diff validates the refs,
+    Then it reports a recoverable tool failure before running git`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-unsafe-ref-");
+    const unsafeRefs = [
+      "--output=leak.diff",
+      "/tmp/not-a-ref",
+      "bad ref",
+      "bad\0ref",
+      "HEAD..HEAD",
+      "HEAD:tracked.txt",
+    ];
+
+    try {
+      for (const baseRef of unsafeRefs) {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          allowBash: false,
+          toolCall: {
+            id: "unsafe_ref_diff",
+            tool: "git_diff",
+            baseRef,
+            headRef: "HEAD",
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toContain("Tool failed: git_diff failed");
+        expect(result.content).toContain("unsafe git ref");
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a ref comparison names tree objects or revision peels,
+    When git_diff resolves the refs,
+    Then it rejects the comparison before diffing`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-non-commit-ref-");
+    const treeId = execFileSync("git", ["rev-parse", "HEAD^{tree}"], {
+      cwd: workspace,
+      encoding: "utf8",
+    }).trim();
+    const nonCommitRefs = [
+      { baseRef: "HEAD^{tree}", headRef: "HEAD" },
+      { baseRef: treeId, headRef: "HEAD" },
+      { baseRef: "HEAD", headRef: treeId },
+    ];
+
+    try {
+      for (const toolCall of nonCommitRefs) {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          allowBash: false,
+          toolCall: {
+            id: "non_commit_ref_diff",
+            tool: "git_diff",
+            ...toolCall,
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toContain("Tool failed: git_diff failed");
+        expect(result.content).toContain("does not resolve to a commit");
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a merge-base ref comparison has unrelated histories,
+    When git_diff compares the refs,
+    Then it reports a recoverable no-common-ancestor failure`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-diff-unrelated-merge-base-",
+    );
+    const originalBranch = execFileSync("git", ["branch", "--show-current"], {
+      cwd: workspace,
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["checkout", "-q", "--orphan", "unrelated"], {
+      cwd: workspace,
+    });
+    await writeFile(join(workspace, "tracked.txt"), "unrelated\n", "utf8");
+    execFileSync("git", ["add", "tracked.txt"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "unrelated root"], {
+      cwd: workspace,
+    });
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "unrelated_merge_base_diff",
+          tool: "git_diff",
+          baseRef: originalBranch,
+          headRef: "unrelated",
+          mergeBase: true,
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("Tool failed: git_diff failed");
+      expect(result.content).toContain(
+        `no common ancestor between ${originalBranch} and unrelated`,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given current-change mode is combined with a ref comparison,
+    When git_diff validates the options,
+    Then it reports a recoverable tool failure before running git`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-ref-mode-");
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "ref_mode_diff",
+          tool: "git_diff",
+          mode: "staged",
+          baseRef: "HEAD~1",
+          headRef: "HEAD",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("Tool failed: git_diff failed");
+      expect(result.content).toContain(
+        "ref comparison cannot be combined with mode",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given ref-only options are missing baseRef,
+    When git_diff validates the options,
+    Then it reports a recoverable tool failure before running git`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-missing-base-");
+
+    try {
+      // When
+      const headOnlyResult = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "head_without_base",
+          tool: "git_diff",
+          headRef: "HEAD",
+        },
+      });
+      const mergeBaseOnlyResult = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "merge_base_without_base",
+          tool: "git_diff",
+          mergeBase: true,
+        },
+      });
+
+      // Then
+      expect(headOnlyResult.ok).toBe(false);
+      expect(headOnlyResult.content).toContain("Tool failed: git_diff failed");
+      expect(headOnlyResult.content).toContain("headRef requires baseRef");
+      expect(mergeBaseOnlyResult.ok).toBe(false);
+      expect(mergeBaseOnlyResult.content).toContain(
+        "Tool failed: git_diff failed",
+      );
+      expect(mergeBaseOnlyResult.content).toContain(
+        "mergeBase requires baseRef",
+      );
+    } finally {
       await rm(workspace, { recursive: true, force: true });
     }
   });

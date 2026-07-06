@@ -79,7 +79,28 @@ export const gitDiffToolArgumentsSchema = z
       z
         .enum(["all", "unstaged", "staged"])
         .describe(
-          "Which current git changes to inspect. Defaults to all, which includes unstaged, staged, and untracked changes.",
+          "Which current git changes to inspect. Defaults to all, which includes unstaged, staged, and untracked changes. Do not combine with baseRef.",
+        ),
+    ),
+    baseRef: optionalToolArgument(
+      z
+        .string()
+        .describe(
+          "Optional older/base Git ref to compare from, such as HEAD~1 or origin/main. Must be a single safe ref, not a range, option, blob spec, or shell string.",
+        ),
+    ),
+    headRef: optionalToolArgument(
+      z
+        .string()
+        .describe(
+          "Optional newer/head Git ref to compare to when baseRef is set. Defaults to HEAD. Must be a single safe ref.",
+        ),
+    ),
+    mergeBase: optionalToolArgument(
+      z
+        .boolean()
+        .describe(
+          "When true with baseRef, compare the merge base of baseRef and headRef to headRef, matching PR-style base...head diffs.",
         ),
     ),
     paths: optionalToolArgument(
