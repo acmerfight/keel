@@ -88,7 +88,10 @@ cover, then spend the budget where coverage is thin — uncovered edges, the
 adversarial and safety surface, and past incidents. Re-test a covered path only
 when a different seam (black box vs unit) or input could expose what the
 author's test cannot; a case that only re-confirms an existing green is waste.
-Keep just enough happy-path coverage to anchor the contract.
+The same rule bars reproducing what CI already gates — the target's own test
+suite, lint, typecheck, build, coverage: read the verdict with `gh pr checks`
+instead of re-running it locally, which yields nothing this workflow does not
+already assume. Keep just enough happy-path coverage to anchor the contract.
 
 Apply a task-quality gate to every case before it counts:
 
