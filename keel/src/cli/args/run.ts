@@ -1,5 +1,6 @@
 import { type BashMode, bashModeFromPolicy } from "../../permissions/bash.ts";
 import {
+  isRecognizedOptionToken,
   type ParseResult,
   parseBashPolicy,
   parseError,
@@ -41,7 +42,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   let transcriptFile: string | undefined;
   let ephemeral = false;
   let sessionId: string | undefined;
-  let resumeSessionId: string | undefined;
+  let resumeSession: RunCliArgs["resumeSession"] | undefined;
   let forkSessionId: string | undefined;
   let forkBeforeMessage: string | undefined;
   let forkPoints = false;
@@ -243,13 +244,21 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     }
 
     if (arg === "--resume") {
+      const nextArg = args[index + 1];
+      if (
+        nextArg === undefined ||
+        isRecognizedOptionToken(nextArg, RUN_OPTIONS)
+      ) {
+        resumeSession = { kind: "latest" };
+        continue;
+      }
       const parsed = requireSeparatedOptionValue(
         "--resume",
-        args[index + 1],
+        nextArg,
         RUN_OPTIONS,
       );
       if (!parsed.ok) return parsed;
-      resumeSessionId = parsed.value;
+      resumeSession = { kind: "id", sessionId: parsed.value };
       skipNext = true;
       continue;
     }
@@ -260,7 +269,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
         arg.slice(resumePrefix.length),
       );
       if (!parsed.ok) return parsed;
-      resumeSessionId = parsed.value;
+      resumeSession = { kind: "id", sessionId: parsed.value };
       continue;
     }
 
@@ -325,13 +334,13 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     break;
   }
 
-  if (sessionId !== undefined && resumeSessionId !== undefined) {
+  if (sessionId !== undefined && resumeSession !== undefined) {
     return parseError("Error: --session cannot be combined with --resume.");
   }
   if (
     ephemeral &&
     (sessionId !== undefined ||
-      resumeSessionId !== undefined ||
+      resumeSession !== undefined ||
       forkSessionId !== undefined ||
       forkBeforeMessage !== undefined ||
       forkPoints)
@@ -340,7 +349,8 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       "Error: --ephemeral cannot be combined with --session, --resume, --fork, --fork-before-message, or --fork-points.",
     );
   }
-  if (forkPoints && resumeSessionId === undefined) {
+  const hasResumeSessionId = resumeSession?.kind === "id";
+  if (forkPoints && !hasResumeSessionId) {
     return parseError("Error: --fork-points requires --resume <id>.");
   }
   if (forkPoints && forkSessionId !== undefined) {
@@ -363,13 +373,13 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   }
   if (
     forkBeforeMessage !== undefined &&
-    (resumeSessionId === undefined || forkSessionId === undefined)
+    (!hasResumeSessionId || forkSessionId === undefined)
   ) {
     return parseError(
       "Error: --fork-before-message requires --resume <id> --fork <new-id>.",
     );
   }
-  if (forkSessionId !== undefined && resumeSessionId === undefined) {
+  if (forkSessionId !== undefined && !hasResumeSessionId) {
     return parseError("Error: --fork requires --resume <id>.");
   }
 
@@ -382,7 +392,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     ...(transcriptFile !== undefined ? { transcriptFile } : {}),
     ephemeral,
     ...(sessionId !== undefined ? { sessionId } : {}),
-    ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
+    ...(resumeSession !== undefined ? { resumeSession } : {}),
     ...(forkSessionId !== undefined ? { forkSessionId } : {}),
     ...(forkBeforeMessage !== undefined ? { forkBeforeMessage } : {}),
     ...(forkPoints ? { forkPoints } : {}),

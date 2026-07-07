@@ -247,7 +247,6 @@ describe("CLI Args", () => {
     ["--report", "--model"],
     ["--transcript", "--session"],
     ["--session", "--resume"],
-    ["--resume", "--fork"],
     ["--fork", "--fork-before-message"],
     ["--skill", "--provider"],
   ])(`Given the %s run option is followed by the %s flag,
