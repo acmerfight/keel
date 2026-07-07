@@ -23,6 +23,8 @@ import {
   bashApprovalGrantKey,
   bashModeExposesTool,
 } from "../permissions/bash.ts";
+import { executeGitDiff } from "../tools/git-diff.ts";
+import { executeGitStatus } from "../tools/git-status.ts";
 import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
 import { formatBashProjectApprovalList } from "./bash-project-approvals.ts";
 import {
@@ -102,6 +104,55 @@ function formatActiveWorkflowSkill(
     return "No workflow skill selected.\n";
   }
   return `Workflow skill: ${workflowSkill.name} (${workflowSkill.relativePath})\n`;
+}
+
+const NON_GIT_DIFF_MESSAGE =
+  "Not in a git work tree. /diff can only inspect changes inside a Git repository.";
+
+type InteractiveDiffInspection =
+  | {
+      readonly kind: "non-git";
+      readonly message: string;
+    }
+  | {
+      readonly kind: "status-only";
+      readonly statusOutput: string;
+    }
+  | {
+      readonly kind: "status-and-diff";
+      readonly statusOutput: string;
+      readonly diffOutput: string;
+    };
+
+function formatInteractiveDiffOutput(
+  inspection: InteractiveDiffInspection,
+): string {
+  switch (inspection.kind) {
+    case "non-git":
+      return `${inspection.message}\n`;
+    case "status-only":
+      return `${inspection.statusOutput}\n`;
+    case "status-and-diff":
+      return `${inspection.statusOutput}\n\n${inspection.diffOutput}\n`;
+  }
+}
+
+async function inspectInteractiveDiff(
+  workspace: string,
+): Promise<InteractiveDiffInspection> {
+  const status = await executeGitStatus(workspace);
+  if (!status.inGitWorkTree) {
+    return { kind: "non-git", message: NON_GIT_DIFF_MESSAGE };
+  }
+  const diff = await executeGitDiff(workspace, { mode: "all" });
+  if (!diff.hasChanges) {
+    return { kind: "status-only", statusOutput: status.content };
+  }
+  return {
+    kind: "status-and-diff",
+    statusOutput: status.content,
+    diffOutput: diff.content,
+  };
 }
 
 function modelSwitchUnknownContextMessage(
@@ -438,6 +489,19 @@ export async function runInteractiveSession(
             recoveryActions: statusRecoveryActions(),
           }),
         );
+        consumeQueuedInputLines([rawInput]);
+        continue;
+      }
+      if (interactiveCommand?.kind === "diff") {
+        try {
+          options.writeStdout(
+            formatInteractiveDiffOutput(
+              await inspectInteractiveDiff(options.workspace),
+            ),
+          );
+        } catch (error) {
+          options.writeStderr(formatInteractiveCommandFailure(error));
+        }
         consumeQueuedInputLines([rawInput]);
         continue;
       }

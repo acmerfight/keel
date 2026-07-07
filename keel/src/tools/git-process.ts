@@ -1,6 +1,6 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
-import { lstatSync } from "node:fs";
-import { isAbsolute, posix, resolve, win32 } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { isAbsolute, posix, relative, resolve, sep, win32 } from "node:path";
 import type { Readable } from "node:stream";
 import { KeelError } from "../core/error.ts";
 import {
@@ -36,6 +36,12 @@ export interface RunGitOptions {
   readonly timeoutMs?: number;
   readonly config?: readonly string[];
   readonly captureMode?: GitProcessCaptureMode;
+}
+
+export interface GitWorkTreeScope {
+  readonly rootPath: string;
+  readonly workspacePathspec: string;
+  readonly pathspecs: readonly string[];
 }
 
 interface GitProcessOutputCapture {
@@ -449,26 +455,48 @@ export function gitPathspecArgs(paths: readonly string[]): readonly string[] {
 
 export function gitPathVisibleToProvider(
   workspacePath: string,
+  gitPathBasePath: string,
   projectIgnorePolicy: ProjectIgnorePolicy,
   path: string,
 ): boolean {
-  const absolutePath = resolve(workspacePath, path);
+  const absolutePath = resolve(gitPathBasePath, path);
   /* v8 ignore next: git emits paths relative to the queried work tree; this guards unexpected git output. */
   if (!isInsideWorkspace(workspacePath, absolutePath)) return false;
   return !projectIgnorePolicy.isIgnored(absolutePath, false);
 }
 
-export async function isGitWorkspace(
+function posixRelativePath(from: string, to: string): string {
+  return relative(from, to).split(sep).join(posix.sep);
+}
+
+function joinGitPath(basePath: string, path: string): string {
+  if (basePath === "") return path;
+  if (path === ".") return basePath;
+  return `${basePath}/${path}`;
+}
+
+export async function resolveGitWorkTreeScope(
   toolName: string,
   workspacePath: string,
+  workspaceRelativePaths: readonly string[],
   signal: AbortSignal | undefined,
-): Promise<boolean> {
+): Promise<GitWorkTreeScope | null> {
   const result = await runGitProcess(
     toolName,
     workspacePath,
-    ["rev-parse", "--is-inside-work-tree"],
+    ["rev-parse", "--show-toplevel"],
     gitRunOptions(undefined, signal, "metadata"),
   );
-  if (result.exitCode !== 0) return false;
-  return result.artifactStdout.text.trim() === "true";
+  if (result.exitCode !== 0) return null;
+
+  const rootPath = realpathSync(result.artifactStdout.text.trim());
+  const workspaceFromRoot = posixRelativePath(rootPath, workspacePath);
+  const workspacePathspec = workspaceFromRoot === "" ? "." : workspaceFromRoot;
+  const pathspecs =
+    workspaceRelativePaths.length === 0
+      ? [workspacePathspec]
+      : workspaceRelativePaths.map((path) =>
+          joinGitPath(workspaceFromRoot, path),
+        );
+  return { rootPath, workspacePathspec, pathspecs };
 }

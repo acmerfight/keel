@@ -7,8 +7,8 @@ import {
   gitPathspecArgs,
   gitPathVisibleToProvider,
   gitRunOptions,
-  isGitWorkspace,
   normalizeGitPathFilters,
+  resolveGitWorkTreeScope,
   runGitProcess,
 } from "./git-process.ts";
 import { limitCountedOutput } from "./output-limit.ts";
@@ -21,6 +21,10 @@ const STATUS_CODE_PATTERN = /^[.MADRCUTU?!]{2}$/u;
 export interface GitStatusOptions {
   readonly paths?: readonly string[];
   readonly signal?: AbortSignal;
+}
+
+export interface GitStatusResult extends ToolResult {
+  readonly inGitWorkTree: boolean;
 }
 
 interface GitStatusBranch {
@@ -256,12 +260,18 @@ function entryPaths(entry: GitStatusEntry): readonly string[] {
 
 function visibleStatusEntries(
   workspacePath: string,
+  gitRootPath: string,
+  projectIgnorePolicy: ReturnType<typeof createProjectIgnorePolicy>,
   parsed: ParsedGitStatus,
 ): readonly GitStatusEntry[] {
-  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
   return parsed.entries.filter((entry) =>
     entryPaths(entry).every((path) =>
-      gitPathVisibleToProvider(workspacePath, projectIgnorePolicy, path),
+      gitPathVisibleToProvider(
+        workspacePath,
+        gitRootPath,
+        projectIgnorePolicy,
+        path,
+      ),
     ),
   );
 }
@@ -368,14 +378,27 @@ function formatGitStatus(
 export async function executeGitStatus(
   workspace: string,
   options: GitStatusOptions = {},
-): Promise<ToolResult> {
+): Promise<GitStatusResult> {
   const workspacePath = realpathSync(workspace);
   const paths = normalizeGitPathFilters(
     "git_status",
     workspacePath,
     options.paths,
   );
-  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  const scope = await resolveGitWorkTreeScope(
+    "git_status",
+    workspacePath,
+    paths,
+    options.signal,
+  );
+  if (scope === null) {
+    return {
+      inGitWorkTree: false,
+      content:
+        "Not in a git work tree. git_status can only inspect changes inside a Git repository.",
+    };
+  }
+  const projectIgnorePolicy = createProjectIgnorePolicy(scope.rootPath);
   assertGitPathFiltersAllowed(
     "git_status",
     workspacePath,
@@ -383,16 +406,9 @@ export async function executeGitStatus(
     projectIgnorePolicy,
   );
 
-  if (!(await isGitWorkspace("git_status", workspacePath, options.signal))) {
-    return {
-      content:
-        "Not in a git work tree. git_status can only inspect changes inside a Git repository.",
-    };
-  }
-
   const result = await runGitProcess(
     "git_status",
-    workspacePath,
+    scope.rootPath,
     [
       "status",
       "--porcelain=v2",
@@ -400,7 +416,7 @@ export async function executeGitStatus(
       "--untracked-files=all",
       "--renames",
       "-z",
-      ...gitPathspecArgs(paths),
+      ...gitPathspecArgs(scope.pathspecs),
     ],
     gitRunOptions(undefined, options.signal, "metadata"),
   );
@@ -412,7 +428,12 @@ export async function executeGitStatus(
   ).artifactStdout;
   const parsed = parseGitStatusOutput(output.text);
   const limited = limitCountedOutput(
-    visibleStatusEntries(workspacePath, parsed),
+    visibleStatusEntries(
+      workspacePath,
+      scope.rootPath,
+      projectIgnorePolicy,
+      parsed,
+    ),
     STATUS_ENTRY_LIMIT,
   );
   const content = formatGitStatus(
@@ -422,12 +443,13 @@ export async function executeGitStatus(
     output.truncated,
   );
   if (limited.truncated) {
-    return { content, sourceTruncated: true };
+    return { content, inGitWorkTree: true, sourceTruncated: true };
   }
   if (output.truncated) {
-    return { content, sourceTruncated: true };
+    return { content, inGitWorkTree: true, sourceTruncated: true };
   }
   return {
     content,
+    inGitWorkTree: true,
   };
 }

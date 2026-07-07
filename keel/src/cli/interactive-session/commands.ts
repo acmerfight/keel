@@ -36,6 +36,10 @@ interface StatusCommand {
   readonly kind: "status";
 }
 
+interface DiffCommand {
+  readonly kind: "diff";
+}
+
 type ApprovalsCommand =
   | {
       readonly kind: "approvals";
@@ -69,6 +73,7 @@ export type InteractiveCommand =
   | ModelCommand
   | SkillCommand
   | StatusCommand
+  | DiffCommand
   | ApprovalsCommand
   | ManualCompactCommand
   | ForkPointsCommand
@@ -91,6 +96,7 @@ export function formatInteractiveHelp(): string {
     "                     Switch the active provider/model for later prompts.",
     "  /skill             Show the active workflow skill.",
     "  /status            Show session state and recovery commands.",
+    "  /diff              Show current git status and diff.",
     "  /approvals         List active bash approvals.",
     "  /approvals revoke <index>",
     "                     Revoke one active bash approval.",
@@ -331,6 +337,18 @@ export function parseInteractiveCommand(
       };
     }
     return { kind: "status" };
+  }
+
+  const diffMatch = /^\/diff(?:\s+(.*))?$/u.exec(trimmed);
+  if (diffMatch !== null) {
+    const extraArgs = diffMatch[1]?.trim();
+    if (extraArgs !== undefined && extraArgs !== "") {
+      return {
+        kind: "invalid",
+        message: "Error: /diff does not accept arguments.",
+      };
+    }
+    return { kind: "diff" };
   }
 
   const approvalsMatch = /^\/approvals(?:\s+(.*))?$/u.exec(trimmed);

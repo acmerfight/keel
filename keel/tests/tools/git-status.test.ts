@@ -57,6 +57,10 @@ while (
   }
 }
 if (args[0] === "rev-parse") {
+  if (args.includes("--show-toplevel")) {
+    writeSync(1, process.cwd() + "\\n");
+    process.exit(0);
+  }
   writeSync(1, "true\\n");
   process.exit(0);
 }
@@ -183,6 +187,106 @@ describe("git_status tool", () => {
       expect(result.content).toContain("Untracked files:");
       expect(result.content).toContain("- src/app.ts");
       expect(result.content).not.toContain("docs/guide.md");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the workspace is a git repository subdirectory,
+    When git_status inspects current changes,
+    Then it reports only changes inside that workspace`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-status-subdir-");
+    await mkdir(join(workspace, "src"));
+    await writeFile(join(workspace, "root.txt"), "before\n", "utf8");
+    await writeFile(join(workspace, "src", "app.ts"), "before\n", "utf8");
+    execFileSync("git", ["add", "root.txt", "src/app.ts"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["commit", "-m", "add nested files"], {
+      cwd: workspace,
+    });
+    await writeFile(join(workspace, "root.txt"), "after\n", "utf8");
+    await writeFile(join(workspace, "src", "app.ts"), "after\n", "utf8");
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace: join(workspace, "src"),
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "subdir_status",
+          tool: "git_status",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toContain("Unstaged changes:");
+      expect(result.content).toContain("- M src/app.ts");
+      expect(result.content).not.toContain("root.txt");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the workspace is a git repository subdirectory,
+    When git_status inspects explicit workspace-relative path filters,
+    Then it scopes each filter under the workspace`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-status-subdir-paths-");
+    await mkdir(join(workspace, "src"));
+    await mkdir(join(workspace, "src", "nested"));
+    await writeFile(join(workspace, "src", "app.ts"), "before\n", "utf8");
+    await writeFile(
+      join(workspace, "src", "nested", "app.ts"),
+      "before\n",
+      "utf8",
+    );
+    execFileSync("git", ["add", "src/app.ts", "src/nested/app.ts"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["commit", "-m", "add nested workspace files"], {
+      cwd: workspace,
+    });
+    await writeFile(join(workspace, "src", "app.ts"), "after\n", "utf8");
+    await writeFile(
+      join(workspace, "src", "nested", "app.ts"),
+      "after\n",
+      "utf8",
+    );
+
+    try {
+      // When
+      const currentWorkspaceResult = await executeToolCall({
+        workspace: join(workspace, "src"),
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "subdir_dot_status",
+          tool: "git_status",
+          paths: ["."],
+        },
+      });
+      const nestedResult = await executeToolCall({
+        workspace: join(workspace, "src"),
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "subdir_nested_status",
+          tool: "git_status",
+          paths: ["nested"],
+        },
+      });
+
+      // Then
+      expect(currentWorkspaceResult.ok).toBe(true);
+      expect(currentWorkspaceResult.content).toContain("- M src/app.ts");
+      expect(currentWorkspaceResult.content).toContain("- M src/nested/app.ts");
+      expect(nestedResult.ok).toBe(true);
+      expect(nestedResult.content).not.toContain("- M src/app.ts");
+      expect(nestedResult.content).toContain("- M src/nested/app.ts");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
