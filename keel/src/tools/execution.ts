@@ -6,6 +6,11 @@ import {
   type RecoverableToolErrorCode,
 } from "../core/error.ts";
 import type { RecordLastBatchCheckpointOperation } from "../core/git.ts";
+import {
+  formatSessionTaskProgressToolResult,
+  type SessionTaskProgress,
+  sessionTaskProgressFromPlan,
+} from "../core/task-progress.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { executeApplyPatch } from "./apply-patch.ts";
 import { executeBash } from "./bash.ts";
@@ -18,7 +23,13 @@ import { executeLs } from "./ls.ts";
 import { executeRead } from "./read.ts";
 import type { ProjectInstructionVisibilityState } from "./scoped-project-instructions.ts";
 import { ScopedProjectInstructionsNotVisibleError } from "./scoped-project-instructions.ts";
-import { builtinToolCallSchema, type ToolCall } from "./tool-call.ts";
+import {
+  builtinToolCallSchema,
+  type InvalidToolCall,
+  isInvalidToolCall,
+  type ToolCall,
+  type ValidToolCall,
+} from "./tool-call.ts";
 import { invalidBuiltinToolCallError } from "./tool-error.ts";
 import type { ToolResult } from "./types.ts";
 import {
@@ -27,16 +38,26 @@ import {
 } from "./workspace-path.ts";
 import { executeWrite } from "./write.ts";
 
-type ReadToolCall = Extract<ToolCall, { readonly tool: "read" }>;
-type LsToolCall = Extract<ToolCall, { readonly tool: "ls" }>;
-type GlobToolCall = Extract<ToolCall, { readonly tool: "glob" }>;
-type GrepToolCall = Extract<ToolCall, { readonly tool: "grep" }>;
-type GitStatusToolCall = Extract<ToolCall, { readonly tool: "git_status" }>;
-type GitDiffToolCall = Extract<ToolCall, { readonly tool: "git_diff" }>;
-type EditToolCall = Extract<ToolCall, { readonly tool: "edit" }>;
-type WriteToolCall = Extract<ToolCall, { readonly tool: "write" }>;
-type ApplyPatchToolCall = Extract<ToolCall, { readonly tool: "apply_patch" }>;
-type BashToolCall = Extract<ToolCall, { readonly tool: "bash" }>;
+type ReadToolCall = Extract<ValidToolCall, { readonly tool: "read" }>;
+type LsToolCall = Extract<ValidToolCall, { readonly tool: "ls" }>;
+type GlobToolCall = Extract<ValidToolCall, { readonly tool: "glob" }>;
+type GrepToolCall = Extract<ValidToolCall, { readonly tool: "grep" }>;
+type GitStatusToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "git_status" }
+>;
+type GitDiffToolCall = Extract<ValidToolCall, { readonly tool: "git_diff" }>;
+type EditToolCall = Extract<ValidToolCall, { readonly tool: "edit" }>;
+type WriteToolCall = Extract<ValidToolCall, { readonly tool: "write" }>;
+type ApplyPatchToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "apply_patch" }
+>;
+type BashToolCall = Extract<ValidToolCall, { readonly tool: "bash" }>;
+type UpdatePlanToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "update_plan" }
+>;
 
 interface BuiltinToolExecutionContext {
   readonly workspace: string;
@@ -63,6 +84,7 @@ export interface ToolExecution {
   readonly mutatedTargetPaths?: readonly string[];
   readonly visibleProjectInstructionPaths?: readonly string[];
   readonly checkpointOperations?: readonly RecordLastBatchCheckpointOperation[];
+  readonly taskProgressUpdate?: SessionTaskProgress;
 }
 
 export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
@@ -122,10 +144,23 @@ function unhandledToolFailureMessage(
   return `Tool failed: ${toolMessage}\nRecovery: Inspect the failed tool request and current workspace state, then retry with corrected arguments or choose another approach.`;
 }
 
+function invalidToolCallFailureMessage(toolCall: InvalidToolCall): string {
+  return `Tool failed: update_plan failed: invalid arguments: ${toolCall.validationError}\nRecovery: ${toolCall.recovery}`;
+}
+
 function scopedProjectInstructionsFailureMessage(
   error: ScopedProjectInstructionsNotVisibleError,
 ): string {
   return `Tool failed: ${error.message}\nRecovery: ${error.recovery}`;
+}
+
+function executeUpdatePlanTool(toolCall: UpdatePlanToolCall): ToolExecution {
+  const taskProgress = sessionTaskProgressFromPlan(toolCall.plan);
+  return {
+    content: formatSessionTaskProgressToolResult(taskProgress),
+    ok: true,
+    taskProgressUpdate: taskProgress,
+  };
 }
 
 function executeReadTool(
@@ -365,7 +400,7 @@ async function executeBashTool(
 
 function executeBuiltinToolCall(
   context: BuiltinToolExecutionContext,
-  toolCall: ToolCall,
+  toolCall: ValidToolCall,
 ): ToolExecution | Promise<ToolExecution> {
   const parsed = builtinToolCallSchema.safeParse(toolCall);
   if (!parsed.success) {
@@ -373,6 +408,8 @@ function executeBuiltinToolCall(
   }
 
   switch (parsed.data.tool) {
+    case "update_plan":
+      return executeUpdatePlanTool(parsed.data);
     case "read":
       return executeReadTool(context, parsed.data);
     case "ls":
@@ -400,6 +437,12 @@ export async function executeToolCall(
   options: ExecuteToolCallOptions,
 ): Promise<ToolExecution> {
   const { toolCall, ...context } = options;
+  if (isInvalidToolCall(toolCall)) {
+    return {
+      content: invalidToolCallFailureMessage(toolCall),
+      ok: false,
+    };
+  }
   try {
     return await executeBuiltinToolCall(context, toolCall);
   } catch (error) {

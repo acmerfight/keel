@@ -1,5 +1,9 @@
 import type { WorkflowSkill } from "../../agent/prompt.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
+import type {
+  SessionTask,
+  SessionTaskProgress,
+} from "../../core/task-progress.ts";
 import type { Message } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
 
@@ -113,6 +117,19 @@ export interface ModelSwitchSessionRecord {
   readonly consumedInputIds?: readonly string[];
 }
 
+interface TaskProgressSessionRecord {
+  readonly schemaVersion: 2;
+  readonly type: "task_progress";
+  readonly timestamp: string;
+  readonly messageOrdinal: number;
+  readonly tasks: readonly SessionTask[];
+}
+
+export interface SessionTaskProgressCheckpoint {
+  readonly messageOrdinal: number;
+  readonly taskProgress: SessionTaskProgress;
+}
+
 interface InputAdmittedSessionRecord {
   readonly schemaVersion: 2;
   readonly type: "input_admitted";
@@ -161,12 +178,14 @@ export interface SnapshotSessionRecord {
   readonly bashApprovalGrants?: readonly BashApprovalGrant[];
   readonly activeModel?: SessionModelSelection;
   readonly modelSwitches?: readonly SessionModelSwitch[];
+  readonly taskProgressCheckpoints?: readonly SessionTaskProgressCheckpoint[];
 }
 
 export type SessionMutationRecord =
   | AppendSessionRecord
   | ReplaceSessionRecord
   | ModelSwitchSessionRecord
+  | TaskProgressSessionRecord
   | InputAdmittedSessionRecord
   | InputConsumedSessionRecord
   | BashApprovalGrantedSessionRecord
@@ -198,6 +217,7 @@ export interface SessionState {
   readonly storedMessages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
   readonly bashApprovalGrants: readonly BashApprovalGrant[];
+  readonly taskProgress: SessionTaskProgress;
   readonly activeModel?: SessionModelSelection;
   readonly modelSwitches: readonly SessionModelSwitch[];
   readonly workflowSkill?: WorkflowSkill;
@@ -250,6 +270,8 @@ export interface SessionReplayState {
   readonly storedMessages: StoredMessage[];
   readonly pendingInputsById: Map<string, SessionQueuedInput>;
   readonly bashApprovalGrants: BashApprovalGrant[];
+  taskProgress: SessionTaskProgress;
+  readonly taskProgressCheckpoints: SessionTaskProgressCheckpoint[];
   activeModel?: SessionModelSelection;
   readonly modelSwitches: SessionModelSwitch[];
 }

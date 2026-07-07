@@ -1,4 +1,8 @@
 import { conversationCheckpointSummaryFromMessage } from "../agent/context-compaction.ts";
+import {
+  formatSessionTaskProgressSummary,
+  type SessionTaskProgress,
+} from "../core/task-progress.ts";
 import type { Message } from "../llm/types.ts";
 import { sanitizeStatusLineText } from "./output.ts";
 import { redactTextForPersistence } from "./persistence-redaction.ts";
@@ -22,6 +26,7 @@ export interface SessionStatusSnapshotOptions {
   readonly messageCount: number;
   readonly pendingInputCount: number;
   readonly bashApprovalCount: number;
+  readonly taskProgress: SessionTaskProgress;
   readonly modelSwitchCount: number;
   readonly undoCheckpoints: readonly { readonly restoredLabel: string }[];
   readonly recoveryActions: readonly SessionStatusRecoveryAction[];
@@ -98,6 +103,7 @@ export function formatSessionStatusSnapshot(
     `  messages: ${options.messageCount}`,
     `  pending inputs: ${options.pendingInputCount}`,
     `  bash approvals: ${options.bashApprovalCount}`,
+    `  tasks: ${formatStatusText(formatSessionTaskProgressSummary(options.taskProgress))}`,
     `  model switches: ${options.modelSwitchCount}`,
     `  latest checkpoint: ${latestCheckpointSummary(options.messages) ?? "none"}`,
     `  undo checkpoints: ${formatUndoCheckpointStatus(options.undoCheckpoints)}`,
@@ -105,6 +111,20 @@ export function formatSessionStatusSnapshot(
     "",
   ];
   return lines.join("\n");
+}
+
+export function formatSessionTasks(taskProgress: SessionTaskProgress): string {
+  if (taskProgress.tasks.length === 0) {
+    return "No session tasks.\n";
+  }
+  return [
+    "Session tasks:",
+    ...taskProgress.tasks.map(
+      (task, index) =>
+        `  ${index + 1}. [${task.status}] ${formatStatusText(task.step)}`,
+    ),
+    "",
+  ].join("\n");
 }
 
 function formatRecoveryActions(

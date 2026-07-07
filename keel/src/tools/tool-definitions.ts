@@ -9,6 +9,7 @@ import {
   grepToolArgumentsSchema,
   lsToolArgumentsSchema,
   readToolArgumentsSchema,
+  updatePlanToolArgumentsSchema,
   writeToolArgumentsSchema,
 } from "./tool-arguments.ts";
 import { invalidBuiltinToolCallError } from "./tool-error.ts";
@@ -46,7 +47,8 @@ interface ToolDisplay<Args> {
 type ToolRisk =
   | { readonly kind: "workspace-read" }
   | { readonly kind: "workspace-write"; readonly destructive: boolean }
-  | { readonly kind: "trusted-shell" };
+  | { readonly kind: "trusted-shell" }
+  | { readonly kind: "agent-state" };
 
 interface BuiltinToolCallInput {
   readonly id: string;
@@ -399,7 +401,26 @@ const bashTool = defineTool({
   risk: { kind: "trusted-shell" },
 });
 
+const updatePlanTool = defineTool({
+  name: "update_plan",
+  description: [
+    "Update the visible task progress for the current agent session.",
+    "Use when: work is non-trivial, has multiple meaningful steps, or the user asks to track tasks.",
+    "Provide the full replacement list each time. Use statuses pending, in_progress, and completed. Keep at most one task in_progress. Pass an empty list to clear task progress.",
+    "Do not use when: the task is a trivial one-step answer or no meaningful progress state has changed.",
+    "On failure: fix the plan shape to use non-empty step strings, valid statuses, and at most one in_progress task before retrying.",
+  ].join("\n"),
+  args: toolArgs(updatePlanToolArgumentsSchema),
+  permission: { kind: "none" },
+  output: { kind: "text" },
+  display: {
+    formatLabel: () => "update_plan",
+  },
+  risk: { kind: "agent-state" },
+});
+
 export const builtinTools = [
+  updatePlanTool,
   readTool,
   lsTool,
   globTool,
@@ -413,6 +434,7 @@ export const builtinTools = [
 ] as const;
 
 const rawBuiltinToolCallSchema = z.discriminatedUnion("tool", [
+  updatePlanTool.toolCallSchema,
   readTool.toolCallSchema,
   lsTool.toolCallSchema,
   globTool.toolCallSchema,

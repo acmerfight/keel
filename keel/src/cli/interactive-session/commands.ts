@@ -36,6 +36,10 @@ interface StatusCommand {
   readonly kind: "status";
 }
 
+interface TasksCommand {
+  readonly kind: "tasks";
+}
+
 interface DiffCommand {
   readonly kind: "diff";
 }
@@ -73,6 +77,7 @@ export type InteractiveCommand =
   | ModelCommand
   | SkillCommand
   | StatusCommand
+  | TasksCommand
   | DiffCommand
   | ApprovalsCommand
   | ManualCompactCommand
@@ -96,6 +101,7 @@ export function formatInteractiveHelp(): string {
     "                     Switch the active provider/model for later prompts.",
     "  /skill             Show the active workflow skill.",
     "  /status            Show session state and recovery commands.",
+    "  /tasks             Show current session tasks.",
     "  /diff              Show current git status and diff.",
     "  /approvals         List active bash approvals.",
     "  /approvals revoke <index>",
@@ -337,6 +343,18 @@ export function parseInteractiveCommand(
       };
     }
     return { kind: "status" };
+  }
+
+  const tasksMatch = /^\/tasks(?:\s+(.*))?$/u.exec(trimmed);
+  if (tasksMatch !== null) {
+    const extraArgs = tasksMatch[1]?.trim();
+    if (extraArgs !== undefined && extraArgs !== "") {
+      return {
+        kind: "invalid",
+        message: "Error: /tasks does not accept arguments.",
+      };
+    }
+    return { kind: "tasks" };
   }
 
   const diffMatch = /^\/diff(?:\s+(.*))?$/u.exec(trimmed);

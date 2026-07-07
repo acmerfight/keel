@@ -1191,6 +1191,7 @@ function projectToolOutputPreview(
     case "edit":
     case "write":
     case "apply_patch":
+    case "update_plan":
     case "unknown":
       return boundedText(text, maxChars);
   }

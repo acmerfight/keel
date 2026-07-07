@@ -48,6 +48,7 @@ import {
   persistSessionMessages,
   persistSessionModelSwitch,
   persistSessionQueuedInput,
+  persistSessionTaskProgress,
   resumeSessionStore,
   type SessionLock,
   type SessionModelSelection,
@@ -207,6 +208,7 @@ export async function runInteractiveCli(
       let sessionPersistence:
         | {
             readonly initialMessages: readonly Message[];
+            readonly initialTaskProgress: SessionState["taskProgress"];
             readonly initialModelSelection?: SessionModelSelection;
             readonly initialModelSwitchCount: number;
             readonly initialQueuedInputs: readonly SessionQueuedInput[];
@@ -220,6 +222,10 @@ export async function runInteractiveCli(
               reason: SessionPersistenceReason,
               consumedInputIds: readonly string[],
             ) => void;
+            readonly persistTaskProgress: (update: {
+              readonly taskProgress: SessionState["taskProgress"];
+              readonly messageOrdinal: number;
+            }) => void;
             readonly persistModelSwitch: (switchRecord: {
               readonly from: SessionModelSelection | null;
               readonly to: SessionModelSelection;
@@ -311,6 +317,9 @@ export async function runInteractiveCli(
         const initialSession = session;
         sessionPersistence = {
           initialMessages: initialSession?.messages ?? [],
+          initialTaskProgress: initialSession?.taskProgress ?? {
+            tasks: [],
+          },
           ...(initialModelSelection !== undefined
             ? { initialModelSelection }
             : {}),
@@ -347,6 +356,17 @@ export async function runInteractiveCli(
               runtime,
               reason,
               consumedInputIds,
+            });
+          },
+          persistTaskProgress: (update: {
+            readonly taskProgress: SessionState["taskProgress"];
+            readonly messageOrdinal: number;
+          }) => {
+            persistSessionTaskProgress({
+              session: ensureActiveSession(),
+              taskProgress: update.taskProgress,
+              messageOrdinal: update.messageOrdinal,
+              runtime,
             });
           },
           persistModelSwitch: (switchRecord: {

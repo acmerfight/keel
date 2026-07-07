@@ -6,6 +6,7 @@ import type { CostReport } from "../../agent/events.ts";
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
 import type { ReadVisibilityState } from "../../agent/read-visibility.ts";
 import type { CostModel } from "../../core/cost.ts";
+import type { SessionTaskProgress } from "../../core/task-progress.ts";
 import type { Message, Usage } from "../../llm/types.ts";
 import type { ProjectInstructionVisibilityState } from "../../tools/scoped-project-instructions.ts";
 import {
@@ -32,6 +33,7 @@ export interface ManualCompactContext {
   readonly readVisibility: ReadVisibilityState;
   readonly projectInstructionVisibility: ProjectInstructionVisibilityState;
   readonly nextPostCompactionReadToolCallId: () => string;
+  readonly taskProgress: SessionTaskProgress;
   readonly options: InteractiveSessionOptions;
   readonly recordCompactionCost: (
     usage: Usage,
@@ -52,6 +54,7 @@ export async function executeManualCompaction(
     readVisibility,
     projectInstructionVisibility,
     nextPostCompactionReadToolCallId,
+    taskProgress,
     options,
     recordCompactionCost,
   } = ctx;
@@ -75,6 +78,7 @@ export async function executeManualCompaction(
       ...(options.toolOutputArtifacts !== undefined
         ? { toolOutputArtifacts: options.toolOutputArtifacts }
         : {}),
+      taskProgress,
     });
     if (signal.aborted) {
       messages.splice(0, messages.length, ...messagesBeforeCompact);

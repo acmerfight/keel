@@ -1,3 +1,4 @@
+import type { SessionTaskProgress } from "../core/task-progress.ts";
 import type { ToolCall, Usage } from "../llm/types.ts";
 import type { ContextCompactionStats } from "./context-compaction.ts";
 import type {
@@ -38,6 +39,11 @@ export type AgentEvent =
       readonly type: "tool_end";
       readonly toolCall: ToolCall;
       readonly ok: boolean;
+    }
+  | {
+      readonly type: "task_progress_updated";
+      readonly taskProgress: SessionTaskProgress;
+      readonly messageOrdinal: number;
     }
   | {
       readonly type: "tool_output_artifact";

@@ -2,6 +2,11 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import type { AgentEvent } from "../../src/agent/events.ts";
+import {
+  printAgentEvents,
+  printStableInteractiveAgentEvents,
+} from "../../src/cli/output.ts";
 import { runCli } from "../../src/testing/cli-harness.ts";
 
 describe("CLI Tool Progress", () => {
@@ -161,5 +166,71 @@ describe("CLI Tool Progress", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  test(`Given an agent updates visible task progress,
+    When classic CLI output prints agent events,
+    Then stderr shows the deterministic task summary`, async () => {
+    // Given
+    async function* events(): AsyncIterable<AgentEvent> {
+      yield {
+        type: "task_progress_updated",
+        messageOrdinal: 2,
+        taskProgress: {
+          tasks: [{ step: "Inspect", status: "in_progress" }],
+        },
+      };
+      yield {
+        type: "end",
+        usage: {
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 0,
+          outputTokens: 0,
+        },
+        turns: 1,
+        stopReason: "completed",
+      };
+    }
+    let stderr = "";
+
+    // When
+    await printAgentEvents(events(), {
+      writeStdout() {},
+      writeStderr(text) {
+        stderr += text;
+      },
+    });
+
+    // Then
+    expect(stderr).toBe("Task progress: 0/1 completed; current: Inspect\n");
+  });
+
+  test(`Given an agent updates visible task progress,
+    When stable interactive output prints agent events,
+    Then the status line shows the deterministic task summary`, async () => {
+    // Given
+    async function* events(): AsyncIterable<AgentEvent> {
+      yield {
+        type: "task_progress_updated",
+        messageOrdinal: 2,
+        taskProgress: {
+          tasks: [{ step: "Verify", status: "completed" }],
+        },
+      };
+    }
+    const statusLines: string[] = [];
+
+    // When
+    await printStableInteractiveAgentEvents(events(), {
+      writeStdout() {},
+      writeAssistantHeader() {},
+      writeStatusLine(text) {
+        statusLines.push(text);
+      },
+    });
+
+    // Then
+    expect(statusLines).toEqual(["Task progress: 1/1 completed"]);
   });
 });

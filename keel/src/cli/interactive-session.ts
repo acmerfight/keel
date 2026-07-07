@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import type { CostReport } from "../agent/events.ts";
+import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { runAgentTurn } from "../agent/loop.ts";
 import { postCompactionReadToolCallId } from "../agent/post-compaction-read-id.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
@@ -16,6 +16,12 @@ import {
   restoreLastEditCheckpoint,
   restoreUndoCheckpointsThrough,
 } from "../core/git.ts";
+import {
+  copySessionTaskProgress,
+  emptySessionTaskProgress,
+  type SessionTaskProgress,
+  sessionTaskProgressesEqual,
+} from "../core/task-progress.ts";
 import type { Message, Usage } from "../llm/types.ts";
 import {
   type BashApprovalGrant,
@@ -72,7 +78,10 @@ import type {
   ProviderSelection,
 } from "./interactive-session/types.ts";
 import { formatUndoCheckpointList } from "./output.ts";
-import { formatSessionStatusSnapshot } from "./session-status-format.ts";
+import {
+  formatSessionStatusSnapshot,
+  formatSessionTasks,
+} from "./session-status-format.ts";
 import type { SessionModelSelection } from "./session-store.ts";
 
 export type {
@@ -203,6 +212,23 @@ export async function runInteractiveSession(
       : {}),
   });
   const messages: Message[] = [...(options.initialMessages ?? [])];
+  let taskProgress = copySessionTaskProgress(
+    options.initialTaskProgress ?? emptySessionTaskProgress(),
+  );
+  const updateTaskProgress = (next: SessionTaskProgress): void => {
+    taskProgress = copySessionTaskProgress(next);
+  };
+  const observeTaskProgressEvents = async function* (
+    stream: AsyncIterable<AgentEvent>,
+    onUpdate: (next: SessionTaskProgress, messageOrdinal: number) => void,
+  ): AsyncGenerator<AgentEvent> {
+    for await (const event of stream) {
+      if (event.type === "task_progress_updated") {
+        onUpdate(event.taskProgress, event.messageOrdinal);
+      }
+      yield event;
+    }
+  };
   let resolved: InteractiveResolvedProvider | null = null;
   let inactiveBashApprovalGrants: BashApprovalGrant[] = [
     ...(options.initialBashApprovalGrants ?? []),
@@ -484,11 +510,17 @@ export async function runInteractiveSession(
             bashApprovalCount:
               activeBashApprovalGrants().length +
               activeProjectBashApprovalGrants.length,
+            taskProgress,
             modelSwitchCount,
             undoCheckpoints: listUndoCheckpoints(options.workspace),
             recoveryActions: statusRecoveryActions(),
           }),
         );
+        consumeQueuedInputLines([rawInput]);
+        continue;
+      }
+      if (interactiveCommand?.kind === "tasks") {
+        options.writeStdout(formatSessionTasks(taskProgress));
         consumeQueuedInputLines([rawInput]);
         continue;
       }
@@ -676,6 +708,7 @@ export async function runInteractiveSession(
                 projectInstructionVisibility,
                 nextPostCompactionReadToolCallId: () =>
                   postCompactionReadToolCallId(postCompactionReadSequence++),
+                taskProgress,
                 options,
                 recordCompactionCost,
               });
@@ -770,6 +803,7 @@ export async function runInteractiveSession(
             projectInstructionVisibility,
             nextPostCompactionReadToolCallId: () =>
               postCompactionReadToolCallId(postCompactionReadSequence++),
+            taskProgress,
             options,
             recordCompactionCost,
           });
@@ -848,6 +882,11 @@ export async function runInteractiveSession(
       }
       resolved = resolveActiveProvider(userMessage);
       const messagesBeforeTurn = messages.slice();
+      const taskProgressBeforeTurn = copySessionTaskProgress(taskProgress);
+      const taskProgressUpdatesDuringTurn: {
+        readonly taskProgress: SessionTaskProgress;
+        readonly messageOrdinal: number;
+      }[] = [];
       const projectInstructionPathsBeforeTurnOldestFirst = [
         ...projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
       ]
@@ -864,66 +903,80 @@ export async function runInteractiveSession(
 
       try {
         const remainingCostUsd = remainingMaxCostUsd();
-        const stream = runAgentTurn({
-          workspace: options.workspace,
-          provider: resolved.provider,
-          messages,
-          systemPrompt,
-          signal: turnAbortController.signal,
-          allowBash: bashModeExposesTool(options.cliArgs.bashMode),
-          stopPolicy: defaultStopPolicy(),
-          ...(bashPermission !== undefined ? { bashPermission } : {}),
-          ...(shouldTrackInteractiveCost(options.cliArgs)
-            ? {
-                costTracking: {
-                  model: options.requireKnownCostModel(resolved),
-                  ...(remainingCostUsd !== undefined
-                    ? { maxCostUsd: remainingCostUsd }
-                    : {}),
-                },
+        const stream = observeTaskProgressEvents(
+          runAgentTurn({
+            workspace: options.workspace,
+            provider: resolved.provider,
+            messages,
+            systemPrompt,
+            signal: turnAbortController.signal,
+            allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+            stopPolicy: defaultStopPolicy(),
+            taskProgress,
+            ...(bashPermission !== undefined ? { bashPermission } : {}),
+            ...(shouldTrackInteractiveCost(options.cliArgs)
+              ? {
+                  costTracking: {
+                    model: options.requireKnownCostModel(resolved),
+                    ...(remainingCostUsd !== undefined
+                      ? { maxCostUsd: remainingCostUsd }
+                      : {}),
+                  },
+                }
+              : {}),
+            ...(resolved.contextCompaction !== undefined
+              ? { contextCompaction: resolved.contextCompaction }
+              : {}),
+            ...(options.toolOutputArtifacts !== undefined
+              ? { toolOutputArtifacts: options.toolOutputArtifacts }
+              : {}),
+            readVisibility,
+            projectInstructionVisibility,
+            recordCheckpointOperations: (operations) => {
+              checkpointOperations.push(...operations);
+            },
+            drainInjectedUserMessages: () => {
+              const queuedLines = lineReader
+                .drainLinesAfter(turnStartSequence)
+                .map(trimQueuedLine)
+                .filter((queuedLine) => queuedLine.line !== "");
+              if (deferRemainingInjectedInput) {
+                deferredInputLines.push(...queuedLines);
+                return [];
               }
-            : {}),
-          ...(resolved.contextCompaction !== undefined
-            ? { contextCompaction: resolved.contextCompaction }
-            : {}),
-          ...(options.toolOutputArtifacts !== undefined
-            ? { toolOutputArtifacts: options.toolOutputArtifacts }
-            : {}),
-          readVisibility,
-          projectInstructionVisibility,
-          recordCheckpointOperations: (operations) => {
-            checkpointOperations.push(...operations);
+              const firstCommandIndex = queuedLines.findIndex(
+                (queuedLine) =>
+                  parseInteractiveCommand(queuedLine.line) !== null,
+              );
+              const injectableLines =
+                firstCommandIndex < 0
+                  ? queuedLines
+                  : queuedLines.slice(0, firstCommandIndex);
+              drainedInjectedLines.push(...injectableLines);
+              if (firstCommandIndex >= 0) {
+                deferRemainingInjectedInput = true;
+                deferredInputLines.push(
+                  ...queuedLines.slice(firstCommandIndex),
+                );
+              }
+              return injectableLines.map((content) => ({
+                role: "user",
+                content: content.line,
+              }));
+            },
+          }),
+          (next, messageOrdinal) => {
+            updateTaskProgress(next);
+            taskProgressUpdatesDuringTurn.push({
+              taskProgress: copySessionTaskProgress(next),
+              messageOrdinal,
+            });
           },
-          drainInjectedUserMessages: () => {
-            const queuedLines = lineReader
-              .drainLinesAfter(turnStartSequence)
-              .map(trimQueuedLine)
-              .filter((queuedLine) => queuedLine.line !== "");
-            if (deferRemainingInjectedInput) {
-              deferredInputLines.push(...queuedLines);
-              return [];
-            }
-            const firstCommandIndex = queuedLines.findIndex(
-              (queuedLine) => parseInteractiveCommand(queuedLine.line) !== null,
-            );
-            const injectableLines =
-              firstCommandIndex < 0
-                ? queuedLines
-                : queuedLines.slice(0, firstCommandIndex);
-            drainedInjectedLines.push(...injectableLines);
-            if (firstCommandIndex >= 0) {
-              deferRemainingInjectedInput = true;
-              deferredInputLines.push(...queuedLines.slice(firstCommandIndex));
-            }
-            return injectableLines.map((content) => ({
-              role: "user",
-              content: content.line,
-            }));
-          },
-        });
+        );
         const finalEnd = await options.printAgentEvents(stream);
         if (turnAbortController.signal.aborted) {
           messages.splice(0, messages.length, ...messagesBeforeTurn);
+          updateTaskProgress(taskProgressBeforeTurn);
           projectInstructionVisibility.clear();
           projectInstructionVisibility.markInstructionPathsVisible(
             projectInstructionPathsBeforeTurnOldestFirst,
@@ -942,6 +995,23 @@ export async function runInteractiveSession(
           ...queuedInputIds([rawInput]),
           ...queuedInputIds(drainedInjectedLines),
         ]);
+        if (options.persistTaskProgress !== undefined) {
+          let lastPersistedTurnProgress = taskProgressBeforeTurn;
+          for (const update of taskProgressUpdatesDuringTurn) {
+            if (
+              sessionTaskProgressesEqual(
+                update.taskProgress,
+                lastPersistedTurnProgress,
+              )
+            ) {
+              continue;
+            }
+            options.persistTaskProgress(update);
+            lastPersistedTurnProgress = copySessionTaskProgress(
+              update.taskProgress,
+            );
+          }
+        }
         options.writeStdout("\n");
         const cumulativeCost =
           finalEnd === undefined ? undefined : recordTurnEnd(finalEnd);
@@ -964,6 +1034,7 @@ export async function runInteractiveSession(
           throw error;
         }
         messages.splice(0, messages.length, ...messagesBeforeTurn);
+        updateTaskProgress(taskProgressBeforeTurn);
         projectInstructionVisibility.clear();
         projectInstructionVisibility.markInstructionPathsVisible(
           projectInstructionPathsBeforeTurnOldestFirst,

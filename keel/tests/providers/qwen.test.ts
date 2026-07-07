@@ -357,6 +357,7 @@ describe("Qwen Provider", () => {
     expect(capturedBody?.model).toBe("qwen3.7-plus");
     expect(capturedBody?.tool_choice).toBe("auto");
     expect(capturedBody?.tools?.map((tool) => tool.function.name)).toEqual([
+      "update_plan",
       "read",
       "ls",
       "glob",

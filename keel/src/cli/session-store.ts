@@ -33,5 +33,6 @@ export {
   persistSessionMessages,
   persistSessionModelSwitch,
   persistSessionQueuedInput,
+  persistSessionTaskProgress,
   resumeSessionStore,
 } from "./session-store/store.ts";

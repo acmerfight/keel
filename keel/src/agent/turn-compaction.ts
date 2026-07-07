@@ -1,3 +1,4 @@
+import type { SessionTaskProgress } from "../core/task-progress.ts";
 import type { LLMProvider, Message } from "../llm/types.ts";
 import {
   addRequestAccounting,
@@ -36,6 +37,7 @@ export interface CompactionConfig {
   readonly signal: AbortSignal;
   readonly contextCompaction: ContextCompactionOptions | undefined;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
+  readonly taskProgress?: () => SessionTaskProgress;
   readonly costTracking: CostTrackingOptions | undefined;
   readonly onContextCompacted: (
     messages: Message[],
@@ -91,6 +93,7 @@ async function attemptContextCompaction(
     ...projectSessionLedgerToProviderMessages(streamOptions.getLedger()),
   ];
   const requestMetadata = requestMetadataForStream(streamOptions);
+  const taskProgress = config.taskProgress?.();
   const result = await compactMessages({
     provider: config.provider,
     systemPrompt: config.systemPrompt,
@@ -106,6 +109,7 @@ async function attemptContextCompaction(
       ? { contextAccounting: state.contextAccounting }
       : {}),
     requestMetadata,
+    ...(taskProgress !== undefined ? { taskProgress } : {}),
     ...(options?.allowCurrentToolOutputCompaction === true
       ? { allowCurrentToolOutputCompaction: true }
       : {}),

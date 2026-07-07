@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
+import {
+  copySessionTaskProgress,
+  emptySessionTaskProgress,
+  type SessionTaskProgress,
+  sessionTaskProgressesEqual,
+} from "../../core/task-progress.ts";
 import type { Message } from "../../llm/types.ts";
 import {
   type BashApprovalGrant,
@@ -28,6 +34,7 @@ import {
   type SessionRecords,
   type SessionState,
   type SessionStoreRuntime,
+  type SessionTaskProgressCheckpoint,
   type StoredMessage,
   type WorkflowSkill,
 } from "./model.ts";
@@ -41,6 +48,7 @@ import {
   parseProviderVisibleMessages,
   redactBashApprovalGrantForPersistence,
   redactSessionQueuedInputForPersistence,
+  redactSessionTaskProgressForPersistence,
   redactStoredMessageForPersistence,
   redactWorkflowSkillForPersistence,
   validateCompletedTranscript,
@@ -54,7 +62,9 @@ import {
   hasMessagePrefix,
   messageArraysEqual,
   rebaseReplayModelSwitchesAfterReplace,
+  rebaseReplayTaskProgressAfterReplace,
   replaceReplayMessages,
+  replaceReplayTaskProgress,
   replayStateForSession,
   sessionRecordWithConsumedInputIds,
   sessionStateFromReplay,
@@ -104,6 +114,7 @@ function createEmptySessionStore(options: {
     storedMessages: [],
     pendingInputsById: new Map(),
     bashApprovalGrants: [],
+    taskProgress: emptySessionTaskProgress(),
     ...(options.workflowSkill !== undefined
       ? { workflowSkill: copyWorkflowSkill(options.workflowSkill) }
       : {}),
@@ -165,6 +176,20 @@ function modelSwitchesForForkPoint(options: {
   ];
 }
 
+function taskProgressForForkPoint(options: {
+  readonly source: SessionState;
+  readonly forkedMessageCount: number;
+}): SessionTaskProgress {
+  let taskProgress = emptySessionTaskProgress();
+  for (const checkpoint of replayStateForSession(options.source)
+    .taskProgressCheckpoints) {
+    if (checkpoint.messageOrdinal <= options.forkedMessageCount) {
+      taskProgress = checkpoint.taskProgress;
+    }
+  }
+  return copySessionTaskProgress(taskProgress);
+}
+
 export function forkSessionStore(options: {
   readonly source: SessionState;
   readonly targetSessionId: string;
@@ -208,6 +233,16 @@ export function forkSessionStore(options: {
     timestamp,
   });
   const activeModel = modelSwitches.at(-1)?.to;
+  const taskProgress = taskProgressForForkPoint({
+    source: options.source,
+    forkedMessageCount: storedMessages.length,
+  });
+  const taskProgressCheckpoints = sessionTaskProgressesEqual(
+    taskProgress,
+    emptySessionTaskProgress(),
+  )
+    ? []
+    : [{ messageOrdinal: 0, taskProgress }];
   const session = createEmptySessionStore({
     sessionId: options.targetSessionId,
     workspace: options.source.workspace,
@@ -229,6 +264,8 @@ export function forkSessionStore(options: {
       ? { activeModel: copySessionModelSelection(activeModel) }
       : {}),
     modelSwitches,
+    taskProgress,
+    taskProgressCheckpoints,
     ...(options.source.workflowSkill !== undefined
       ? { workflowSkill: copyWorkflowSkill(options.source.workflowSkill) }
       : {}),
@@ -240,6 +277,15 @@ export function forkSessionStore(options: {
       timestamp,
       from: null,
       to: copySessionModelSelection(activeModel),
+    });
+  }
+  if (!sessionTaskProgressesEqual(taskProgress, emptySessionTaskProgress())) {
+    appendJsonLine(session.filePath, {
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      type: "task_progress",
+      timestamp,
+      messageOrdinal: 0,
+      tasks: redactSessionTaskProgressForPersistence(taskProgress).tasks,
     });
   }
   if (storedMessages.length > 0) {
@@ -291,6 +337,8 @@ export function resumeSessionStore(options: {
   let bashApprovalGrants: BashApprovalGrant[] = [];
   let activeModel: SessionModelSelection | undefined;
   let modelSwitches: SessionModelSwitch[] = [];
+  let taskProgress = emptySessionTaskProgress();
+  let taskProgressCheckpoints: SessionTaskProgressCheckpoint[] = [];
   for (const record of records.mutations) {
     switch (record.type) {
       case "append":
@@ -314,6 +362,12 @@ export function resumeSessionStore(options: {
                   messageOrdinal: 0,
                 },
               ];
+        taskProgressCheckpoints = sessionTaskProgressesEqual(
+          taskProgress,
+          emptySessionTaskProgress(),
+        )
+          ? []
+          : [{ messageOrdinal: 0, taskProgress }];
         break;
       case "model_switch":
         activeModel = copySessionModelSelection(record.to);
@@ -330,6 +384,21 @@ export function resumeSessionStore(options: {
           },
         ];
         consumeReplayInputs(pendingInputsById, record.consumedInputIds);
+        break;
+      case "task_progress":
+        taskProgress = {
+          tasks: record.tasks.map((task) => ({
+            step: task.step,
+            status: task.status,
+          })),
+        };
+        taskProgressCheckpoints = [
+          ...taskProgressCheckpoints,
+          {
+            messageOrdinal: record.messageOrdinal,
+            taskProgress: copySessionTaskProgress(taskProgress),
+          },
+        ];
         break;
       case "input_admitted":
         pendingInputsById.set(record.id, {
@@ -404,6 +473,15 @@ export function resumeSessionStore(options: {
           messageOrdinal: modelSwitch.messageOrdinal,
         }));
         activeModel = modelSwitches.at(-1)?.to;
+        taskProgressCheckpoints = (record.taskProgressCheckpoints ?? []).map(
+          (checkpoint) => ({
+            messageOrdinal: checkpoint.messageOrdinal,
+            taskProgress: copySessionTaskProgress(checkpoint.taskProgress),
+          }),
+        );
+        taskProgress =
+          taskProgressCheckpoints.at(-1)?.taskProgress ??
+          emptySessionTaskProgress();
         break;
       }
     }
@@ -419,6 +497,8 @@ export function resumeSessionStore(options: {
     storedMessages,
     pendingInputsById,
     bashApprovalGrants,
+    taskProgress,
+    taskProgressCheckpoints,
     ...(activeModel !== undefined
       ? { activeModel: copySessionModelSelection(activeModel) }
       : {}),
@@ -426,6 +506,39 @@ export function resumeSessionStore(options: {
     ...(header.workflowSkill !== undefined
       ? { workflowSkill: copyWorkflowSkill(header.workflowSkill) }
       : {}),
+  });
+}
+
+export function persistSessionTaskProgress(options: {
+  readonly session: SessionState;
+  readonly taskProgress: SessionTaskProgress;
+  readonly messageOrdinal?: number;
+  readonly runtime: SessionStoreRuntime;
+}): void {
+  const replayState = replayStateForSession(options.session);
+  if (
+    sessionTaskProgressesEqual(replayState.taskProgress, options.taskProgress)
+  ) {
+    return;
+  }
+  const taskProgress = redactSessionTaskProgressForPersistence(
+    options.taskProgress,
+  );
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "task_progress",
+    timestamp: isoTimestamp(options.runtime),
+    messageOrdinal: options.messageOrdinal ?? replayState.storedMessages.length,
+    tasks: taskProgress.tasks,
+  });
+  replaceReplayTaskProgress(
+    replayState,
+    taskProgress,
+    options.messageOrdinal ?? replayState.storedMessages.length,
+  );
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
   });
 }
 
@@ -508,6 +621,7 @@ export function persistSessionMessages(options: {
   );
   replaceReplayMessages(replayState, currentStoredMessages);
   rebaseReplayModelSwitchesAfterReplace(replayState, timestamp);
+  rebaseReplayTaskProgressAfterReplace(replayState);
   consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
   appendSessionSnapshotIfNeeded({
     session: options.session,

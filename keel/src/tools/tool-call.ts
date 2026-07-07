@@ -1,6 +1,6 @@
-import type { z } from "zod";
+import { z } from "zod";
 import { builtinToolCallSchema, builtinTools } from "./tool-definitions.ts";
-import { toolCallValidationError } from "./tool-error.ts";
+import { toolCallValidationError, zodIssuesText } from "./tool-error.ts";
 import {
   type OpenAICompatibleToolParameters,
   openAICompatibleParametersFromSchema,
@@ -24,7 +24,26 @@ type BuiltinToolForName<Name extends ToolName> = Extract<
   { readonly name: Name }
 >;
 
-export type ToolCall = z.infer<typeof builtinToolCallSchema>;
+export type ValidToolCall = z.infer<typeof builtinToolCallSchema>;
+
+const invalidUpdatePlanToolCallSchema = z
+  .object({
+    id: z.string(),
+    tool: z.literal("update_plan"),
+    invalidArguments: z.record(z.string(), z.unknown()),
+    validationError: z.string(),
+    recovery: z.string(),
+  })
+  .strict();
+
+export type InvalidToolCall = z.infer<typeof invalidUpdatePlanToolCallSchema>;
+
+export const toolCallSchema = z.union([
+  builtinToolCallSchema,
+  invalidUpdatePlanToolCallSchema,
+]);
+
+export type ToolCall = ValidToolCall | InvalidToolCall;
 
 export interface ToolCallInput {
   readonly id: string;
@@ -34,6 +53,9 @@ export interface ToolCallInput {
 type ParsedToolCall =
   | { readonly success: true; readonly data: ToolCall }
   | { readonly success: false; readonly error?: z.ZodError };
+
+const INVALID_UPDATE_PLAN_RECOVERY =
+  "Provide the full replacement plan using non-empty step strings, statuses pending, in_progress, or completed, and at most one in_progress task.";
 
 const builtinToolNames: ReadonlySet<string> = new Set(
   builtinTools.map((tool) => tool.name),
@@ -76,6 +98,37 @@ function rawToolCallArguments(
   return args;
 }
 
+function recordFromProviderArguments(
+  parsedArguments: unknown,
+): Record<string, unknown> {
+  if (
+    parsedArguments !== null &&
+    typeof parsedArguments === "object" &&
+    !Array.isArray(parsedArguments)
+  ) {
+    const record: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(parsedArguments)) {
+      record[key] = value;
+    }
+    return record;
+  }
+  return { arguments: parsedArguments };
+}
+
+function invalidUpdatePlanToolCall(options: {
+  readonly id: string;
+  readonly parsedArguments: unknown;
+  readonly error: z.ZodError;
+}): InvalidToolCall {
+  return {
+    id: options.id,
+    tool: "update_plan",
+    invalidArguments: recordFromProviderArguments(options.parsedArguments),
+    validationError: zodIssuesText(options.error),
+    recovery: INVALID_UPDATE_PLAN_RECOVERY,
+  };
+}
+
 function toOpenAICompatibleToolDefinition(
   tool: RegisteredBuiltinTool,
 ): OpenAICompatibleToolDefinition {
@@ -114,6 +167,16 @@ function parseToolCallFromParsedArguments(
   const tool = builtinToolForName(name);
   const result = tool.args.schema.safeParse(parsedArguments);
   if (!result.success) {
+    if (tool.risk.kind === "agent-state") {
+      return {
+        success: true,
+        data: invalidUpdatePlanToolCall({
+          id,
+          parsedArguments,
+          error: result.error,
+        }),
+      };
+    }
     return { success: false, error: result.error };
   }
   const toolCall = builtinToolCallSchema.safeParse({
@@ -133,7 +196,7 @@ function parseToolCallFromParsedArguments(
 }
 
 function normalizeToolCallResult(toolCall: ToolCallInput): ParsedToolCall {
-  const parsed = builtinToolCallSchema.safeParse(toolCall);
+  const parsed = toolCallSchema.safeParse(toolCall);
   if (parsed.success) {
     return { success: true, data: parsed.data };
   }
@@ -157,6 +220,9 @@ export function normalizeProviderToolCall(toolCall: ToolCallInput): ToolCall {
 }
 
 export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
+  if (isInvalidToolCall(toolCall)) {
+    return toolCall.invalidArguments;
+  }
   const tool = builtinToolForName(toolCall.tool);
   return tool.argumentsFromCall(toolCall);
 }
@@ -164,13 +230,25 @@ export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
 export function toolCallCanonicalArguments(
   toolCall: ToolCall,
 ): Record<string, unknown> {
+  if (isInvalidToolCall(toolCall)) {
+    return toolCall.invalidArguments;
+  }
   const tool = builtinToolForName(toolCall.tool);
   return tool.canonicalArgumentsFromCall(toolCall);
 }
 
 export function toolCallLabel(toolCall: ToolCall): string {
+  if (isInvalidToolCall(toolCall)) {
+    return toolCall.tool;
+  }
   const tool = builtinToolForName(toolCall.tool);
   return tool.formatCallLabel(toolCall);
+}
+
+export function isInvalidToolCall(
+  toolCall: ToolCall,
+): toolCall is InvalidToolCall {
+  return "invalidArguments" in toolCall;
 }
 
 export { builtinToolCallSchema };

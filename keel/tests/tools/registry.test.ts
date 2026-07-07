@@ -339,6 +339,7 @@ describe("tool registry", () => {
     const names = builtinTools.map((tool) => tool.name);
 
     expect(names).toEqual([
+      "update_plan",
       "read",
       "ls",
       "glob",
@@ -365,6 +366,13 @@ describe("tool registry", () => {
     }));
 
     expect(contracts).toEqual([
+      {
+        name: "update_plan",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
       {
         name: "read",
         permission: "none",
@@ -627,6 +635,7 @@ describe("tool registry", () => {
     );
 
     expect(argumentsByTool).toEqual({
+      update_plan: { fields: ["plan"], required: ["plan"] },
       read: { fields: ["path", "offset", "limit"], required: ["path"] },
       ls: { fields: ["path", "limit"], required: [] },
       glob: { fields: ["pattern", "path"], required: ["pattern"] },
@@ -765,6 +774,7 @@ describe("tool registry", () => {
     const tools = openAICompatibleTools(false);
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
+      "update_plan",
       "read",
       "ls",
       "glob",
@@ -783,6 +793,7 @@ describe("tool registry", () => {
     const tools = openAICompatibleTools(true);
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
+      "update_plan",
       "read",
       "ls",
       "glob",

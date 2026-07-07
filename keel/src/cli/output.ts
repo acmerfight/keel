@@ -1,6 +1,7 @@
 import type { ContextCompactionStats } from "../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import type { ToolOutputArtifactNotice } from "../agent/tool-output-artifacts.ts";
+import { formatSessionTaskProgressSummary } from "../core/task-progress.ts";
 import { toolCallLabel } from "../tools/registry.ts";
 import type { AgentEventReportRecorder } from "./report-events.ts";
 
@@ -228,6 +229,10 @@ export async function printAgentEvents(
           `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}\n`,
         );
       }
+    } else if (event.type === "task_progress_updated") {
+      runtime.writeStderr(
+        `Task progress: ${sanitizeStatusLineText(formatSessionTaskProgressSummary(event.taskProgress))}\n`,
+      );
     } else if (event.type === "tool_output_artifact") {
       runtime.writeStderr(`${formatToolOutputArtifactNotice(event)}\n`);
     } else if (event.type === "end") {
@@ -278,6 +283,11 @@ export async function printStableInteractiveAgentEvents(
             `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}`,
           );
         }
+        break;
+      case "task_progress_updated":
+        runtime.writeStatusLine(
+          `Task progress: ${sanitizeStatusLineText(formatSessionTaskProgressSummary(event.taskProgress))}`,
+        );
         break;
       case "tool_output_artifact":
         runtime.writeStatusLine(formatToolOutputArtifactNotice(event));

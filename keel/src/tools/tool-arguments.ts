@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sessionTaskPlanSchema } from "../core/task-progress.ts";
 import { optionalToolArgument } from "./tool-schema.ts";
 
 export const readToolArgumentsSchema = z
@@ -200,6 +201,14 @@ export const bashToolArgumentsSchema = z
         .describe(
           "Optional command timeout in milliseconds. Defaults to 10000ms.",
         ),
+    ),
+  })
+  .strict();
+
+export const updatePlanToolArgumentsSchema = z
+  .object({
+    plan: sessionTaskPlanSchema.describe(
+      "The full replacement list of task steps and statuses. Pass an empty list to clear task progress.",
     ),
   })
   .strict();

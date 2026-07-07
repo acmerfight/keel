@@ -1423,6 +1423,54 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "invalid-update-plan") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          id: "call_plan_0",
+                          index: 0,
+                          type: "function",
+                          function: {
+                            name: "update_plan",
+                            arguments: JSON.stringify({
+                              plan: [
+                                {
+                                  step: "Inspect request",
+                                  status: "in_progress",
+                                },
+                                {
+                                  step: "Answer user",
+                                  status: "in_progress",
+                                },
+                              ],
+                            }),
+                          },
+                        },
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "invalid-read-arguments") {
             writeSseResponse(res, [
               sseData({
@@ -3805,6 +3853,54 @@ describe("DeepSeek Provider", () => {
     });
   });
 
+  test(`Given an update_plan tool call has invalid deterministic state,
+    When provider validates the completed tool call,
+    Then it yields a recoverable invalid tool call for the agent loop`, async () => {
+    // Given
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    // When
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "invalid-update-plan" }],
+        signal: freshSignal(),
+      }),
+    );
+
+    // Then
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        id: "call_plan_0",
+        tool: "update_plan",
+        invalidArguments: {
+          plan: [
+            { step: "Inspect request", status: "in_progress" },
+            { step: "Answer user", status: "in_progress" },
+          ],
+        },
+        validationError: "plan: At most one task can be in_progress.",
+        recovery:
+          "Provide the full replacement plan using non-empty step strings, statuses pending, in_progress, or completed, and at most one in_progress task.",
+      },
+      {
+        type: "stop",
+        reason: "stop",
+        usage: {
+          inputTokens: 30,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 30,
+          outputTokens: 8,
+        },
+      },
+    ]);
+  });
+
   test(`Given a read tool call has invalid arguments,
     When provider validates the completed tool call,
     Then it throws a read argument protocol error`, async () => {
@@ -4383,6 +4479,7 @@ describe("DeepSeek Provider", () => {
       // Then
       const parsed = parseDeepseekRequestBody(capturedBody);
       expect(parsed.tools?.map((tool) => tool.function.name)).toEqual([
+        "update_plan",
         "read",
         "ls",
         "glob",
@@ -4486,6 +4583,7 @@ describe("DeepSeek Provider", () => {
       // Then
       const parsed = parseDeepseekRequestBody(capturedBody);
       expect(parsed.tools?.map((tool) => tool.function.name)).toEqual([
+        "update_plan",
         "read",
         "ls",
         "glob",
@@ -4680,6 +4778,7 @@ describe("DeepSeek Provider", () => {
         throw new Error("Expected tools array");
       }
       expect(parsed.tools.map((tool) => tool.function.name)).toEqual([
+        "update_plan",
         "read",
         "ls",
         "glob",
