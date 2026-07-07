@@ -184,6 +184,101 @@ describe("Interactive Session - Bash Approval Grants", () => {
     }
   });
 
+  test(`Given an interactive user approves a bash command family for the project,
+    When the user lists approvals in the same session,
+    Then the new project approval appears immediately`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const command = "git status --short";
+    const provider = createFakeProvider([
+      fakeToolResponse("bash", { command }),
+      fakeResponse("Saved project approval."),
+    ]);
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const persistedProjectGrants: unknown[] = [];
+    let approvalAnswered = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace,
+      platform: process.platform,
+      projectRoot: workspace,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+        if (text.includes("Approve bash command") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.write("r\n/approvals\n");
+          input.end();
+        }
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistProjectBashApprovalGrant: (grant) => {
+        persistedProjectGrants.push(grant);
+      },
+    });
+
+    try {
+      execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+
+      // When
+      input.write("check status\n");
+
+      // Then
+      await withTimeout(
+        session,
+        5000,
+        "project approval listing did not finish",
+      );
+      expect(stdout).toContain("Saved project approval.\n");
+      expect(stdout).toContain("No bash approvals for this session.\n");
+      expect(stdout).toContain("Bash project approvals:\n");
+      expect(stdout).toContain(`     project: ${workspace}\n`);
+      expect(stdout).toContain(`     approved from: ${workspace}\n`);
+      expect(stdout).toContain("     argv prefix: git status\n");
+      expect(stderr).toContain(
+        "[r] allow command family for this project: git status",
+      );
+      expect(persistedProjectGrants).toEqual([
+        {
+          projectRoot: workspace,
+          cwd: workspace,
+          argvPrefix: ["git", "status"],
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an interactive approval prompt for project verification,
     When the assistant requests a typecheck command,
     Then the prompt shows verification risk and offers that command family`, async () => {

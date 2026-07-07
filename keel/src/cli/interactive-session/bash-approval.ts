@@ -1,33 +1,12 @@
 import {
   type BashApprovalGrant,
   type BashMode,
+  type BashProjectApprovalGrant,
   createSessionBashPermissionPolicy,
   type SessionBashPermissionPolicy,
 } from "../../permissions/bash.ts";
+import { escapeApprovalText } from "../bash-approval-text.ts";
 import type { LineReader } from "./line-reader.ts";
-
-export function escapeApprovalText(text: string): string {
-  return text.replace(
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: approval prompts must render model-controlled bytes visibly.
-    /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2060\u202a-\u202e\u2066-\u2069\ufeff]/g,
-    (char) => {
-      switch (char) {
-        case "\n":
-          return "\\n";
-        case "\r":
-          return "\\r";
-        case "\t":
-          return "\\t";
-        default: {
-          const code = char.charCodeAt(0);
-          return code <= 0x9f
-            ? `\\x${code.toString(16).padStart(2, "0")}`
-            : `\\u{${code.toString(16)}}`;
-        }
-      }
-    },
-  );
-}
 
 export function interactiveBashPermissionPolicy(
   mode: BashMode,
@@ -36,6 +15,9 @@ export function interactiveBashPermissionPolicy(
   policyOptions: {
     readonly initialGrants?: readonly BashApprovalGrant[];
     readonly onGrant?: (grant: BashApprovalGrant) => void;
+    readonly projectRoot?: string;
+    readonly initialProjectGrants?: readonly BashProjectApprovalGrant[];
+    readonly onProjectGrant?: (grant: BashProjectApprovalGrant) => void;
   },
 ): SessionBashPermissionPolicy | undefined {
   if (mode !== "ask") {
@@ -55,6 +37,9 @@ export function createPromptedBashPermissionPolicy(
     readonly scopeLabel: "session" | "this run";
     readonly initialGrants?: readonly BashApprovalGrant[];
     readonly onGrant?: (grant: BashApprovalGrant) => void;
+    readonly projectRoot?: string;
+    readonly initialProjectGrants?: readonly BashProjectApprovalGrant[];
+    readonly onProjectGrant?: (grant: BashProjectApprovalGrant) => void;
   },
 ): SessionBashPermissionPolicy {
   return createSessionBashPermissionPolicy({
@@ -64,6 +49,13 @@ export function createPromptedBashPermissionPolicy(
     ...(policyOptions.onGrant !== undefined
       ? { onGrant: policyOptions.onGrant }
       : {}),
+    ...(policyOptions.projectRoot !== undefined
+      ? { projectRoot: policyOptions.projectRoot }
+      : {}),
+    initialProjectGrants: policyOptions.initialProjectGrants ?? [],
+    onProjectGrant:
+      policyOptions.onProjectGrant ??
+      ((_grant: BashProjectApprovalGrant) => undefined),
     prompt: async (request) => {
       const promptSequence = lineReader.sequence();
       const prefixApprovalLine =
@@ -72,6 +64,14 @@ export function createPromptedBashPermissionPolicy(
           : [
               `[p] allow ${request.prefixApproval.promptLabel} for ${policyOptions.scopeLabel}: ${escapeApprovalText(
                 request.prefixApproval.display,
+              )}`,
+            ];
+      const projectApprovalLine =
+        request.projectApproval === undefined
+          ? []
+          : [
+              `[r] allow ${request.projectApproval.promptLabel} for this project: ${escapeApprovalText(
+                request.projectApproval.display,
               )}`,
             ];
       writeStderr(
@@ -83,6 +83,7 @@ export function createPromptedBashPermissionPolicy(
             request.assessment.summary,
           )}`,
           ...prefixApprovalLine,
+          ...projectApprovalLine,
           "Approved command output may be sent to the provider unredacted.",
           `[y] allow once, [s] allow exact command for ${policyOptions.scopeLabel}, [n] deny; any other input denies: `,
         ].join("\n"),
@@ -112,6 +113,9 @@ export function createPromptedBashPermissionPolicy(
       }
       if (request.prefixApproval !== undefined && answer === "p") {
         return { type: "allow", scope: "session-prefix" };
+      }
+      if (request.projectApproval !== undefined && answer === "r") {
+        return { type: "allow", scope: "project-prefix" };
       }
       return { type: "deny", message: "User did not approve this command." };
     },

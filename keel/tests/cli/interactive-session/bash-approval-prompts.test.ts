@@ -1,9 +1,12 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import { createPromptedBashPermissionPolicy } from "../../../src/cli/interactive-session/bash-approval.ts";
+import { createLineReader } from "../../../src/cli/interactive-session/line-reader.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
   createFakeProvider,
@@ -19,6 +22,51 @@ import {
 } from "../../../src/testing/interactive-session-fixtures.ts";
 
 describe("Interactive Session - Bash Approval Prompts", () => {
+  test(`Given a prompted bash policy has no project persistence callback,
+    When the user approves a command family for the project,
+    Then the policy allows the command without requiring a callback`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
+    const input = new PassThrough();
+    const promptInput = createInterface({
+      input,
+      crlfDelay: Number.POSITIVE_INFINITY,
+    });
+    const lineReader = createLineReader(promptInput, {});
+    let stderr = "";
+    const policy = createPromptedBashPermissionPolicy(
+      lineReader,
+      (text) => {
+        stderr += text;
+        if (text.includes("Approve bash command?")) {
+          input.end("r\n");
+        }
+      },
+      {
+        scopeLabel: "session",
+        projectRoot: workspace,
+      },
+    );
+
+    try {
+      // When
+      const decision = await policy.review({
+        command: "git status --short",
+        cwd: workspace,
+        signal: new AbortController().signal,
+      });
+
+      // Then
+      expect(decision).toEqual({ type: "allow", scope: "project-prefix" });
+      expect(stderr).toContain(
+        "[r] allow command family for this project: git status",
+      );
+    } finally {
+      promptInput.close();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an interactive user approves bash once,
     When the assistant repeats the same command,
     Then the session asks for approval again`, async () => {

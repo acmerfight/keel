@@ -1,6 +1,7 @@
 export type { CliArgs } from "./args/types.ts";
 export { USAGE } from "./args/usage.ts";
 
+import { parseApprovalsArgs } from "./args/approvals.ts";
 import { parseAuthArgs } from "./args/auth.ts";
 import { parseConfigArgs } from "./args/config.ts";
 import { parseDoctorArgs } from "./args/doctor.ts";
@@ -86,6 +87,10 @@ export function parseCliArgs(args: readonly string[]): CliArgsParseResult {
 
   if (args[0] === "sessions") {
     return parseSessionsArgs(args.slice(1));
+  }
+
+  if (args[0] === "approvals") {
+    return parseApprovalsArgs(args.slice(1));
   }
 
   if (args[0] === "artifacts") {

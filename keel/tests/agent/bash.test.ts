@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -1028,6 +1028,80 @@ describe("Bash Commands", () => {
       expect(decision).toEqual({
         type: "deny",
         message: "No command family approval is available.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a command family is approved for a project,
+    When a matching command runs from another cwd in that project,
+    Then the project approval is reused without prompting`, async () => {
+    // Given
+    const projectRoot = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const nestedWorkspace = join(projectRoot, "packages", "app");
+    await mkdir(nestedWorkspace, { recursive: true });
+    let promptCount = 0;
+    const bashPermission = createSessionBashPermissionPolicy({
+      projectRoot,
+      initialProjectGrants: [
+        {
+          projectRoot,
+          cwd: projectRoot,
+          argvPrefix: ["git", "status"],
+        },
+      ],
+      prompt: () => {
+        promptCount++;
+        return { type: "deny", message: "should not prompt" };
+      },
+    });
+
+    try {
+      // When
+      const decision = await bashPermission.review({
+        command: "git status --porcelain",
+        cwd: nestedWorkspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(decision).toEqual({ type: "allow", scope: "project-prefix" });
+      expect(promptCount).toBe(0);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given project command approval is unavailable,
+    When a prompt incorrectly approves a project command family,
+    Then the command is denied instead of cached for the project`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    let offeredPrefix = false;
+    let offeredProjectApproval = false;
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        offeredPrefix = request.prefixApproval !== undefined;
+        offeredProjectApproval = request.projectApproval !== undefined;
+        return { type: "allow", scope: "project-prefix" };
+      },
+    });
+
+    try {
+      // When
+      const decision = await bashPermission.review({
+        command: "git status --short",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(offeredPrefix).toBe(true);
+      expect(offeredProjectApproval).toBe(false);
+      expect(decision).toEqual({
+        type: "deny",
+        message: "No project command approval is available.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

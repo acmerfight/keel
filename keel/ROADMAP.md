@@ -98,15 +98,19 @@ What a user can do today:
 - `keel --bash-policy ask` — expose bash while requiring per-command
   approval in real TTY one-shot runs and interactive sessions, with exact
   command + cwd approval and conservative command-family + cwd approval
-  remembered for the current one-shot run or active interactive session.
-  Interactive grants are restored by named-session resume. Interactive
+  remembered for the current one-shot run or active interactive session, plus
+  project-scoped persistent approvals for conservative command families.
+  Non-TTY one-shot runs can use saved project approvals but still fail closed
+  when no matching approval already exists, so approvals cannot be read from
+  piped input. `keel approvals` lists, revokes, or clears project bash
+  approvals for the current project. Interactive grants are restored by
+  named-session resume. Interactive
   `/approvals` lists active bash approvals and can revoke one approval or clear
-  all approvals before later matching commands run. Approval prompts include
+  all session approvals before later matching commands run. Approval prompts include
   deterministic risk labels for workspace-read, project-verification,
   workspace-write, and unknown/dangerous commands, and verification-family
   approvals cover common project checks such as `pnpm test`, `pnpm typecheck`,
-  `pnpm lint`, and `pnpm build`. Non-TTY one-shot runs and forced non-TTY
-  interactive runs fail closed so approvals cannot be read from piped input.
+  `pnpm lint`, and `pnpm build`.
 - `keel --max-cost <usd>` — one-shot or interactive session cost tracking
   with budget stop.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
@@ -293,13 +297,14 @@ Codex/Claude Code — or directly moves the eval numbers.
   prompts in real TTY one-shot runs and interactive sessions, fails closed
   without an approval UI, records exact command + cwd approvals, supports
   conservative command-family approvals, restores active grants for
-  named-session resume, and exposes `/approvals` to list, revoke, or clear
-  active interactive grants. Prompts now show deterministic risk labels so
+  named-session resume, saves project-scoped approvals for conservative command
+  families, and exposes `/approvals` plus `keel approvals` to list, revoke, or
+  clear active or project grants. Prompts now show deterministic risk labels so
   users can distinguish workspace-read commands, project verification commands,
   workspace-writing commands, and unknown/dangerous shell syntax before
   approving. Remaining work is deeper shell parsing, family-specific validators
-  for additional commands where safe, and persistent user/project approval
-  rules. OS sandboxing remains P2.
+  for additional commands where safe, and user-global approval rules. OS
+  sandboxing remains P2.
 - **Whole-task undo** — ✅ Partial (2026-07): `/undo` restores the last edit,
   created file, apply_patch batch, or multi-file task checkpoint, while
   `/undo --list` and `/undo --to <index>` let users choose an older listed

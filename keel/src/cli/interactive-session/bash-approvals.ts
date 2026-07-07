@@ -1,5 +1,5 @@
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
-import { escapeApprovalText } from "./bash-approval.ts";
+import { escapeApprovalText } from "../bash-approval-text.ts";
 
 export function formatBashApprovalList(
   grants: readonly BashApprovalGrant[],

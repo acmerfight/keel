@@ -22,6 +22,12 @@ export type BashApprovalGrant =
       readonly argvPrefix: readonly string[];
     };
 
+export interface BashProjectApprovalGrant {
+  readonly projectRoot: string;
+  readonly cwd: string;
+  readonly argvPrefix: readonly string[];
+}
+
 export function bashModeFromPolicy(policy: BashPolicy): BashMode {
   return policy === "deny" ? "disabled" : policy;
 }
@@ -48,6 +54,7 @@ export interface BashPermissionRequest {
   readonly signal: AbortSignal;
   readonly assessment: BashCommandAssessment;
   readonly prefixApproval?: BashPermissionPrefixApproval;
+  readonly projectApproval?: BashPermissionProjectApproval;
 }
 
 interface BashPermissionPrefixApproval {
@@ -56,10 +63,14 @@ interface BashPermissionPrefixApproval {
   readonly promptLabel: "command family" | "this command";
 }
 
+interface BashPermissionProjectApproval extends BashPermissionPrefixApproval {
+  readonly projectRoot: string;
+}
+
 export type BashPermissionDecision =
   | {
       readonly type: "allow";
-      readonly scope: "once" | "session" | "session-prefix";
+      readonly scope: "once" | "session" | "session-prefix" | "project-prefix";
     }
   | {
       readonly type: "deny";
@@ -114,6 +125,11 @@ function copyBashApprovalGrant(grant: BashApprovalGrant): BashApprovalGrant {
 
 interface PrefixApprovalRule {
   readonly cwd: string;
+  readonly argvPrefix: readonly string[];
+}
+
+interface ProjectPrefixApprovalRule {
+  readonly projectRoot: string;
   readonly argvPrefix: readonly string[];
 }
 
@@ -353,15 +369,33 @@ function prefixKey(rule: PrefixApprovalRule): string {
   return JSON.stringify([rule.cwd, rule.argvPrefix]);
 }
 
+function projectPrefixKey(rule: ProjectPrefixApprovalRule): string {
+  return JSON.stringify([rule.projectRoot, rule.argvPrefix]);
+}
+
+function copyBashProjectApprovalGrant(
+  grant: BashProjectApprovalGrant,
+): BashProjectApprovalGrant {
+  return {
+    projectRoot: grant.projectRoot,
+    cwd: grant.cwd,
+    argvPrefix: [...grant.argvPrefix],
+  };
+}
+
 export function createSessionBashPermissionPolicy(options: {
   readonly prompt: (
     request: BashPermissionRequest,
   ) => BashPermissionDecision | Promise<BashPermissionDecision>;
   readonly initialGrants?: readonly BashApprovalGrant[];
   readonly onGrant?: (grant: BashApprovalGrant) => void;
+  readonly projectRoot?: string;
+  readonly initialProjectGrants?: readonly BashProjectApprovalGrant[];
+  readonly onProjectGrant?: (grant: BashProjectApprovalGrant) => void;
 }): SessionBashPermissionPolicy {
   const approved = new Set<string>();
   const approvedPrefixes = new Set<string>();
+  const approvedProjectPrefixes = new Set<string>();
   const grantsByKey = new Map<string, BashApprovalGrant>();
   const addGrant = (grant: BashApprovalGrant): boolean => {
     const key = bashApprovalGrantKey(grant);
@@ -387,6 +421,9 @@ export function createSessionBashPermissionPolicy(options: {
   };
   for (const grant of options.initialGrants ?? []) {
     addGrant(grant);
+  }
+  for (const grant of options.initialProjectGrants ?? []) {
+    approvedProjectPrefixes.add(projectPrefixKey(grant));
   }
 
   return {
@@ -442,11 +479,29 @@ export function createSessionBashPermissionPolicy(options: {
       ) {
         return { type: "allow", scope: "session-prefix" };
       }
+      if (
+        matchingPrefix !== undefined &&
+        options.projectRoot !== undefined &&
+        approvedProjectPrefixes.has(
+          projectPrefixKey({
+            projectRoot: options.projectRoot,
+            argvPrefix: matchingPrefix.argvPrefix,
+          }),
+        )
+      ) {
+        return { type: "allow", scope: "project-prefix" };
+      }
 
+      const projectApproval =
+        prefixApproval === undefined || options.projectRoot === undefined
+          ? undefined
+          : { ...prefixApproval, projectRoot: options.projectRoot };
       const promptRequest =
         prefixApproval === undefined
           ? { ...request, assessment }
-          : { ...request, assessment, prefixApproval };
+          : projectApproval === undefined
+            ? { ...request, assessment, prefixApproval }
+            : { ...request, assessment, prefixApproval, projectApproval };
       const decision = await options.prompt(promptRequest);
       if (decision.type === "allow" && decision.scope === "session") {
         const grant = {
@@ -475,6 +530,23 @@ export function createSessionBashPermissionPolicy(options: {
         if (addGrant(grant)) {
           options.onGrant?.(grant);
         }
+      } else if (
+        decision.type === "allow" &&
+        decision.scope === "project-prefix"
+      ) {
+        if (projectApproval === undefined) {
+          return {
+            type: "deny",
+            message: "No project command approval is available.",
+          };
+        }
+        const grant = {
+          projectRoot: projectApproval.projectRoot,
+          cwd: request.cwd,
+          argvPrefix: [...projectApproval.argvPrefix],
+        } satisfies BashProjectApprovalGrant;
+        approvedProjectPrefixes.add(projectPrefixKey(grant));
+        options.onProjectGrant?.(copyBashProjectApprovalGrant(grant));
       }
       return decision;
     },

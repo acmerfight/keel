@@ -19,10 +19,12 @@ import {
 import type { Message, Usage } from "../llm/types.ts";
 import {
   type BashApprovalGrant,
+  type BashProjectApprovalGrant,
   bashApprovalGrantKey,
   bashModeExposesTool,
 } from "../permissions/bash.ts";
 import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
+import { formatBashProjectApprovalList } from "./bash-project-approvals.ts";
 import {
   formatInteractiveForkPicker,
   formatInteractiveSessionForkPoints,
@@ -154,6 +156,21 @@ export async function runInteractiveSession(
   let inactiveBashApprovalGrants: BashApprovalGrant[] = [
     ...(options.initialBashApprovalGrants ?? []),
   ];
+  let activeProjectBashApprovalGrants: BashProjectApprovalGrant[] = [
+    ...(options.initialProjectBashApprovalGrants ?? []),
+  ];
+  const appendProjectBashApprovalGrant = (
+    grant: BashProjectApprovalGrant,
+  ): void => {
+    activeProjectBashApprovalGrants = [
+      ...activeProjectBashApprovalGrants,
+      {
+        projectRoot: grant.projectRoot,
+        cwd: grant.cwd,
+        argvPrefix: [...grant.argvPrefix],
+      },
+    ];
+  };
   const input = createInterface({
     input: options.input,
     crlfDelay: Number.POSITIVE_INFINITY,
@@ -176,6 +193,14 @@ export async function runInteractiveSession(
         : {}),
       onGrant: (grant) => {
         options.persistBashApprovalGrant?.(grant);
+      },
+      ...(options.projectRoot !== undefined
+        ? { projectRoot: options.projectRoot }
+        : {}),
+      initialProjectGrants: activeProjectBashApprovalGrants,
+      onProjectGrant: (grant) => {
+        appendProjectBashApprovalGrant(grant);
+        options.persistProjectBashApprovalGrant?.(grant);
       },
     },
   );
@@ -405,7 +430,9 @@ export async function runInteractiveSession(
             messages,
             messageCount: messages.length,
             pendingInputCount: lineReader.pendingInputCount(),
-            bashApprovalCount: activeBashApprovalGrants().length,
+            bashApprovalCount:
+              activeBashApprovalGrants().length +
+              activeProjectBashApprovalGrants.length,
             modelSwitchCount,
             undoCheckpoints: listUndoCheckpoints(options.workspace),
             recoveryActions: statusRecoveryActions(),
@@ -418,7 +445,10 @@ export async function runInteractiveSession(
         switch (interactiveCommand.action) {
           case "list":
             options.writeStdout(
-              formatBashApprovalList(activeBashApprovalGrants()),
+              [
+                formatBashApprovalList(activeBashApprovalGrants()),
+                formatBashProjectApprovalList(activeProjectBashApprovalGrants),
+              ].join(""),
             );
             consumeQueuedInputLines([rawInput]);
             break;
