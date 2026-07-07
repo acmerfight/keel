@@ -1,0 +1,4 @@
+interface:
+  display_name: "QA"
+  short_description: "Black-box QA the Keel agent against real providers."
+  default_prompt: "$qa"
