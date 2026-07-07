@@ -33,7 +33,10 @@ one unambiguous QA target. Otherwise ask for the PR, range, feature, or "smoke".
 ## Scope Resolution
 
 1. Identify the exact scope and, for a diff-based target, the base
-   (prefer the PR base or `origin/main...HEAD`).
+   (prefer the PR base or `origin/main...HEAD`). Then pin the artifact under
+   test: check out or apply the target, confirm the change is actually present
+   in the tree you will run, and record the tested commit. Stale or wrong code
+   turns every later green into a false verdict.
 2. For a PR or range, read the diff first, then the owning code, to find the real risk
    surface. Mine it the way `.claude/plans/qa-blackbox-pr370.md` mined the auth PR:
    trim/normalize edges, resolution-priority interplay, overwrite/idempotency,
@@ -77,8 +80,13 @@ Run everything from `keel/`. Use the real black-box seam — never assert on int
 
 ## Case Design
 
-Design before you run. Budget the case mix roughly: ~40% happy path, ~30% edge, ~20%
-adversarial/safety, ~10% regression (past incidents and prior findings).
+Design before you run. Allocate cases by marginal bug-yield, not a fixed
+template: first map what the target's own tests and the existing suite already
+cover, then spend the budget where coverage is thin — uncovered edges, the
+adversarial and safety surface, and past incidents. Re-test a covered path only
+when a different seam (black box vs unit) or input could expose what the
+author's test cannot; a case that only re-confirms an existing green is waste.
+Keep just enough happy-path coverage to anchor the contract.
 
 Apply a task-quality gate to every case before it counts:
 
@@ -113,6 +121,12 @@ outranks any capability finding:
 Grade observable outcomes and state, not the exact tool order — the agent may reach a
 valid result by an unanticipated path, and that must pass.
 
+An oracle is only trustworthy once you have seen it go red. Before a green
+counts, confirm the check has detection power — it fired against a known-bad or
+boundary input, not just the happy path. This is also the price of an all-green
+verdict: report clean only after you have genuinely tried to make the apparatus
+fail and could not.
+
 Deterministic oracles first: exit code; file and directory state; the `Tool: <name>`
 trajectory in stderr; local HTTP/SSE request capture for what hits the wire; the
 `--report` JSON (`turns`, `stopReason`, `usage`, `costUsd`, `schemaVersion`); and
@@ -123,6 +137,11 @@ When a tool case fails, name which of the four layers broke: tool selection, arg
 extraction, result utilization, or error recovery.
 
 ## Non-Determinism
+
+Scale the apparatus to the risk surface. Multi-trial sampling, cost caps, and
+provider cross-checks exist for model-driven behavior; do not spend them on a
+surface with no provider or model in the path — read the code first to tell
+which you have.
 
 For behavioral cases whose result can vary between runs, run N trials (default 3) and
 report both `pass@k` (at least one success) and `pass^k` (every trial succeeds); note when
