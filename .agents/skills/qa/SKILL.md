@@ -27,8 +27,8 @@ Accept a concrete QA target:
 - `$qa provider auth` / `$qa edit tool` — a named feature or area.
 - `$qa` (bare) — whole-agent smoke over core tool and loop paths.
 
-If the target is omitted, infer it only when the current thread or git state has exactly
-one unambiguous QA target. Otherwise ask for the PR, range, feature, or "smoke".
+If the target is omitted, infer it only when the current thread or git state has
+exactly one unambiguous QA target. Otherwise ask for the PR, range, feature, or "smoke".
 
 ## Scope Resolution
 
