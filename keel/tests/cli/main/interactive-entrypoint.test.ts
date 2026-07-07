@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
-  access,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   symlink,
@@ -60,6 +60,26 @@ function oversizedReadFixture(options: {
     options.end,
     "tail beyond the read tool byte budget ".repeat(200),
   ].join("\n");
+}
+
+function sessionIdFromResumeLine(output: string): string {
+  const match = /^\s+resume: keel --resume ([^\n]+)$/mu.exec(output);
+  const sessionId = match?.at(1);
+  if (sessionId === undefined) {
+    throw new Error(`No session resume line found in output:\n${output}`);
+  }
+  return sessionId;
+}
+
+async function sessionDirectoryNames(home: string): Promise<readonly string[]> {
+  try {
+    return await readdir(join(home, "sessions"));
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
 }
 
 describe("CLI Main - Interactive Entrypoint", () => {
@@ -168,13 +188,74 @@ describe("CLI Main - Interactive Entrypoint", () => {
   });
 
   test(`Given the user runs interactive mode without a session flag,
-    When the prompt completes,
-    Then no persistent session is created implicitly`, async () => {
+    When the prompt completes and the user lists sessions,
+    Then the CLI shows a resumable session that restores prior context`, async () => {
     // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const input = new PassThrough();
+    input.end("remember alpha\n");
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Remembered: remember alpha\n");
+      expect(fixture.stderr()).toBe("");
+
+      const listFixture = createRuntime(["sessions"], {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+      });
+      const listExitCode = await runCliMain(listFixture.runtime);
+      expect(listExitCode).toBe(0);
+      expect(listFixture.stdout()).toContain("Sessions for workspace ");
+      const sessionId = sessionIdFromResumeLine(listFixture.stdout());
+
+      const resumeInput = new PassThrough();
+      resumeInput.end("what did I ask you to remember?\n");
+      const resumeFixture = createRuntime(["--resume", sessionId], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input: resumeInput,
+      });
+      const resumeExitCode = await runCliMain(resumeFixture.runtime);
+      expect(resumeExitCode).toBe(0);
+      expect(resumeFixture.stdout()).toBe("Earlier you said: remember alpha\n");
+      expect(resumeFixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user starts an ephemeral interactive session,
+    When the prompt completes and the user lists sessions,
+    Then no persistent session is created`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
     const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
     const input = new PassThrough();
     input.end("hello\n");
-    const fixture = createRuntime([], {
+    const fixture = createRuntime(["--ephemeral"], {
+      cwd: workspace,
       env: {
         KEEL_PROVIDER: "fake",
         KEEL_FORCE_INTERACTIVE: "1",
@@ -190,8 +271,20 @@ describe("CLI Main - Interactive Entrypoint", () => {
       // Then
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe("Remembered: hello\n");
-      await expect(access(join(home, "sessions"))).rejects.toThrow();
+      expect(fixture.stderr()).toBe("");
+
+      const listFixture = createRuntime(["sessions"], {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+      });
+      const listExitCode = await runCliMain(listFixture.runtime);
+      expect(listExitCode).toBe(0);
+      expect(listFixture.stdout()).toContain("No sessions for workspace ");
+      expect(await sessionDirectoryNames(home)).toEqual([]);
     } finally {
+      await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
   });
@@ -369,7 +462,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       // Then
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe("Hello from fake provider.\n");
-      await expect(access(join(home, "sessions"))).rejects.toThrow();
+      expect(await sessionDirectoryNames(home)).toEqual([]);
     } finally {
       await rm(home, { recursive: true, force: true });
     }
@@ -1103,6 +1196,39 @@ describe("CLI Main - Interactive Entrypoint", () => {
     }
   });
 
+  test(`Given a default interactive session fails before the first completed turn,
+    When the provider configuration is invalid,
+    Then the CLI main does not create an empty session ledger`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const input = new PassThrough();
+    input.end("hello\n");
+    const fixture = createRuntime([], {
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_PROVIDER: "deepseek",
+        DEEPSEEK_API_KEY: "",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      for (const line of DEEPSEEK_MISSING_API_KEY_GUIDANCE) {
+        expect(fixture.stderr()).toContain(line);
+      }
+      expect(await sessionDirectoryNames(home)).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a named session fails before the first completed turn,
     When the provider configuration is invalid,
     Then the CLI main does not create an empty session ledger`, async () => {
@@ -1130,9 +1256,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       for (const line of DEEPSEEK_MISSING_API_KEY_GUIDANCE) {
         expect(fixture.stderr()).toContain(line);
       }
-      await expect(
-        access(join(home, "sessions", "provider-fails", "ledger.jsonl")),
-      ).rejects.toThrow();
+      expect(await sessionDirectoryNames(home)).toEqual([]);
     } finally {
       await rm(home, { recursive: true, force: true });
     }

@@ -498,7 +498,7 @@ export async function runInteractiveSession(
       if (interactiveCommand?.kind === "status") {
         options.writeStdout(
           formatSessionStatusSnapshot({
-            session: options.sessionId ?? "(interactive, not persisted)",
+            session: options.sessionId ?? "(ephemeral, not persisted)",
             workspace: options.workspace,
             activeModel: activeModelStatus(),
             ...(options.workflowSkill !== undefined

@@ -24,6 +24,7 @@ const RUN_OPTIONS = [
   "--max-cost",
   "--report",
   "--transcript",
+  "--ephemeral",
   "--session",
   "--resume",
   "--fork",
@@ -38,6 +39,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   let maxCostUsd: number | undefined;
   let reportFile: string | undefined;
   let transcriptFile: string | undefined;
+  let ephemeral = false;
   let sessionId: string | undefined;
   let resumeSessionId: string | undefined;
   let forkSessionId: string | undefined;
@@ -213,6 +215,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       continue;
     }
 
+    if (arg === "--ephemeral") {
+      ephemeral = true;
+      continue;
+    }
+
     if (arg === "--session") {
       const parsed = requireSeparatedOptionValue(
         "--session",
@@ -321,6 +328,18 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   if (sessionId !== undefined && resumeSessionId !== undefined) {
     return parseError("Error: --session cannot be combined with --resume.");
   }
+  if (
+    ephemeral &&
+    (sessionId !== undefined ||
+      resumeSessionId !== undefined ||
+      forkSessionId !== undefined ||
+      forkBeforeMessage !== undefined ||
+      forkPoints)
+  ) {
+    return parseError(
+      "Error: --ephemeral cannot be combined with --session, --resume, --fork, --fork-before-message, or --fork-points.",
+    );
+  }
   if (forkPoints && resumeSessionId === undefined) {
     return parseError("Error: --fork-points requires --resume <id>.");
   }
@@ -361,6 +380,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(reportFile !== undefined ? { reportFile } : {}),
     ...(transcriptFile !== undefined ? { transcriptFile } : {}),
+    ephemeral,
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
     ...(forkSessionId !== undefined ? { forkSessionId } : {}),

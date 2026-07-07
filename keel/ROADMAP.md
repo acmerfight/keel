@@ -66,15 +66,17 @@ What a user can do today:
   recoverable tool errors with LLM-facing recovery hints, tool progress on stderr, graceful stop with
   a progress summary when the 64-turn limit is exhausted.
 - `keel` — interactive in-process session: sequential follow-up messages
-  reuse prior user / assistant / tool context from the same terminal run;
-  input typed while a tool turn is running is injected after tool results at
-  the next model request. Real TTY sessions render a stable terminal display
-  with a session intro, `keel>` prompts, `status:` progress lines, and an
-  `assistant:` header. Local commands include `/help`, `/undo`, `/model`,
-  `/skill`, `/status`, `/approvals`, `/compact`, `/fork`, and `/fork-points`.
+  reuse prior user / assistant / tool context from the same terminal run and
+  persist completed turns to an automatic JSONL session ledger by default;
+  `keel --ephemeral` keeps the conversation process-local. Input typed while a
+  tool turn is running is injected after tool results at the next model
+  request. Real TTY sessions render a stable terminal display with a session
+  intro, `keel>` prompts, `status:` progress lines, and an `assistant:` header.
+  Local commands include `/help`, `/undo`, `/model`, `/skill`, `/status`,
+  `/approvals`, `/compact`, `/fork`, and `/fork-points`.
 - `keel --session <id>` / `keel --resume <id>` / `keel sessions` /
   `keel sessions fork <source-id> <target-id> [--before-message <id>]` —
-  persist, resume, list, and fork interactive transcripts as JSONL session
+  name, resume, list, and fork interactive transcripts as JSONL session
   ledgers, with schema validation, workspace checks, active-session locks,
   bounded snapshots, replay of queued input that was admitted but not yet
   consumed, active model switches, workflow skill identity, and independent
@@ -284,12 +286,13 @@ Codex/Claude Code — or directly moves the eval numbers.
   apply_patch operations can be scheduled together; conflicting file/tree
   resources, `AGENTS.md` mutations, `bash`, and unmodeled effects remain
   serialized.
-- **Session persistence / resume.** ✅ Partial (2026-06): named interactive
-  sessions persist JSONL ledgers and rebuild transcript context on
+- **Session persistence / resume.** ✅ Partial (2026-06): default and named
+  interactive sessions persist JSONL ledgers and rebuild transcript context on
   `--resume`, including compaction replacement records, active-session locks,
   unconsumed queued input, bounded snapshots, active model switches, and
-  workflow skill identity. `keel sessions fork <source-id> <target-id>
-  [--before-message <id>]`, `keel --resume <id> --fork-points`, and interactive
+  workflow skill identity. `keel --ephemeral` intentionally skips the ledger.
+  `keel sessions fork <source-id> <target-id> [--before-message <id>]`,
+  `keel --resume <id> --fork-points`, and interactive
   `/fork [--before-message <id>|--pick]` create independent forks from restored
   history without copying pending queued input. Remaining work is richer session
   UI and future sub-agent state.

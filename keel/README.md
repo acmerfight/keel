@@ -44,6 +44,10 @@ Start an interactive session:
 keel
 ```
 
+Interactive sessions are saved by default. Use `keel sessions` to find the
+resume command for prior work, or `keel --ephemeral` when you intentionally do
+not want a session ledger.
+
 Useful follow-up commands:
 
 ```bash

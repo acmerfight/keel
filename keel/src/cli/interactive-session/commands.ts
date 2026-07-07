@@ -109,13 +109,18 @@ export function formatInteractiveHelp(): string {
     "  /approvals clear   Clear active bash approvals.",
     "  /compact [focus]   Summarize older conversation context with optional focus.",
     "  /fork <target-id> [--before-message <id>]",
-    "                     Fork this named or resumed session without switching to it.",
+    "                     Fork this saved session without switching to it.",
     "  /fork <target-id> --pick",
     "                     Choose the fork point interactively.",
     "  /fork-points       List restored user-message fork points.",
     "",
     "Session commands:",
-    "      Session ledgers are best-effort redacted at rest; live provider requests may include raw content.",
+    "      Interactive sessions save ledgers by default with best-effort at-rest redaction.",
+    "      Live provider requests may include raw content.",
+    "  keel --ephemeral",
+    "      Start an interactive session without saving a ledger.",
+    "  keel --session <id>",
+    "      Start a saved interactive session with a chosen id.",
     "  keel sessions",
     "      List saved interactive sessions.",
     "  keel --resume <id>",
@@ -485,5 +490,5 @@ export function formatManualCompactionFailure(error: unknown): string {
 export function formatForkRequiresNamedSession(
   command: "/fork" | "/fork-points",
 ): string {
-  return `Error: ${command} requires a named session. Start with --session or --resume.\n`;
+  return `Error: ${command} requires a saved session. Start without --ephemeral, or use --session or --resume.\n`;
 }

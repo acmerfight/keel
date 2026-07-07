@@ -193,8 +193,10 @@ describe("CLI Text Reply", () => {
       expect(exit.stdout).toContain("/compact [focus]");
       expect(exit.stdout).toContain("keel sessions");
       expect(exit.stdout).toContain("keel sessions fork");
+      expect(exit.stdout).toContain("keel --ephemeral");
+      expect(exit.stdout).toContain("keel --session <id>");
       const sessionVisibilityNote =
-        "Session ledgers are best-effort redacted at rest; live provider requests may include raw content.";
+        "Interactive sessions save ledgers by default with best-effort at-rest redaction.";
       expect(exit.stdout).toContain(sessionVisibilityNote);
       expect(exit.stdout.indexOf(sessionVisibilityNote)).toBeLessThan(
         exit.stdout.indexOf("  keel sessions"),

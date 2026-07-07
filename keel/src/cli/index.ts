@@ -90,6 +90,12 @@ async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
     );
     return 1;
   }
+  if (userMessage !== undefined && cliArgs.ephemeral) {
+    runtime.writeStderr(
+      "Error: --ephemeral is only supported for interactive sessions.\n",
+    );
+    return 1;
+  }
   if (!userMessage && cliArgs.transcriptFile !== undefined) {
     runtime.writeStderr(
       "Error: --transcript is only supported for one-shot runs.\n",
