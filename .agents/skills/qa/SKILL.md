@@ -38,13 +38,13 @@ exactly one unambiguous QA target. Otherwise ask for the PR, range, feature, or 
    in the tree you will run, and record the tested commit. Stale or wrong code
    turns every later green into a false verdict.
 2. For a PR or range, read the diff first, then the owning code, to find the real risk
-   surface. Mine it the way `.claude/plans/qa-blackbox-pr370.md` mined the auth PR:
-   trim/normalize edges, resolution-priority interplay, overwrite/idempotency,
-   symlink/path edges, partial state, schema poisoning, and the E2E critical path.
+   surface. Mine it for the recurring high-yield seams: trim/normalize edges,
+   resolution-priority interplay, overwrite/idempotency, symlink/path edges, partial
+   state, schema poisoning, and the E2E critical path.
 3. For a named feature, read that module plus its tests to learn its contract.
 4. For whole-agent smoke, cover three layers, not just tools:
    - **Tools and loop** — built-in tool contracts and loop control-flow classes
-     (`keel/qa-blackbox.ts` is the reference starting point).
+     (`keel/tests/cli/main/tool-smoke.test.ts` shows the black-box seam end to end).
    - **Stateful commands** — `sessions` (persist / `--resume` / `--fork`), `/undo`
      checkpoint restore, `approvals` (bash approval list / revoke / clear),
      `artifacts show`, `config` / `auth` / `setup` / `doctor`, and context compaction on
@@ -55,11 +55,11 @@ exactly one unambiguous QA target. Otherwise ask for the PR, range, feature, or 
 
 Run everything from `keel/`. Use the real black-box seam — never assert on internals.
 
-- **In-process harness** (preferred, matches `keel/qa-blackbox.ts`): build a runtime with
-  `createRuntime(args, { cwd, env })` from `src/testing/cli-runtime-fixtures.ts`, then call
-  `runCliMain(fixture.runtime)` from `src/cli/index.ts`. Read `fixture.stdout()`,
-  `fixture.stderr()`, and the returned exit code. Run the scratch harness with
-  `node --experimental-strip-types <harness>.ts`.
+- **In-process harness** (preferred; `keel/tests/cli/main/tool-smoke.test.ts` is the
+  worked example): build a runtime with `createRuntime(args, { cwd, env })` from
+  `src/testing/cli-runtime-fixtures.ts`, then call `runCliMain(fixture.runtime)` from
+  `src/cli/index.ts`. Read `fixture.stdout()`, `fixture.stderr()`, and the returned exit
+  code. Run the scratch harness with `node --experimental-strip-types <harness>.ts`.
 - **Interactive / stateful runs** use the same seam: pass a `PassThrough` as `input` with
   `inputIsTTY`, then write newline-delimited prompts and slash-commands (`/model`, `/undo`)
   to drive multi-turn sessions, resume, fork, and undo. Persisted state lives under
