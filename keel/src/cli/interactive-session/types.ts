@@ -79,6 +79,7 @@ export interface InteractiveSessionOptions {
   readonly sessionResumeAvailable?: () => boolean;
   readonly initialModelSwitchCount?: number;
   readonly initialQueuedInputs?: readonly SessionQueuedInput[];
+  readonly initialInputLines?: readonly string[];
   readonly initialBashApprovalGrants?: readonly BashApprovalGrant[];
   readonly projectRoot?: string;
   readonly initialProjectBashApprovalGrants?: readonly BashProjectApprovalGrant[];

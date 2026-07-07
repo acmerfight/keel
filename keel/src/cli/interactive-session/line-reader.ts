@@ -68,6 +68,7 @@ export function createLineReader(
   input: ReturnType<typeof createInterface>,
   options: {
     readonly initialQueuedInputs?: readonly SessionQueuedInput[];
+    readonly initialInputLines?: readonly string[];
     readonly persistQueuedInput?: (input: {
       readonly sequence: number;
       readonly line: string;
@@ -77,13 +78,26 @@ export function createLineReader(
   const queued: QueuedLine[] = (options.initialQueuedInputs ?? []).map(
     queuedLineFromSessionInput,
   );
-  const waiters: Array<(line: QueuedLine | null) => void> = [];
-  const freshWaiters: LineWaiter[] = [];
-  let closed = false;
   let currentSequence = queued.reduce(
     (highest, queuedLine) => Math.max(highest, queuedLine.sequence),
     0,
   );
+  for (const line of options.initialInputLines ?? []) {
+    currentSequence++;
+    const admittedInput =
+      line.trim() === ""
+        ? undefined
+        : options.persistQueuedInput?.({
+            sequence: currentSequence,
+            line,
+          });
+    queued.push(
+      queuedLineWithInputId(currentSequence, line, admittedInput?.id),
+    );
+  }
+  const waiters: Array<(line: QueuedLine | null) => void> = [];
+  const freshWaiters: LineWaiter[] = [];
+  let closed = false;
 
   // Approval answers must be typed after the approval prompt appears. The
   // sequence lets approval waits ignore already-queued user messages.

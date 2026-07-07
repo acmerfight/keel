@@ -256,6 +256,9 @@ export async function runInteractiveSession(
     ...(options.initialQueuedInputs !== undefined
       ? { initialQueuedInputs: options.initialQueuedInputs }
       : {}),
+    ...(options.initialInputLines !== undefined
+      ? { initialInputLines: options.initialInputLines }
+      : {}),
     ...(options.persistQueuedInput !== undefined
       ? { persistQueuedInput: options.persistQueuedInput }
       : {}),

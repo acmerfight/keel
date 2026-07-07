@@ -39,7 +39,9 @@ import { formatCliRuntimeError } from "./runtime-error.ts";
 import {
   formatSessionCatalogWarnings,
   formatSessionForkCreated,
+  formatSessionPicker,
 } from "./session-catalog-format.ts";
+import { readSessionPickerSelection } from "./session-picker.ts";
 import {
   acquireSessionLock,
   consumeSessionQueuedInputs,
@@ -71,6 +73,13 @@ import {
 import { loadWorkflowSkill, WorkflowSkillError } from "./workflow-skills.ts";
 
 type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
+type DirectResumeSessionCliArg = Exclude<
+  NonNullable<RunCliArgs["resumeSession"]>,
+  { readonly kind: "pick" }
+>;
+
+const RESUME_PICK_REQUIRES_TTY_ERROR =
+  "Error: --resume --pick requires a real TTY so the session choice cannot be read from piped input. Use keel --resume for the latest session or keel --resume <id> for automation.";
 
 type InteractiveSessionStart =
   | {
@@ -96,7 +105,13 @@ function createAutomaticSessionId(): string {
 }
 
 function interactiveSessionStartFromCliArgs(
-  cliArgs: RunCliArgs,
+  cliArgs: {
+    readonly ephemeral: boolean;
+    readonly sessionId?: string;
+    readonly resumeSession?: DirectResumeSessionCliArg;
+    readonly forkSessionId?: string;
+    readonly forkBeforeMessage?: string;
+  },
   options: {
     readonly workspace: string;
     readonly runtime: CliRuntime;
@@ -147,6 +162,45 @@ function latestSessionIdForWorkspace(options: {
   return latestSession.id;
 }
 
+async function pickedSessionIdForWorkspace(options: {
+  readonly workspace: string;
+  readonly runtime: CliRuntime;
+}): Promise<{
+  readonly sessionId: string;
+  readonly initialInputLines: readonly string[];
+} | null> {
+  const { runtime } = options;
+  const catalog = listSessionCatalog(options);
+  runtime.writeStderr(formatSessionCatalogWarnings(catalog.warnings));
+  if (catalog.sessions.length === 0) {
+    throw new SessionStoreError(
+      `Error: no saved sessions for workspace ${catalog.workspace}. Complete an interactive turn before running keel --resume --pick.`,
+    );
+  }
+  runtime.writeStdout(formatSessionPicker(catalog));
+  const pickerResult = await readSessionPickerSelection({
+    input: runtime.input,
+    maxChoice: catalog.sessions.length,
+    writeStdout: runtime.writeStdout,
+    writeStderr: runtime.writeStderr,
+  });
+  if (pickerResult.kind === "cancelled") {
+    if (pickerResult.explicit) {
+      runtime.writeStdout("Resume cancelled.\n");
+    }
+    return null;
+  }
+  const selectedSession = catalog.sessions[pickerResult.selection.choice - 1];
+  /* v8 ignore next 3: the picker validates the choice range against this catalog length. */
+  if (selectedSession === undefined) {
+    throw new SessionStoreError("Error: selected session is not available.");
+  }
+  return {
+    sessionId: selectedSession.id,
+    initialInputLines: pickerResult.initialInputLines,
+  };
+}
+
 function activeSessionIdForStart(
   sessionStart: InteractiveSessionStart,
 ): string | null {
@@ -167,6 +221,10 @@ export async function runInteractiveCli(
 ): Promise<number> {
   let exitCode = 0;
 
+  if (cliArgs.resumeSession?.kind === "pick" && runtime.input.isTTY !== true) {
+    runtime.writeStderr(`${RESUME_PICK_REQUIRES_TTY_ERROR}\n`);
+    return 1;
+  }
   if (
     runtime.input.isTTY !== true &&
     runtime.env("KEEL_FORCE_INTERACTIVE") !== "1"
@@ -194,10 +252,45 @@ export async function runInteractiveCli(
             };
           })()
         : undefined;
-    const sessionStart = interactiveSessionStartFromCliArgs(cliArgs, {
-      workspace,
-      runtime,
-    });
+    let sessionStart: InteractiveSessionStart;
+    let initialInputLines: readonly string[] = [];
+    if (cliArgs.resumeSession?.kind === "pick") {
+      const pickedSession = await pickedSessionIdForWorkspace({
+        workspace,
+        runtime,
+      });
+      if (pickedSession === null) {
+        return 0;
+      }
+      const sessionId = pickedSession.sessionId;
+      initialInputLines = pickedSession.initialInputLines;
+      runtime.writeStderr(`Resuming selected session: ${sessionId}\n`);
+      sessionStart = { kind: "resume", sessionId };
+    } else {
+      const directResumeSession: DirectResumeSessionCliArg | undefined =
+        cliArgs.resumeSession;
+      sessionStart = interactiveSessionStartFromCliArgs(
+        {
+          ephemeral: cliArgs.ephemeral,
+          ...(cliArgs.sessionId !== undefined
+            ? { sessionId: cliArgs.sessionId }
+            : {}),
+          ...(directResumeSession !== undefined
+            ? { resumeSession: directResumeSession }
+            : {}),
+          ...(cliArgs.forkSessionId !== undefined
+            ? { forkSessionId: cliArgs.forkSessionId }
+            : {}),
+          ...(cliArgs.forkBeforeMessage !== undefined
+            ? { forkBeforeMessage: cliArgs.forkBeforeMessage }
+            : {}),
+        },
+        {
+          workspace,
+          runtime,
+        },
+      );
+    }
     try {
       if (sessionStart.kind === "fork") {
         sourceSessionLock = acquireSessionLock({
@@ -569,6 +662,7 @@ export async function runInteractiveCli(
         ...(projectInstructions !== undefined ? { projectInstructions } : {}),
         ...(workflowSkill !== undefined ? { workflowSkill } : {}),
         ...(sessionPersistence !== undefined ? sessionPersistence : {}),
+        ...(initialInputLines.length > 0 ? { initialInputLines } : {}),
         ...(projectBashApprovals !== undefined
           ? {
               projectRoot: projectBashApprovals.projectRoot,

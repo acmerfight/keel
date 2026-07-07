@@ -169,6 +169,30 @@ export function formatSessionCatalog(catalog: SessionCatalog): string {
   return `${lines.join("\n")}\n`;
 }
 
+function sessionPickerEntryLines(
+  entry: SessionCatalogEntry,
+  index: number,
+): readonly string[] {
+  const detailIndent = "   ";
+  return [
+    `${index + 1}. ${formatSessionDetailText(entry.id)}  updated ${formatSessionDetailText(entry.updatedAt)}`,
+    `${detailIndent}branch: ${formatSessionDetailText(entry.graph.branchTitle)}`,
+    `${detailIndent}preview: ${formatSessionDetailText(entry.preview)}`,
+  ];
+}
+
+export function formatSessionPicker(catalog: SessionCatalog): string {
+  const lines = [
+    `Sessions for workspace ${formatSessionDetailText(catalog.workspace)}:`,
+    "Keep one saved session open per task; resume it for follow-ups until the task is done.",
+  ];
+  for (const [index, entry] of catalog.sessions.entries()) {
+    lines.push(...sessionPickerEntryLines(entry, index));
+  }
+  lines.push(`Select session [1-${catalog.sessions.length}], or q to cancel:`);
+  return `${lines.join("\n")}\n`;
+}
+
 function formatSessionDetailText(text: string): string {
   const normalized = redactTextForPersistence(text)
     .replace(/\s+/gu, " ")

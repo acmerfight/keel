@@ -28,6 +28,7 @@ const RUN_OPTIONS = [
   "--ephemeral",
   "--session",
   "--resume",
+  "--pick",
   "--fork",
   "--fork-before-message",
   "--fork-points",
@@ -43,6 +44,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   let ephemeral = false;
   let sessionId: string | undefined;
   let resumeSession: RunCliArgs["resumeSession"] | undefined;
+  let resumePick = false;
   let forkSessionId: string | undefined;
   let forkBeforeMessage: string | undefined;
   let forkPoints = false;
@@ -273,6 +275,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       continue;
     }
 
+    if (arg === "--pick") {
+      resumePick = true;
+      continue;
+    }
+
     if (arg === "--fork") {
       const parsed = requireSeparatedOptionValue(
         "--fork",
@@ -349,6 +356,37 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       "Error: --ephemeral cannot be combined with --session, --resume, --fork, --fork-before-message, or --fork-points.",
     );
   }
+  if (resumePick && resumeSession === undefined) {
+    return parseError("Error: --pick requires --resume.");
+  }
+  if (resumePick && resumeSession?.kind === "id") {
+    return parseError(
+      "Error: --resume --pick requires --resume without a session id.",
+    );
+  }
+  if (resumePick && forkSessionId !== undefined) {
+    return parseError("Error: --resume --pick cannot be combined with --fork.");
+  }
+  if (resumePick && forkPoints) {
+    return parseError(
+      "Error: --resume --pick cannot be combined with --fork-points.",
+    );
+  }
+  if (resumePick && forkBeforeMessage !== undefined) {
+    return parseError(
+      "Error: --resume --pick cannot be combined with --fork-before-message.",
+    );
+  }
+  if (resumePick && userMessage !== undefined) {
+    return parseError(
+      "Error: --resume --pick cannot be combined with a message.",
+    );
+  }
+  if (resumePick && transcriptFile !== undefined) {
+    return parseError(
+      "Error: --resume --pick cannot be combined with --transcript.",
+    );
+  }
   const hasResumeSessionId = resumeSession?.kind === "id";
   if (forkPoints && !hasResumeSessionId) {
     return parseError("Error: --fork-points requires --resume <id>.");
@@ -382,6 +420,8 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   if (forkSessionId !== undefined && !hasResumeSessionId) {
     return parseError("Error: --fork requires --resume <id>.");
   }
+  const parsedResumeSession: RunCliArgs["resumeSession"] | undefined =
+    resumePick ? { kind: "pick" } : resumeSession;
 
   return parseOk({
     command: "run",
@@ -392,7 +432,9 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     ...(transcriptFile !== undefined ? { transcriptFile } : {}),
     ephemeral,
     ...(sessionId !== undefined ? { sessionId } : {}),
-    ...(resumeSession !== undefined ? { resumeSession } : {}),
+    ...(parsedResumeSession !== undefined
+      ? { resumeSession: parsedResumeSession }
+      : {}),
     ...(forkSessionId !== undefined ? { forkSessionId } : {}),
     ...(forkBeforeMessage !== undefined ? { forkBeforeMessage } : {}),
     ...(forkPoints ? { forkPoints } : {}),

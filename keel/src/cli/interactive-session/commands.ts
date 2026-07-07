@@ -130,6 +130,8 @@ export function formatInteractiveHelp(): string {
     "      List saved interactive sessions.",
     "  keel --resume",
     "      Resume the latest saved interactive session for this workspace.",
+    "  keel --resume --pick",
+    "      Choose a saved interactive session for this workspace.",
     "  keel --resume <id>",
     "      Resume a saved interactive session.",
     "  keel --resume <id> --fork-points",
