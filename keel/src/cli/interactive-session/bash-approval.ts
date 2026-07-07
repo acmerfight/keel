@@ -42,6 +42,21 @@ export function interactiveBashPermissionPolicy(
     return undefined;
   }
 
+  return createPromptedBashPermissionPolicy(lineReader, writeStderr, {
+    ...policyOptions,
+    scopeLabel: "session",
+  });
+}
+
+export function createPromptedBashPermissionPolicy(
+  lineReader: LineReader,
+  writeStderr: (text: string) => void,
+  policyOptions: {
+    readonly scopeLabel: "session" | "this run";
+    readonly initialGrants?: readonly BashApprovalGrant[];
+    readonly onGrant?: (grant: BashApprovalGrant) => void;
+  },
+): SessionBashPermissionPolicy {
   return createSessionBashPermissionPolicy({
     ...(policyOptions.initialGrants !== undefined
       ? { initialGrants: policyOptions.initialGrants }
@@ -55,7 +70,7 @@ export function interactiveBashPermissionPolicy(
         request.prefixApproval === undefined
           ? []
           : [
-              `[p] allow ${request.prefixApproval.promptLabel} for session: ${escapeApprovalText(
+              `[p] allow ${request.prefixApproval.promptLabel} for ${policyOptions.scopeLabel}: ${escapeApprovalText(
                 request.prefixApproval.display,
               )}`,
             ];
@@ -69,7 +84,7 @@ export function interactiveBashPermissionPolicy(
           )}`,
           ...prefixApprovalLine,
           "Approved command output may be sent to the provider unredacted.",
-          "[y] allow once, [s] allow exact command for session, [n] deny; any other input denies: ",
+          `[y] allow once, [s] allow exact command for ${policyOptions.scopeLabel}, [n] deny; any other input denies: `,
         ].join("\n"),
       );
       const rawAnswer = await lineReader.readLineAfter(
