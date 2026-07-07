@@ -40,8 +40,12 @@ import {
   formatSessionCatalogWarnings,
   formatSessionForkCreated,
   formatSessionPicker,
+  formatSessionStartupPrompt,
 } from "./session-catalog-format.ts";
-import { readSessionPickerSelection } from "./session-picker.ts";
+import {
+  readSessionPickerSelection,
+  readSessionStartupSelection,
+} from "./session-picker.ts";
 import {
   acquireSessionLock,
   consumeSessionQueuedInputs,
@@ -57,6 +61,8 @@ import {
   persistSessionQueuedInput,
   persistSessionTaskProgress,
   resumeSessionStore,
+  type SessionCatalog,
+  type SessionCatalogEntry,
   type SessionLock,
   type SessionModelSelection,
   type SessionQueuedInput,
@@ -99,6 +105,21 @@ type InteractiveSessionStart =
       readonly targetSessionId: string;
       readonly beforeMessageId?: string;
     };
+
+type PromptedInteractiveSessionStart =
+  | {
+      readonly kind: "start";
+      readonly sessionStart: InteractiveSessionStart;
+      readonly initialInputLines: readonly string[];
+    }
+  | {
+      readonly kind: "cancelled";
+    };
+
+interface BareKeelPromptCatalog {
+  readonly catalog: SessionCatalog;
+  readonly latestSession: SessionCatalogEntry;
+}
 
 function createAutomaticSessionId(): string {
   return `session-${randomUUID()}`;
@@ -160,6 +181,100 @@ function latestSessionIdForWorkspace(options: {
     );
   }
   return latestSession.id;
+}
+
+function shouldPromptForSavedSessionOnBareKeel(
+  cliArgs: RunCliArgs,
+  runtime: CliRuntime,
+): boolean {
+  return (
+    runtime.args.length === 0 &&
+    runtime.input.isTTY === true &&
+    !cliArgs.ephemeral &&
+    cliArgs.sessionId === undefined &&
+    cliArgs.resumeSession === undefined &&
+    cliArgs.forkSessionId === undefined &&
+    cliArgs.forkBeforeMessage === undefined &&
+    cliArgs.forkPoints !== true
+  );
+}
+
+function bareKeelPromptCatalog(options: {
+  readonly workspace: string;
+  readonly runtime: CliRuntime;
+}): BareKeelPromptCatalog | null {
+  const catalog = listSessionCatalog(options);
+  const latestSession = catalog.sessions[0];
+  if (latestSession === undefined) {
+    return null;
+  }
+  return { catalog, latestSession };
+}
+
+async function promptedSessionStartForBareKeel(options: {
+  readonly promptCatalog: BareKeelPromptCatalog;
+  readonly runtime: CliRuntime;
+}): Promise<PromptedInteractiveSessionStart> {
+  const { runtime } = options;
+  const { catalog, latestSession } = options.promptCatalog;
+  runtime.writeStderr(formatSessionCatalogWarnings(catalog.warnings));
+  const startupPrompt = formatSessionStartupPrompt({
+    workspace: catalog.workspace,
+    latestSession,
+  });
+  runtime.writeStdout(startupPrompt);
+  const startupSelection = await readSessionStartupSelection({
+    input: runtime.input,
+    maxChoice: catalog.sessions.length,
+    startupPrompt,
+    pickerPrompt: formatSessionPicker(catalog),
+    writeStdout: runtime.writeStdout,
+    writeStderr: runtime.writeStderr,
+  });
+  switch (startupSelection.kind) {
+    case "resume-latest":
+      runtime.writeStderr(`Resuming latest session: ${latestSession.id}\n`);
+      return {
+        kind: "start",
+        sessionStart: { kind: "resume", sessionId: latestSession.id },
+        initialInputLines: startupSelection.initialInputLines,
+      };
+    case "pick": {
+      const selectedSession =
+        catalog.sessions[startupSelection.selection.choice - 1];
+      /* v8 ignore next 3: the picker validates the choice range against this catalog length. */
+      if (selectedSession === undefined) {
+        throw new SessionStoreError(
+          "Error: selected session is not available.",
+        );
+      }
+      runtime.writeStderr(`Resuming selected session: ${selectedSession.id}\n`);
+      return {
+        kind: "start",
+        sessionStart: { kind: "resume", sessionId: selectedSession.id },
+        initialInputLines: startupSelection.initialInputLines,
+      };
+    }
+    case "new":
+      runtime.writeStdout("Starting a new saved session.\n");
+      return {
+        kind: "start",
+        sessionStart: {
+          kind: "create",
+          sessionId: createAutomaticSessionId(),
+        },
+        initialInputLines: startupSelection.initialInputLines,
+      };
+    case "cancelled":
+      if (startupSelection.explicit) {
+        runtime.writeStdout(
+          startupSelection.source === "picker"
+            ? "Resume cancelled.\n"
+            : "Startup cancelled.\n",
+        );
+      }
+      return { kind: "cancelled" };
+  }
 }
 
 async function pickedSessionIdForWorkspace(options: {
@@ -266,6 +381,32 @@ export async function runInteractiveCli(
       initialInputLines = pickedSession.initialInputLines;
       runtime.writeStderr(`Resuming selected session: ${sessionId}\n`);
       sessionStart = { kind: "resume", sessionId };
+    } else if (shouldPromptForSavedSessionOnBareKeel(cliArgs, runtime)) {
+      const promptCatalog = bareKeelPromptCatalog({
+        workspace,
+        runtime,
+      });
+      if (promptCatalog === null) {
+        sessionStart = interactiveSessionStartFromCliArgs(
+          {
+            ephemeral: cliArgs.ephemeral,
+          },
+          {
+            workspace,
+            runtime,
+          },
+        );
+      } else {
+        const promptedSessionStart = await promptedSessionStartForBareKeel({
+          promptCatalog,
+          runtime,
+        });
+        if (promptedSessionStart.kind === "cancelled") {
+          return 0;
+        }
+        sessionStart = promptedSessionStart.sessionStart;
+        initialInputLines = promptedSessionStart.initialInputLines;
+      }
     } else {
       const directResumeSession: DirectResumeSessionCliArg | undefined =
         cliArgs.resumeSession;

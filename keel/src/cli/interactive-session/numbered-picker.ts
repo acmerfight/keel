@@ -1,6 +1,6 @@
 import type { LineReader, QueuedLine } from "./line-reader.ts";
 
-interface NumberedPickerSelection {
+export interface NumberedPickerSelection {
   readonly choice: number;
 }
 

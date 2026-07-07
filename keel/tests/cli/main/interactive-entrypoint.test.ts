@@ -88,6 +88,28 @@ async function sessionDirectoryNames(home: string): Promise<readonly string[]> {
   }
 }
 
+async function writeWorkflowSkill(options: {
+  readonly workspace: string;
+  readonly name: string;
+  readonly description: string;
+  readonly body: string;
+}): Promise<void> {
+  const skillDir = join(options.workspace, ".agents", "skills", options.name);
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(
+    join(skillDir, "SKILL.md"),
+    [
+      "---",
+      `name: ${options.name}`,
+      `description: ${options.description}`,
+      "---",
+      "",
+      options.body,
+      "",
+    ].join("\n"),
+  );
+}
+
 function savedSessionIntroFromStderr(stderr: string): string {
   const match =
     /^Keel interactive session\nsession: ([^\n]+)\nContinue the task here; send follow-ups or corrections until it is done\.\nAfter a completed turn, resume with: keel --resume \1\nCommands: \/status \/tasks \/diff \/undo \/help\n/u.exec(
@@ -393,6 +415,525 @@ describe("CLI Main - Interactive Entrypoint", () => {
   });
 
   test(`Given saved sessions exist in the current workspace,
+    When the user starts bare Keel in a real terminal and accepts the latest session,
+    Then Keel continues the saved task before reading the next prompt`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "older",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
+          { role: "user", content: "remember alpha" },
+          {
+            role: "assistant",
+            content: "Remembered alpha.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "latest",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          { role: "user", content: "remember beta" },
+          {
+            role: "assistant",
+            content: "Remembered beta.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await mkdir(join(home, "sessions", "broken"), { recursive: true });
+    await writeFile(join(home, "sessions", "broken", "ledger.jsonl"), "{bad\n");
+
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () => fixture.stdout().includes("Resume latest saved session?"),
+        "resume-first startup prompt did not render",
+      );
+      input.end("\nwhat did I ask you to remember?\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain(
+        `Saved sessions for workspace ${ledgerWorkspace}:\n`,
+      );
+      expect(fixture.stdout()).toContain(
+        "Resume latest saved session?\n  Enter/y  resume latest: latest\n  p        pick another session\n  n        start a new session\n  q        quit\n",
+      );
+      expect(fixture.stdout()).toContain("Earlier you said: remember beta\n");
+      expect(fixture.stderr()).toContain(
+        'Warning: skipped session "broken": cannot load session ledger',
+      );
+      expect(fixture.stderr()).toContain("Resuming latest session: latest\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions exist in the current workspace,
+    When the user starts bare Keel and asks to pick a session,
+    Then Keel opens the picker and continues the selected task`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "older",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
+          { role: "user", content: "remember alpha" },
+          {
+            role: "assistant",
+            content: "Remembered alpha.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "latest",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          { role: "user", content: "remember beta" },
+          {
+            role: "assistant",
+            content: "Remembered beta.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () => fixture.stdout().includes("Resume latest saved session?"),
+        "resume-first startup prompt did not render",
+      );
+      input.end("p\n2\n\nwhat did I ask you to remember?\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain(
+        "Select session [1-2], or q to cancel:",
+      );
+      expect(fixture.stdout()).toContain("Earlier you said: remember alpha\n");
+      expect(fixture.stderr()).toContain("Resuming selected session: older\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions exist in the current workspace,
+    When the user starts bare Keel and chooses a new session,
+    Then Keel starts fresh instead of restoring saved context`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "latest",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          { role: "user", content: "remember beta" },
+          {
+            role: "assistant",
+            content: "Remembered beta.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () => fixture.stdout().includes("Resume latest saved session?"),
+        "resume-first startup prompt did not render",
+      );
+      input.end("n\nwhat did I ask you to remember?\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain(
+        "Starting a new saved session.\nRemembered: what did I ask you to remember?\n",
+      );
+      expect(fixture.stdout()).not.toContain("Earlier you said:");
+      expect(fixture.stderr()).not.toContain("Resuming");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions exist in the current workspace,
+    When the user starts bare Keel and cancels the startup prompt,
+    Then Keel exits without starting a provider turn or creating a new session`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "latest",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          { role: "user", content: "remember beta" },
+          {
+            role: "assistant",
+            content: "Remembered beta.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () => fixture.stdout().includes("Resume latest saved session?"),
+        "resume-first startup prompt did not render",
+      );
+      input.end("q\nthis must not run\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("Startup cancelled.\n");
+      expect(fixture.stdout()).not.toContain("Remembered:");
+      expect(fixture.stderr()).not.toContain("Keel interactive session");
+      expect(await sessionDirectoryNames(home)).toEqual(["latest"]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions exist in the current workspace,
+    When the user starts bare Keel and cancels after opening the picker,
+    Then Keel exits without starting a resumed session`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "latest",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          { role: "user", content: "remember beta" },
+          {
+            role: "assistant",
+            content: "Remembered beta.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () => fixture.stdout().includes("Resume latest saved session?"),
+        "resume-first startup prompt did not render",
+      );
+      input.end("p\nq\nthis must not run\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain(
+        "Select session [1-1], or q to cancel:",
+      );
+      expect(fixture.stdout()).toContain("Resume cancelled.\n");
+      expect(fixture.stdout()).not.toContain("Remembered:");
+      expect(fixture.stderr()).not.toContain("Resuming selected session");
+      expect(fixture.stderr()).not.toContain("Keel interactive session");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions exist in the current workspace,
+    When input closes while bare Keel waits for the startup choice,
+    Then Keel exits without an explicit cancellation message`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "latest",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          { role: "user", content: "remember beta" },
+          {
+            role: "assistant",
+            content: "Remembered beta.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () => fixture.stdout().includes("Resume latest saved session?"),
+        "resume-first startup prompt did not render",
+      );
+      input.end();
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).not.toContain("Startup cancelled.\n");
+      expect(fixture.stdout()).not.toContain("Remembered:");
+      expect(fixture.stderr()).not.toContain("Keel interactive session");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions exist in the current workspace,
+    When the user enters an invalid bare Keel startup choice and then chooses new,
+    Then Keel re-prompts and starts a fresh session`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "latest",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          { role: "user", content: "remember beta" },
+          {
+            role: "assistant",
+            content: "Remembered beta.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () => fixture.stdout().includes("Resume latest saved session?"),
+        "resume-first startup prompt did not render",
+      );
+      input.end("maybe\nn\nfresh task\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stderr()).toContain(
+        "Error: choose Enter/y, p, n, or q.\n",
+      );
+      expect(fixture.stdout()).toContain("Starting a new saved session.\n");
+      expect(fixture.stdout()).toContain("Remembered: fresh task\n");
+      expect(fixture.stdout()).not.toContain("Earlier you said:");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions exist and the user selects a workflow skill,
+    When the user starts Keel in a real terminal,
+    Then Keel starts the skilled session without showing the bare resume prompt`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeWorkflowSkill({
+      workspace,
+      name: "review",
+      description: "Review a PR using the project checklist.",
+      body: "Read PR comments first.",
+    });
+    await writeSessionLedger({
+      home,
+      id: "latest",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          { role: "user", content: "remember beta" },
+          {
+            role: "assistant",
+            content: "Remembered beta.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime(["--skill", "review"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () => fixture.stderr().includes("keel> "),
+        "interactive skill session did not render the first prompt",
+      );
+      input.end("hello from skill\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Remembered: hello from skill\n");
+      expect(fixture.stdout()).not.toContain("Resume latest saved session?");
+      expect(fixture.stderr()).not.toContain("Resuming latest session");
+      expect(fixture.stderr()).not.toContain(
+        'session "latest" has no workflow skill',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions exist in the current workspace,
     When the user picks a session to resume,
     Then Keel continues the selected saved task instead of the latest one`, async () => {
     // Given
@@ -669,26 +1210,31 @@ describe("CLI Main - Interactive Entrypoint", () => {
     When Keel renders the first prompt,
     Then the intro explains to keep follow-ups in the session and how to resume it`, async () => {
     // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-tui-home-"));
     const input = new PassThrough();
     const fixture = createRuntime([], {
-      env: { KEEL_PROVIDER: "fake" },
+      env: { KEEL_PROVIDER: "fake", KEEL_HOME: home },
       input,
       inputIsTTY: true,
     });
 
-    // When
-    const run = runCliMain(fixture.runtime);
-    await waitForCondition(
-      () => fixture.stderr().includes("keel> "),
-      "interactive session did not render the initial prompt",
-    );
-    input.end();
-    const exitCode = await run;
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () => fixture.stderr().includes("keel> "),
+        "interactive session did not render the initial prompt",
+      );
+      input.end();
+      const exitCode = await run;
 
-    // Then
-    expect(exitCode).toBe(0);
-    const intro = expectDefaultSavedSessionIntro(fixture.stderr());
-    expect(fixture.stderr()).toBe(`${intro}keel> \n`);
+      // Then
+      expect(exitCode).toBe(0);
+      const intro = expectDefaultSavedSessionIntro(fixture.stderr());
+      expect(fixture.stderr()).toBe(`${intro}keel> \n`);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given the user starts an ephemeral real interactive terminal session,
@@ -1005,6 +1551,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     Then the display keeps prompts and status separate from assistant output`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-home-"));
     await writeFile(join(workspace, "note.txt"), "hello from note\n", "utf8");
     const capturedBodies: unknown[] = [];
     const server = createServer((req, res) => {
@@ -1043,6 +1590,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       env: {
         DEEPSEEK_API_KEY: "test-key",
         DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_HOME: home,
       },
       input,
       inputIsTTY: true,
@@ -1076,6 +1624,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   });
 
@@ -1083,6 +1632,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     When the assistant replies after the retry,
     Then the display keeps the retry status separate from assistant output`, async () => {
     // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-home-"));
     let requestCount = 0;
     const server = createServer((req, res) => {
       if (req.url !== "/chat/completions") {
@@ -1117,6 +1667,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       env: {
         DEEPSEEK_API_KEY: "test-key",
         DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_HOME: home,
       },
       input,
       inputIsTTY: true,
@@ -1144,6 +1695,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       );
     } finally {
       await close(server);
+      await rm(home, { recursive: true, force: true });
     }
   });
 
@@ -1152,6 +1704,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     Then the display keeps the failed tool status separate from assistant output`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-fail-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-home-"));
     const capturedBodies: unknown[] = [];
     const server = createServer((req, res) => {
       if (req.url !== "/chat/completions") {
@@ -1189,6 +1742,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       env: {
         DEEPSEEK_API_KEY: "test-key",
         DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_HOME: home,
       },
       input,
       inputIsTTY: true,
@@ -1223,6 +1777,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   });
 
@@ -1332,6 +1887,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     Then the stderr log keeps prompts and status on separate lines`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-log-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-home-"));
     await writeFile(join(workspace, "note.txt"), "hello from note\n", "utf8");
     const capturedBodies: unknown[] = [];
     const server = createServer((req, res) => {
@@ -1370,6 +1926,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       env: {
         DEEPSEEK_API_KEY: "test-key",
         DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_HOME: home,
       },
       input,
       inputIsTTY: true,
@@ -1404,6 +1961,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   });
 
@@ -1412,6 +1970,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     Then the approval prompt is separated from the input prompt and still accepts a fresh answer`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-bash-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-home-"));
     const command =
       "node -e \"require('node:fs').writeFileSync('approved.txt', 'yes')\"";
     const capturedBodies: unknown[] = [];
@@ -1452,6 +2011,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       env: {
         DEEPSEEK_API_KEY: "test-key",
         DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_HOME: home,
       },
       input,
       inputIsTTY: true,
@@ -1490,6 +2050,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   });
 
@@ -1497,64 +2058,74 @@ describe("CLI Main - Interactive Entrypoint", () => {
     When the user asks for help and then sends a prompt,
     Then the next input prompt is still visible before the assistant replies`, async () => {
     // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-home-"));
     const input = new PassThrough();
     const fixture = createRuntime([], {
-      env: { KEEL_PROVIDER: "fake" },
+      env: { KEEL_PROVIDER: "fake", KEEL_HOME: home },
       input,
       inputIsTTY: true,
     });
 
-    // When
-    const run = runCliMain(fixture.runtime);
-    input.write("/help\n");
-    await waitForCondition(() => {
-      const stderr = fixture.stderr();
-      return (
-        stderr.includes("Commands: /status /tasks /diff /undo /help\n") &&
-        stderr === `${savedSessionIntroFromStderr(stderr)}keel> /help\nkeel> `
-      );
-    }, "interactive help did not return to a visible prompt");
-    input.end("hello\n");
-    const exitCode = await run;
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      input.write("/help\n");
+      await waitForCondition(() => {
+        const stderr = fixture.stderr();
+        return (
+          stderr.includes("Commands: /status /tasks /diff /undo /help\n") &&
+          stderr === `${savedSessionIntroFromStderr(stderr)}keel> /help\nkeel> `
+        );
+      }, "interactive help did not return to a visible prompt");
+      input.end("hello\n");
+      const exitCode = await run;
 
-    // Then
-    expect(exitCode).toBe(0);
-    expect(fixture.stdout()).toContain("Interactive commands:\n");
-    expect(fixture.stdout()).toContain(
-      "Keep one saved session open for a task; send follow-ups or corrections here until it is done.",
-    );
-    expect(fixture.stdout()).toContain("Remembered: hello\n");
-    const intro = expectDefaultSavedSessionIntro(fixture.stderr());
-    expect(fixture.stderr()).toContain(
-      [intro, "keel> /help\n", "keel> hello\n", "assistant:\n"].join(""),
-    );
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("Interactive commands:\n");
+      expect(fixture.stdout()).toContain(
+        "Keep one saved session open for a task; send follow-ups or corrections here until it is done.",
+      );
+      expect(fixture.stdout()).toContain("Remembered: hello\n");
+      const intro = expectDefaultSavedSessionIntro(fixture.stderr());
+      expect(fixture.stderr()).toContain(
+        [intro, "keel> /help\n", "keel> hello\n", "assistant:\n"].join(""),
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given a real interactive terminal session waits at an empty prompt,
     When stdin closes,
     Then the prompt line is closed before exit`, async () => {
     // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-home-"));
     const input = new PassThrough();
     const fixture = createRuntime([], {
-      env: { KEEL_PROVIDER: "fake" },
+      env: { KEEL_PROVIDER: "fake", KEEL_HOME: home },
       input,
       inputIsTTY: true,
     });
 
-    // When
-    const run = runCliMain(fixture.runtime);
-    await waitForCondition(
-      () => fixture.stderr().includes("keel> "),
-      "interactive session did not render the initial prompt",
-    );
-    input.end();
-    const exitCode = await run;
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () => fixture.stderr().includes("keel> "),
+        "interactive session did not render the initial prompt",
+      );
+      input.end();
+      const exitCode = await run;
 
-    // Then
-    expect(exitCode).toBe(0);
-    expect(fixture.stdout()).toBe("");
-    const intro = expectDefaultSavedSessionIntro(fixture.stderr());
-    expect(fixture.stderr()).toBe(`${intro}keel> \n`);
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("");
+      const intro = expectDefaultSavedSessionIntro(fixture.stderr());
+      expect(fixture.stderr()).toBe(`${intro}keel> \n`);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given interactive mode has cost tracking enabled,
