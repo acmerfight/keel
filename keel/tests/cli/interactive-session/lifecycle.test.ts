@@ -325,6 +325,9 @@ describe("Interactive Session - Lifecycle", () => {
       expect(stdout).toContain("  model switches: 1\n");
       expect(stdout).toContain("  latest checkpoint: none\n");
       expect(stdout).toContain("  undo checkpoints: 0\n");
+      expect(stdout).toContain(
+        "  continue: send follow-ups or corrections here until the task is done\n",
+      );
       expect(stdout).toContain("recovery:\n");
       expect(stdout).toContain("  resume: keel --resume status-detail\n");
       expect(stdout).toContain("  fork-points: /fork-points\n");
@@ -589,6 +592,12 @@ describe("Interactive Session - Lifecycle", () => {
     // Then
     await session;
     expect(stdout).toContain("Interactive commands:");
+    expect(stdout).toContain(
+      "Keep one saved session open for a task; send follow-ups or corrections here until it is done.",
+    );
+    expect(stdout).toContain(
+      "Input typed while a turn runs is applied at the next safe model request.",
+    );
     expect(stdout).toContain("/help");
     expect(stdout).toContain("/status");
     expect(stdout).toContain("/diff");

@@ -501,6 +501,14 @@ export async function runInteractiveCli(
         runtime.input.isTTY === true
           ? createStableInteractiveDisplay(runtime, {
               inputEchoesToDisplay: runtime.stderrIsTTY === true,
+              session:
+                activeSessionId === undefined
+                  ? { kind: "ephemeral" }
+                  : {
+                      kind: "saved",
+                      sessionId: activeSessionId,
+                      resumeAvailable: sessionStart.kind !== "create",
+                    },
             })
           : undefined;
       const reportRecorder = createAgentEventReportRecorder();
@@ -510,7 +518,10 @@ export async function runInteractiveCli(
         workspace,
         platform: runtime.platform,
         ...(activeSessionId !== undefined
-          ? { sessionId: activeSessionId }
+          ? {
+              sessionId: activeSessionId,
+              sessionResumeAvailable: () => session !== undefined,
+            }
           : {}),
         ...(cliArgs.providerId !== undefined || cliArgs.model !== undefined
           ? {

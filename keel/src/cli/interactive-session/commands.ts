@@ -91,6 +91,11 @@ type ParseResult<T> =
 
 export function formatInteractiveHelp(): string {
   return [
+    "Workflow:",
+    "  Keep one saved session open for a task; send follow-ups or corrections here until it is done.",
+    "  Input typed while a turn runs is applied at the next safe model request.",
+    "  Use /status for the resume command, /tasks for progress, /diff for changes, and /undo to roll back.",
+    "",
     "Interactive commands:",
     "  /help              Show this help.",
     "  /undo              Restore the latest undo checkpoint.",

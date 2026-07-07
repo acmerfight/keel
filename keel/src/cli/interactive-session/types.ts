@@ -76,6 +76,7 @@ export interface InteractiveSessionOptions {
   readonly initialTaskProgress?: SessionTaskProgress;
   readonly initialModelSelection?: SessionModelSelection;
   readonly configuredModelSelection?: ProviderSelection;
+  readonly sessionResumeAvailable?: () => boolean;
   readonly initialModelSwitchCount?: number;
   readonly initialQueuedInputs?: readonly SessionQueuedInput[];
   readonly initialBashApprovalGrants?: readonly BashApprovalGrant[];

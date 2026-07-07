@@ -97,6 +97,7 @@ export function formatSessionStatusSnapshot(
   const lines = [
     "status:",
     `  session: ${formatStatusText(options.session)}`,
+    "  continue: send follow-ups or corrections here until the task is done",
     `  workspace: ${formatStatusText(options.workspace)}`,
     `  active model: ${formatStatusText(options.activeModel)}`,
     `  workflow skill: ${formatWorkflowSkill(options.workflowSkill)}`,

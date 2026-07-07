@@ -409,7 +409,8 @@ export async function runInteractiveSession(
         : formatModelSelection(options.initialModelSelection)
       : formatActiveModel(resolved);
   const statusRecoveryActions = () => [
-    ...(options.sessionId === undefined
+    ...(options.sessionId === undefined ||
+    options.sessionResumeAvailable?.() === false
       ? []
       : [
           {

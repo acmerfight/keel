@@ -16,6 +16,40 @@ interface StableInteractiveDisplayRuntime {
 
 interface StableInteractiveDisplayOptions {
   readonly inputEchoesToDisplay: boolean;
+  readonly session:
+    | {
+        readonly kind: "saved";
+        readonly sessionId: string;
+        readonly resumeAvailable: boolean;
+      }
+    | {
+        readonly kind: "ephemeral";
+      };
+}
+
+function formatInteractiveIntro(
+  session: StableInteractiveDisplayOptions["session"],
+): string {
+  if (session.kind === "ephemeral") {
+    return [
+      "Keel interactive session (ephemeral)",
+      "Not saved. Start without --ephemeral to resume later.",
+      "Continue the task here; send follow-ups or corrections until it is done.",
+      "Commands: /status /tasks /diff /undo /help",
+      "",
+    ].join("\n");
+  }
+
+  return [
+    "Keel interactive session",
+    `session: ${session.sessionId}`,
+    "Continue the task here; send follow-ups or corrections until it is done.",
+    session.resumeAvailable
+      ? `Resume later with: keel --resume ${session.sessionId}`
+      : `After a completed turn, resume with: keel --resume ${session.sessionId}`,
+    "Commands: /status /tasks /diff /undo /help",
+    "",
+  ].join("\n");
 }
 
 export function createStableInteractiveDisplay(
@@ -34,7 +68,7 @@ export function createStableInteractiveDisplay(
 
   return {
     writeIntro: () => {
-      runtime.writeStderr("Keel interactive session\n");
+      runtime.writeStderr(formatInteractiveIntro(options.session));
     },
     renderPrompt: () => {
       runtime.writeStderr("keel> ");
