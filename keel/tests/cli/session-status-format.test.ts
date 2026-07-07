@@ -26,6 +26,9 @@ describe("CLI Session Status Format", () => {
 
     // Then
     expect(formatted).toContain("status:\n");
+    expect(formatted).toContain(
+      "  continue: send follow-ups or corrections here until the task is done\n",
+    );
     expect(formatted).not.toContain("recovery:\n");
   });
 

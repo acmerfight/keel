@@ -82,6 +82,32 @@ async function sessionDirectoryNames(home: string): Promise<readonly string[]> {
   }
 }
 
+function savedSessionIntroFromStderr(stderr: string): string {
+  const match =
+    /^Keel interactive session\nsession: ([^\n]+)\nContinue the task here; send follow-ups or corrections until it is done\.\nAfter a completed turn, resume with: keel --resume \1\nCommands: \/status \/tasks \/diff \/undo \/help\n/u.exec(
+      stderr,
+    );
+  if (match === null) {
+    throw new Error(`No saved session intro found in stderr:\n${stderr}`);
+  }
+  return match[0];
+}
+
+function expectDefaultSavedSessionIntro(stderr: string): string {
+  const intro = savedSessionIntroFromStderr(stderr);
+  const sessionId = intro.match(/^session: ([^\n]+)$/mu)?.at(1);
+  expect(sessionId).toMatch(/^session-[0-9a-f-]+$/u);
+  return intro;
+}
+
+const EPHEMERAL_INTERACTIVE_INTRO = [
+  "Keel interactive session (ephemeral)",
+  "Not saved. Start without --ephemeral to resume later.",
+  "Continue the task here; send follow-ups or corrections until it is done.",
+  "Commands: /status /tasks /diff /undo /help",
+  "",
+].join("\n");
+
 describe("CLI Main - Interactive Entrypoint", () => {
   test(`Given provider and model flags are used for an interactive session,
     When the CLI main runs in-process,
@@ -129,6 +155,41 @@ describe("CLI Main - Interactive Entrypoint", () => {
     );
     expect(fixture.stdout()).not.toContain("Remembered:");
     expect(fixture.stderr()).toBe("");
+  });
+
+  test(`Given a saved interactive session has no completed turn yet,
+    When the user asks for status,
+    Then the snapshot does not show an unusable resume command`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-status-fresh-home-"));
+    const input = new PassThrough();
+    input.end("/status\n");
+    const fixture = createRuntime([], {
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("status:\n");
+      expect(fixture.stdout()).toContain(
+        "  continue: send follow-ups or corrections here until the task is done\n",
+      );
+      expect(fixture.stdout()).not.toContain("resume: keel --resume");
+      expect(fixture.stdout()).toContain("  undo-list: /undo --list\n");
+      expect(fixture.stderr()).toBe("");
+      expect(await sessionDirectoryNames(home)).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test.each([
@@ -285,6 +346,64 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(await sessionDirectoryNames(home)).toEqual([]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user starts a saved real interactive terminal session,
+    When Keel renders the first prompt,
+    Then the intro explains to keep follow-ups in the session and how to resume it`, async () => {
+    // Given
+    const input = new PassThrough();
+    const fixture = createRuntime([], {
+      env: { KEEL_PROVIDER: "fake" },
+      input,
+      inputIsTTY: true,
+    });
+
+    // When
+    const run = runCliMain(fixture.runtime);
+    await waitForCondition(
+      () => fixture.stderr().includes("keel> "),
+      "interactive session did not render the initial prompt",
+    );
+    input.end();
+    const exitCode = await run;
+
+    // Then
+    expect(exitCode).toBe(0);
+    const intro = expectDefaultSavedSessionIntro(fixture.stderr());
+    expect(fixture.stderr()).toBe(`${intro}keel> \n`);
+  });
+
+  test(`Given the user starts an ephemeral real interactive terminal session,
+    When Keel renders the first prompt,
+    Then the intro explains the session is not resumable`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-ephemeral-tui-home-"));
+    const input = new PassThrough();
+    const fixture = createRuntime(["--ephemeral"], {
+      env: { KEEL_PROVIDER: "fake", KEEL_HOME: home },
+      input,
+      inputIsTTY: true,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () => fixture.stderr() === `${EPHEMERAL_INTERACTIVE_INTRO}keel> `,
+        "ephemeral interactive session did not render the initial prompt",
+      );
+      input.end();
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stderr()).toBe(`${EPHEMERAL_INTERACTIVE_INTRO}keel> \n`);
+      expect(fixture.stderr()).not.toContain("keel --resume");
+      expect(await sessionDirectoryNames(home)).toEqual([]);
+    } finally {
       await rm(home, { recursive: true, force: true });
     }
   });
@@ -624,9 +743,10 @@ describe("CLI Main - Interactive Entrypoint", () => {
       // Then
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe("Read done.\n");
+      const intro = expectDefaultSavedSessionIntro(fixture.stderr());
       expect(fixture.stderr()).toBe(
         [
-          "Keel interactive session\n",
+          intro,
           "keel> read note.txt\n",
           "status: Tool: read note.txt\n",
           "assistant:\n",
@@ -698,9 +818,10 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(exitCode).toBe(0);
       expect(requestCount).toBe(2);
       expect(fixture.stdout()).toBe("Recovered.\n");
+      const intro = expectDefaultSavedSessionIntro(fixture.stderr());
       expect(fixture.stderr()).toBe(
         [
-          "Keel interactive session\n",
+          intro,
           "keel> hello\n",
           "status: Provider retry: DeepSeek rate limited (attempt 1/4 in 0ms)\n",
           "assistant:\n",
@@ -768,9 +889,10 @@ describe("CLI Main - Interactive Entrypoint", () => {
       // Then
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe("Handled failure.\n");
+      const intro = expectDefaultSavedSessionIntro(fixture.stderr());
       expect(fixture.stderr()).toBe(
         [
-          "Keel interactive session\n",
+          intro,
           "keel> read missing.txt\n",
           "status: Tool: read missing.txt\n",
           "status: Tool failed: read missing.txt\n",
@@ -949,9 +1071,10 @@ describe("CLI Main - Interactive Entrypoint", () => {
       // Then
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe("Read done.\n");
+      const intro = expectDefaultSavedSessionIntro(fixture.stderr());
       expect(fixture.stderr()).toBe(
         [
-          "Keel interactive session\n",
+          intro,
           "keel> \n",
           "status: Tool: read note.txt\n",
           "assistant:\n",
@@ -1038,8 +1161,9 @@ describe("CLI Main - Interactive Entrypoint", () => {
         "yes",
       );
       expect(fixture.stdout()).toBe("Ran.\n");
+      const intro = expectDefaultSavedSessionIntro(fixture.stderr());
       expect(fixture.stderr()).toContain(
-        `Keel interactive session\nkeel> run approved command\nstatus: Tool: bash ${command}\nApprove bash command?\n`,
+        `${intro}keel> run approved command\nstatus: Tool: bash ${command}\nApprove bash command?\n`,
       );
       expect(fixture.stderr()).toContain("assistant:\n");
       const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
@@ -1068,26 +1192,26 @@ describe("CLI Main - Interactive Entrypoint", () => {
     // When
     const run = runCliMain(fixture.runtime);
     input.write("/help\n");
-    await waitForCondition(
-      () =>
-        fixture.stderr() ===
-        ["Keel interactive session\n", "keel> /help\n", "keel> "].join(""),
-      "interactive help did not return to a visible prompt",
-    );
+    await waitForCondition(() => {
+      const stderr = fixture.stderr();
+      return (
+        stderr.includes("Commands: /status /tasks /diff /undo /help\n") &&
+        stderr === `${savedSessionIntroFromStderr(stderr)}keel> /help\nkeel> `
+      );
+    }, "interactive help did not return to a visible prompt");
     input.end("hello\n");
     const exitCode = await run;
 
     // Then
     expect(exitCode).toBe(0);
     expect(fixture.stdout()).toContain("Interactive commands:\n");
+    expect(fixture.stdout()).toContain(
+      "Keep one saved session open for a task; send follow-ups or corrections here until it is done.",
+    );
     expect(fixture.stdout()).toContain("Remembered: hello\n");
+    const intro = expectDefaultSavedSessionIntro(fixture.stderr());
     expect(fixture.stderr()).toContain(
-      [
-        "Keel interactive session\n",
-        "keel> /help\n",
-        "keel> hello\n",
-        "assistant:\n",
-      ].join(""),
+      [intro, "keel> /help\n", "keel> hello\n", "assistant:\n"].join(""),
     );
   });
 
@@ -1105,7 +1229,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     // When
     const run = runCliMain(fixture.runtime);
     await waitForCondition(
-      () => fixture.stderr() === "Keel interactive session\nkeel> ",
+      () => fixture.stderr().includes("keel> "),
       "interactive session did not render the initial prompt",
     );
     input.end();
@@ -1114,7 +1238,8 @@ describe("CLI Main - Interactive Entrypoint", () => {
     // Then
     expect(exitCode).toBe(0);
     expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe("Keel interactive session\nkeel> \n");
+    const intro = expectDefaultSavedSessionIntro(fixture.stderr());
+    expect(fixture.stderr()).toBe(`${intro}keel> \n`);
   });
 
   test(`Given interactive mode has cost tracking enabled,
