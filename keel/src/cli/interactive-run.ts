@@ -3,6 +3,12 @@ import type { Message } from "../llm/types.ts";
 import type { BashApprovalGrant } from "../permissions/bash.ts";
 import type { CliArgs } from "./args.ts";
 import { USAGE } from "./args.ts";
+import {
+  BashProjectApprovalsError,
+  bashApprovalProjectRoot,
+  listBashProjectApprovalGrants,
+  saveBashProjectApprovalGrant,
+} from "./bash-project-approvals.ts";
 import { sessionForkPointsFromStoredMessages } from "./fork-points.ts";
 import { createStableInteractiveDisplay } from "./interactive-session/display.ts";
 import {
@@ -83,6 +89,16 @@ export async function runInteractiveCli(
   let sourceSessionLock: SessionLock | undefined;
   try {
     const workspace = runtime.cwd();
+    const projectBashApprovals =
+      cliArgs.bashMode === "ask"
+        ? (() => {
+            const projectRoot = bashApprovalProjectRoot(workspace);
+            return {
+              projectRoot,
+              grants: listBashProjectApprovalGrants(runtime, projectRoot),
+            };
+          })()
+        : undefined;
     try {
       if (
         cliArgs.forkSessionId !== undefined &&
@@ -420,6 +436,15 @@ export async function runInteractiveCli(
         ...(projectInstructions !== undefined ? { projectInstructions } : {}),
         ...(workflowSkill !== undefined ? { workflowSkill } : {}),
         ...(sessionPersistence !== undefined ? sessionPersistence : {}),
+        ...(projectBashApprovals !== undefined
+          ? {
+              projectRoot: projectBashApprovals.projectRoot,
+              initialProjectBashApprovalGrants: projectBashApprovals.grants,
+              persistProjectBashApprovalGrant: (grant) => {
+                saveBashProjectApprovalGrant(runtime, grant);
+              },
+            }
+          : {}),
         toolOutputArtifacts,
         input: runtime.input,
         writeStdout: (text) => {
@@ -494,6 +519,10 @@ export async function runInteractiveCli(
       return 1;
     }
     if (error instanceof WorkflowSkillError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof BashProjectApprovalsError) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }

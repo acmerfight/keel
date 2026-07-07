@@ -6,10 +6,18 @@ import { isAbortThrow } from "../core/error.ts";
 import type { Message } from "../llm/types.ts";
 import {
   type BashMode,
+  type BashPermissionDecision,
   type BashPermissionPolicy,
   bashModeExposesTool,
+  createSessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
 import type { CliArgs } from "./args.ts";
+import {
+  BashProjectApprovalsError,
+  bashApprovalProjectRoot,
+  listBashProjectApprovalGrants,
+  saveBashProjectApprovalGrant,
+} from "./bash-project-approvals.ts";
 import { createPromptedBashPermissionPolicy } from "./interactive-session/bash-approval.ts";
 import { createLineReader } from "./interactive-session/line-reader.ts";
 import { formatCostReport, printAgentEvents } from "./output.ts";
@@ -36,19 +44,18 @@ import { loadWorkflowSkill, WorkflowSkillError } from "./workflow-skills.ts";
 
 type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
 
-function denyOneShotBashPermissionPolicy(): BashPermissionPolicy {
+function denyOneShotBashPermissionDecision(): BashPermissionDecision {
   return {
-    review: () => ({
-      type: "deny",
-      message:
-        "Shell command requires terminal approval; non-TTY one-shot runs cannot approve bash commands.",
-    }),
+    type: "deny",
+    message:
+      "Shell command requires terminal approval; non-TTY one-shot runs cannot approve bash commands.",
   };
 }
 
 function oneShotBashPermissionPolicy(
   bashMode: BashMode,
   runtime: CliRuntime,
+  workspace: string,
 ): {
   readonly policy?: BashPermissionPolicy;
   readonly close?: () => void;
@@ -56,8 +63,19 @@ function oneShotBashPermissionPolicy(
   if (bashMode !== "ask") {
     return {};
   }
+  const projectRoot = bashApprovalProjectRoot(workspace);
+  const initialProjectGrants = listBashProjectApprovalGrants(
+    runtime,
+    projectRoot,
+  );
   if (runtime.input.isTTY !== true) {
-    return { policy: denyOneShotBashPermissionPolicy() };
+    return {
+      policy: createSessionBashPermissionPolicy({
+        projectRoot,
+        initialProjectGrants,
+        prompt: () => denyOneShotBashPermissionDecision(),
+      }),
+    };
   }
 
   const input = createInterface({
@@ -68,7 +86,14 @@ function oneShotBashPermissionPolicy(
   const policy = createPromptedBashPermissionPolicy(
     lineReader,
     runtime.writeStderr,
-    { scopeLabel: "this run" },
+    {
+      scopeLabel: "this run",
+      projectRoot,
+      initialProjectGrants,
+      onProjectGrant: (grant) => {
+        saveBashProjectApprovalGrant(runtime, grant);
+      },
+    },
   );
   return { policy, close: () => input.close() };
 }
@@ -102,6 +127,7 @@ export async function runOneShotCli(
     const bashPermission = oneShotBashPermissionPolicy(
       cliArgs.bashMode,
       runtime,
+      workspace,
     );
     closeBashApprovalInput = bashPermission.close;
     await cleanupExpiredToolOutputArtifacts({ runtime });
@@ -196,6 +222,10 @@ export async function runOneShotCli(
       return 1;
     }
     if (error instanceof WorkflowSkillError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof BashProjectApprovalsError) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }

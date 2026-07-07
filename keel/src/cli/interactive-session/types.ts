@@ -6,7 +6,11 @@ import type { CostModel } from "../../core/cost.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
-import type { BashApprovalGrant, BashMode } from "../../permissions/bash.ts";
+import type {
+  BashApprovalGrant,
+  BashMode,
+  BashProjectApprovalGrant,
+} from "../../permissions/bash.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
 import type { ModelSource, ProviderSelection } from "../provider-config.ts";
 import type {
@@ -73,6 +77,11 @@ export interface InteractiveSessionOptions {
   readonly initialModelSwitchCount?: number;
   readonly initialQueuedInputs?: readonly SessionQueuedInput[];
   readonly initialBashApprovalGrants?: readonly BashApprovalGrant[];
+  readonly projectRoot?: string;
+  readonly initialProjectBashApprovalGrants?: readonly BashProjectApprovalGrant[];
+  readonly persistProjectBashApprovalGrant?: (
+    grant: BashProjectApprovalGrant,
+  ) => void;
   readonly persistQueuedInput?: (input: {
     readonly sequence: number;
     readonly line: string;

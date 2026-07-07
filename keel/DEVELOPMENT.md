@@ -66,7 +66,7 @@ Keel's project ignore policy is enforced by the built-in file tools: `read`, `ls
 
 `bash` is disabled by default. When enabled with `--allow-bash` or `--bash-policy trusted`, it is trusted shell mode: commands run with the current OS user's permissions and may read or modify gitignored files.
 
-`--bash-policy ask` adds per-command user approval in interactive sessions, but it is still approval, not an OS sandbox. Do not describe bash approval as preserving the file-tool ignore boundary unless a real permission or sandbox layer exists.
+`--bash-policy ask` adds per-command user approval in interactive sessions and can reuse saved project approvals for conservative command families, but it is still approval, not an OS sandbox. Do not describe bash approval as preserving the file-tool ignore boundary unless a real permission or sandbox layer exists.
 
 Live provider requests are not a secret boundary. User text, tool results, and approved or trusted bash output can be sent to the selected provider unredacted because exact code, fixtures, diffs, and command output are required for reliable coding.
 

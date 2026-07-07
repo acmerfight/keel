@@ -111,6 +111,21 @@ interface ArtifactsShowCliArgs {
 
 type ArtifactsCliArgs = ArtifactsShowCliArgs;
 
+export type ApprovalsCliArgs =
+  | {
+      readonly command: "approvals";
+      readonly mode: "list";
+    }
+  | {
+      readonly command: "approvals";
+      readonly mode: "clear";
+    }
+  | {
+      readonly command: "approvals";
+      readonly mode: "revoke";
+      readonly index: number;
+    };
+
 export interface RunCliArgs {
   readonly command: "run";
   readonly bashMode: BashMode;
@@ -137,6 +152,7 @@ export type CliArgs =
   | UndoCliArgs
   | { readonly command: "skills" }
   | ArtifactsCliArgs
+  | ApprovalsCliArgs
   | SessionsCliArgs
   | EvalCliArgs
   | RunCliArgs;

@@ -86,7 +86,7 @@ describe("Interactive Session - Bash Approvals Command", () => {
 
   test(`Given an interactive session has no bash approvals,
     When the user enters /approvals,
-    Then Keel reports that there are no active approvals`, async () => {
+    Then Keel reports that there are no active session or project approvals`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-approvals-empty-"));
     const input = new PassThrough();
@@ -126,7 +126,9 @@ describe("Interactive Session - Bash Approvals Command", () => {
 
       // Then
       await session;
-      expect(stdout).toBe("No bash approvals for this session.\n");
+      expect(stdout).toBe(
+        "No bash approvals for this session.\nNo bash project approvals.\n",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -184,7 +186,7 @@ describe("Interactive Session - Bash Approvals Command", () => {
 
   test(`Given an interactive session has bash approval grants,
     When the user enters /approvals,
-    Then Keel lists the active exact and command-family approvals without starting a model turn`, async () => {
+    Then Keel lists active session and project approvals without starting a model turn`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-approvals-list-"));
     const input = new PassThrough();
@@ -205,6 +207,14 @@ describe("Interactive Session - Bash Approvals Command", () => {
           type: "prefix",
           cwd: workspace,
           argvPrefix: ["git", "status"],
+        },
+      ],
+      projectRoot: workspace,
+      initialProjectBashApprovalGrants: [
+        {
+          projectRoot: workspace,
+          cwd: workspace,
+          argvPrefix: ["pnpm", "test"],
         },
       ],
       input,
@@ -245,6 +255,13 @@ describe("Interactive Session - Bash Approvals Command", () => {
       expect(stdout).toContain("     argv prefix: git status\n");
       expect(stdout).toContain(
         "Use /approvals revoke <index> or /approvals clear to remove approvals.\n",
+      );
+      expect(stdout).toContain("Bash project approvals:\n");
+      expect(stdout).toContain(`     project: ${workspace}\n`);
+      expect(stdout).toContain(`     approved from: ${workspace}\n`);
+      expect(stdout).toContain("     argv prefix: pnpm test\n");
+      expect(stdout).toContain(
+        "Use keel approvals revoke <index> or keel approvals clear to remove project approvals.\n",
       );
       expect(stdout).not.toContain("\u001b");
       expect(stderr).toBe("");

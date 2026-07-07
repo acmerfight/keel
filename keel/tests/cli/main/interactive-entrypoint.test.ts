@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   access,
   mkdtemp,
@@ -191,6 +192,160 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(fixture.stdout()).toBe("Remembered: hello\n");
       await expect(access(join(home, "sessions"))).rejects.toThrow();
     } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the project bash approval store is invalid while bash ask mode is off,
+    When the user starts an interactive session,
+    Then Keel ignores the approval store and starts normally`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeFile(join(home, "bash-project-approvals.json"), "{", "utf8");
+    const input = new PassThrough();
+    input.end("hello\n");
+    const fixture = createRuntime([], {
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Remembered: hello\n");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the project bash approval store is invalid while bash ask mode is on,
+    When the user starts an interactive session,
+    Then Keel fails closed before resolving a provider`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const input = new PassThrough();
+    await writeFile(join(home, "bash-project-approvals.json"), "{", "utf8");
+    const fixture = createRuntime(["--bash-policy", "ask"], {
+      env: {
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        `Error: cannot read bash project approvals ${join(
+          home,
+          "bash-project-approvals.json",
+        )}: invalid JSON.\n`,
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given bash ask mode runs in a real interactive terminal session,
+    When the user approves a command family for the project,
+    Then the project approval is persisted for the current workspace`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-bash-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_bash_project", "bash", {
+              command: "git status --short",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Saved."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    let approvalAnswered = false;
+    const fixture = createRuntime(["--bash-policy", "ask"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      onStderr: (text) => {
+        if (text.includes("Approve bash command?") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.write("r\n");
+          input.end();
+        }
+      },
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      input.write("check status\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Saved.\n");
+      expect(fixture.stderr()).toContain(
+        "[r] allow command family for this project: git status",
+      );
+
+      const approvals = createRuntime(["approvals"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      const approvalsExitCode = await runCliMain(approvals.runtime);
+      expect(approvalsExitCode).toBe(0);
+      expect(approvals.stdout()).toContain("Bash project approvals:\n");
+      expect(approvals.stdout()).toContain("argv prefix: git status\n");
+      expect(approvals.stderr()).toBe("");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
   });
