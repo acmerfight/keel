@@ -165,7 +165,53 @@ describe("git_diff tool", () => {
       expect(result.content).toBe("No git changes found.");
       await expect(executeGitDiff(workspace)).resolves.toEqual({
         content: "No git changes found.",
+        hasChanges: false,
+        inGitWorkTree: true,
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the workspace is a git repository subdirectory,
+    When git_diff inspects current changes,
+    Then it returns only diffs inside that workspace`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-subdir-");
+    await mkdir(join(workspace, "src"));
+    await writeFile(join(workspace, "root.txt"), "before\n", "utf8");
+    await writeFile(join(workspace, "src", "app.ts"), "before\n", "utf8");
+    execFileSync("git", ["add", "root.txt", "src/app.ts"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["commit", "-m", "add nested files"], {
+      cwd: workspace,
+    });
+    await writeFile(join(workspace, "root.txt"), "after\n", "utf8");
+    await writeFile(join(workspace, "src", "app.ts"), "after\n", "utf8");
+    await writeFile(join(workspace, "src", "new.ts"), "new\n", "utf8");
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace: join(workspace, "src"),
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "subdir_diff",
+          tool: "git_diff",
+          mode: "all",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toContain("diff --git a/src/app.ts b/src/app.ts");
+      expect(result.content).toContain("-before");
+      expect(result.content).toContain("+after");
+      expect(result.content).toContain("diff --git a/src/new.ts b/src/new.ts");
+      expect(result.content).toContain("+new");
+      expect(result.content).not.toContain("root.txt");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

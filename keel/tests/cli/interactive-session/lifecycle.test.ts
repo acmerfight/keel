@@ -1,4 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -13,7 +14,235 @@ import {
   ZERO_USAGE,
 } from "../../../src/testing/interactive-session-fixtures.ts";
 
+async function createGitWorkspace(prefix: string): Promise<string> {
+  const workspace = await mkdtemp(join(tmpdir(), prefix));
+  execFileSync("git", ["init", "-b", "main"], { cwd: workspace });
+  execFileSync("git", ["config", "user.email", "keel@example.test"], {
+    cwd: workspace,
+  });
+  execFileSync("git", ["config", "user.name", "Keel Test"], {
+    cwd: workspace,
+  });
+  await writeFile(join(workspace, "tracked.txt"), "before\n", "utf8");
+  execFileSync("git", ["add", "tracked.txt"], { cwd: workspace });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: workspace });
+  return workspace;
+}
+
+async function runInteractiveLocalCommand(
+  command: string,
+  workspace: string,
+  beforeInput?: () => Promise<void> | void,
+): Promise<{
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly providerResolved: boolean;
+}> {
+  const input = new PassThrough();
+  let stdout = "";
+  let stderr = "";
+  let providerResolved = false;
+  const session = runInteractiveSession({
+    cliArgs: { bashMode: "ask" },
+    workspace,
+    platform: process.platform,
+    input,
+    writeStdout: (text) => {
+      stdout += text;
+    },
+    writeStderr: (text) => {
+      stderr += text;
+    },
+    onSigint: () => {},
+    offSigint: () => {},
+    setExitCode: () => {},
+    forceExit: (code) => {
+      throw new ForcedExit(code);
+    },
+    resolveProvider: () => {
+      providerResolved = true;
+      throw new Error(`${command} should not resolve a provider`);
+    },
+    requireKnownCostModel: () => ZERO_COST_MODEL,
+    printAgentEvents: async () => {
+      throw new Error(`${command} should not start a model turn`);
+    },
+    formatCostReport: () => "",
+  });
+
+  await beforeInput?.();
+  input.end(`${command}\n`);
+  await session;
+  return { stdout, stderr, providerResolved };
+}
+
 describe("Interactive Session - Lifecycle", () => {
+  test(`Given staged unstaged and untracked workspace changes,
+    When user enters /diff,
+    Then Keel prints current git changes without starting a model turn`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-interactive-diff-");
+    await writeFile(join(workspace, "tracked.txt"), "after\n", "utf8");
+    await writeFile(join(workspace, "staged.txt"), "staged\n", "utf8");
+    execFileSync("git", ["add", "staged.txt"], { cwd: workspace });
+    await writeFile(join(workspace, "untracked.txt"), "untracked\n", "utf8");
+
+    try {
+      // When
+      const result = await runInteractiveLocalCommand("/diff", workspace);
+
+      // Then
+      expect(result.stdout).toContain("Branch: main");
+      expect(result.stdout).toContain("Staged changes:");
+      expect(result.stdout).toContain("- A staged.txt");
+      expect(result.stdout).toContain("Unstaged changes:");
+      expect(result.stdout).toContain("- M tracked.txt");
+      expect(result.stdout).toContain("Untracked files:");
+      expect(result.stdout).toContain("- untracked.txt");
+      expect(result.stdout).toContain("diff --git a/tracked.txt b/tracked.txt");
+      expect(result.stdout).toContain("-before");
+      expect(result.stdout).toContain("+after");
+      expect(result.stdout).toContain("diff --git a/staged.txt b/staged.txt");
+      expect(result.stdout).toContain("+staged");
+      expect(result.stdout).toContain(
+        "diff --git a/untracked.txt b/untracked.txt",
+      );
+      expect(result.stdout).toContain("+untracked");
+      expect(result.stderr).toBe("");
+      expect(result.providerResolved).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the session workspace is a git repository subdirectory,
+    When user enters /diff,
+    Then Keel prints only workspace changes with their diff hunks`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-interactive-diff-subdir-");
+    await mkdir(join(workspace, "src"));
+    await writeFile(join(workspace, ".gitignore"), "src/secret.env\n", "utf8");
+    await writeFile(join(workspace, "root.txt"), "before\n", "utf8");
+    await writeFile(join(workspace, "src", "app.ts"), "before\n", "utf8");
+    await writeFile(
+      join(workspace, "src", "secret.env"),
+      "TOKEN=OLD\n",
+      "utf8",
+    );
+    execFileSync("git", ["add", ".gitignore", "root.txt", "src/app.ts"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["add", "-f", "src/secret.env"], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "add nested files"], {
+      cwd: workspace,
+    });
+    await writeFile(join(workspace, "root.txt"), "after\n", "utf8");
+    await writeFile(join(workspace, "src", "app.ts"), "after\n", "utf8");
+    await writeFile(
+      join(workspace, "src", "secret.env"),
+      "TOKEN=NEW\n",
+      "utf8",
+    );
+    await writeFile(join(workspace, "src", "new.ts"), "new\n", "utf8");
+
+    try {
+      // When
+      const result = await runInteractiveLocalCommand(
+        "/diff",
+        join(workspace, "src"),
+      );
+
+      // Then
+      expect(result.stdout).toContain("Branch: main");
+      expect(result.stdout).toContain("- M src/app.ts");
+      expect(result.stdout).toContain("- src/new.ts");
+      expect(result.stdout).toContain("diff --git a/src/app.ts b/src/app.ts");
+      expect(result.stdout).toContain("diff --git a/src/new.ts b/src/new.ts");
+      expect(result.stdout).not.toContain("root.txt");
+      expect(result.stdout).not.toContain("secret.env");
+      expect(result.stdout).not.toContain("TOKEN=NEW");
+      expect(result.stderr).toBe("");
+      expect(result.providerResolved).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a clean git workspace,
+    When user enters /diff,
+    Then Keel reports that no git changes exist without starting a model turn`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-interactive-diff-clean-");
+
+    try {
+      // When
+      const result = await runInteractiveLocalCommand("/diff", workspace);
+
+      // Then
+      expect(result.stdout).toContain("Branch: main");
+      expect(result.stdout).toContain("No git changes found.");
+      expect(result.stdout.match(/No git changes found\./gu)?.length).toBe(1);
+      expect(result.stderr).toBe("");
+      expect(result.providerResolved).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a non-git workspace,
+    When user enters /diff,
+    Then Keel explains that git changes are unavailable without starting a model turn`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-interactive-diff-none-"),
+    );
+
+    try {
+      // When
+      const result = await runInteractiveLocalCommand("/diff", workspace);
+
+      // Then
+      expect(result.stdout).toBe(
+        "Not in a git work tree. /diff can only inspect changes inside a Git repository.\n",
+      );
+      expect(result.stderr).toBe("");
+      expect(result.providerResolved).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user passes arguments to /diff,
+    When the interactive session handles the local command,
+    Then Keel rejects the command without starting a model turn`, async () => {
+    // When
+    const result = await runInteractiveLocalCommand("/diff now", process.cwd());
+
+    // Then
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("Error: /diff does not accept arguments.\n");
+    expect(result.providerResolved).toBe(false);
+  });
+
+  test(`Given the workspace path is unavailable,
+    When user enters /diff,
+    Then Keel reports the local command failure without starting a model turn`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-interactive-diff-missing-"),
+    );
+
+    // When
+    const result = await runInteractiveLocalCommand("/diff", workspace, () =>
+      rm(workspace, { recursive: true, force: true }),
+    );
+
+    // Then
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("ENOENT:");
+    expect(result.providerResolved).toBe(false);
+  });
+
   test(`Given the interactive session has restorable state,
     When user enters /status,
     Then Keel prints an actionable snapshot without starting a model turn`, async () => {
@@ -362,6 +591,7 @@ describe("Interactive Session - Lifecycle", () => {
     expect(stdout).toContain("Interactive commands:");
     expect(stdout).toContain("/help");
     expect(stdout).toContain("/status");
+    expect(stdout).toContain("/diff");
     expect(stdout).toContain("/undo");
     expect(stdout).toContain("/compact [focus]");
     expect(stdout).toContain("keel sessions");

@@ -1,5 +1,4 @@
 import { realpathSync } from "node:fs";
-import { relative, resolve } from "node:path";
 import { KeelError } from "../core/error.ts";
 import {
   assertGitPathFiltersAllowed,
@@ -12,8 +11,8 @@ import {
   gitPathspecArgs,
   gitPathVisibleToProvider,
   gitRunOptions,
-  isGitWorkspace,
   normalizeGitPathFilters,
+  resolveGitWorkTreeScope,
   runGitProcess,
 } from "./git-process.ts";
 import { type CapturedByteOutput, limitCountedOutput } from "./output-limit.ts";
@@ -24,6 +23,7 @@ import {
 import type { ToolResult } from "./types.ts";
 
 const UNTRACKED_FILE_LIMIT = 50;
+const GIT_DIFF_NO_CHANGES_CONTENT = "No git changes found.";
 const SAFE_GIT_REF_PATTERN = /^[A-Za-z0-9_./@{}~^+-]+$/u;
 const GIT_COMMIT_OID_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
 
@@ -46,6 +46,11 @@ export interface GitDiffOptions {
   readonly mergeBase?: boolean;
   readonly paths?: readonly string[];
   readonly signal?: AbortSignal;
+}
+
+export interface GitDiffResult extends ToolResult {
+  readonly hasChanges: boolean;
+  readonly inGitWorkTree: boolean;
 }
 
 interface SingleChangedTrackedEntry {
@@ -412,13 +417,14 @@ function parseChangedTrackedEntries(
 async function changedTrackedEntries(
   workspacePath: string,
   args: readonly string[],
+  paths: readonly string[],
   config: readonly string[],
   signal: AbortSignal | undefined,
 ): Promise<readonly ChangedTrackedEntry[]> {
   const result = await runGitProcess(
     "git_diff",
     workspacePath,
-    safeDiffArgs([...args, "--name-status", "-z"], []),
+    safeDiffArgs([...args, "--name-status", "-z"], paths),
     gitRunOptions(config, signal, "metadata"),
   );
   expectGitExitCode("git_diff", "diff --name-status", result, new Set([0, 1]));
@@ -456,15 +462,18 @@ function trackedEntryMatchesPathFilters(
 
 async function trackedDiffPaths(
   workspacePath: string,
+  gitRootPath: string,
   args: readonly string[],
+  discoveryPaths: readonly string[],
   paths: readonly string[],
   config: readonly string[],
   signal: AbortSignal | undefined,
   projectIgnorePolicy: ProjectIgnorePolicy,
 ): Promise<readonly string[]> {
   const entries = await changedTrackedEntries(
-    workspacePath,
+    gitRootPath,
     args,
+    discoveryPaths,
     config,
     signal,
   );
@@ -473,7 +482,12 @@ async function trackedDiffPaths(
   for (const entry of entries) {
     const entryPaths = trackedEntryPaths(entry);
     const entryVisible = entryPaths.every((path) =>
-      gitPathVisibleToProvider(workspacePath, projectIgnorePolicy, path),
+      gitPathVisibleToProvider(
+        workspacePath,
+        gitRootPath,
+        projectIgnorePolicy,
+        path,
+      ),
     );
     if (entryVisible && trackedEntryMatchesPathFilters(entry, paths)) {
       for (const path of entryPaths) {
@@ -487,7 +501,9 @@ async function trackedDiffPaths(
 
 async function runTrackedDiff(
   workspacePath: string,
+  gitRootPath: string,
   args: readonly string[],
+  discoveryPaths: readonly string[],
   paths: readonly string[],
   config: readonly string[],
   signal: AbortSignal | undefined,
@@ -495,18 +511,21 @@ async function runTrackedDiff(
 ): Promise<GitProcessResult | null> {
   const visiblePaths = await trackedDiffPaths(
     workspacePath,
+    gitRootPath,
     args,
+    discoveryPaths,
     paths,
     config,
     signal,
     projectIgnorePolicy,
   );
   if (visiblePaths.length === 0) return null;
-  return runDiff(workspacePath, args, visiblePaths, config, signal);
+  return runDiff(gitRootPath, args, visiblePaths, config, signal);
 }
 
 async function untrackedFiles(
   workspacePath: string,
+  gitRootPath: string,
   paths: readonly string[],
   config: readonly string[],
   signal: AbortSignal | undefined,
@@ -514,7 +533,7 @@ async function untrackedFiles(
 ): Promise<readonly string[]> {
   const result = await runGitProcess(
     "git_diff",
-    workspacePath,
+    gitRootPath,
     [
       "ls-files",
       "--others",
@@ -531,7 +550,12 @@ async function untrackedFiles(
     .filter(
       (path) =>
         path !== "" &&
-        gitPathVisibleToProvider(workspacePath, projectIgnorePolicy, path),
+        gitPathVisibleToProvider(
+          workspacePath,
+          gitRootPath,
+          projectIgnorePolicy,
+          path,
+        ),
     );
 }
 
@@ -539,6 +563,7 @@ async function appendUntrackedDiffs(
   sections: string[],
   artifactSections: string[],
   workspacePath: string,
+  gitRootPath: string,
   paths: readonly string[],
   config: readonly string[],
   signal: AbortSignal | undefined,
@@ -546,6 +571,7 @@ async function appendUntrackedDiffs(
 ): Promise<void> {
   const files = await untrackedFiles(
     workspacePath,
+    gitRootPath,
     paths,
     config,
     signal,
@@ -555,7 +581,7 @@ async function appendUntrackedDiffs(
   for (const file of visibleFiles.items) {
     const result = await runGitProcess(
       "git_diff",
-      workspacePath,
+      gitRootPath,
       [
         "diff",
         ...UNTRACKED_DIFF_ARGS,
@@ -569,7 +595,7 @@ async function appendUntrackedDiffs(
     appendProcessSections(
       sections,
       artifactSections,
-      `Untracked changes (${relative(workspacePath, resolve(workspacePath, file))})`,
+      `Untracked changes (${file})`,
       expectGitExitCode("git_diff", "diff --no-index", result, new Set([0, 1])),
     );
   }
@@ -583,7 +609,7 @@ async function appendUntrackedDiffs(
 export async function executeGitDiff(
   workspace: string,
   options: GitDiffOptions = {},
-): Promise<ToolResult> {
+): Promise<GitDiffResult> {
   const workspacePath = realpathSync(workspace);
   const refComparison = normalizeRefComparison(options);
   const paths = normalizeGitPathFilters(
@@ -591,7 +617,21 @@ export async function executeGitDiff(
     workspacePath,
     options.paths,
   );
-  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  const scope = await resolveGitWorkTreeScope(
+    "git_diff",
+    workspacePath,
+    paths,
+    options.signal,
+  );
+  if (scope === null) {
+    return {
+      content:
+        "Not in a git work tree. git_diff can only inspect changes inside a Git repository.",
+      hasChanges: false,
+      inGitWorkTree: false,
+    };
+  }
+  const projectIgnorePolicy = createProjectIgnorePolicy(scope.rootPath);
   assertGitPathFiltersAllowed(
     "git_diff",
     workspacePath,
@@ -599,33 +639,31 @@ export async function executeGitDiff(
     projectIgnorePolicy,
   );
 
-  if (!(await isGitWorkspace("git_diff", workspacePath, options.signal))) {
-    return {
-      content:
-        "Not in a git work tree. git_diff can only inspect changes inside a Git repository.",
-    };
-  }
-
-  const config = await configuredFilterOverrides(workspacePath, options.signal);
+  const config = await configuredFilterOverrides(
+    scope.rootPath,
+    options.signal,
+  );
   const sections: string[] = [];
   const artifactSections: string[] = [];
 
   if (refComparison !== null) {
     const resolvedComparison = await resolveRefComparison(
-      workspacePath,
+      scope.rootPath,
       refComparison,
       config,
       options.signal,
     );
     const refDiff = await runTrackedDiff(
       workspacePath,
+      scope.rootPath,
       await refComparisonDiffArgs(
-        workspacePath,
+        scope.rootPath,
         resolvedComparison,
         config,
         options.signal,
       ),
-      paths,
+      [scope.workspacePathspec],
+      scope.pathspecs,
       config,
       options.signal,
       projectIgnorePolicy,
@@ -644,8 +682,10 @@ export async function executeGitDiff(
     if (mode === "all" || mode === "unstaged") {
       const unstagedDiff = await runTrackedDiff(
         workspacePath,
+        scope.rootPath,
         [],
-        paths,
+        [scope.workspacePathspec],
+        scope.pathspecs,
         config,
         options.signal,
         projectIgnorePolicy,
@@ -663,8 +703,10 @@ export async function executeGitDiff(
     if (mode === "all" || mode === "staged") {
       const stagedDiff = await runTrackedDiff(
         workspacePath,
+        scope.rootPath,
         ["--cached"],
-        paths,
+        [scope.workspacePathspec],
+        scope.pathspecs,
         config,
         options.signal,
         projectIgnorePolicy,
@@ -684,7 +726,8 @@ export async function executeGitDiff(
         sections,
         artifactSections,
         workspacePath,
-        paths,
+        scope.rootPath,
+        scope.pathspecs,
         config,
         options.signal,
         projectIgnorePolicy,
@@ -693,16 +736,18 @@ export async function executeGitDiff(
   }
 
   const content =
-    sections.length === 0 ? "No git changes found." : sections.join("\n\n");
+    sections.length === 0 ? GIT_DIFF_NO_CHANGES_CONTENT : sections.join("\n\n");
   const artifactContent =
     artifactSections.length === 0
-      ? "No git changes found."
+      ? GIT_DIFF_NO_CHANGES_CONTENT
       : artifactSections.join("\n\n");
   const previewTruncated = gitDiffContentSourceTruncated(content);
   const artifactSourceTruncated =
     gitDiffContentSourceTruncated(artifactContent);
   return {
     content,
+    hasChanges: sections.length > 0,
+    inGitWorkTree: true,
     ...(previewTruncated ? { sourceTruncated: true } : {}),
     ...(previewTruncated || artifactSourceTruncated ? { artifactContent } : {}),
     ...(previewTruncated || artifactSourceTruncated
