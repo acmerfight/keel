@@ -133,6 +133,7 @@ export interface RunCliArgs {
   readonly maxCostUsd?: number;
   readonly reportFile?: string;
   readonly transcriptFile?: string;
+  readonly ephemeral: boolean;
   readonly sessionId?: string;
   readonly resumeSessionId?: string;
   readonly forkSessionId?: string;

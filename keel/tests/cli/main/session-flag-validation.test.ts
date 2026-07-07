@@ -6,6 +6,89 @@ import { runCliMain } from "../../../src/cli/index.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 
 describe("CLI Main - Session Flag Validation", () => {
+  test(`Given ephemeral mode is combined with a named session,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--ephemeral", "--session", "demo"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --ephemeral cannot be combined with --session, --resume, --fork, --fork-before-message, or --fork-points.\n",
+    );
+  });
+
+  test(`Given ephemeral mode is combined with a resumed session,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--ephemeral", "--resume", "demo"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --ephemeral cannot be combined with --session, --resume, --fork, --fork-before-message, or --fork-points.\n",
+    );
+  });
+
+  test.each([
+    {
+      label: "fork target",
+      args: ["--ephemeral", "--fork", "target"],
+    },
+    {
+      label: "fork points",
+      args: ["--ephemeral", "--fork-points"],
+    },
+    {
+      label: "fork point selector",
+      args: ["--ephemeral", "--fork-before-message", "msg_demo"],
+    },
+  ])(`Given ephemeral mode is combined with a $label,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async (testCase) => {
+    // Given
+    const fixture = createRuntime(testCase.args);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --ephemeral cannot be combined with --session, --resume, --fork, --fork-before-message, or --fork-points.\n",
+    );
+  });
+
+  test(`Given ephemeral mode is passed with a one-shot prompt,
+    When the CLI main parses the request,
+    Then it returns a validation error because ephemeral mode is interactive-only`, async () => {
+    // Given
+    const fixture = createRuntime(["--ephemeral", "hello"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --ephemeral is only supported for interactive sessions.\n",
+    );
+  });
+
   test(`Given resume is passed without a session id,
     When the CLI main parses the request,
     Then it returns a validation error before starting interactive mode`, async () => {

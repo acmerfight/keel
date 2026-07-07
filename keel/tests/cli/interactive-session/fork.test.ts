@@ -501,7 +501,7 @@ describe("Interactive Session - Fork", () => {
     await session;
     expect(stdout).toBe("");
     expect(stderr).toBe(
-      "Error: /fork requires a named session. Start with --session or --resume.\n",
+      "Error: /fork requires a saved session. Start without --ephemeral, or use --session or --resume.\n",
     );
     expect(providerResolved).toBe(false);
     expect(sigintHandlers.size).toBe(0);
@@ -722,9 +722,9 @@ describe("Interactive Session - Fork", () => {
     expect(stdout).toBe("");
     expect(stderr).toBe(
       [
-        "Error: /fork-points requires a named session. Start with --session or --resume.",
-        "Error: /fork requires a named session. Start with --session or --resume.",
-        "Error: /fork requires a named session. Start with --session or --resume.",
+        "Error: /fork-points requires a saved session. Start without --ephemeral, or use --session or --resume.",
+        "Error: /fork requires a saved session. Start without --ephemeral, or use --session or --resume.",
+        "Error: /fork requires a saved session. Start without --ephemeral, or use --session or --resume.",
         "",
       ].join("\n"),
     );

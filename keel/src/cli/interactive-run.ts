@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isAbortThrow } from "../core/error.ts";
 import type { Message } from "../llm/types.ts";
 import type { BashApprovalGrant } from "../permissions/bash.ts";
@@ -67,6 +68,71 @@ import { loadWorkflowSkill, WorkflowSkillError } from "./workflow-skills.ts";
 
 type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
 
+type InteractiveSessionStart =
+  | {
+      readonly kind: "ephemeral";
+    }
+  | {
+      readonly kind: "create";
+      readonly sessionId: string;
+    }
+  | {
+      readonly kind: "resume";
+      readonly sessionId: string;
+    }
+  | {
+      readonly kind: "fork";
+      readonly sourceSessionId: string;
+      readonly targetSessionId: string;
+      readonly beforeMessageId?: string;
+    };
+
+function createAutomaticSessionId(): string {
+  return `session-${randomUUID()}`;
+}
+
+function interactiveSessionStartFromCliArgs(
+  cliArgs: RunCliArgs,
+): InteractiveSessionStart {
+  if (cliArgs.ephemeral) {
+    return { kind: "ephemeral" };
+  }
+  if (cliArgs.sessionId !== undefined) {
+    return { kind: "create", sessionId: cliArgs.sessionId };
+  }
+  if (
+    cliArgs.resumeSessionId !== undefined &&
+    cliArgs.forkSessionId !== undefined
+  ) {
+    return {
+      kind: "fork",
+      sourceSessionId: cliArgs.resumeSessionId,
+      targetSessionId: cliArgs.forkSessionId,
+      ...(cliArgs.forkBeforeMessage !== undefined
+        ? { beforeMessageId: cliArgs.forkBeforeMessage }
+        : {}),
+    };
+  }
+  if (cliArgs.resumeSessionId !== undefined) {
+    return { kind: "resume", sessionId: cliArgs.resumeSessionId };
+  }
+  return { kind: "create", sessionId: createAutomaticSessionId() };
+}
+
+function activeSessionIdForStart(
+  sessionStart: InteractiveSessionStart,
+): string | null {
+  switch (sessionStart.kind) {
+    case "ephemeral":
+      return null;
+    case "create":
+    case "resume":
+      return sessionStart.sessionId;
+    case "fork":
+      return sessionStart.targetSessionId;
+  }
+}
+
 export async function runInteractiveCli(
   cliArgs: RunCliArgs,
   runtime: CliRuntime,
@@ -100,19 +166,16 @@ export async function runInteractiveCli(
             };
           })()
         : undefined;
+    const sessionStart = interactiveSessionStartFromCliArgs(cliArgs);
     try {
-      if (
-        cliArgs.forkSessionId !== undefined &&
-        cliArgs.resumeSessionId !== undefined
-      ) {
+      if (sessionStart.kind === "fork") {
         sourceSessionLock = acquireSessionLock({
-          sessionId: cliArgs.resumeSessionId,
+          sessionId: sessionStart.sourceSessionId,
           runtime,
         });
       }
-      const sessionIdForLock =
-        cliArgs.sessionId ?? cliArgs.forkSessionId ?? cliArgs.resumeSessionId;
-      if (sessionIdForLock !== undefined) {
+      const sessionIdForLock = activeSessionIdForStart(sessionStart);
+      if (sessionIdForLock !== null) {
         sessionLock = acquireSessionLock({
           sessionId: sessionIdForLock,
           runtime,
@@ -123,18 +186,26 @@ export async function runInteractiveCli(
       let persistedMessages: readonly Message[] = [];
       let initialModelSelection: SessionModelSelection | undefined;
       let workflowSkill =
-        cliArgs.resumeSessionId === undefined && cliArgs.skillName !== undefined
+        (sessionStart.kind === "create" || sessionStart.kind === "ephemeral") &&
+        cliArgs.skillName !== undefined
           ? loadWorkflowSkill(workspace, cliArgs.skillName)
           : undefined;
-      if (cliArgs.sessionId !== undefined) {
-        activeSessionId = cliArgs.sessionId;
+      if (sessionStart.kind === "create") {
+        activeSessionId = sessionStart.sessionId;
         ensureSessionCanBeCreated({
-          sessionId: cliArgs.sessionId,
+          sessionId: sessionStart.sessionId,
           runtime,
         });
-      } else if (cliArgs.resumeSessionId !== undefined) {
+      } else if (
+        sessionStart.kind === "resume" ||
+        sessionStart.kind === "fork"
+      ) {
+        const sourceSessionId =
+          sessionStart.kind === "resume"
+            ? sessionStart.sessionId
+            : sessionStart.sourceSessionId;
         const resumedSession = resumeSessionStore({
-          sessionId: cliArgs.resumeSessionId,
+          sessionId: sourceSessionId,
           workspace,
           runtime,
         });
@@ -144,18 +215,18 @@ export async function runInteractiveCli(
             ? { requestedSkillName: cliArgs.skillName }
             : {}),
         });
-        if (cliArgs.forkSessionId !== undefined) {
+        if (sessionStart.kind === "fork") {
           ensureSessionCanBeCreated({
-            sessionId: cliArgs.forkSessionId,
+            sessionId: sessionStart.targetSessionId,
             runtime,
           });
           session = forkSessionStore({
             source: resumedSession,
-            targetSessionId: cliArgs.forkSessionId,
-            ...(cliArgs.forkBeforeMessage !== undefined
+            targetSessionId: sessionStart.targetSessionId,
+            ...(sessionStart.beforeMessageId !== undefined
               ? {
                   forkPoint: {
-                    beforeMessageId: cliArgs.forkBeforeMessage,
+                    beforeMessageId: sessionStart.beforeMessageId,
                     optionName: "--fork-before-message",
                   },
                 }

@@ -1408,7 +1408,7 @@ describe("CLI Main - Run Report Compaction", () => {
         compaction.toolOutputCharsAfter,
       );
       expect(firstArtifactRef(compaction)).toMatch(
-        /^tool-output:interactive-[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/u,
+        /^tool-output:session-session-[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/u,
       );
     } finally {
       await close(server);

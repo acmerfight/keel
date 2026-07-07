@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   mkdirSync,
   readFileSync,
+  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -257,6 +258,25 @@ function releaseSessionLock(lockPath: string, token: string): void {
   } catch (error) {
     sessionStoreError(
       `Error: cannot release session lock ${lockPath}: ${errorMessage(error)}`,
+    );
+  }
+  removeEmptySessionDirectory(lockPath);
+}
+
+function removeEmptySessionDirectory(lockPath: string): void {
+  const sessionDirectory = dirname(lockPath);
+  try {
+    rmdirSync(sessionDirectory);
+  } catch (error) {
+    if (
+      hasNodeErrorCode(error, "ENOENT") ||
+      hasNodeErrorCode(error, "ENOTEMPTY") ||
+      hasNodeErrorCode(error, "EEXIST")
+    ) {
+      return;
+    }
+    sessionStoreError(
+      `Error: cannot remove empty session directory ${sessionDirectory}: ${errorMessage(error)}`,
     );
   }
 }
