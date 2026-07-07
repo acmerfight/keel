@@ -1,6 +1,6 @@
 export const USAGE = [
   "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] [--skill <name>] <message>",
-  "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--skill <name>] [--ephemeral | --session <id> | --resume [<id>] | --resume <id> --fork-points | --resume <id> --fork <new-id> [--fork-before-message <id>]]",
+  "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--skill <name>] [--ephemeral | --session <id> | --resume [<id>] | --resume --pick | --resume <id> --fork-points | --resume <id> --fork <new-id> [--fork-before-message <id>]]",
   "       keel --doctor [--offline] [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
   "       keel auth login <deepseek|kimi|qwen> --with-api-key",
   "       keel auth status",
@@ -27,7 +27,7 @@ export const USAGE = [
   "--transcript writes a best-effort redacted provider-visible one-shot transcript as schema-versioned JSONL. Live provider requests are not redacted.",
   "--skill loads .agents/skills/<name>/SKILL.md as explicit workflow guidance for the current run.",
   "Interactive sessions persist provider context by default with best-effort at-rest redaction; use --ephemeral to skip the session ledger. Live provider requests may still include raw user and tool content.",
-  "--session names a new interactive session; --resume continues the latest saved interactive session for the current workspace, or a specific session with --resume <id>.",
+  "--session names a new interactive session; --resume continues the latest saved interactive session for the current workspace, --resume --pick lets a real TTY choose one, or --resume <id> resumes a specific session.",
   "--limit controls how many recent restored messages sessions show prints; --all prints the full restored timeline.",
   "--fork-points lists restored user message ids for sessions fork --before-message; it requires --resume.",
   "--fork-before-message cuts a fork before the restored message id; it requires --resume and --fork.",

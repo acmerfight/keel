@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -28,6 +29,10 @@ import {
   sseToolCall,
   sseToolFinish,
 } from "../../../src/testing/provider-sse-fixtures.ts";
+import {
+  appendSessionRecordLine,
+  writeSessionLedger,
+} from "../../../src/testing/session-ledger-fixtures.ts";
 
 const DEEPSEEK_MISSING_API_KEY_GUIDANCE = [
   "Error: missing API key for deepseek.",
@@ -383,6 +388,236 @@ describe("CLI Main - Interactive Entrypoint", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(otherWorkspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions exist in the current workspace,
+    When the user picks a session to resume,
+    Then Keel continues the selected saved task instead of the latest one`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const otherWorkspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const otherLedgerWorkspace = await realpath(otherWorkspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "older",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
+          { role: "user", content: "remember alpha" },
+          {
+            role: "assistant",
+            content: "Remembered alpha.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "latest",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          { role: "user", content: "remember beta" },
+          {
+            role: "assistant",
+            content: "Remembered beta.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "elsewhere",
+      workspace: otherLedgerWorkspace,
+      createdAt: "2026-01-03T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-03T00:00:05.000Z", [
+          { role: "user", content: "remember elsewhere" },
+          {
+            role: "assistant",
+            content: "Remembered elsewhere.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await mkdir(join(home, "sessions", "broken"), { recursive: true });
+    await writeFile(join(home, "sessions", "broken", "ledger.jsonl"), "{bad\n");
+
+    const input = new PassThrough();
+    const fixture = createRuntime(["--resume", "--pick"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () =>
+          fixture.stdout().includes("Select session [1-2], or q to cancel:"),
+        "resume picker did not render the session choices",
+      );
+      input.end("2\n\nwhat did I ask you to remember?\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain(`Sessions for workspace ${ledgerWorkspace}:\n`);
+      expect(stdout).toContain(
+        "Keep one saved session open per task; resume it for follow-ups until the task is done.\n",
+      );
+      expect(stdout).toContain("1. latest  updated 2026-01-02T00:00:05.000Z\n");
+      expect(stdout).toContain("   preview: remember beta\n");
+      expect(stdout).toContain("2. older  updated 2026-01-01T00:00:05.000Z\n");
+      expect(stdout).toContain("   preview: remember alpha\n");
+      expect(stdout).not.toContain("elsewhere");
+      expect(stdout).not.toContain("remember elsewhere");
+      expect(stdout).toContain("Earlier you said: remember alpha\n");
+      expect(fixture.stderr()).toContain(
+        'Warning: skipped session "broken": cannot load session ledger',
+      );
+      expect(fixture.stderr()).toContain("Resuming selected session: older\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(otherWorkspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions exist in the current workspace,
+    When the user cancels the resume picker,
+    Then Keel exits without starting a resumed session`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "cancel-demo",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
+          { role: "user", content: "remember cancel demo" },
+          {
+            role: "assistant",
+            content: "Remembered cancel demo.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime(["--resume", "--pick"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () =>
+          fixture.stdout().includes("Select session [1-1], or q to cancel:"),
+        "resume picker did not render before cancellation",
+      );
+      input.end("q\nthis must not run\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("Resume cancelled.\n");
+      expect(fixture.stderr()).not.toContain("Resuming selected session");
+      expect(fixture.stderr()).not.toContain("Keel interactive session");
+      expect(
+        await readFile(
+          join(home, "sessions", "cancel-demo", "ledger.jsonl"),
+          "utf8",
+        ),
+      ).not.toContain("this must not run");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions exist in the current workspace,
+    When input closes while the resume picker waits,
+    Then Keel exits without an explicit cancellation message`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "eof-demo",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
+          { role: "user", content: "remember eof demo" },
+          {
+            role: "assistant",
+            content: "Remembered eof demo.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime(["--resume", "--pick"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () =>
+          fixture.stdout().includes("Select session [1-1], or q to cancel:"),
+        "resume picker did not render before EOF",
+      );
+      input.end();
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).not.toContain("Resume cancelled.\n");
+      expect(fixture.stderr()).not.toContain("Resuming selected session");
+      expect(fixture.stderr()).not.toContain("Keel interactive session");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
   });

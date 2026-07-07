@@ -165,6 +165,121 @@ describe("CLI Main - Session Flag Validation", () => {
     }
   });
 
+  test(`Given resume pick is passed without a real terminal,
+    When the CLI main starts interactive mode,
+    Then it reports that the picker requires a real TTY`, async () => {
+    // Given
+    const fixture = createRuntime(["--resume", "--pick"], {
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+      },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --resume --pick requires a real TTY so the session choice cannot be read from piped input. Use keel --resume for the latest session or keel --resume <id> for automation.\n",
+    );
+  });
+
+  test(`Given resume pick is passed and no saved sessions exist,
+    When the CLI main resolves the session picker catalog,
+    Then it reports that there is no resumable session for the workspace`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const fixture = createRuntime(["--resume", "--pick"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        `Error: no saved sessions for workspace ${await realpath(workspace)}. Complete an interactive turn before running keel --resume --pick.\n`,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      label: "explicit session id",
+      args: ["--resume", "demo", "--pick"],
+      stderr:
+        "Error: --resume --pick requires --resume without a session id.\n",
+    },
+    {
+      label: "fork target",
+      args: ["--resume", "--pick", "--fork", "target"],
+      stderr: "Error: --resume --pick cannot be combined with --fork.\n",
+    },
+    {
+      label: "fork points",
+      args: ["--resume", "--pick", "--fork-points"],
+      stderr: "Error: --resume --pick cannot be combined with --fork-points.\n",
+    },
+    {
+      label: "fork point selector",
+      args: ["--resume", "--pick", "--fork-before-message", "msg_demo"],
+      stderr:
+        "Error: --resume --pick cannot be combined with --fork-before-message.\n",
+    },
+    {
+      label: "one-shot prompt",
+      args: ["--resume", "--pick", "hello"],
+      stderr: "Error: --resume --pick cannot be combined with a message.\n",
+    },
+    {
+      label: "transcript file",
+      args: ["--resume", "--pick", "--transcript", "transcript.jsonl"],
+      stderr: "Error: --resume --pick cannot be combined with --transcript.\n",
+    },
+  ])(`Given resume pick is combined with a $label,
+    When the CLI main parses the request,
+    Then it returns a validation error before reading sessions`, async (testCase) => {
+    // Given
+    const fixture = createRuntime(testCase.args);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(testCase.stderr);
+  });
+
+  test(`Given pick is passed without resume,
+    When the CLI main parses the request,
+    Then it returns a validation error before starting interactive mode`, async () => {
+    // Given
+    const fixture = createRuntime(["--pick"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --pick requires --resume.\n");
+  });
+
   test(`Given fork is passed without a target session id,
     When the CLI main parses the request,
     Then it returns a validation error before starting interactive mode`, async () => {

@@ -150,6 +150,9 @@ type ResumeSessionCliArg =
       readonly sessionId: string;
     }
   | {
+      readonly kind: "pick";
+    }
+  | {
       readonly kind: "latest";
     };
 
