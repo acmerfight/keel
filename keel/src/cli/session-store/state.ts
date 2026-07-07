@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import {
+  copySessionTaskProgress,
+  emptySessionTaskProgress,
+  type SessionTaskProgress,
+  sessionTaskProgressesEqual,
+} from "../../core/task-progress.ts";
 import type { Message, ToolCall } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
 import { toolCallCanonicalArguments } from "../../tools/registry.ts";
@@ -18,6 +24,7 @@ import {
   type SessionReplayState,
   type SessionState,
   type SessionStoreRuntime,
+  type SessionTaskProgressCheckpoint,
   type StoredMessage,
   sessionReplayStateKey,
   type WorkflowSkill,
@@ -31,6 +38,7 @@ import {
   messagesFromStoredMessages,
   redactBashApprovalGrantForPersistence,
   redactSessionQueuedInputForPersistence,
+  redactSessionTaskProgressCheckpointForPersistence,
 } from "./records.ts";
 import { isoTimestamp } from "./runtime.ts";
 
@@ -204,6 +212,15 @@ function copySessionModelSwitch(
   };
 }
 
+function copySessionTaskProgressCheckpoint(
+  checkpoint: SessionTaskProgressCheckpoint,
+): SessionTaskProgressCheckpoint {
+  return {
+    messageOrdinal: checkpoint.messageOrdinal,
+    taskProgress: copySessionTaskProgress(checkpoint.taskProgress),
+  };
+}
+
 function sessionStateFromReplay(options: {
   readonly id: string;
   readonly filePath: string;
@@ -212,6 +229,8 @@ function sessionStateFromReplay(options: {
   readonly storedMessages: readonly StoredMessage[];
   readonly pendingInputsById: ReadonlyMap<string, SessionQueuedInput>;
   readonly bashApprovalGrants: readonly BashApprovalGrant[];
+  readonly taskProgress: SessionTaskProgress;
+  readonly taskProgressCheckpoints?: readonly SessionTaskProgressCheckpoint[];
   readonly activeModel?: SessionModelSelection;
   readonly modelSwitches?: readonly SessionModelSwitch[];
   readonly workflowSkill?: WorkflowSkill;
@@ -223,6 +242,10 @@ function sessionStateFromReplay(options: {
   const bashApprovalGrants = options.bashApprovalGrants.map(
     copyBashApprovalGrant,
   );
+  const taskProgressCheckpoints = (options.taskProgressCheckpoints ?? []).map(
+    copySessionTaskProgressCheckpoint,
+  );
+  const taskProgress = copySessionTaskProgress(options.taskProgress);
   const activeModel =
     options.activeModel === undefined
       ? undefined
@@ -238,6 +261,10 @@ function sessionStateFromReplay(options: {
     storedMessages: storedMessages.map(copyStoredMessage),
     pendingInputsById,
     bashApprovalGrants,
+    taskProgress: copySessionTaskProgress(taskProgress),
+    taskProgressCheckpoints: taskProgressCheckpoints.map(
+      copySessionTaskProgressCheckpoint,
+    ),
     ...(activeModel !== undefined ? { activeModel } : {}),
     modelSwitches: modelSwitches.map(copySessionModelSwitch),
   };
@@ -251,6 +278,7 @@ function sessionStateFromReplay(options: {
     storedMessages,
     pendingInputs: pendingInputsInReplayOrder(pendingInputsById),
     bashApprovalGrants,
+    taskProgress,
     ...(activeModel !== undefined ? { activeModel } : {}),
     modelSwitches,
     ...(workflowSkill !== undefined ? { workflowSkill } : {}),
@@ -328,6 +356,31 @@ function appendReplayModelSwitch(
   state.activeModel = copySessionModelSelection(replaySwitch.to);
 }
 
+function rebaseReplayTaskProgressAfterReplace(state: SessionReplayState): void {
+  state.taskProgressCheckpoints.splice(0, state.taskProgressCheckpoints.length);
+  if (
+    sessionTaskProgressesEqual(state.taskProgress, emptySessionTaskProgress())
+  ) {
+    return;
+  }
+  state.taskProgressCheckpoints.push({
+    messageOrdinal: 0,
+    taskProgress: copySessionTaskProgress(state.taskProgress),
+  });
+}
+
+function replaceReplayTaskProgress(
+  state: SessionReplayState,
+  taskProgress: SessionTaskProgress,
+  messageOrdinal = state.storedMessages.length,
+): void {
+  state.taskProgress = copySessionTaskProgress(taskProgress);
+  state.taskProgressCheckpoints.push({
+    messageOrdinal,
+    taskProgress: copySessionTaskProgress(taskProgress),
+  });
+}
+
 function sessionRecordWithConsumedInputIds(
   record: AppendSessionRecord,
   consumedInputIds: readonly string[],
@@ -381,6 +434,13 @@ function appendSessionSnapshotIfNeeded(options: {
     ...(replayState.modelSwitches.length > 0
       ? { modelSwitches: replayState.modelSwitches.map(copySessionModelSwitch) }
       : {}),
+    ...(replayState.taskProgressCheckpoints.length > 0
+      ? {
+          taskProgressCheckpoints: replayState.taskProgressCheckpoints.map(
+            redactSessionTaskProgressCheckpointForPersistence,
+          ),
+        }
+      : {}),
   });
 }
 
@@ -412,7 +472,9 @@ export {
   hasMessagePrefix,
   messageArraysEqual,
   rebaseReplayModelSwitchesAfterReplace,
+  rebaseReplayTaskProgressAfterReplace,
   replaceReplayMessages,
+  replaceReplayTaskProgress,
   replayStateForSession,
   sessionRecordWithConsumedInputIds,
   sessionStateFromReplay,

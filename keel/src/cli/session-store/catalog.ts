@@ -149,6 +149,7 @@ function applySessionCatalogMutation(
     case "bash_approval_revoked":
     case "bash_approvals_cleared":
     case "model_switch":
+    case "task_progress":
       return {
         ...state,
         updatedAt: record.timestamp,

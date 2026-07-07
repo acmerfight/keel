@@ -5,6 +5,7 @@ import type { ToolOutputArtifactsOptions } from "../../agent/tool-output-artifac
 import type { CostModel } from "../../core/cost.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
+import type { SessionTaskProgress } from "../../core/task-progress.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
 import type {
   BashApprovalGrant,
@@ -72,6 +73,7 @@ export interface InteractiveSessionOptions {
   readonly projectInstructions?: ProjectInstructions;
   readonly workflowSkill?: WorkflowSkill;
   readonly initialMessages?: readonly Message[];
+  readonly initialTaskProgress?: SessionTaskProgress;
   readonly initialModelSelection?: SessionModelSelection;
   readonly configuredModelSelection?: ProviderSelection;
   readonly initialModelSwitchCount?: number;
@@ -92,6 +94,10 @@ export interface InteractiveSessionOptions {
     reason: SessionPersistenceReason,
     consumedInputIds: readonly string[],
   ) => void;
+  readonly persistTaskProgress?: (update: {
+    readonly taskProgress: SessionTaskProgress;
+    readonly messageOrdinal: number;
+  }) => void;
   readonly persistModelSwitch?: (switchRecord: {
     readonly from: SessionModelSelection | null;
     readonly to: SessionModelSelection;

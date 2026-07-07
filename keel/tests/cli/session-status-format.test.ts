@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { formatSessionStatusSnapshot } from "../../src/cli/session-status-format.ts";
+import {
+  formatSessionStatusSnapshot,
+  formatSessionTasks,
+} from "../../src/cli/session-status-format.ts";
+import { emptySessionTaskProgress } from "../../src/core/task-progress.ts";
 
 describe("CLI Session Status Format", () => {
   test(`Given no recovery actions are available,
@@ -14,6 +18,7 @@ describe("CLI Session Status Format", () => {
       messageCount: 0,
       pendingInputCount: 0,
       bashApprovalCount: 0,
+      taskProgress: emptySessionTaskProgress(),
       modelSwitchCount: 0,
       undoCheckpoints: [],
       recoveryActions: [],
@@ -39,6 +44,7 @@ describe("CLI Session Status Format", () => {
       messageCount: 0,
       pendingInputCount: 0,
       bashApprovalCount: 0,
+      taskProgress: emptySessionTaskProgress(),
       modelSwitchCount: 0,
       undoCheckpoints: [{ restoredLabel: "note.txt" }],
       recoveryActions: [{ label: "resume", command: longCommand }],
@@ -50,5 +56,13 @@ describe("CLI Session Status Format", () => {
     );
     expect(formatted).toContain("\\x1b\\u{202e}");
     expect(formatted).not.toContain("...");
+  });
+
+  test(`Given no visible session tasks exist,
+    When the task list is formatted,
+    Then the user sees an explicit empty state`, () => {
+    expect(formatSessionTasks(emptySessionTaskProgress())).toBe(
+      "No session tasks.\n",
+    );
   });
 });

@@ -31,6 +31,235 @@ import {
 } from "../../../src/testing/session-ledger-fixtures.ts";
 
 describe("CLI Main - Session Resume Transcript", () => {
+  test(`Given a provider emits invalid update_plan arguments,
+    When the model repairs the plan after the tool failure,
+    Then the interactive session continues without a provider protocol crash`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    let requestCount = 0;
+    const providerRequests: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      req.on("end", () => {
+        requestCount++;
+        providerRequests.push(
+          JSON.parse(Buffer.concat(chunks).toString("utf8")),
+        );
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (requestCount === 1) {
+          res.write(
+            sseToolCall("call_bad_plan", "update_plan", {
+              plan: [
+                { step: "Inspect request", status: "in_progress" },
+                { step: "Answer user", status: "in_progress" },
+              ],
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (requestCount === 2) {
+          res.write(
+            sseToolCall("call_fixed_plan", "update_plan", {
+              plan: [
+                { step: "Inspect request", status: "completed" },
+                { step: "Answer user", status: "in_progress" },
+              ],
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Recovered."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.end("start task\n");
+    const fixture = createRuntime(["--session", "task-progress-recovery"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_PROVIDER: "deepseek",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Recovered.\n");
+      expect(fixture.stderr()).not.toContain(
+        "update_plan tool call has invalid arguments",
+      );
+      expect(fixture.stderr()).toContain(
+        "Task progress: 1/2 completed; current: Answer user",
+      );
+      expect(JSON.stringify(providerRequests[1])).toContain(
+        "Tool failed: update_plan failed: invalid arguments",
+      );
+      expect(JSON.stringify(providerRequests[1])).toContain(
+        "At most one task can be in_progress",
+      );
+      const ledgerLines = (
+        await readFile(
+          join(home, "sessions", "task-progress-recovery", "ledger.jsonl"),
+          "utf8",
+        )
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(
+        ledgerLines.filter((line) => line.type === "task_progress"),
+      ).toEqual([
+        {
+          schemaVersion: 2,
+          type: "task_progress",
+          timestamp: expect.any(String),
+          messageOrdinal: 5,
+          tasks: [
+            { step: "Inspect request", status: "completed" },
+            { step: "Answer user", status: "in_progress" },
+          ],
+        },
+      ]);
+
+      const resumeInput = new PassThrough();
+      resumeInput.end("/tasks\n");
+      const resumeFixture = createRuntime(
+        ["--resume", "task-progress-recovery"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+          },
+          input: resumeInput,
+        },
+      );
+      const resumeExitCode = await runCliMain(resumeFixture.runtime);
+      expect(resumeExitCode).toBe(0);
+      expect(resumeFixture.stdout()).toContain(
+        "  2. [in_progress] Answer user",
+      );
+      expect(resumeFixture.stderr()).toBe("");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named interactive session receives task progress from the provider,
+    When the turn completes,
+    Then the session ledger persists the deterministic task checkpoint`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      req.resume();
+      requestCount++;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      if (requestCount === 1) {
+        res.write(
+          sseToolCall("call_plan", "update_plan", {
+            plan: [
+              {
+                step: "Inspect the prompt",
+                status: "in_progress",
+              },
+            ],
+          }),
+        );
+        res.write(sseToolFinish());
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
+      }
+      res.end(sseTextReplyWithUsage("Done."));
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.end("start task\n");
+    const fixture = createRuntime(["--session", "task-progress"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_PROVIDER: "deepseek",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Done.\n");
+      expect(fixture.stderr()).toContain("Task progress:");
+      const ledgerLines = (
+        await readFile(
+          join(home, "sessions", "task-progress", "ledger.jsonl"),
+          "utf8",
+        )
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerLines).toContainEqual({
+        schemaVersion: 2,
+        type: "task_progress",
+        timestamp: expect.any(String),
+        messageOrdinal: 3,
+        tasks: [{ step: "Inspect the prompt", status: "in_progress" }],
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the user starts and resumes a named interactive session,
     When follow-up prompts are sent after process restart,
     Then the provider receives the prior transcript and persists queued input`, async () => {

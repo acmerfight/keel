@@ -1,4 +1,8 @@
 import { KeelError } from "../../core/error.ts";
+import {
+  appendSessionTaskProgressToSummary,
+  type SessionTaskProgress,
+} from "../../core/task-progress.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
 import type {
   ToolOutputArtifactCompactionArtifact,
@@ -290,6 +294,7 @@ export async function buildCompactedMessages(
   options: ResolvedContextCompactionOptions,
   toolOutputArtifacts?: ToolOutputArtifactsOptions,
   summaryInputMaxChars = options.summaryInputMaxChars,
+  taskProgress?: SessionTaskProgress,
 ): Promise<BuildCompactedMessagesResult> {
   const recentMessages = messages.slice(firstRetainedIndex);
   const recent =
@@ -306,7 +311,9 @@ export async function buildCompactedMessages(
     artifactStore: toolOutputArtifacts?.store,
   });
   const checkpoint = renderConversationCheckpoint({
-    summary: normalizeCheckpointSummary(summary),
+    summary: normalizeCheckpointSummary(
+      appendSessionTaskProgressToSummary(summary, taskProgress),
+    ),
     noLaterMessages: recent.messages.length === 0,
     evidence: checkpointEvidence,
     evidenceMaxChars: compactionEvidenceMaxChars(summaryInputMaxChars),

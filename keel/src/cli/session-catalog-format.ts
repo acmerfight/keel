@@ -278,6 +278,7 @@ export function formatSessionDetail(options: {
       messageCount: options.session.storedMessages.length,
       pendingInputCount: options.session.pendingInputs.length,
       bashApprovalCount: options.session.bashApprovalGrants.length,
+      taskProgress: options.session.taskProgress,
       modelSwitchCount: options.session.modelSwitches.length,
       undoCheckpoints: options.undoCheckpoints,
       recoveryActions: [

@@ -1,11 +1,16 @@
 import { z } from "zod";
 import { providerIds } from "../../core/provider-id.ts";
+import {
+  type SessionTaskProgress,
+  sessionTaskPlanSchema,
+  sessionTaskProgressSchema,
+} from "../../core/task-progress.ts";
 import type {
   Message,
   UserMessageContextCompactionMetadata,
 } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
-import { builtinToolCallSchema } from "../../tools/tool-call.ts";
+import { toolCallSchema } from "../../tools/tool-call.ts";
 import {
   hasPersistenceRedactionMarker,
   redactMessageForPersistence,
@@ -29,12 +34,11 @@ import {
   type SessionModelSwitch,
   type SessionMutationRecord,
   type SessionQueuedInput,
+  type SessionTaskProgressCheckpoint,
   type SnapshotSessionRecord,
   type StoredMessage,
   type WorkflowSkill,
 } from "./model.ts";
-
-const toolCallSchema = builtinToolCallSchema;
 
 type BashApprovalRevokedSessionRecord = Extract<
   SessionMutationRecord,
@@ -236,6 +240,23 @@ const modelSwitchRecordSchema = z
   })
   .strict();
 
+const taskProgressRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("task_progress"),
+    timestamp: z.string(),
+    messageOrdinal: z.number().int().nonnegative(),
+    tasks: sessionTaskPlanSchema,
+  })
+  .strict();
+
+const sessionTaskProgressCheckpointSchema = z
+  .object({
+    messageOrdinal: z.number().int().nonnegative(),
+    taskProgress: sessionTaskProgressSchema,
+  })
+  .strict();
+
 const inputAdmittedRecordSchema = z
   .object({
     schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
@@ -325,6 +346,9 @@ const snapshotRecordSchema = z
     bashApprovalGrants: z.array(bashApprovalGrantSchema).optional(),
     activeModel: sessionModelSelectionSchema.optional(),
     modelSwitches: z.array(sessionModelSwitchSchema).optional(),
+    taskProgressCheckpoints: z
+      .array(sessionTaskProgressCheckpointSchema)
+      .optional(),
   })
   .strict();
 
@@ -338,6 +362,7 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   appendRecordSchema,
   replaceRecordSchema,
   modelSwitchRecordSchema,
+  taskProgressRecordSchema,
   inputAdmittedRecordSchema,
   inputConsumedRecordSchema,
   bashApprovalGrantedRecordSchema,
@@ -355,6 +380,9 @@ type RawSessionQueuedInput = z.infer<typeof queuedInputSchema>;
 type RawBashApprovalGrant = z.infer<typeof bashApprovalGrantSchema>;
 type RawSessionModelSelection = z.infer<typeof sessionModelSelectionSchema>;
 type RawSessionModelSwitch = z.infer<typeof sessionModelSwitchSchema>;
+type RawSessionTaskProgressCheckpoint = z.infer<
+  typeof sessionTaskProgressCheckpointSchema
+>;
 type RawSessionHeaderRecord = z.infer<typeof sessionHeaderSchema>;
 type RawSessionMutationRecord = z.infer<typeof sessionMutationRecordSchema>;
 
@@ -646,6 +674,37 @@ function appendConsumedInputIds(
   return { ...record, consumedInputIds: [...inputIds] };
 }
 
+function redactSessionTaskProgressForPersistence(
+  taskProgress: SessionTaskProgress,
+): SessionTaskProgress {
+  return {
+    tasks: taskProgress.tasks.map((task) => ({
+      step: redactTextForPersistence(task.step),
+      status: task.status,
+    })),
+  };
+}
+
+function redactSessionTaskProgressCheckpointForPersistence(
+  checkpoint: SessionTaskProgressCheckpoint,
+): SessionTaskProgressCheckpoint {
+  return {
+    messageOrdinal: checkpoint.messageOrdinal,
+    taskProgress: redactSessionTaskProgressForPersistence(
+      checkpoint.taskProgress,
+    ),
+  };
+}
+
+function toSessionTaskProgressCheckpoint(
+  checkpoint: RawSessionTaskProgressCheckpoint,
+): SessionTaskProgressCheckpoint {
+  return redactSessionTaskProgressCheckpointForPersistence({
+    messageOrdinal: checkpoint.messageOrdinal,
+    taskProgress: checkpoint.taskProgress,
+  });
+}
+
 function toSessionQueuedInput(
   input: RawSessionQueuedInput,
 ): SessionQueuedInput {
@@ -757,6 +816,17 @@ function toSessionMutationRecord(
         },
         record.consumedInputIds,
       );
+    case "task_progress":
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "task_progress",
+        timestamp: record.timestamp,
+        messageOrdinal: record.messageOrdinal,
+        tasks: record.tasks.map((task) => ({
+          step: redactTextForPersistence(task.step),
+          status: task.status,
+        })),
+      };
     case "input_admitted":
       return {
         schemaVersion: SESSION_SCHEMA_VERSION,
@@ -818,6 +888,13 @@ function toSessionMutationRecord(
           : {}),
         ...(record.modelSwitches !== undefined
           ? { modelSwitches: record.modelSwitches.map(toSessionModelSwitch) }
+          : {}),
+        ...(record.taskProgressCheckpoints !== undefined
+          ? {
+              taskProgressCheckpoints: record.taskProgressCheckpoints.map(
+                toSessionTaskProgressCheckpoint,
+              ),
+            }
           : {}),
       };
   }
@@ -968,6 +1045,8 @@ export {
   parseSnapshotSessionMutationRecord,
   redactBashApprovalGrantForPersistence,
   redactSessionQueuedInputForPersistence,
+  redactSessionTaskProgressCheckpointForPersistence,
+  redactSessionTaskProgressForPersistence,
   redactStoredMessageForPersistence,
   redactWorkflowSkillForPersistence,
   validateCompletedTranscript,

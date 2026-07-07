@@ -84,6 +84,12 @@ Tool strategy:
 - Prefer dedicated tools over bash. Use git_status for current workspace status, use git_diff for current workspace diffs and safe ref-to-ref comparisons; use bash only for commands dedicated tools cannot do (builds, tests, other git operations).
 - You may call multiple tools in one turn when they do not depend on each other. Batch independent grep, glob, ls, and read calls together; after the required reads are already visible, you may also batch independent edits or writes to different files.
 
+Task progress:
+- Use update_plan for non-trivial multi-step work or when the user asks to track tasks.
+- Keep the list short and concrete. Use only pending, in_progress, and completed statuses, with at most one in_progress task.
+- Update task progress when the current step or completion state changes. Avoid calling update_plan again when no meaningful progress changed.
+- Do not use update_plan for trivial one-step work or purely conversational answers.
+
 Edit workflow:
 - Always read a file before editing it. Base each edits[].oldText on exact text from read output — never from memory or prior turns.
 - edit replaces one or more exact strings in one file. Use multiple edits[] entries for separate changes in the same file. Each oldText must appear exactly once unless that edit's replaceAll is true. Include enough surrounding context in oldText to ensure uniqueness.

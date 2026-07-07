@@ -1,3 +1,4 @@
+import type { SessionTaskProgress } from "../core/task-progress.ts";
 import type { LLMProvider, Message, Usage } from "../llm/types.ts";
 import { currentToolRound } from "./context-compaction/current-tool-round.ts";
 import type {
@@ -82,6 +83,7 @@ interface CompactMessagesOptions {
   readonly contextCompaction?: ContextCompactionOptions;
   readonly contextAccounting?: ContextCompactionAccountingSnapshot;
   readonly requestMetadata?: ContextCompactionRequestMetadata;
+  readonly taskProgress?: SessionTaskProgress;
   readonly focusInstruction?: string;
   readonly allowCurrentToolOutputCompaction?: boolean;
   readonly currentToolOutputCompactionReason?: CurrentToolOutputCompactionReason;
@@ -467,6 +469,7 @@ export async function compactMessages(
     resolved,
     options.toolOutputArtifacts,
     summaryTurn.summaryInputMaxChars,
+    options.taskProgress,
   );
   const currentToolOutputMaxChars = currentToolOutputMaxCharsForCompaction({
     messages: compacted.messages,

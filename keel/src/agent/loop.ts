@@ -2,6 +2,11 @@ import {
   type RecordLastBatchCheckpointOperation,
   recordLastTaskCheckpoint,
 } from "../core/git.ts";
+import {
+  copySessionTaskProgress,
+  emptySessionTaskProgress,
+  type SessionTaskProgress,
+} from "../core/task-progress.ts";
 import type {
   AssistantProviderMetadata,
   LLMProvider,
@@ -79,6 +84,7 @@ export interface RunAgentOptions {
   readonly bashPermission?: BashPermissionPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
+  readonly taskProgress?: SessionTaskProgress;
   readonly onTranscriptReady?: (messages: readonly Message[]) => void;
 }
 
@@ -98,6 +104,7 @@ export interface RunAgentTurnOptions {
   readonly bashPermission?: BashPermissionPolicy;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
+  readonly taskProgress?: SessionTaskProgress;
   readonly readVisibility?: ReadVisibilityState;
   readonly projectInstructionVisibility?: ProjectInstructionVisibilityState;
   readonly recordCheckpointOperations?: (
@@ -471,6 +478,9 @@ export async function* runAgentTurn(
   const projectInstructionVisibility =
     options.projectInstructionVisibility ??
     createProjectInstructionVisibilityState(workspace);
+  let taskProgress = copySessionTaskProgress(
+    options.taskProgress ?? emptySessionTaskProgress(),
+  );
   let postCompactionReadSequence = 0;
   const config: CompactionConfig = {
     provider,
@@ -480,6 +490,7 @@ export async function* runAgentTurn(
     ...(options.toolOutputArtifacts !== undefined
       ? { toolOutputArtifacts: options.toolOutputArtifacts }
       : {}),
+    taskProgress: () => taskProgress,
     costTracking,
     onContextCompacted: async (targetMessages) => {
       const postCompactionReadSequenceSnapshot = postCompactionReadSequence;
@@ -700,6 +711,23 @@ export async function* runAgentTurn(
       completedToolExecutions.push(completed);
       pendingToolExecutions.push(completed);
     };
+    const taskProgressEventFromExecution = (
+      execution: ToolExecution,
+    ): Extract<
+      AgentEvent,
+      { readonly type: "task_progress_updated" }
+    > | null => {
+      if (execution.taskProgressUpdate === undefined) {
+        return null;
+      }
+      taskProgress = copySessionTaskProgress(execution.taskProgressUpdate);
+      return {
+        type: "task_progress_updated",
+        taskProgress,
+        messageOrdinal:
+          sessionLedger.entries.length + pendingToolExecutions.length + 1,
+      };
+    };
 
     for (const segment of planToolCallExecutionSegments(scheduled)) {
       if (segment.kind === "parallel") {
@@ -719,6 +747,11 @@ export async function* runAgentTurn(
           }
           const { toolCall, result: execution } = result;
           yield { type: "tool_end", toolCall, ok: execution.ok };
+          const taskProgressEvent = taskProgressEventFromExecution(execution);
+          /* v8 ignore next 3: update_plan uses global tool access and is never scheduled in a parallel batch. */
+          if (taskProgressEvent !== null) {
+            yield taskProgressEvent;
+          }
           recordCompletedToolExecution({ toolCall, execution });
         }
       } else {
@@ -734,6 +767,10 @@ export async function* runAgentTurn(
           throw error;
         }
         yield { type: "tool_end", toolCall, ok: execution.ok };
+        const taskProgressEvent = taskProgressEventFromExecution(execution);
+        if (taskProgressEvent !== null) {
+          yield taskProgressEvent;
+        }
         recordCompletedToolExecution({ toolCall, execution });
       }
     }

@@ -6,6 +6,12 @@ function zodIssuePath(issue: z.core.$ZodIssue): string {
     : issue.path.map(String).join(".");
 }
 
+export function zodIssuesText(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => `${zodIssuePath(issue)}: ${issue.message}`)
+    .join("; ");
+}
+
 export function toolCallValidationError(
   prefix: string,
   toolName: string,
@@ -16,10 +22,7 @@ export function toolCallValidationError(
     return new Error(message);
   }
 
-  const issues = error.issues
-    .map((issue) => `${zodIssuePath(issue)}: ${issue.message}`)
-    .join("; ");
-  return new Error(`${message}: ${issues}`);
+  return new Error(`${message}: ${zodIssuesText(error)}`);
 }
 
 export function invalidBuiltinToolCallError(
