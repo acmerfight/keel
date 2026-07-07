@@ -156,7 +156,10 @@ export function formatSessionCatalog(catalog: SessionCatalog): string {
   if (catalog.sessions.length === 0) {
     return `No sessions for workspace ${catalog.workspace}.\n`;
   }
-  const lines = [`Sessions for workspace ${catalog.workspace}:`];
+  const lines = [
+    `Sessions for workspace ${catalog.workspace}:`,
+    "resume latest: keel --resume",
+  ];
   for (const group of sessionCatalogGraphGroups(catalog.sessions)) {
     lines.push(
       `graph ${group.graphId} root ${group.rootSessionId}  updated ${group.updatedAt}`,

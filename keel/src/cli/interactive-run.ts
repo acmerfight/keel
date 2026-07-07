@@ -36,13 +36,17 @@ import { createAgentEventReportRecorder } from "./report-events.ts";
 import { resolveResumedWorkflowSkill } from "./resumed-workflow-skill.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { formatCliRuntimeError } from "./runtime-error.ts";
-import { formatSessionForkCreated } from "./session-catalog-format.ts";
+import {
+  formatSessionCatalogWarnings,
+  formatSessionForkCreated,
+} from "./session-catalog-format.ts";
 import {
   acquireSessionLock,
   consumeSessionQueuedInputs,
   createSessionStore,
   ensureSessionCanBeCreated,
   forkSessionStore,
+  listSessionCatalog,
   persistSessionBashApprovalGrant,
   persistSessionBashApprovalRevoked,
   persistSessionBashApprovalsCleared,
@@ -93,6 +97,10 @@ function createAutomaticSessionId(): string {
 
 function interactiveSessionStartFromCliArgs(
   cliArgs: RunCliArgs,
+  options: {
+    readonly workspace: string;
+    readonly runtime: CliRuntime;
+  },
 ): InteractiveSessionStart {
   if (cliArgs.ephemeral) {
     return { kind: "ephemeral" };
@@ -101,22 +109,42 @@ function interactiveSessionStartFromCliArgs(
     return { kind: "create", sessionId: cliArgs.sessionId };
   }
   if (
-    cliArgs.resumeSessionId !== undefined &&
+    cliArgs.resumeSession?.kind === "id" &&
     cliArgs.forkSessionId !== undefined
   ) {
     return {
       kind: "fork",
-      sourceSessionId: cliArgs.resumeSessionId,
+      sourceSessionId: cliArgs.resumeSession.sessionId,
       targetSessionId: cliArgs.forkSessionId,
       ...(cliArgs.forkBeforeMessage !== undefined
         ? { beforeMessageId: cliArgs.forkBeforeMessage }
         : {}),
     };
   }
-  if (cliArgs.resumeSessionId !== undefined) {
-    return { kind: "resume", sessionId: cliArgs.resumeSessionId };
+  if (cliArgs.resumeSession?.kind === "id") {
+    return { kind: "resume", sessionId: cliArgs.resumeSession.sessionId };
+  }
+  if (cliArgs.resumeSession?.kind === "latest") {
+    const sessionId = latestSessionIdForWorkspace(options);
+    options.runtime.writeStderr(`Resuming latest session: ${sessionId}\n`);
+    return { kind: "resume", sessionId };
   }
   return { kind: "create", sessionId: createAutomaticSessionId() };
+}
+
+function latestSessionIdForWorkspace(options: {
+  readonly workspace: string;
+  readonly runtime: CliRuntime;
+}): string {
+  const catalog = listSessionCatalog(options);
+  options.runtime.writeStderr(formatSessionCatalogWarnings(catalog.warnings));
+  const latestSession = catalog.sessions[0];
+  if (latestSession === undefined) {
+    throw new SessionStoreError(
+      `Error: no saved sessions for workspace ${catalog.workspace}. Complete an interactive turn before running keel --resume.`,
+    );
+  }
+  return latestSession.id;
 }
 
 function activeSessionIdForStart(
@@ -166,7 +194,10 @@ export async function runInteractiveCli(
             };
           })()
         : undefined;
-    const sessionStart = interactiveSessionStartFromCliArgs(cliArgs);
+    const sessionStart = interactiveSessionStartFromCliArgs(cliArgs, {
+      workspace,
+      runtime,
+    });
     try {
       if (sessionStart.kind === "fork") {
         sourceSessionLock = acquireSessionLock({

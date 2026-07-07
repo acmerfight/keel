@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -134,19 +134,35 @@ describe("CLI Main - Session Flag Validation", () => {
     expect(fixture.stderr()).toBe("Error: --session requires a value.\n");
   });
 
-  test(`Given resume is passed without a following value,
-    When the CLI main parses the request,
-    Then it returns a validation error before starting interactive mode`, async () => {
+  test(`Given resume is passed without a session id and no saved sessions exist,
+    When the CLI main resolves the latest session,
+    Then it reports that there is no resumable session for the workspace`, async () => {
     // Given
-    const fixture = createRuntime(["--resume"]);
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const fixture = createRuntime(["--resume"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+    });
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe("Error: --resume requires a value.\n");
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        `Error: no saved sessions for workspace ${await realpath(workspace)}. Complete an interactive turn before running keel --resume.\n`,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given fork is passed without a target session id,
@@ -184,6 +200,21 @@ describe("CLI Main - Session Flag Validation", () => {
     Then it returns a validation error before starting interactive mode`, async () => {
     // Given
     const fixture = createRuntime(["--fork", "target"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe("Error: --fork requires --resume <id>.\n");
+  });
+
+  test(`Given latest resume is combined with a fork target,
+    When the CLI main parses the request,
+    Then it requires an explicit source session id`, async () => {
+    // Given
+    const fixture = createRuntime(["--resume", "--fork", "target"]);
 
     // When
     const exitCode = await runCliMain(fixture.runtime);
@@ -267,6 +298,23 @@ describe("CLI Main - Session Flag Validation", () => {
     Then it returns a validation error before reading sessions`, async () => {
     // Given
     const fixture = createRuntime(["--fork-points"]);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: --fork-points requires --resume <id>.\n",
+    );
+  });
+
+  test(`Given latest resume is combined with fork-points,
+    When the CLI main parses the request,
+    Then it requires an explicit source session id`, async () => {
+    // Given
+    const fixture = createRuntime(["--resume", "--fork-points"]);
 
     // When
     const exitCode = await runCliMain(fixture.runtime);

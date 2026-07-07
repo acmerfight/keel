@@ -140,7 +140,7 @@ export function requireSeparatedOptionValue(
   return parsed;
 }
 
-function isRecognizedOptionToken(
+export function isRecognizedOptionToken(
   token: string,
   recognizedOptions: readonly string[],
 ): boolean {

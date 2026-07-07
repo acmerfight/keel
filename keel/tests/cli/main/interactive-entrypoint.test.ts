@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
+  mkdir,
   mkdtemp,
   readdir,
   readFile,
@@ -303,6 +304,85 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(resumeFixture.stderr()).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions exist in multiple workspaces,
+    When the user resumes without a session id,
+    Then Keel continues the latest saved session for the current workspace`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const otherWorkspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const env = {
+      KEEL_PROVIDER: "fake",
+      KEEL_FORCE_INTERACTIVE: "1",
+      KEEL_HOME: home,
+    };
+    const olderInput = new PassThrough();
+    olderInput.end("remember alpha\n");
+    const olderRun = createRuntime(["--session", "older"], {
+      cwd: workspace,
+      env,
+      input: olderInput,
+      now: () => 1_000,
+    });
+    const otherInput = new PassThrough();
+    otherInput.end("remember elsewhere\n");
+    const otherRun = createRuntime(["--session", "elsewhere"], {
+      cwd: otherWorkspace,
+      env,
+      input: otherInput,
+      now: () => 3_000,
+    });
+    const latestInput = new PassThrough();
+    latestInput.end("remember beta\n");
+    const latestRun = createRuntime(["--session", "latest"], {
+      cwd: workspace,
+      env,
+      input: latestInput,
+      now: () => 2_000,
+    });
+
+    try {
+      const olderExitCode = await runCliMain(olderRun.runtime);
+      const otherExitCode = await runCliMain(otherRun.runtime);
+      const latestExitCode = await runCliMain(latestRun.runtime);
+      await mkdir(join(home, "sessions", "broken"), { recursive: true });
+      await writeFile(
+        join(home, "sessions", "broken", "ledger.jsonl"),
+        "{not json\n",
+        "utf8",
+      );
+      const resumeInput = new PassThrough();
+      resumeInput.end("what did I ask you to remember?\n");
+      const resumeRun = createRuntime(["--resume"], {
+        cwd: workspace,
+        env,
+        input: resumeInput,
+        now: () => 4_000,
+      });
+
+      // When
+      const resumeExitCode = await runCliMain(resumeRun.runtime);
+
+      // Then
+      expect(olderExitCode).toBe(0);
+      expect(otherExitCode).toBe(0);
+      expect(latestExitCode).toBe(0);
+      expect(olderRun.stdout()).toBe("Remembered: remember alpha\n");
+      expect(otherRun.stdout()).toBe("Remembered: remember elsewhere\n");
+      expect(latestRun.stdout()).toBe("Remembered: remember beta\n");
+      expect(resumeExitCode).toBe(0);
+      expect(resumeRun.stdout()).toBe("Earlier you said: remember beta\n");
+      expect(resumeRun.stderr()).toContain(
+        'Warning: skipped session "broken": cannot load session ledger',
+      );
+      expect(resumeRun.stderr()).toContain("Resuming latest session: latest\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(otherWorkspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
   });

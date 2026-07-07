@@ -1116,6 +1116,7 @@ describe("CLI Main - Sessions Command", () => {
       expect(exitCode).toBe(0);
       const stdout = fixture.stdout();
       expect(stdout).toContain(`Sessions for workspace ${ledgerWorkspace}:\n`);
+      expect(stdout).toContain("resume latest: keel --resume\n");
       expect(stdout).toContain(
         "graph long-preview root long-preview  updated 2026-01-04T00:00:05.000Z\n",
       );

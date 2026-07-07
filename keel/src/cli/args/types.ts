@@ -135,7 +135,7 @@ export interface RunCliArgs {
   readonly transcriptFile?: string;
   readonly ephemeral: boolean;
   readonly sessionId?: string;
-  readonly resumeSessionId?: string;
+  readonly resumeSession?: ResumeSessionCliArg;
   readonly forkSessionId?: string;
   readonly forkBeforeMessage?: string;
   readonly forkPoints?: boolean;
@@ -143,6 +143,15 @@ export interface RunCliArgs {
   readonly model?: string;
   readonly skillName?: string;
 }
+
+type ResumeSessionCliArg =
+  | {
+      readonly kind: "id";
+      readonly sessionId: string;
+    }
+  | {
+      readonly kind: "latest";
+    };
 
 export type CliArgs =
   | { readonly command: "help" }

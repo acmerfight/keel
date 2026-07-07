@@ -78,12 +78,16 @@ async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
   }
 
   const userMessage = cliArgs.userMessage;
-  if (cliArgs.forkPoints && cliArgs.resumeSessionId !== undefined) {
-    return runForkPointsCommand(cliArgs, runtime, cliArgs.resumeSessionId);
+  if (cliArgs.forkPoints && cliArgs.resumeSession?.kind === "id") {
+    return runForkPointsCommand(
+      cliArgs,
+      runtime,
+      cliArgs.resumeSession.sessionId,
+    );
   }
   if (
     userMessage !== undefined &&
-    (cliArgs.sessionId !== undefined || cliArgs.resumeSessionId !== undefined)
+    (cliArgs.sessionId !== undefined || cliArgs.resumeSession !== undefined)
   ) {
     runtime.writeStderr(
       "Error: --session and --resume are only supported for interactive sessions.\n",
