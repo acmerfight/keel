@@ -1,7 +1,14 @@
+import {
+  formatSessionTaskProgressSummary,
+  type SessionTaskProgress,
+} from "../core/task-progress.ts";
 import { type ToolCall, toolCallLabel } from "../tools/registry.ts";
 import { sanitizeStatusLineText } from "./output.ts";
 import { redactTextForPersistence } from "./persistence-redaction.ts";
-import { formatSessionStatusSnapshot } from "./session-status-format.ts";
+import {
+  formatSessionStatusSnapshot,
+  formatSessionTasks,
+} from "./session-status-format.ts";
 import type {
   SessionCatalog,
   SessionCatalogEntry,
@@ -43,10 +50,31 @@ function sessionCatalogEntryLines(
         ]
       : []),
     `${detailIndent}preview: ${formatSessionDetailText(entry.preview)}`,
+    ...sessionRecoveryStateLines(entry, detailIndent),
     `${detailIndent}show: keel sessions show ${entry.id}`,
     `${detailIndent}resume: keel --resume ${entry.id}`,
     `${detailIndent}fork-points: keel --resume ${entry.id} --fork-points`,
     `${detailIndent}fork: keel sessions fork ${entry.id} <new-id>`,
+  ];
+}
+
+function hasActiveSessionTasks(taskProgress: SessionTaskProgress): boolean {
+  return taskProgress.tasks.some((task) => task.status !== "completed");
+}
+
+function sessionRecoveryStateLines(
+  entry: SessionCatalogEntry,
+  indent: string,
+): readonly string[] {
+  return [
+    ...(hasActiveSessionTasks(entry.taskProgress)
+      ? [
+          `${indent}tasks: ${formatSessionDetailText(formatSessionTaskProgressSummary(entry.taskProgress))}`,
+        ]
+      : []),
+    ...(entry.pendingInputCount > 0
+      ? [`${indent}pending inputs: ${entry.pendingInputCount}`]
+      : []),
   ];
 }
 
@@ -184,6 +212,7 @@ function sessionPickerEntryLines(
       ? [`${detailIndent}title: ${formatSessionDetailText(entry.title)}`]
       : []),
     `${detailIndent}preview: ${formatSessionDetailText(entry.preview)}`,
+    ...sessionRecoveryStateLines(entry, detailIndent),
   ];
 }
 
@@ -213,6 +242,7 @@ export function formatSessionStartupPrompt(options: {
       ? [`title: ${formatSessionDetailText(latestSession.title)}`]
       : []),
     `preview: ${formatSessionDetailText(latestSession.preview)}`,
+    ...sessionRecoveryStateLines(latestSession, ""),
     "Resume latest saved session?",
     `  Enter/y  resume latest: ${latestSessionId}`,
     "  p        pick another session",
@@ -361,6 +391,9 @@ export function formatSessionDetail(options: {
         },
       ],
     }).trimEnd(),
+    ...(options.session.taskProgress.tasks.length === 0
+      ? []
+      : [formatSessionTasks(options.session.taskProgress).trimEnd()]),
     "state:",
     `  messages: ${options.session.storedMessages.length}`,
     `  pending inputs: ${options.session.pendingInputs.length}`,

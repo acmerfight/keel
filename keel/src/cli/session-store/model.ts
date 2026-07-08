@@ -252,6 +252,8 @@ export interface SessionCatalogEntry {
   readonly workflowSkill?: SessionCatalogWorkflowSkill;
   readonly title?: string;
   readonly preview: string;
+  readonly pendingInputCount: number;
+  readonly taskProgress: SessionTaskProgress;
 }
 
 export interface SessionCatalogWorkflowSkill {
@@ -278,6 +280,8 @@ export interface SessionCatalogReplayState {
   readonly updatedAt: string;
   readonly title?: string;
   readonly preview: CatalogPreviewState;
+  readonly pendingInputsById: Map<string, SessionQueuedInput>;
+  readonly taskProgress: SessionTaskProgress;
 }
 
 export interface SessionReplayState {

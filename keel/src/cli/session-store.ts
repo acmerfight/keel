@@ -19,6 +19,7 @@ export type {
   SessionQueuedInput,
   SessionState,
   SessionStoreRuntime,
+  SessionTaskProgressCheckpoint,
   StoredMessage,
 } from "./session-store/model.ts";
 export { sessionHome } from "./session-store/paths.ts";

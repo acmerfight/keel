@@ -1,6 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { WorkflowSkill } from "../agent/prompt.ts";
+import type {
+  SessionQueuedInput,
+  SessionTaskProgressCheckpoint,
+} from "../cli/session-store.ts";
+import type { SessionTask } from "../core/task-progress.ts";
 import type { Message } from "../llm/types.ts";
 
 export function appendSessionRecordLine(
@@ -33,6 +38,10 @@ export function snapshotSessionRecordLine(
   timestamp: string,
   messages: readonly Message[],
   title?: string,
+  options: {
+    readonly pendingInputs?: readonly SessionQueuedInput[];
+    readonly taskProgressCheckpoints?: readonly SessionTaskProgressCheckpoint[];
+  } = {},
 ): string {
   return JSON.stringify({
     schemaVersion: 2,
@@ -40,7 +49,10 @@ export function snapshotSessionRecordLine(
     timestamp,
     reason: "size_threshold",
     messages: storedMessages(messages, `snapshot-${timestamp}`),
-    pendingInputs: [],
+    pendingInputs: options.pendingInputs ?? [],
+    ...(options.taskProgressCheckpoints !== undefined
+      ? { taskProgressCheckpoints: options.taskProgressCheckpoints }
+      : {}),
     ...(title !== undefined ? { title } : {}),
   });
 }
@@ -48,12 +60,32 @@ export function snapshotSessionRecordLine(
 export function sessionTitleRecordLine(
   timestamp: string,
   title: string,
+  options: {
+    readonly consumedInputIds?: readonly string[];
+  } = {},
 ): string {
   return JSON.stringify({
     schemaVersion: 2,
     type: "session_title",
     timestamp,
     title,
+    ...(options.consumedInputIds !== undefined
+      ? { consumedInputIds: options.consumedInputIds }
+      : {}),
+  });
+}
+
+export function taskProgressRecordLine(options: {
+  readonly timestamp: string;
+  readonly tasks: readonly SessionTask[];
+  readonly messageOrdinal?: number;
+}): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    type: "task_progress",
+    timestamp: options.timestamp,
+    messageOrdinal: options.messageOrdinal ?? 0,
+    tasks: options.tasks,
   });
 }
 
