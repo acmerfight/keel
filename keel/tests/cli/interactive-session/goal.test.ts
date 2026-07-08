@@ -256,6 +256,77 @@ describe("Interactive Session - Goals", () => {
     expect(stderr).toBe("");
   });
 
+  test(`Given a saved interactive session has an active goal,
+    When the user mistypes a goal criterion subcommand,
+    Then Keel reports the unknown subcommand and keeps the goal unchanged`, async () => {
+    // Given
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let persistedGoal: SessionGoal | undefined = {
+      objective: "Original",
+      status: "active",
+    };
+    const provider = unusedProvider("unused-goal-subcommand-typo-provider");
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      sessionId: "goal-subcommand-typo-session",
+      initialSessionGoal: persistedGoal,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionGoal: ({ goal }) => {
+        persistedGoal = goal ?? undefined;
+        return persistedGoal;
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        for await (const _event of stream) {
+          throw new Error(
+            "Provider should not be called for local goal commands",
+          );
+        }
+        return undefined;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("/goal done-whenX loads fast\n");
+    input.write("/goal verifyX pnpm test\n");
+    input.end("/status\n");
+    await session;
+
+    // Then
+    expect(persistedGoal).toEqual({
+      objective: "Original",
+      status: "active",
+    });
+    expect(stdout).toContain("  goal: active - Original; criterion: missing\n");
+    expect(stderr).toBe(
+      'Error: unknown /goal subcommand "done-whenX". Did you mean /goal done-when <criterion>?\n' +
+        'Error: unknown /goal subcommand "verifyX". Did you mean /goal verify <command>?\n',
+    );
+  });
+
   test(`Given bash is enabled for a saved interactive session with an active goal,
     When the user sets a goal verification command,
     Then Keel preserves the command criterion text without warning that automatic verification is unavailable`, async () => {

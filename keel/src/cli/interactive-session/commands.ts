@@ -428,11 +428,34 @@ function parseGoalCommandArgs(
       criterion,
     };
   }
+  const unknownSubcommand = parseUnknownGoalSubcommand(trimmedArgs);
+  if (unknownSubcommand !== null) {
+    return unknownSubcommand;
+  }
   return {
     kind: "goal",
     action: "set",
     objective: normalizeSessionGoalObjective(trimmedArgs),
   };
+}
+
+function parseUnknownGoalSubcommand(
+  trimmedArgs: string,
+): InvalidInteractiveCommand | null {
+  const firstArg = /^\S+/u.exec(trimmedArgs)?.[0] ?? trimmedArgs;
+  if (firstArg.startsWith("done-when")) {
+    return {
+      kind: "invalid",
+      message: `Error: unknown /goal subcommand "${firstArg}". Did you mean /goal done-when <criterion>?`,
+    };
+  }
+  if (/^verify[^a-z]/u.test(firstArg)) {
+    return {
+      kind: "invalid",
+      message: `Error: unknown /goal subcommand "${firstArg}". Did you mean /goal verify <command>?`,
+    };
+  }
+  return null;
 }
 
 export function parseInteractiveCommand(
