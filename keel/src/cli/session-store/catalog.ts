@@ -1,6 +1,10 @@
 import { readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { errorMessage } from "../../core/error.ts";
+import {
+  copySessionTaskProgress,
+  emptySessionTaskProgress,
+} from "../../core/task-progress.ts";
 import type { Message } from "../../llm/types.ts";
 import { redactTextForPersistence } from "../persistence-redaction.ts";
 import {
@@ -29,6 +33,7 @@ import {
   type SessionCatalogWorkflowSkill,
   type SessionHeaderRecord,
   type SessionMutationRecord,
+  type SessionQueuedInput,
   type SessionRecords,
   type SessionStoreRuntime,
   type StoredMessage,
@@ -121,7 +126,23 @@ function initialSessionCatalogReplayState(
   return {
     updatedAt: header.createdAt,
     preview: { kind: "empty" },
+    pendingInputsById: new Map(),
+    taskProgress: emptySessionTaskProgress(),
   };
+}
+
+function consumeSessionCatalogInputs(
+  pendingInputsById: Map<string, SessionQueuedInput>,
+  inputIds: readonly string[] | undefined,
+): Map<string, SessionQueuedInput> {
+  if (inputIds === undefined || inputIds.length === 0) {
+    return pendingInputsById;
+  }
+  const nextPendingInputs = new Map(pendingInputsById);
+  for (const inputId of inputIds) {
+    nextPendingInputs.delete(inputId);
+  }
+  return nextPendingInputs;
 }
 
 function applySessionCatalogMutation(
@@ -137,35 +158,89 @@ function applySessionCatalogMutation(
           state.preview,
           catalogPreviewStateFromStoredMessages(record.messages),
         ),
+        pendingInputsById: consumeSessionCatalogInputs(
+          state.pendingInputsById,
+          record.consumedInputIds,
+        ),
       };
     case "replace":
       return {
         ...state,
         updatedAt: record.timestamp,
         preview: catalogPreviewStateFromStoredMessages(record.messages),
+        pendingInputsById: consumeSessionCatalogInputs(
+          state.pendingInputsById,
+          record.consumedInputIds,
+        ),
       };
     case "snapshot":
       return {
         updatedAt: record.timestamp,
         ...(record.title !== undefined ? { title: record.title } : {}),
         preview: catalogPreviewStateFromStoredMessages(record.messages),
+        pendingInputsById: new Map(
+          record.pendingInputs.map((input) => [input.id, input]),
+        ),
+        taskProgress:
+          record.taskProgressCheckpoints?.at(-1)?.taskProgress ??
+          emptySessionTaskProgress(),
       };
     case "session_title":
       return {
         ...state,
         updatedAt: record.timestamp,
         title: record.title,
+        pendingInputsById: consumeSessionCatalogInputs(
+          state.pendingInputsById,
+          record.consumedInputIds,
+        ),
       };
     case "input_admitted":
+      return {
+        ...state,
+        updatedAt: record.timestamp,
+        pendingInputsById: new Map(state.pendingInputsById).set(record.id, {
+          id: record.id,
+          timestamp: record.timestamp,
+          sequence: record.sequence,
+          line: record.line,
+        }),
+      };
     case "input_consumed":
-    case "bash_approval_granted":
-    case "bash_approval_revoked":
-    case "bash_approvals_cleared":
-    case "model_switch":
+      return {
+        ...state,
+        updatedAt: record.timestamp,
+        pendingInputsById: consumeSessionCatalogInputs(
+          state.pendingInputsById,
+          record.inputIds,
+        ),
+      };
     case "task_progress":
       return {
         ...state,
         updatedAt: record.timestamp,
+        taskProgress: {
+          tasks: record.tasks.map((task) => ({
+            step: task.step,
+            status: task.status,
+          })),
+        },
+      };
+    case "bash_approval_granted":
+      return {
+        ...state,
+        updatedAt: record.timestamp,
+      };
+    case "bash_approval_revoked":
+    case "bash_approvals_cleared":
+    case "model_switch":
+      return {
+        ...state,
+        updatedAt: record.timestamp,
+        pendingInputsById: consumeSessionCatalogInputs(
+          state.pendingInputsById,
+          record.consumedInputIds,
+        ),
       };
   }
 }
@@ -197,6 +272,8 @@ function sessionCatalogEntry(records: SessionRecords): SessionCatalogEntry {
       : {}),
     ...(state.title !== undefined ? { title: state.title } : {}),
     preview: catalogPreviewValue(state.preview),
+    pendingInputCount: state.pendingInputsById.size,
+    taskProgress: copySessionTaskProgress(state.taskProgress),
   };
 }
 

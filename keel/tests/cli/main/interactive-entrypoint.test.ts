@@ -31,6 +31,8 @@ import {
 } from "../../../src/testing/provider-sse-fixtures.ts";
 import {
   appendSessionRecordLine,
+  inputAdmittedRecordLine,
+  taskProgressRecordLine,
   writeSessionLedger,
 } from "../../../src/testing/session-ledger-fixtures.ts";
 
@@ -620,6 +622,106 @@ describe("CLI Main - Interactive Entrypoint", () => {
         'Warning: skipped session "broken": cannot load session ledger',
       );
       expect(fixture.stderr()).toContain("Resuming latest session: latest\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a saved session has active task progress and queued input,
+    When the user starts bare Keel and opens the resume picker,
+    Then Keel shows recovery status before the user selects a session`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "active",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-03-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-03-01T00:00:01.000Z", [
+          { role: "user", content: "fix resume status" },
+          {
+            role: "assistant",
+            content: "I will inspect session recovery.",
+            toolCalls: [],
+          },
+        ]),
+        taskProgressRecordLine({
+          timestamp: "2026-03-01T00:00:02.000Z",
+          tasks: [
+            { step: "Inspect session recovery", status: "completed" },
+            { step: "Patch catalog status", status: "in_progress" },
+          ],
+        }),
+        inputAdmittedRecordLine({
+          timestamp: "2026-03-01T00:00:03.000Z",
+          id: "active-follow-up",
+          line: "also update the startup prompt",
+        }),
+      ],
+    });
+
+    try {
+      const startupInput = new PassThrough();
+      const startupFixture = createRuntime([], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_HOME: home,
+        },
+        input: startupInput,
+        inputIsTTY: true,
+        stderrIsTTY: false,
+      });
+      const startupRun = runCliMain(startupFixture.runtime);
+      await waitForCondition(
+        () => startupFixture.stdout().includes("Resume latest saved session?"),
+        "resume-first startup prompt did not render",
+      );
+      startupInput.end("q\n");
+      const startupExitCode = await startupRun;
+
+      expect(startupExitCode).toBe(0);
+      expect(startupFixture.stdout()).toContain(
+        `Saved sessions for workspace ${ledgerWorkspace}:\n`,
+      );
+      expect(startupFixture.stdout()).toContain(
+        "tasks: 1/2 completed; current: Patch catalog status\n",
+      );
+      expect(startupFixture.stdout()).toContain("pending inputs: 1\n");
+      expect(startupFixture.stdout()).toContain("Startup cancelled.\n");
+
+      const pickerInput = new PassThrough();
+      const pickerFixture = createRuntime(["--resume", "--pick"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_HOME: home,
+        },
+        input: pickerInput,
+        inputIsTTY: true,
+        stderrIsTTY: false,
+      });
+      const pickerRun = runCliMain(pickerFixture.runtime);
+      await waitForCondition(
+        () =>
+          pickerFixture
+            .stdout()
+            .includes("Select session [1-1], or q to cancel:"),
+        "resume picker did not render the session choice",
+      );
+      pickerInput.end("q\n");
+      const pickerExitCode = await pickerRun;
+
+      expect(pickerExitCode).toBe(0);
+      expect(pickerFixture.stdout()).toContain(
+        "   tasks: 1/2 completed; current: Patch catalog status\n",
+      );
+      expect(pickerFixture.stdout()).toContain("   pending inputs: 1\n");
+      expect(pickerFixture.stdout()).toContain("Resume cancelled.\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

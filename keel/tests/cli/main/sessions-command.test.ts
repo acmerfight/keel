@@ -14,6 +14,7 @@ import {
   replaceSessionRecordLine,
   sessionTitleRecordLine,
   snapshotSessionRecordLine,
+  taskProgressRecordLine,
   writeSessionLedger,
 } from "../../../src/testing/session-ledger-fixtures.ts";
 
@@ -88,6 +89,213 @@ describe("CLI Main - Sessions Command", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe('Error: unknown sessions option "--all"\n');
+  });
+
+  test(`Given a saved session has active task progress and queued input,
+    When the user lists sessions,
+    Then the catalog shows recovery status before the resume command`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "active",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-03-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-03-01T00:00:01.000Z", [
+          { role: "user", content: "fix resume status" },
+          {
+            role: "assistant",
+            content: "I will inspect session recovery.",
+            toolCalls: [],
+          },
+        ]),
+        taskProgressRecordLine({
+          timestamp: "2026-03-01T00:00:02.000Z",
+          tasks: [
+            { step: "Inspect session recovery", status: "completed" },
+            { step: "Patch catalog status", status: "in_progress" },
+            { step: "Verify resume picker", status: "pending" },
+          ],
+        }),
+        inputAdmittedRecordLine({
+          timestamp: "2026-03-01T00:00:03.000Z",
+          id: "active-follow-up",
+          line: "also update the startup prompt",
+        }),
+      ],
+    });
+    const fixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain(`Sessions for workspace ${ledgerWorkspace}:\n`);
+      expect(stdout).toContain("active  updated 2026-03-01T00:00:03.000Z\n");
+      expect(stdout).toContain(
+        "   tasks: 1/3 completed; current: Patch catalog status\n",
+      );
+      expect(stdout).toContain("   pending inputs: 1\n");
+      expect(stdout.indexOf("   tasks:")).toBeLessThan(
+        stdout.indexOf("   resume: keel --resume active"),
+      );
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a saved session snapshot contains recovery state,
+    When the user lists sessions,
+    Then the catalog shows the snapshotted task progress and pending inputs`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "snapshotted-active",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-03-02T00:00:00.000Z",
+      records: [
+        snapshotSessionRecordLine(
+          "2026-03-02T00:00:01.000Z",
+          [
+            { role: "user", content: "continue snapshot task" },
+            {
+              role: "assistant",
+              content: "Continuing.",
+              toolCalls: [],
+            },
+          ],
+          undefined,
+          {
+            pendingInputs: [
+              {
+                id: "snapshot-follow-up",
+                timestamp: "2026-03-02T00:00:00.500Z",
+                sequence: 1,
+                line: "also update picker",
+              },
+            ],
+            taskProgressCheckpoints: [
+              {
+                messageOrdinal: 0,
+                taskProgress: {
+                  tasks: [
+                    { step: "Restore snapshot state", status: "completed" },
+                    { step: "Render recovery status", status: "in_progress" },
+                  ],
+                },
+              },
+            ],
+          },
+        ),
+      ],
+    });
+    const fixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain(`Sessions for workspace ${ledgerWorkspace}:\n`);
+      expect(stdout).toContain(
+        "snapshotted-active  updated 2026-03-02T00:00:01.000Z\n",
+      );
+      expect(stdout).toContain(
+        "   tasks: 1/2 completed; current: Render recovery status\n",
+      );
+      expect(stdout).toContain("   pending inputs: 1\n");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved session inputs are consumed by input records and mutations,
+    When the user lists sessions,
+    Then the catalog only counts inputs still waiting for the next turn`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "partly-consumed",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-03-03T00:00:00.000Z",
+      records: [
+        inputAdmittedRecordLine({
+          timestamp: "2026-03-03T00:00:01.000Z",
+          id: "first-input",
+          line: "first follow-up",
+        }),
+        inputAdmittedRecordLine({
+          timestamp: "2026-03-03T00:00:02.000Z",
+          id: "second-input",
+          line: "second follow-up",
+        }),
+        inputConsumedRecordLine("2026-03-03T00:00:03.000Z", ["first-input"]),
+        inputAdmittedRecordLine({
+          timestamp: "2026-03-03T00:00:04.000Z",
+          id: "third-input",
+          line: "third follow-up",
+        }),
+        sessionTitleRecordLine(
+          "2026-03-03T00:00:05.000Z",
+          "Partly consumed input",
+          { consumedInputIds: ["second-input"] },
+        ),
+      ],
+    });
+    const fixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain(`Sessions for workspace ${ledgerWorkspace}:\n`);
+      expect(stdout).toContain(
+        "partly-consumed  updated 2026-03-03T00:00:05.000Z\n",
+      );
+      expect(stdout).toContain("   pending inputs: 1\n");
+      expect(stdout).not.toContain("pending inputs: 2");
+      expect(stdout).not.toContain("pending inputs: 3");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given sessions fork is missing the target session id,
@@ -281,6 +489,13 @@ describe("CLI Main - Sessions Command", () => {
         ]),
         modelSwitchRecordLine("2026-02-01T00:00:02.000Z"),
         sessionTitleRecordLine("2026-02-01T00:00:02.500Z", "Fix login timeout"),
+        taskProgressRecordLine({
+          timestamp: "2026-02-01T00:00:02.750Z",
+          tasks: [
+            { step: "Inspect session detail", status: "completed" },
+            { step: "Patch catalog status", status: "in_progress" },
+          ],
+        }),
         inputAdmittedRecordLine({
           timestamp: "2026-02-01T00:00:03.000Z",
           id: "queued-detail-input",
@@ -334,6 +549,9 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain("  messages: 4\n");
       expect(stdout).toContain("  pending inputs: 1\n");
       expect(stdout).toContain("  bash approvals: 1\n");
+      expect(stdout).toContain(
+        "  tasks: 1/2 completed; current: Patch catalog status\n",
+      );
       expect(stdout).toContain("  model switches: 1\n");
       expect(stdout).toContain("  latest checkpoint: none\n");
       expect(stdout).toContain("  undo checkpoints: 0\n");
@@ -344,6 +562,9 @@ describe("CLI Main - Sessions Command", () => {
       );
       expect(stdout).toContain("  fork: keel sessions fork detail <new-id>\n");
       expect(stdout).toContain("  undo-list: keel /undo --list\n");
+      expect(stdout).toContain("Session tasks:\n");
+      expect(stdout).toContain("  1. [completed] Inspect session detail\n");
+      expect(stdout).toContain("  2. [in_progress] Patch catalog status\n");
       expect(stdout).toContain("state:\n");
       expect(stdout).toContain("  messages: 4\n");
       expect(stdout).toContain("  pending inputs: 1\n");
