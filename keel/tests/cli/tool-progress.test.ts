@@ -233,4 +233,55 @@ describe("CLI Tool Progress", () => {
     // Then
     expect(statusLines).toEqual(["Task progress: 1/1 completed"]);
   });
+
+  test(`Given an agent updates the visible session goal,
+    When classic CLI output prints agent events,
+    Then stderr shows the deterministic goal summary`, async () => {
+    // Given
+    async function* events(): AsyncIterable<AgentEvent> {
+      yield {
+        type: "session_goal_updated",
+        messageOrdinal: 2,
+        goal: { objective: "Finish checkout", status: "completed" },
+      };
+    }
+    let stderr = "";
+
+    // When
+    await printAgentEvents(events(), {
+      writeStdout() {},
+      writeStderr(text) {
+        stderr += text;
+      },
+    });
+
+    // Then
+    expect(stderr).toBe("Session goal: completed - Finish checkout\n");
+  });
+
+  test(`Given an agent updates the visible session goal,
+    When stable interactive output prints agent events,
+    Then the status line shows the deterministic goal summary`, async () => {
+    // Given
+    async function* events(): AsyncIterable<AgentEvent> {
+      yield {
+        type: "session_goal_updated",
+        messageOrdinal: 2,
+        goal: { objective: "Finish checkout", status: "completed" },
+      };
+    }
+    const statusLines: string[] = [];
+
+    // When
+    await printStableInteractiveAgentEvents(events(), {
+      writeStdout() {},
+      writeAssistantHeader() {},
+      writeStatusLine(text) {
+        statusLines.push(text);
+      },
+    });
+
+    // Then
+    expect(statusLines).toEqual(["Session goal: completed - Finish checkout"]);
+  });
 });

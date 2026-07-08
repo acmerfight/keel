@@ -2,6 +2,7 @@ import {
   type RecordLastBatchCheckpointOperation,
   recordLastTaskCheckpoint,
 } from "../core/git.ts";
+import { copySessionGoal, type SessionGoal } from "../core/session-goal.ts";
 import {
   copySessionTaskProgress,
   emptySessionTaskProgress,
@@ -105,6 +106,7 @@ export interface RunAgentTurnOptions {
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly taskProgress?: SessionTaskProgress;
+  readonly sessionGoal?: SessionGoal;
   readonly readVisibility?: ReadVisibilityState;
   readonly projectInstructionVisibility?: ProjectInstructionVisibilityState;
   readonly recordCheckpointOperations?: (
@@ -481,6 +483,10 @@ export async function* runAgentTurn(
   let taskProgress = copySessionTaskProgress(
     options.taskProgress ?? emptySessionTaskProgress(),
   );
+  let sessionGoal =
+    options.sessionGoal === undefined
+      ? undefined
+      : copySessionGoal(options.sessionGoal);
   let postCompactionReadSequence = 0;
   const config: CompactionConfig = {
     provider,
@@ -653,6 +659,7 @@ export async function* runAgentTurn(
           hasRead: readVisibility.hasRead,
         },
         projectInstructions: projectInstructionVisibility,
+        ...(sessionGoal !== undefined ? { sessionGoal } : {}),
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
 
@@ -728,6 +735,23 @@ export async function* runAgentTurn(
           sessionLedger.entries.length + pendingToolExecutions.length + 1,
       };
     };
+    const sessionGoalEventFromExecution = (
+      execution: ToolExecution,
+    ): Extract<
+      AgentEvent,
+      { readonly type: "session_goal_updated" }
+    > | null => {
+      if (execution.sessionGoalUpdate === undefined) {
+        return null;
+      }
+      sessionGoal = copySessionGoal(execution.sessionGoalUpdate);
+      return {
+        type: "session_goal_updated",
+        goal: sessionGoal,
+        messageOrdinal:
+          sessionLedger.entries.length + pendingToolExecutions.length + 1,
+      };
+    };
 
     for (const segment of planToolCallExecutionSegments(scheduled)) {
       if (segment.kind === "parallel") {
@@ -752,6 +776,11 @@ export async function* runAgentTurn(
           if (taskProgressEvent !== null) {
             yield taskProgressEvent;
           }
+          const sessionGoalEvent = sessionGoalEventFromExecution(execution);
+          /* v8 ignore next 3: update_goal uses global tool access and is never scheduled in a parallel batch. */
+          if (sessionGoalEvent !== null) {
+            yield sessionGoalEvent;
+          }
           recordCompletedToolExecution({ toolCall, execution });
         }
       } else {
@@ -770,6 +799,10 @@ export async function* runAgentTurn(
         const taskProgressEvent = taskProgressEventFromExecution(execution);
         if (taskProgressEvent !== null) {
           yield taskProgressEvent;
+        }
+        const sessionGoalEvent = sessionGoalEventFromExecution(execution);
+        if (sessionGoalEvent !== null) {
+          yield sessionGoalEvent;
         }
         recordCompletedToolExecution({ toolCall, execution });
       }

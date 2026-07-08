@@ -358,6 +358,7 @@ describe("Qwen Provider", () => {
     expect(capturedBody?.tool_choice).toBe("auto");
     expect(capturedBody?.tools?.map((tool) => tool.function.name)).toEqual([
       "update_plan",
+      "update_goal",
       "read",
       "ls",
       "glob",

@@ -4480,6 +4480,7 @@ describe("DeepSeek Provider", () => {
       const parsed = parseDeepseekRequestBody(capturedBody);
       expect(parsed.tools?.map((tool) => tool.function.name)).toEqual([
         "update_plan",
+        "update_goal",
         "read",
         "ls",
         "glob",
@@ -4584,6 +4585,7 @@ describe("DeepSeek Provider", () => {
       const parsed = parseDeepseekRequestBody(capturedBody);
       expect(parsed.tools?.map((tool) => tool.function.name)).toEqual([
         "update_plan",
+        "update_goal",
         "read",
         "ls",
         "glob",
@@ -4779,6 +4781,7 @@ describe("DeepSeek Provider", () => {
       }
       expect(parsed.tools.map((tool) => tool.function.name)).toEqual([
         "update_plan",
+        "update_goal",
         "read",
         "ls",
         "glob",

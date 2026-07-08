@@ -212,3 +212,13 @@ export const updatePlanToolArgumentsSchema = z
     ),
   })
   .strict();
+
+export const updateGoalToolArgumentsSchema = z
+  .object({
+    status: z
+      .enum(["completed"])
+      .describe(
+        "Mark the active saved session goal completed. This is the only supported goal status update.",
+      ),
+  })
+  .strict();

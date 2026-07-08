@@ -7,6 +7,11 @@ import {
 } from "../core/error.ts";
 import type { RecordLastBatchCheckpointOperation } from "../core/git.ts";
 import {
+  copySessionGoal,
+  formatSessionGoalCompletedToolResult,
+  type SessionGoal,
+} from "../core/session-goal.ts";
+import {
   formatSessionTaskProgressToolResult,
   type SessionTaskProgress,
   sessionTaskProgressFromPlan,
@@ -58,6 +63,10 @@ type UpdatePlanToolCall = Extract<
   ValidToolCall,
   { readonly tool: "update_plan" }
 >;
+type UpdateGoalToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "update_goal" }
+>;
 
 interface BuiltinToolExecutionContext {
   readonly workspace: string;
@@ -69,6 +78,7 @@ interface BuiltinToolExecutionContext {
     readonly hasRead: (targetPath: string) => boolean;
   };
   readonly projectInstructions?: ProjectInstructionVisibilityState;
+  readonly sessionGoal?: SessionGoal;
 }
 
 export interface ToolExecution {
@@ -85,6 +95,7 @@ export interface ToolExecution {
   readonly visibleProjectInstructionPaths?: readonly string[];
   readonly checkpointOperations?: readonly RecordLastBatchCheckpointOperation[];
   readonly taskProgressUpdate?: SessionTaskProgress;
+  readonly sessionGoalUpdate?: SessionGoal;
 }
 
 export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
@@ -145,7 +156,7 @@ function unhandledToolFailureMessage(
 }
 
 function invalidToolCallFailureMessage(toolCall: InvalidToolCall): string {
-  return `Tool failed: update_plan failed: invalid arguments: ${toolCall.validationError}\nRecovery: ${toolCall.recovery}`;
+  return `Tool failed: ${toolCall.tool} failed: invalid arguments: ${toolCall.validationError}\nRecovery: ${toolCall.recovery}`;
 }
 
 function scopedProjectInstructionsFailureMessage(
@@ -160,6 +171,28 @@ function executeUpdatePlanTool(toolCall: UpdatePlanToolCall): ToolExecution {
     content: formatSessionTaskProgressToolResult(taskProgress),
     ok: true,
     taskProgressUpdate: taskProgress,
+  };
+}
+
+function executeUpdateGoalTool(
+  { sessionGoal }: BuiltinToolExecutionContext,
+  toolCall: UpdateGoalToolCall,
+): ToolExecution {
+  if (sessionGoal?.status !== "active") {
+    return {
+      content:
+        "Tool failed: update_goal failed: no active session goal is set.\nRecovery: Continue without updating the goal, or ask the user to set a saved session goal first.",
+      ok: false,
+    };
+  }
+  const completedGoal: SessionGoal = {
+    objective: sessionGoal.objective,
+    status: toolCall.status,
+  };
+  return {
+    content: formatSessionGoalCompletedToolResult(completedGoal),
+    ok: true,
+    sessionGoalUpdate: copySessionGoal(completedGoal),
   };
 }
 
@@ -410,6 +443,8 @@ function executeBuiltinToolCall(
   switch (parsed.data.tool) {
     case "update_plan":
       return executeUpdatePlanTool(parsed.data);
+    case "update_goal":
+      return executeUpdateGoalTool(context, parsed.data);
     case "read":
       return executeReadTool(context, parsed.data);
     case "ls":

@@ -1,3 +1,4 @@
+import type { SessionGoal } from "../core/session-goal.ts";
 import type { SessionTaskProgress } from "../core/task-progress.ts";
 import type { ToolCall, Usage } from "../llm/types.ts";
 import type { ContextCompactionStats } from "./context-compaction.ts";
@@ -43,6 +44,11 @@ export type AgentEvent =
   | {
       readonly type: "task_progress_updated";
       readonly taskProgress: SessionTaskProgress;
+      readonly messageOrdinal: number;
+    }
+  | {
+      readonly type: "session_goal_updated";
+      readonly goal: SessionGoal;
       readonly messageOrdinal: number;
     }
   | {

@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
+import type { SessionGoal } from "../../src/core/session-goal.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 
 const ZERO_USAGE: Usage = {
@@ -116,6 +117,92 @@ describe("Task Progress", () => {
       expect(messages.at(-1)).toEqual({
         role: "assistant",
         content: "I am inspecting the failure.",
+        toolCalls: [],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a model marks the active session goal completed during a turn,
+    When the agent continues after the tool call,
+    Then the user sees the goal update and the model receives the goal result`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-goal-progress-"));
+    const messages: Message[] = [
+      { role: "user", content: "Finish the durable session goal." },
+    ];
+    const providerRequests: (readonly Message[])[] = [];
+    const sessionGoal: SessionGoal = {
+      objective: "Finish the durable session goal",
+      status: "active",
+    };
+    const provider: LLMProvider = {
+      id: "goal-progress-provider",
+      async *stream(options) {
+        providerRequests.push(structuredClone([...options.messages]));
+        if (providerRequests.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "The session goal is complete." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          sessionGoal,
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "session_goal_updated",
+        messageOrdinal: 3,
+        goal: {
+          objective: "Finish the durable session goal",
+          status: "completed",
+        },
+      });
+      expect(providerRequests).toHaveLength(2);
+      expect(providerRequests[1]).toEqual([
+        { role: "user", content: "Finish the durable session goal." },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "goal_1",
+              tool: "update_goal",
+              status: "completed",
+            },
+          ],
+        },
+        {
+          role: "tool",
+          toolCallId: "goal_1",
+          content: "Session goal completed: Finish the durable session goal.",
+        },
+      ]);
+      expect(messages.at(-1)).toEqual({
+        role: "assistant",
+        content: "The session goal is complete.",
         toolCalls: [],
       });
     } finally {

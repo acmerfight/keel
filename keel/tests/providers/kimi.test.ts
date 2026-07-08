@@ -1053,6 +1053,7 @@ describe("Kimi Provider", () => {
     });
     expect(capturedBody?.tools?.map((tool) => tool.function.name)).toEqual([
       "update_plan",
+      "update_goal",
       "read",
       "ls",
       "glob",
@@ -1105,6 +1106,7 @@ describe("Kimi Provider", () => {
     // Then
     expect(capturedBody?.tools?.map((tool) => tool.function.name)).toEqual([
       "update_plan",
+      "update_goal",
       "read",
       "ls",
       "glob",

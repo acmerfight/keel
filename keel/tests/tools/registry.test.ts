@@ -265,6 +265,7 @@ describe("tool registry", () => {
     const writeTool = builtinToolByName("write");
     const applyPatchTool = builtinToolByName("apply_patch");
     const bashTool = builtinToolByName("bash");
+    const updateGoalTool = builtinToolByName("update_goal");
 
     expect(readTool.display.formatLabel({ path: "src/index.ts" })).toBe(
       "read src/index.ts",
@@ -324,6 +325,9 @@ describe("tool registry", () => {
     expect(bashTool.display.formatLabel({ command: "pnpm test" })).toBe(
       "bash pnpm test",
     );
+    expect(updateGoalTool.display.formatLabel({ status: "completed" })).toBe(
+      "update_goal",
+    );
 
     expect(bashTool.permission.kind).toBe("approval");
     if (bashTool.permission.kind === "approval") {
@@ -340,6 +344,7 @@ describe("tool registry", () => {
 
     expect(names).toEqual([
       "update_plan",
+      "update_goal",
       "read",
       "ls",
       "glob",
@@ -368,6 +373,13 @@ describe("tool registry", () => {
     expect(contracts).toEqual([
       {
         name: "update_plan",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "update_goal",
         permission: "none",
         output: "text",
         risk: { kind: "agent-state" },
@@ -636,6 +648,7 @@ describe("tool registry", () => {
 
     expect(argumentsByTool).toEqual({
       update_plan: { fields: ["plan"], required: ["plan"] },
+      update_goal: { fields: ["status"], required: ["status"] },
       read: { fields: ["path", "offset", "limit"], required: ["path"] },
       ls: { fields: ["path", "limit"], required: [] },
       glob: { fields: ["pattern", "path"], required: ["pattern"] },
@@ -775,6 +788,7 @@ describe("tool registry", () => {
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "update_plan",
+      "update_goal",
       "read",
       "ls",
       "glob",
@@ -794,6 +808,7 @@ describe("tool registry", () => {
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "update_plan",
+      "update_goal",
       "read",
       "ls",
       "glob",
