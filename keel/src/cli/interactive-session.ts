@@ -20,6 +20,7 @@ import {
   activeSessionGoalSystemPrompt,
   copySessionGoal,
   type SessionGoal,
+  sessionGoalsEqual,
 } from "../core/session-goal.ts";
 import {
   copySessionTaskProgress,
@@ -250,13 +251,22 @@ export async function runInteractiveSession(
   const updateTaskProgress = (next: SessionTaskProgress): void => {
     taskProgress = copySessionTaskProgress(next);
   };
-  const observeTaskProgressEvents = async function* (
+  const updateSessionGoal = (next: SessionGoal): void => {
+    sessionGoal = copySessionGoal(next);
+  };
+  const observeAgentStateEvents = async function* (
     stream: AsyncIterable<AgentEvent>,
-    onUpdate: (next: SessionTaskProgress, messageOrdinal: number) => void,
+    onTaskProgressUpdate: (
+      next: SessionTaskProgress,
+      messageOrdinal: number,
+    ) => void,
+    onSessionGoalUpdate: (next: SessionGoal) => void,
   ): AsyncGenerator<AgentEvent> {
     for await (const event of stream) {
       if (event.type === "task_progress_updated") {
-        onUpdate(event.taskProgress, event.messageOrdinal);
+        onTaskProgressUpdate(event.taskProgress, event.messageOrdinal);
+      } else if (event.type === "session_goal_updated") {
+        onSessionGoalUpdate(event.goal);
       }
       yield event;
     }
@@ -1029,10 +1039,13 @@ export async function runInteractiveSession(
       resolved = resolveActiveProvider(userMessage);
       const messagesBeforeTurn = messages.slice();
       const taskProgressBeforeTurn = copySessionTaskProgress(taskProgress);
+      const sessionGoalBeforeTurn =
+        sessionGoal === undefined ? undefined : copySessionGoal(sessionGoal);
       const taskProgressUpdatesDuringTurn: {
         readonly taskProgress: SessionTaskProgress;
         readonly messageOrdinal: number;
       }[] = [];
+      const sessionGoalUpdatesDuringTurn: SessionGoal[] = [];
       const projectInstructionPathsBeforeTurnOldestFirst = [
         ...projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
       ]
@@ -1049,7 +1062,7 @@ export async function runInteractiveSession(
 
       try {
         const remainingCostUsd = remainingMaxCostUsd();
-        const stream = observeTaskProgressEvents(
+        const stream = observeAgentStateEvents(
           runAgentTurn({
             workspace: options.workspace,
             provider: resolved.provider,
@@ -1059,6 +1072,7 @@ export async function runInteractiveSession(
             allowBash: bashModeExposesTool(options.cliArgs.bashMode),
             stopPolicy: defaultStopPolicy(),
             taskProgress,
+            ...(sessionGoal !== undefined ? { sessionGoal } : {}),
             ...(bashPermission !== undefined ? { bashPermission } : {}),
             ...(shouldTrackInteractiveCost(options.cliArgs)
               ? {
@@ -1118,11 +1132,19 @@ export async function runInteractiveSession(
               messageOrdinal,
             });
           },
+          (next) => {
+            updateSessionGoal(next);
+            sessionGoalUpdatesDuringTurn.push(copySessionGoal(next));
+          },
         );
         const finalEnd = await options.printAgentEvents(stream);
         if (turnAbortController.signal.aborted) {
           messages.splice(0, messages.length, ...messagesBeforeTurn);
           updateTaskProgress(taskProgressBeforeTurn);
+          sessionGoal =
+            sessionGoalBeforeTurn === undefined
+              ? undefined
+              : copySessionGoal(sessionGoalBeforeTurn);
           projectInstructionVisibility.clear();
           projectInstructionVisibility.markInstructionPathsVisible(
             projectInstructionPathsBeforeTurnOldestFirst,
@@ -1158,6 +1180,22 @@ export async function runInteractiveSession(
             );
           }
         }
+        if (options.persistSessionGoal !== undefined) {
+          let lastPersistedGoal = sessionGoalBeforeTurn;
+          for (const goal of sessionGoalUpdatesDuringTurn) {
+            if (sessionGoalsEqual(goal, lastPersistedGoal)) {
+              continue;
+            }
+            sessionGoal = options.persistSessionGoal({
+              goal,
+              consumedInputIds: [],
+            });
+            lastPersistedGoal =
+              sessionGoal === undefined
+                ? undefined
+                : copySessionGoal(sessionGoal);
+          }
+        }
         options.writeStdout("\n");
         const cumulativeCost =
           finalEnd === undefined ? undefined : recordTurnEnd(finalEnd);
@@ -1181,6 +1219,10 @@ export async function runInteractiveSession(
         }
         messages.splice(0, messages.length, ...messagesBeforeTurn);
         updateTaskProgress(taskProgressBeforeTurn);
+        sessionGoal =
+          sessionGoalBeforeTurn === undefined
+            ? undefined
+            : copySessionGoal(sessionGoalBeforeTurn);
         projectInstructionVisibility.clear();
         projectInstructionVisibility.markInstructionPathsVisible(
           projectInstructionPathsBeforeTurnOldestFirst,

@@ -26,21 +26,26 @@ type BuiltinToolForName<Name extends ToolName> = Extract<
 
 export type ValidToolCall = z.infer<typeof builtinToolCallSchema>;
 
-const invalidUpdatePlanToolCallSchema = z
+const recoverableAgentStateToolNames = ["update_plan", "update_goal"] as const;
+
+type RecoverableAgentStateToolName =
+  (typeof recoverableAgentStateToolNames)[number];
+
+const invalidAgentStateToolCallSchema = z
   .object({
     id: z.string(),
-    tool: z.literal("update_plan"),
+    tool: z.enum(recoverableAgentStateToolNames),
     invalidArguments: z.record(z.string(), z.unknown()),
     validationError: z.string(),
     recovery: z.string(),
   })
   .strict();
 
-export type InvalidToolCall = z.infer<typeof invalidUpdatePlanToolCallSchema>;
+export type InvalidToolCall = z.infer<typeof invalidAgentStateToolCallSchema>;
 
 export const toolCallSchema = z.union([
   builtinToolCallSchema,
-  invalidUpdatePlanToolCallSchema,
+  invalidAgentStateToolCallSchema,
 ]);
 
 export type ToolCall = ValidToolCall | InvalidToolCall;
@@ -56,6 +61,15 @@ type ParsedToolCall =
 
 const INVALID_UPDATE_PLAN_RECOVERY =
   "Provide the full replacement plan using non-empty step strings, statuses pending, in_progress, or completed, and at most one in_progress task.";
+const INVALID_UPDATE_GOAL_RECOVERY =
+  "Set status to completed only when the active session goal is actually achieved and no required work remains.";
+
+const agentStateRecovery: Readonly<
+  Record<RecoverableAgentStateToolName, string>
+> = {
+  update_plan: INVALID_UPDATE_PLAN_RECOVERY,
+  update_goal: INVALID_UPDATE_GOAL_RECOVERY,
+};
 
 const builtinToolNames: ReadonlySet<string> = new Set(
   builtinTools.map((tool) => tool.name),
@@ -70,6 +84,18 @@ function isBuiltinToolForName<Name extends ToolName>(
   name: Name,
 ): tool is BuiltinToolForName<Name> {
   return tool.name === name;
+}
+
+function isRecoverableAgentStateToolName(
+  name: ToolName,
+): name is RecoverableAgentStateToolName {
+  switch (name) {
+    case "update_plan":
+    case "update_goal":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function builtinToolForName<Name extends ToolName>(
@@ -115,17 +141,18 @@ function recordFromProviderArguments(
   return { arguments: parsedArguments };
 }
 
-function invalidUpdatePlanToolCall(options: {
+function invalidAgentStateToolCall(options: {
   readonly id: string;
+  readonly tool: RecoverableAgentStateToolName;
   readonly parsedArguments: unknown;
   readonly error: z.ZodError;
 }): InvalidToolCall {
   return {
     id: options.id,
-    tool: "update_plan",
+    tool: options.tool,
     invalidArguments: recordFromProviderArguments(options.parsedArguments),
     validationError: zodIssuesText(options.error),
-    recovery: INVALID_UPDATE_PLAN_RECOVERY,
+    recovery: agentStateRecovery[options.tool],
   };
 }
 
@@ -168,10 +195,14 @@ function parseToolCallFromParsedArguments(
   const result = tool.args.schema.safeParse(parsedArguments);
   if (!result.success) {
     if (tool.risk.kind === "agent-state") {
+      if (!isRecoverableAgentStateToolName(name)) {
+        return { success: false, error: result.error };
+      }
       return {
         success: true,
-        data: invalidUpdatePlanToolCall({
+        data: invalidAgentStateToolCall({
           id,
+          tool: name,
           parsedArguments,
           error: result.error,
         }),

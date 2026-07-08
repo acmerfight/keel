@@ -9,6 +9,7 @@ import {
   grepToolArgumentsSchema,
   lsToolArgumentsSchema,
   readToolArgumentsSchema,
+  updateGoalToolArgumentsSchema,
   updatePlanToolArgumentsSchema,
   writeToolArgumentsSchema,
 } from "./tool-arguments.ts";
@@ -419,8 +420,27 @@ const updatePlanTool = defineTool({
   risk: { kind: "agent-state" },
 });
 
+const updateGoalTool = defineTool({
+  name: "update_goal",
+  description: [
+    "Mark the current active saved session goal completed.",
+    "Use when: the durable session goal has actually been achieved and no required work remains for that goal.",
+    "Provide status completed. This tool cannot create, rewrite, pause, clear, block, or budget a goal.",
+    "Do not use when: no saved session goal is active, the current user request is only a step toward the goal, or more required work remains.",
+    "On failure: continue working toward the goal, or ask the user to set a saved session goal first.",
+  ].join("\n"),
+  args: toolArgs(updateGoalToolArgumentsSchema),
+  permission: { kind: "none" },
+  output: { kind: "text" },
+  display: {
+    formatLabel: () => "update_goal",
+  },
+  risk: { kind: "agent-state" },
+});
+
 export const builtinTools = [
   updatePlanTool,
+  updateGoalTool,
   readTool,
   lsTool,
   globTool,
@@ -435,6 +455,7 @@ export const builtinTools = [
 
 const rawBuiltinToolCallSchema = z.discriminatedUnion("tool", [
   updatePlanTool.toolCallSchema,
+  updateGoalTool.toolCallSchema,
   readTool.toolCallSchema,
   lsTool.toolCallSchema,
   globTool.toolCallSchema,

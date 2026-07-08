@@ -340,6 +340,7 @@ describe("tool registry", () => {
 
     expect(names).toEqual([
       "update_plan",
+      "update_goal",
       "read",
       "ls",
       "glob",
@@ -368,6 +369,13 @@ describe("tool registry", () => {
     expect(contracts).toEqual([
       {
         name: "update_plan",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "update_goal",
         permission: "none",
         output: "text",
         risk: { kind: "agent-state" },
@@ -636,6 +644,7 @@ describe("tool registry", () => {
 
     expect(argumentsByTool).toEqual({
       update_plan: { fields: ["plan"], required: ["plan"] },
+      update_goal: { fields: ["status"], required: ["status"] },
       read: { fields: ["path", "offset", "limit"], required: ["path"] },
       ls: { fields: ["path", "limit"], required: [] },
       glob: { fields: ["pattern", "path"], required: ["pattern"] },
@@ -775,6 +784,7 @@ describe("tool registry", () => {
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "update_plan",
+      "update_goal",
       "read",
       "ls",
       "glob",
@@ -794,6 +804,7 @@ describe("tool registry", () => {
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "update_plan",
+      "update_goal",
       "read",
       "ls",
       "glob",

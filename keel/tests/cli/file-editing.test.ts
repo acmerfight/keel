@@ -466,6 +466,7 @@ describe("CLI File Editing", () => {
         ),
       ).toEqual([
         "update_plan",
+        "update_goal",
         "read",
         "ls",
         "glob",
@@ -547,6 +548,7 @@ describe("CLI File Editing", () => {
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
       expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([
         "update_plan",
+        "update_goal",
         "read",
         "ls",
         "glob",
@@ -707,6 +709,7 @@ describe("CLI File Editing", () => {
       const request = requestWithToolsSchema.parse(JSON.parse(capturedBody));
       expect(request.tools?.map((tool) => tool.function?.name)).toEqual([
         "update_plan",
+        "update_goal",
         "read",
         "ls",
         "glob",
@@ -893,6 +896,7 @@ describe("CLI File Editing", () => {
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
       expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([
         "update_plan",
+        "update_goal",
         "read",
         "ls",
         "glob",

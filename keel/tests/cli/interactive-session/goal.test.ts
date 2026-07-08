@@ -10,6 +10,7 @@ import type { SessionGoal } from "../../../src/core/session-goal.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   ForcedExit,
+  withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
 } from "../../../src/testing/interactive-session-fixtures.ts";
@@ -427,5 +428,111 @@ describe("Interactive Session - Goals", () => {
     expect(stdout).toContain("  goal: completed - Ship the release notes\n");
     expect(providerPrompts).toHaveLength(1);
     expect(providerPrompts[0]).not.toContain("Session goal:");
+  });
+
+  test(`Given a saved interactive session has an active goal,
+    When the model marks the goal completed during a turn and the user checks status,
+    Then Keel persists and displays the completed goal`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-goal-tool-"));
+    let turnEnded: () => void = () => {};
+    const turnDone = new Promise<void>((resolve) => {
+      turnEnded = resolve;
+    });
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let persistedGoal: SessionGoal | undefined = {
+      objective: "Finish the checkout goal",
+      status: "active",
+    };
+    const provider: LLMProvider = {
+      id: "goal-tool-provider",
+      async *stream(options) {
+        const completedGoalResults = options.messages.filter(
+          (message) =>
+            message.role === "tool" &&
+            message.content.includes("Session goal completed:"),
+        ).length;
+        if (completedGoalResults === 0) {
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "Goal finished." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      sessionId: "goal-tool-session",
+      initialSessionGoal: persistedGoal,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionGoal: ({ goal }) => {
+        persistedGoal = goal ?? undefined;
+        return persistedGoal;
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          }
+          if (event.type === "end") {
+            finalEnd = event;
+            turnEnded();
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("finish the saved goal\n");
+      await withTimeout(turnDone, 5000, "goal turn did not finish");
+      input.end("/status\n");
+      await session;
+
+      // Then
+      expect(persistedGoal).toEqual({
+        objective: "Finish the checkout goal",
+        status: "completed",
+      });
+      expect(stdout).toContain("Goal finished.\n");
+      expect(stdout).toContain(
+        "  goal: completed - Finish the checkout goal\n",
+      );
+      expect(stderr).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 });
