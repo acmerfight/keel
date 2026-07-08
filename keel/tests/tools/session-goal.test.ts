@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
+  activeSessionGoalSystemPrompt,
   formatSessionGoalCompletedToolResult,
   sessionGoalSchema,
 } from "../../src/core/session-goal.ts";
@@ -20,20 +21,68 @@ function freshSignal(): AbortSignal {
 }
 
 describe("Session Goal Tool", () => {
-  test(`Given a saved session goal has a completion command,
+  test(`Given a saved session goal has a command completion criterion,
     When the goal schema parses it,
-    Then Keel trims and preserves the command criterion`, () => {
+    Then Keel trims and preserves the explicit criterion contract`, () => {
     expect(
       sessionGoalSchema.parse({
         objective: "Ship the checkout fix",
         status: "active",
-        completionCommand: " pnpm test ",
+        criterionKind: "command",
+        completionCriterion: " pnpm test ",
       }),
     ).toEqual({
       objective: "Ship the checkout fix",
       status: "active",
-      completionCommand: "pnpm test",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
     });
+  });
+
+  test(`Given a saved session goal has only one completion criterion field,
+    When the goal schema parses it,
+    Then Keel rejects the incomplete criterion contract`, () => {
+    expect(
+      sessionGoalSchema.safeParse({
+        objective: "Ship the checkout fix",
+        status: "active",
+        criterionKind: "command",
+      }).success,
+    ).toBe(false);
+    expect(
+      sessionGoalSchema.safeParse({
+        objective: "Ship the checkout fix",
+        status: "active",
+        completionCriterion: "pnpm test",
+      }).success,
+    ).toBe(false);
+  });
+
+  test(`Given an active goal has an assertion completion criterion,
+    When Keel builds the provider system prompt,
+    Then it exposes the criterion without allowing model-owned completion`, () => {
+    const prompt = activeSessionGoalSystemPrompt(
+      {
+        objective: "Publish release notes",
+        status: "active",
+        criterionKind: "assertion",
+        completionCriterion: "Release notes cover every changed command.",
+      },
+      { bashToolVisible: true },
+    );
+
+    if (prompt === null) {
+      throw new Error("expected active goal prompt");
+    }
+    expect(prompt).toContain(
+      "Completion criterion (assertion): Release notes cover every changed command.",
+    );
+    expect(prompt).toContain(
+      "Assertion criteria cannot be completed by the acting model yet.",
+    );
+    expect(prompt).not.toContain(
+      "Before proposing completion, run the command completion criterion",
+    );
   });
 
   test(`Given a completed session goal already has sentence punctuation,
@@ -70,7 +119,7 @@ describe("Session Goal Tool", () => {
     });
   });
 
-  test(`Given update_goal receives completed for an active goal without a completion command,
+  test(`Given update_goal receives completed for an active goal without a completion criterion,
     When the builtin tool executes,
     Then it rejects model-owned completion without mutating goal state`, async () => {
     // Given
@@ -100,7 +149,51 @@ describe("Session Goal Tool", () => {
       expect(execution).toMatchObject({
         ok: false,
         content: expect.stringContaining(
-          "Tool failed: update_goal failed: no completion command is set",
+          "Tool failed: update_goal failed: no completion criterion is set",
+        ),
+      });
+      expect(execution.sessionGoalUpdate).toBeUndefined();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given update_goal receives completed for an active assertion-criterion goal,
+    When the builtin tool executes before assertion evaluation exists,
+    Then it rejects model-owned completion without mutating goal state`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-update-goal-assertion-"),
+    );
+    const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
+      status: "completed",
+    });
+
+    try {
+      if (toolCall === null) {
+        throw new Error("expected valid update_goal call");
+      }
+
+      // When
+      const execution = await executeToolCall({
+        workspace,
+        toolCall,
+        signal: freshSignal(),
+        allowBash: false,
+        sessionGoal: {
+          objective: "Publish the migration notes",
+          status: "active",
+          criterionKind: "assertion",
+          completionCriterion:
+            "The release notes explain every changed command.",
+        },
+      });
+
+      // Then
+      expect(execution).toMatchObject({
+        ok: false,
+        content: expect.stringContaining(
+          "Tool failed: update_goal failed: assertion completion criteria are not supported yet",
         ),
       });
       expect(execution.sessionGoalUpdate).toBeUndefined();
@@ -134,7 +227,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
-          completionCommand: "pnpm test",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
         },
         goalCompletionCommandEvidence: {
           command: "pnpm test",
@@ -151,7 +245,8 @@ describe("Session Goal Tool", () => {
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "completed",
-          completionCommand: "pnpm test",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
         },
       });
     } finally {
@@ -164,7 +259,7 @@ describe("Session Goal Tool", () => {
       name: "no command evidence",
       evidence: () => undefined,
       expected:
-        "Tool failed: update_goal failed: completion command has not run",
+        "Tool failed: update_goal failed: command completion criterion has not run",
     },
     {
       name: "different command evidence",
@@ -217,7 +312,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
-          completionCommand: "pnpm test",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
         },
         ...(goalCompletionCommandEvidence !== undefined
           ? { goalCompletionCommandEvidence }
@@ -261,7 +357,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
-          completionCommand: "pnpm test",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
         },
         workspaceMutationSequence: 0,
       });
@@ -304,7 +401,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
-          completionCommand: "pnpm test",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
         },
         goalCompletionCommandEvidence: {
           command: "pnpm test",
@@ -319,7 +417,7 @@ describe("Session Goal Tool", () => {
       expect(execution).toMatchObject({
         ok: false,
         content: expect.stringContaining(
-          "Tool failed: update_goal failed: completion command exited with code 1.",
+          "Tool failed: update_goal failed: command completion criterion exited with code 1.",
         ),
       });
       expect(execution.sessionGoalUpdate).toBeUndefined();
@@ -353,7 +451,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
-          completionCommand: "pnpm test",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
         },
         goalCompletionCommandEvidence: {
           command: "pnpm test",
@@ -368,7 +467,7 @@ describe("Session Goal Tool", () => {
       expect(execution).toMatchObject({
         ok: false,
         content: expect.stringContaining(
-          "Tool failed: update_goal failed: completion command exited with code unknown.",
+          "Tool failed: update_goal failed: command completion criterion exited with code unknown.",
         ),
       });
       expect(execution.sessionGoalUpdate).toBeUndefined();
@@ -402,7 +501,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
-          completionCommand: "pnpm test",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
         },
         goalCompletionCommandEvidence: {
           command: "pnpm test",
@@ -417,7 +517,7 @@ describe("Session Goal Tool", () => {
       expect(execution).toMatchObject({
         ok: false,
         content: expect.stringContaining(
-          "Tool failed: update_goal failed: completion command evidence is stale",
+          "Tool failed: update_goal failed: command completion criterion evidence is stale",
         ),
       });
       expect(execution.sessionGoalUpdate).toBeUndefined();

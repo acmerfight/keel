@@ -256,7 +256,9 @@ describe("CLI Tool Progress", () => {
     });
 
     // Then
-    expect(stderr).toBe("Session goal: completed - Finish checkout\n");
+    expect(stderr).toBe(
+      "Session goal: completed - Finish checkout; criterion: missing\n",
+    );
   });
 
   test(`Given an agent updates the visible session goal,
@@ -282,6 +284,8 @@ describe("CLI Tool Progress", () => {
     });
 
     // Then
-    expect(statusLines).toEqual(["Session goal: completed - Finish checkout"]);
+    expect(statusLines).toEqual([
+      "Session goal: completed - Finish checkout; criterion: missing",
+    ]);
   });
 });

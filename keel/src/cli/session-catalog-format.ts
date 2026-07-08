@@ -67,7 +67,7 @@ function hasActiveSessionTasks(taskProgress: SessionTaskProgress): boolean {
 }
 
 function formatSessionGoalRecoveryState(goal: SessionGoal): string {
-  return formatSessionDetailText(formatSessionGoalSummary(goal));
+  return formatSessionGoalDetailText(formatSessionGoalSummary(goal));
 }
 
 function sessionRecoveryStateLines(
@@ -267,6 +267,10 @@ function formatSessionDetailText(text: string): string {
     .replace(/\s+/gu, " ")
     .trim();
   return sanitizeStatusLineText(normalized);
+}
+
+function formatSessionGoalDetailText(text: string): string {
+  return sanitizeStatusLineText(redactTextForPersistence(text).trim());
 }
 
 function formatSessionDetailToolCall(toolCall: ToolCall): string {

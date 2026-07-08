@@ -55,6 +55,7 @@ import {
   formatInteractiveGoal,
   formatInteractiveGoalCleared,
   formatInteractiveGoalCompleted,
+  formatInteractiveGoalCriterionSet,
   formatInteractiveGoalSet,
   formatInteractiveGoalVerificationSet,
   formatInteractiveHelp,
@@ -642,8 +643,12 @@ export async function runInteractiveSession(
               const completedGoal: SessionGoal = {
                 objective: sessionGoal.objective,
                 status: "completed",
-                ...(sessionGoal.completionCommand !== undefined
-                  ? { completionCommand: sessionGoal.completionCommand }
+                ...(sessionGoal.criterionKind !== undefined &&
+                sessionGoal.completionCriterion !== undefined
+                  ? {
+                      criterionKind: sessionGoal.criterionKind,
+                      completionCriterion: sessionGoal.completionCriterion,
+                    }
                   : {}),
               };
               sessionGoal = options.persistSessionGoal({
@@ -672,7 +677,7 @@ export async function runInteractiveSession(
             }
             if (sessionGoal.status !== "active") {
               options.writeStderr(
-                "Error: completed session goal cannot add a verification command. Set a new goal instead.\n",
+                "Error: completed session goal cannot change the completion criterion. Set a new goal instead.\n",
               );
               consumeQueuedInputLines([rawInput]);
               break;
@@ -681,8 +686,12 @@ export async function runInteractiveSession(
               const verifiedGoal = {
                 objective: sessionGoal.objective,
                 status: "active",
-                completionCommand: goalCommand.command,
-              } satisfies SessionGoal & { readonly completionCommand: string };
+                criterionKind: "command",
+                completionCriterion: goalCommand.command,
+              } satisfies SessionGoal & {
+                readonly criterionKind: "command";
+                readonly completionCriterion: string;
+              };
               sessionGoal = options.persistSessionGoal({
                 goal: verifiedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
@@ -693,6 +702,44 @@ export async function runInteractiveSession(
                     options.cliArgs.bashMode,
                   ),
                 }),
+              );
+            } catch (error) {
+              options.writeStderr(formatInteractiveCommandFailure(error));
+              consumeQueuedInputLines([rawInput]);
+            }
+            break;
+          }
+          case "criterion": {
+            if (options.persistSessionGoal === undefined) {
+              options.writeStderr(formatGoalRequiresSavedSession());
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (sessionGoal === undefined) {
+              options.writeStderr("Error: no session goal is set.\n");
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (sessionGoal.status !== "active") {
+              options.writeStderr(
+                "Error: completed session goal cannot change the completion criterion. Set a new goal instead.\n",
+              );
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            try {
+              const goalWithCriterion = {
+                objective: sessionGoal.objective,
+                status: "active",
+                criterionKind: goalCommand.criterionKind,
+                completionCriterion: goalCommand.criterion,
+              } satisfies SessionGoal;
+              sessionGoal = options.persistSessionGoal({
+                goal: goalWithCriterion,
+                consumedInputIds: queuedInputIds([rawInput]),
+              });
+              options.writeStdout(
+                formatInteractiveGoalCriterionSet(goalWithCriterion),
               );
             } catch (error) {
               options.writeStderr(formatInteractiveCommandFailure(error));

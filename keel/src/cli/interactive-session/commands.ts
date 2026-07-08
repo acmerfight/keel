@@ -3,8 +3,10 @@ import { isProviderId } from "../../core/provider-id.ts";
 import {
   formatSessionGoalSummary,
   normalizeSessionGoalCompletionCommand,
+  normalizeSessionGoalCompletionCriterion,
   normalizeSessionGoalObjective,
   type SessionGoal,
+  type SessionGoalCriterionKind,
 } from "../../core/session-goal.ts";
 import { sanitizeStatusLineText } from "../output.ts";
 import { redactTextForPersistence } from "../persistence-redaction.ts";
@@ -62,6 +64,12 @@ type GoalCommand =
       readonly kind: "goal";
       readonly action: "verify";
       readonly command: string;
+    }
+  | {
+      readonly kind: "goal";
+      readonly action: "criterion";
+      readonly criterionKind: SessionGoalCriterionKind;
+      readonly criterion: string;
     };
 
 interface TasksCommand {
@@ -139,6 +147,8 @@ export function formatInteractiveHelp(): string {
     "  /title [text]      Show or set this saved session title.",
     "  /goal [objective]  Show or set this saved session goal.",
     "  /goal verify <cmd> Set the command that proves the goal is done.",
+    "  /goal done-when <criterion>",
+    "                     Set an assertion completion criterion.",
     "  /goal complete     Mark the current session goal completed.",
     "  /goal clear        Clear the current session goal.",
     "  /tasks             Show current session tasks.",
@@ -393,6 +403,12 @@ function parseGoalCommandArgs(
       message: "Error: /goal verify requires a command.",
     };
   }
+  if (trimmedArgs === "done-when") {
+    return {
+      kind: "invalid",
+      message: "Error: /goal done-when requires a completion criterion.",
+    };
+  }
   const verifyPrefix = "verify ";
   if (trimmedArgs.startsWith(verifyPrefix)) {
     const command = normalizeSessionGoalCompletionCommand(
@@ -400,11 +416,46 @@ function parseGoalCommandArgs(
     );
     return { kind: "goal", action: "verify", command };
   }
+  const doneWhenPrefix = "done-when ";
+  if (trimmedArgs.startsWith(doneWhenPrefix)) {
+    const criterion = normalizeSessionGoalCompletionCriterion(
+      trimmedArgs.slice(doneWhenPrefix.length),
+    );
+    return {
+      kind: "goal",
+      action: "criterion",
+      criterionKind: "assertion",
+      criterion,
+    };
+  }
+  const unknownSubcommand = parseUnknownGoalSubcommand(trimmedArgs);
+  if (unknownSubcommand !== null) {
+    return unknownSubcommand;
+  }
   return {
     kind: "goal",
     action: "set",
     objective: normalizeSessionGoalObjective(trimmedArgs),
   };
+}
+
+function parseUnknownGoalSubcommand(
+  trimmedArgs: string,
+): InvalidInteractiveCommand | null {
+  const firstArg = trimmedArgs.replace(/\s.*$/u, "");
+  if (firstArg.startsWith("done-when")) {
+    return {
+      kind: "invalid",
+      message: `Error: unknown /goal subcommand "${firstArg}". Did you mean /goal done-when <criterion>?`,
+    };
+  }
+  if (/^verify[^a-z]/u.test(firstArg)) {
+    return {
+      kind: "invalid",
+      message: `Error: unknown /goal subcommand "${firstArg}". Did you mean /goal verify <command>?`,
+    };
+  }
+  return null;
 }
 
 export function parseInteractiveCommand(
@@ -590,9 +641,7 @@ function formatInteractiveTitleText(title: string): string {
 }
 
 function formatInteractiveGoalText(text: string): string {
-  return sanitizeStatusLineText(
-    redactTextForPersistence(text).replace(/\s+/gu, " ").trim(),
-  );
+  return sanitizeStatusLineText(redactTextForPersistence(text).trim());
 }
 
 export function formatInteractiveTitle(title: string | undefined): string {
@@ -622,16 +671,28 @@ export function formatInteractiveGoalCompleted(goal: SessionGoal): string {
 }
 
 export function formatInteractiveGoalVerificationSet(
-  goal: SessionGoal & { readonly completionCommand: string },
+  goal: SessionGoal & {
+    readonly criterionKind: "command";
+    readonly completionCriterion: string;
+  },
   options: { readonly bashToolVisible: boolean },
 ): string {
   const setMessage = `Goal verification command set: ${formatInteractiveGoalText(
-    goal.completionCommand,
+    goal.completionCriterion,
   )}\n`;
   if (options.bashToolVisible) {
     return setMessage;
   }
   return `${setMessage}Note: bash is disabled in this run, so the agent cannot run this verification command. Resume with --bash-policy ask or --bash-policy trusted, or use /goal complete after checking it manually.\n`;
+}
+
+export function formatInteractiveGoalCriterionSet(
+  goal: SessionGoal & {
+    readonly criterionKind: SessionGoalCriterionKind;
+    readonly completionCriterion: string;
+  },
+): string {
+  return `Goal ${goal.criterionKind} criterion set: ${formatInteractiveGoalText(goal.completionCriterion)}\n`;
 }
 
 export function formatInteractiveGoalCleared(): string {

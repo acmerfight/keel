@@ -52,7 +52,9 @@ describe("CLI Session Status Format", () => {
     });
 
     // Then
-    expect(formatted).toContain("  goal: completed - Ship the release notes\n");
+    expect(formatted).toContain(
+      "  goal: completed - Ship the release notes; criterion: missing\n",
+    );
   });
 
   test(`Given a recovery command is long and contains terminal controls,
