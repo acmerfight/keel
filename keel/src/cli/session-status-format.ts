@@ -45,6 +45,10 @@ function formatStatusText(text: string): string {
   return sanitizeStatusLineText(normalized);
 }
 
+function formatStatusGoalText(text: string): string {
+  return sanitizeStatusLineText(redactTextForPersistence(text).trim());
+}
+
 function escapeStatusTextWithoutLimit(text: string): string {
   return text.replace(
     // biome-ignore lint/suspicious/noControlCharactersInRegex: recovery commands must render untrusted bytes visibly.
@@ -109,7 +113,7 @@ export function formatSessionStatusSnapshot(
         : formatStatusText(options.title)
     }`,
     "  continue: send follow-ups or corrections here until the task is done",
-    `  goal: ${formatStatusText(formatSessionGoalSummary(options.goal))}`,
+    `  goal: ${formatStatusGoalText(formatSessionGoalSummary(options.goal))}`,
     `  workspace: ${formatStatusText(options.workspace)}`,
     `  active model: ${formatStatusText(options.activeModel)}`,
     `  workflow skill: ${formatWorkflowSkill(options.workflowSkill)}`,

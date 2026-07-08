@@ -113,6 +113,8 @@ describe("CLI Main - Sessions Command", () => {
           goal: {
             objective: "Fix the session resume flow",
             status: "active",
+            criterionKind: "command",
+            completionCriterion: 'node  -e "process.exit(0)"',
           },
         }),
       ],
@@ -150,7 +152,7 @@ describe("CLI Main - Sessions Command", () => {
       expect(exitCode).toBe(0);
       const stdout = fixture.stdout();
       expect(stdout).toContain(
-        "   goal: active - Fix the session resume flow; criterion: missing\n",
+        '   goal: active - Fix the session resume flow; criterion(command): node  -e "process.exit(0)"\n',
       );
       expect(stdout).toContain(
         "   goal: completed - Ship the release notes; criterion: missing\n",

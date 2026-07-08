@@ -618,9 +618,7 @@ function formatInteractiveTitleText(title: string): string {
 }
 
 function formatInteractiveGoalText(text: string): string {
-  return sanitizeStatusLineText(
-    redactTextForPersistence(text).replace(/\s+/gu, " ").trim(),
-  );
+  return sanitizeStatusLineText(redactTextForPersistence(text).trim());
 }
 
 export function formatInteractiveTitle(title: string | undefined): string {

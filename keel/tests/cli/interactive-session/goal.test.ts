@@ -258,7 +258,7 @@ describe("Interactive Session - Goals", () => {
 
   test(`Given bash is enabled for a saved interactive session with an active goal,
     When the user sets a goal verification command,
-    Then Keel does not warn that automatic verification is unavailable`, async () => {
+    Then Keel preserves the command criterion text without warning that automatic verification is unavailable`, async () => {
     // Given
     const input = new PassThrough();
     let stdout = "";
@@ -303,7 +303,8 @@ describe("Interactive Session - Goals", () => {
     });
 
     // When
-    input.end("/goal verify pnpm test\n");
+    input.write('/goal verify node  -e "process.exit(0)"\n');
+    input.end("/status\n");
     await session;
 
     // Then
@@ -311,9 +312,14 @@ describe("Interactive Session - Goals", () => {
       objective: "Ship the checkout fix",
       status: "active",
       criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completionCriterion: 'node  -e "process.exit(0)"',
     });
-    expect(stdout).toBe("Goal verification command set: pnpm test\n");
+    expect(stdout).toContain(
+      'Goal verification command set: node  -e "process.exit(0)"\n',
+    );
+    expect(stdout).toContain(
+      '  goal: active - Ship the checkout fix; criterion(command): node  -e "process.exit(0)"\n',
+    );
     expect(stderr).toBe("");
   });
 
@@ -414,19 +420,20 @@ describe("Interactive Session - Goals", () => {
     input.write("/goal Fix checkout tests\n");
     input.write("/goal verify pnpm test\n");
     input.write("/goal complete\n");
+    input.write("/goal done-when release notes cover every command\n");
     input.end("/goal clear\n");
     await session;
 
     // Then
     expect(stderr).toBe(
       "Error: /goal requires a saved session. Start without --ephemeral, or use --session or --resume.\n".repeat(
-        4,
+        5,
       ),
     );
   });
 
   test(`Given no goal is set in a saved session,
-    When the user tries to complete or verify it,
+    When the user tries to complete or set a completion criterion,
     Then Keel reports that no goal exists`, async () => {
     // Given
     const input = new PassThrough();
@@ -462,11 +469,12 @@ describe("Interactive Session - Goals", () => {
 
     // When
     input.write("/goal complete\n");
-    input.end("/goal verify pnpm test\n");
+    input.write("/goal verify pnpm test\n");
+    input.end("/goal done-when release notes cover every command\n");
     await session;
 
     // Then
-    expect(stderr).toBe("Error: no session goal is set.\n".repeat(2));
+    expect(stderr).toBe("Error: no session goal is set.\n".repeat(3));
   });
 
   test(`Given goal persistence fails,
@@ -514,11 +522,12 @@ describe("Interactive Session - Goals", () => {
     input.write("/goal Replace the goal\n");
     input.write("/goal verify pnpm test\n");
     input.write("/goal complete\n");
+    input.write("/goal done-when release notes cover every command\n");
     input.end("/goal clear\n");
     await session;
 
     // Then
-    expect(stderr).toBe("goal store unavailable\n".repeat(4));
+    expect(stderr).toBe("goal store unavailable\n".repeat(5));
   });
 
   test(`Given an active goal is completed,
@@ -591,6 +600,7 @@ describe("Interactive Session - Goals", () => {
     // When
     input.write("/goal complete\n");
     input.write("/goal verify pnpm lint\n");
+    input.write("/goal done-when release notes cover every command\n");
     input.write("/status\n");
     input.end("answer a normal follow-up\n");
     await session;
@@ -607,7 +617,9 @@ describe("Interactive Session - Goals", () => {
       "  goal: completed - Ship the release notes; criterion(command): pnpm test\n",
     );
     expect(stderr).toBe(
-      "Error: completed session goal cannot change the completion criterion. Set a new goal instead.\n",
+      "Error: completed session goal cannot change the completion criterion. Set a new goal instead.\n".repeat(
+        2,
+      ),
     );
     expect(providerPrompts).toHaveLength(1);
     expect(providerPrompts[0]).not.toContain("Session goal:");

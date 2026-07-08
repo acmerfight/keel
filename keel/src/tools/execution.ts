@@ -11,7 +11,6 @@ import {
   formatSessionGoalCompletedToolResult,
   normalizeSessionGoalCompletionCommand,
   type SessionGoal,
-  sessionGoalCommandCriterion,
 } from "../core/session-goal.ts";
 import {
   formatSessionTaskProgressToolResult,
@@ -226,16 +225,9 @@ function executeUpdateGoalTool(
       ok: false,
     };
   }
-  const commandCriterion = sessionGoalCommandCriterion(sessionGoal);
-  if (commandCriterion === undefined) {
-    return {
-      content:
-        "Tool failed: update_goal failed: no command completion criterion is set for the active session goal.\nRecovery: Ask the user to add one with /goal verify <command>, continue working, or ask the user to use /goal complete for an explicit override.",
-      ok: false,
-    };
-  }
-  const expectedCommand =
-    normalizeSessionGoalCompletionCommand(commandCriterion);
+  const expectedCommand = normalizeSessionGoalCompletionCommand(
+    sessionGoal.completionCriterion,
+  );
   if (goalCompletionCommandEvidence === undefined) {
     return {
       content:
