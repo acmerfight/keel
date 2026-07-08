@@ -310,6 +310,148 @@ describe("Interactive Session - Goals", () => {
     expect(stderr).toBe("");
   });
 
+  test(`Given a saved interactive session has non-active lifecycle goals,
+    When the user pauses or resumes invalid states,
+    Then Keel enforces the user-owned lifecycle boundaries`, async () => {
+    // Given
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let persistedGoal: SessionGoal | undefined = {
+      objective: "Finish lifecycle guard coverage",
+      status: "completed",
+    };
+    const provider = unusedProvider("unused-goal-lifecycle-guards-provider");
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      sessionId: "goal-lifecycle-guards-session",
+      initialSessionGoal: persistedGoal,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionGoal: ({ goal }) => {
+        persistedGoal = goal ?? undefined;
+        return persistedGoal;
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => undefined,
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("/goal pause\n");
+    input.write("/goal resume\n");
+    input.write("/goal Blocked objective\n");
+    input.write("/goal pause\n");
+    input.write("/goal resume\n");
+    input.write("/goal Blocked objective\n");
+    input.write("/goal pause\n");
+    input.write("/goal resume\n");
+    input.end("/goal\n");
+    await session;
+
+    // Then
+    expect(persistedGoal).toEqual({
+      objective: "Blocked objective",
+      status: "active",
+    });
+    expect(stderr).toBe(
+      "Error: only active session goals can be paused.\n" +
+        "Error: only paused or blocked session goals can be resumed.\n",
+    );
+    expect(stdout).toContain("Goal paused: Blocked objective\n");
+    expect(stdout).toContain("Goal resumed: Blocked objective\n");
+    expect(stdout).toContain(
+      "Session goal: active - Blocked objective; criterion: missing\n",
+    );
+  });
+
+  test(`Given a saved interactive session has a blocked goal,
+    When the user resumes it,
+    Then Keel clears the blocker reason and reactivates the goal`, async () => {
+    // Given
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let persistedGoal: SessionGoal | undefined = {
+      objective: "Continue blocked goal",
+      status: "blocked",
+      statusReason: "Need credentials.",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+    };
+    const provider = unusedProvider("unused-blocked-goal-resume-provider");
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      sessionId: "blocked-goal-resume-session",
+      initialSessionGoal: persistedGoal,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionGoal: ({ goal }) => {
+        persistedGoal = goal ?? undefined;
+        return persistedGoal;
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => undefined,
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("/goal resume\n");
+    input.end("/goal\n");
+    await session;
+
+    // Then
+    expect(persistedGoal).toEqual({
+      objective: "Continue blocked goal",
+      status: "active",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+    });
+    expect(stdout).toContain("Goal resumed: Continue blocked goal\n");
+    expect(stdout).toContain(
+      "Session goal: active - Continue blocked goal; criterion(command): pnpm test\n",
+    );
+    expect(stderr).toBe("");
+  });
+
   test(`Given a saved interactive session has an active goal,
     When the user sets an assertion completion criterion,
     Then Keel shows the criterion without contacting the provider`, async () => {
@@ -725,6 +867,55 @@ describe("Interactive Session - Goals", () => {
 
     // Then
     expect(stderr).toBe("goal store unavailable\n".repeat(6));
+  });
+
+  test(`Given goal resume persistence fails,
+    When the user resumes a paused goal,
+    Then Keel reports the local command failure`, async () => {
+    // Given
+    const input = new PassThrough();
+    let stderr = "";
+    const provider = unusedProvider("unused-failing-goal-resume-provider");
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      sessionId: "failing-goal-resume-session",
+      initialSessionGoal: {
+        objective: "Resume persistence failure",
+        status: "paused",
+      },
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionGoal: () => {
+        throw new Error("goal resume store unavailable");
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => undefined,
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("/goal resume\n");
+    await session;
+
+    // Then
+    expect(stderr).toBe("goal resume store unavailable\n");
   });
 
   test(`Given an active goal is completed,

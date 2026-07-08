@@ -402,9 +402,31 @@ describe("Session Store Goal", () => {
           goal: {
             objective: "Blocked command",
             status: "blocked",
-            statusReason: "x".repeat(SESSION_GOAL_STATUS_REASON_MAX_LENGTH + 1),
+            statusReason: "   ",
           },
           runtime: runtime(home, 6),
+        }),
+      ).toThrow("Error: /goal blocked status requires a reason.");
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: {
+            objective: "Active command",
+            status: "active",
+            statusReason: "Need credentials.",
+          },
+          runtime: runtime(home, 7),
+        }),
+      ).toThrow("Error: /goal blocked reason requires blocked status.");
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: {
+            objective: "Blocked command",
+            status: "blocked",
+            statusReason: "x".repeat(SESSION_GOAL_STATUS_REASON_MAX_LENGTH + 1),
+          },
+          runtime: runtime(home, 8),
         }),
       ).toThrow(
         `Error: /goal blocked reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,

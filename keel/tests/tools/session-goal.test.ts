@@ -6,6 +6,7 @@ import {
   activeSessionGoalSystemPrompt,
   formatSessionGoalBlockedToolResult,
   formatSessionGoalCompletedToolResult,
+  formatSessionGoalSummary,
   sessionGoalSchema,
 } from "../../src/core/session-goal.ts";
 import {
@@ -162,6 +163,32 @@ describe("Session Goal Tool", () => {
     ).toBe(
       "Session goal blocked: Finish the migration? Reason: Need production credentials.",
     );
+    expect(() =>
+      formatSessionGoalBlockedToolResult({
+        objective: "Finish the migration",
+        status: "blocked",
+      }),
+    ).toThrow("Blocked session goal requires a reason.");
+  });
+
+  test(`Given session goals have and omit blocked reasons,
+    When summaries are formatted,
+    Then Keel only includes the reason for blocked goals that carry one`, () => {
+    expect(
+      formatSessionGoalSummary({
+        objective: "Continue active work",
+        status: "active",
+      }),
+    ).toBe("active - Continue active work; criterion: missing");
+    expect(
+      formatSessionGoalSummary({
+        objective: "Wait for credentials",
+        status: "blocked",
+        statusReason: "Need credentials.",
+      }),
+    ).toBe(
+      "blocked - Wait for credentials; criterion: missing; reason: Need credentials.",
+    );
   });
 
   test(`Given provider tools are listed,
@@ -234,6 +261,133 @@ describe("Session Goal Tool", () => {
           completionCriterion: "pnpm test",
         },
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given update_goal receives blocked without a reason,
+    When the builtin tool validates the provider arguments,
+    Then it returns a recoverable invalid-arguments failure`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-update-goal-blocked-missing-reason-"),
+    );
+
+    try {
+      // When
+      const execution = await executeToolCall({
+        workspace,
+        toolCall: {
+          id: "goal_1",
+          tool: "update_goal",
+          status: "blocked",
+        },
+        signal: freshSignal(),
+        allowBash: false,
+        sessionGoal: {
+          objective: "Finish the durable checkout goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      });
+
+      // Then
+      expect(execution).toMatchObject({
+        ok: false,
+        content: expect.stringContaining(
+          "reason: reason is required when status is blocked",
+        ),
+      });
+      expect(execution.sessionGoalUpdate).toBeUndefined();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given update_goal receives blocked for an active goal without a criterion,
+    When the builtin tool executes,
+    Then it preserves the criterion-less blocked goal state`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-update-goal-blocked-no-criterion-"),
+    );
+    const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
+      status: "blocked",
+      reason: "Need user input.",
+    });
+
+    try {
+      if (toolCall === null) {
+        throw new Error("expected valid update_goal call");
+      }
+
+      // When
+      const execution = await executeToolCall({
+        workspace,
+        toolCall,
+        signal: freshSignal(),
+        allowBash: false,
+        sessionGoal: {
+          objective: "Finish the durable checkout goal",
+          status: "active",
+        },
+      });
+
+      // Then
+      expect(execution).toMatchObject({
+        ok: true,
+        sessionGoalUpdate: {
+          objective: "Finish the durable checkout goal",
+          status: "blocked",
+          statusReason: "Need user input.",
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given update_goal receives completed with a blocked-only reason,
+    When the builtin tool validates the provider arguments,
+    Then it returns a recoverable invalid-arguments failure`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-update-goal-completed-reason-"),
+    );
+    const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
+      status: "completed",
+      reason: "not allowed for completed",
+    });
+
+    try {
+      if (toolCall === null) {
+        throw new Error("expected recoverable invalid update_goal call");
+      }
+
+      // When
+      const execution = await executeToolCall({
+        workspace,
+        toolCall,
+        signal: freshSignal(),
+        allowBash: false,
+        sessionGoal: {
+          objective: "Finish the durable checkout goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      });
+
+      // Then
+      expect(execution).toMatchObject({
+        ok: false,
+        content: expect.stringContaining(
+          "reason: reason is only valid when status is blocked",
+        ),
+      });
+      expect(execution.sessionGoalUpdate).toBeUndefined();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

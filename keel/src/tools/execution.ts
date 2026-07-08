@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   errorMessage,
   isAbortThrow,
@@ -211,17 +212,12 @@ function executeUpdateGoalTool(
     };
   }
   if (toolCall.status === "blocked") {
-    if (toolCall.reason === undefined) {
-      return {
-        content:
-          "Tool failed: update_goal failed: blocked status requires a reason.\nRecovery: Retry with status blocked and a concise reason, or continue working toward the goal.",
-        ok: false,
-      };
-    }
     const blockedGoal: SessionGoal = {
       objective: sessionGoal.objective,
       status: "blocked",
-      statusReason: normalizeSessionGoalStatusReason(toolCall.reason),
+      statusReason: normalizeSessionGoalStatusReason(
+        z.string().parse(toolCall.reason),
+      ),
       ...(sessionGoal.criterionKind !== undefined &&
       sessionGoal.completionCriterion !== undefined
         ? {
