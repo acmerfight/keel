@@ -49,6 +49,14 @@ describe("Interactive Session - Goals", () => {
       kind: "goal",
       action: "complete",
     });
+    expect(parseInteractiveCommand("/goal pause")).toEqual({
+      kind: "goal",
+      action: "pause",
+    });
+    expect(parseInteractiveCommand("/goal resume")).toEqual({
+      kind: "goal",
+      action: "resume",
+    });
     expect(parseInteractiveCommand("/goal verify pnpm test")).toEqual({
       kind: "goal",
       action: "verify",
@@ -187,6 +195,119 @@ describe("Interactive Session - Goals", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  test(`Given a saved interactive session has an active goal,
+    When the user pauses and resumes it,
+    Then Keel keeps the paused goal visible without injecting it as active work`, async () => {
+    // Given
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let persistedGoal: SessionGoal | undefined = {
+      objective: "Finish lifecycle states",
+      status: "active",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+    };
+    const providerPrompts: string[] = [];
+    const providerMessages: (readonly Message[])[] = [];
+    const provider: LLMProvider = {
+      id: "goal-pause-provider",
+      async *stream(options) {
+        providerPrompts.push(options.systemPrompt);
+        providerMessages.push(structuredClone([...options.messages]));
+        yield {
+          type: "text",
+          text: providerPrompts.length === 1 ? "Paused turn." : "Resumed turn.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      sessionId: "goal-pause-session",
+      initialSessionGoal: persistedGoal,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionGoal: ({ goal }) => {
+        persistedGoal = goal ?? undefined;
+        return persistedGoal;
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          }
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("/goal pause\n");
+    input.write("/status\n");
+    input.write("handle a side request while paused\n");
+    input.write("/goal resume\n");
+    input.write("/status\n");
+    input.end("continue the durable goal\n");
+    await session;
+
+    // Then
+    expect(persistedGoal).toEqual({
+      objective: "Finish lifecycle states",
+      status: "active",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+    });
+    expect(stdout).toContain("Goal paused: Finish lifecycle states\n");
+    expect(stdout).toContain(
+      "  goal: paused - Finish lifecycle states; criterion(command): pnpm test\n",
+    );
+    expect(stdout).toContain("Paused turn.\n");
+    expect(stdout).toContain("Goal resumed: Finish lifecycle states\n");
+    expect(stdout).toContain(
+      "  goal: active - Finish lifecycle states; criterion(command): pnpm test\n",
+    );
+    expect(stdout).toContain("Resumed turn.\n");
+    expect(providerPrompts).toHaveLength(2);
+    expect(providerPrompts[0]).not.toContain("Session goal:");
+    expect(providerPrompts[1]).toContain("Session goal:");
+    expect(providerPrompts[1]).toContain("Finish lifecycle states");
+    expect(providerMessages).toEqual([
+      [{ role: "user", content: "handle a side request while paused" }],
+      [
+        { role: "user", content: "handle a side request while paused" },
+        { role: "assistant", content: "Paused turn.", toolCalls: [] },
+        { role: "user", content: "continue the durable goal" },
+      ],
+    ]);
+    expect(stderr).toBe("");
   });
 
   test(`Given a saved interactive session has an active goal,
@@ -490,6 +611,8 @@ describe("Interactive Session - Goals", () => {
     // When
     input.write("/goal Fix checkout tests\n");
     input.write("/goal verify pnpm test\n");
+    input.write("/goal pause\n");
+    input.write("/goal resume\n");
     input.write("/goal complete\n");
     input.write("/goal done-when release notes cover every command\n");
     input.end("/goal clear\n");
@@ -498,7 +621,7 @@ describe("Interactive Session - Goals", () => {
     // Then
     expect(stderr).toBe(
       "Error: /goal requires a saved session. Start without --ephemeral, or use --session or --resume.\n".repeat(
-        5,
+        7,
       ),
     );
   });
@@ -540,16 +663,18 @@ describe("Interactive Session - Goals", () => {
 
     // When
     input.write("/goal complete\n");
+    input.write("/goal pause\n");
+    input.write("/goal resume\n");
     input.write("/goal verify pnpm test\n");
     input.end("/goal done-when release notes cover every command\n");
     await session;
 
     // Then
-    expect(stderr).toBe("Error: no session goal is set.\n".repeat(3));
+    expect(stderr).toBe("Error: no session goal is set.\n".repeat(5));
   });
 
   test(`Given goal persistence fails,
-    When the user sets, completes, or clears a goal,
+    When the user sets, pauses, completes, or clears a goal,
     Then Keel reports the local command failure`, async () => {
     // Given
     const input = new PassThrough();
@@ -592,13 +717,14 @@ describe("Interactive Session - Goals", () => {
     // When
     input.write("/goal Replace the goal\n");
     input.write("/goal verify pnpm test\n");
+    input.write("/goal pause\n");
     input.write("/goal complete\n");
     input.write("/goal done-when release notes cover every command\n");
     input.end("/goal clear\n");
     await session;
 
     // Then
-    expect(stderr).toBe("goal store unavailable\n".repeat(5));
+    expect(stderr).toBe("goal store unavailable\n".repeat(6));
   });
 
   test(`Given an active goal is completed,
@@ -688,7 +814,7 @@ describe("Interactive Session - Goals", () => {
       "  goal: completed - Ship the release notes; criterion(command): pnpm test\n",
     );
     expect(stderr).toBe(
-      "Error: completed session goal cannot change the completion criterion. Set a new goal instead.\n".repeat(
+      "Error: only active session goals can change the completion criterion. Resume the goal or set a new goal first.\n".repeat(
         2,
       ),
     );

@@ -12,6 +12,7 @@ import {
 import {
   SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
   SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
+  SESSION_GOAL_STATUS_REASON_MAX_LENGTH,
 } from "../../../src/core/session-goal.ts";
 import type { Message } from "../../../src/llm/types.ts";
 import { runtime } from "../../../src/testing/session-store-fixtures.ts";
@@ -122,6 +123,85 @@ describe("Session Store Goal", () => {
         status: "active",
         criterionKind: "assertion",
         completionCriterion: "release notes cover every changed command",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given paused and blocked session goals are persisted,
+    When the session is resumed,
+    Then lifecycle state and blocked reason survive the ledger boundary`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+
+    try {
+      const session = createSessionStore({
+        sessionId: "session-goal-lifecycle",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When
+      persistSessionGoal({
+        session,
+        goal: {
+          objective: "Finish lifecycle states",
+          status: "paused",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+        runtime: runtime(home, 1),
+      });
+      persistSessionGoal({
+        session,
+        goal: {
+          objective: "Finish lifecycle states",
+          status: "blocked",
+          statusReason: " Need credentials\nfrom the user. ",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+        runtime: runtime(home, 2),
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "session-goal-lifecycle",
+        workspace,
+        runtime: runtime(home, 3),
+      });
+
+      // Then
+      expect(resumed.goal).toEqual({
+        objective: "Finish lifecycle states",
+        status: "blocked",
+        statusReason: "Need credentials from the user.",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+      });
+      const ledgerRecords = (await readFile(session.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerRecords.at(-2)).toMatchObject({
+        type: "session_goal",
+        goal: {
+          objective: "Finish lifecycle states",
+          status: "paused",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      });
+      expect(ledgerRecords.at(-1)).toMatchObject({
+        type: "session_goal",
+        goal: {
+          objective: "Finish lifecycle states",
+          status: "blocked",
+          statusReason: "Need credentials from the user.",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -305,6 +385,29 @@ describe("Session Store Goal", () => {
         }),
       ).toThrow(
         `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
+      );
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: {
+            objective: "Blocked command",
+            status: "blocked",
+          },
+          runtime: runtime(home, 5),
+        }),
+      ).toThrow("Error: /goal blocked status requires a reason.");
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: {
+            objective: "Blocked command",
+            status: "blocked",
+            statusReason: "x".repeat(SESSION_GOAL_STATUS_REASON_MAX_LENGTH + 1),
+          },
+          runtime: runtime(home, 6),
+        }),
+      ).toThrow(
+        `Error: /goal blocked reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
       );
       const ledgerRecords = (await readFile(session.filePath, "utf8"))
         .trimEnd()

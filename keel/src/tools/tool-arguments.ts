@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SESSION_GOAL_STATUS_REASON_MAX_LENGTH } from "../core/session-goal.ts";
 import { sessionTaskPlanSchema } from "../core/task-progress.ts";
 import { optionalToolArgument } from "./tool-schema.ts";
 
@@ -216,9 +217,35 @@ export const updatePlanToolArgumentsSchema = z
 export const updateGoalToolArgumentsSchema = z
   .object({
     status: z
-      .enum(["completed"])
+      .enum(["completed", "blocked"])
       .describe(
-        "Propose that the active saved session goal is completed. Runtime only accepts the proposal when the goal completion gate passes.",
+        "Propose a lifecycle state for the active saved session goal. Use completed only when the completion gate passes. Use blocked only when progress is genuinely blocked.",
       ),
+    reason: optionalToolArgument(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(SESSION_GOAL_STATUS_REASON_MAX_LENGTH)
+        .describe(
+          "Required when status is blocked. Concisely state the blocking condition. Omit for completed.",
+        ),
+    ),
   })
-  .strict();
+  .strict()
+  .superRefine((args, ctx) => {
+    if (args.status === "blocked" && args.reason === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["reason"],
+        message: "reason is required when status is blocked",
+      });
+    }
+    if (args.status === "completed" && args.reason !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["reason"],
+        message: "reason is only valid when status is blocked",
+      });
+    }
+  });

@@ -4,8 +4,10 @@ import {
   normalizeSessionGoalCompletionCommand,
   normalizeSessionGoalCompletionCriterion,
   normalizeSessionGoalObjective,
+  normalizeSessionGoalStatusReason,
   SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
   SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
+  SESSION_GOAL_STATUS_REASON_MAX_LENGTH,
   type SessionGoal,
   sessionGoalSchema,
 } from "../../core/session-goal.ts";
@@ -764,6 +766,12 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
         : normalizeSessionGoalCompletionCriterion(
             redactTextForPersistence(goal.completionCriterion),
           );
+  const statusReason =
+    goal.statusReason === undefined
+      ? undefined
+      : normalizeSessionGoalStatusReason(
+          redactTextForPersistence(goal.statusReason),
+        );
   if (objective === "") {
     sessionStoreError("Error: /goal requires non-empty text.");
   }
@@ -783,9 +791,29 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
     );
   }
+  if (goal.status === "blocked" && statusReason === undefined) {
+    sessionStoreError("Error: /goal blocked status requires a reason.");
+  }
+  if (goal.status === "blocked" && statusReason === "") {
+    sessionStoreError("Error: /goal blocked status requires a reason.");
+  }
+  if (goal.status !== "blocked" && statusReason !== undefined) {
+    sessionStoreError("Error: /goal blocked reason requires blocked status.");
+  }
+  if (
+    statusReason !== undefined &&
+    statusReason.length > SESSION_GOAL_STATUS_REASON_MAX_LENGTH
+  ) {
+    sessionStoreError(
+      `Error: /goal blocked reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
+    );
+  }
   return {
     objective,
     status: goal.status,
+    ...(goal.status === "blocked" && statusReason !== undefined
+      ? { statusReason }
+      : {}),
     ...(goal.criterionKind !== undefined && completionCriterion !== undefined
       ? {
           criterionKind: goal.criterionKind,

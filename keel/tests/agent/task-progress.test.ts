@@ -210,6 +210,103 @@ describe("Task Progress", () => {
     }
   });
 
+  test(`Given a model marks an active session goal blocked,
+    When the agent continues after the tool call,
+    Then Keel persists the blocked goal and returns the blocker reason to the model`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-goal-blocked-"));
+    const messages: Message[] = [
+      { role: "user", content: "Finish the durable session goal." },
+    ];
+    const providerRequests: (readonly Message[])[] = [];
+    const sessionGoal: SessionGoal = {
+      objective: "Finish the durable session goal",
+      status: "active",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+    };
+    const provider: LLMProvider = {
+      id: "goal-blocked-provider",
+      async *stream(options) {
+        providerRequests.push(structuredClone([...options.messages]));
+        if (providerRequests.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "blocked",
+            reason: "Need credentials from the user.",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield {
+          type: "text",
+          text: "The session goal is blocked on credentials.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          sessionGoal,
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "session_goal_updated",
+        messageOrdinal: 3,
+        goal: {
+          objective: "Finish the durable session goal",
+          status: "blocked",
+          statusReason: "Need credentials from the user.",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      });
+      expect(providerRequests).toHaveLength(2);
+      expect(providerRequests[1]).toEqual([
+        { role: "user", content: "Finish the durable session goal." },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "goal_1",
+              tool: "update_goal",
+              status: "blocked",
+              reason: "Need credentials from the user.",
+            },
+          ],
+        },
+        {
+          role: "tool",
+          toolCallId: "goal_1",
+          content:
+            "Session goal blocked: Finish the durable session goal. Reason: Need credentials from the user.",
+        },
+      ]);
+      expect(messages.at(-1)).toEqual({
+        role: "assistant",
+        content: "The session goal is blocked on credentials.",
+        toolCalls: [],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a model verifies an active session goal with its command completion criterion,
     When the model proposes completion after the successful command,
     Then Keel persists the completed goal and returns the goal result`, async () => {

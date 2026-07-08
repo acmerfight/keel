@@ -53,7 +53,7 @@ interface TitleCommand {
 type GoalCommand =
   | {
       readonly kind: "goal";
-      readonly action: "show" | "complete" | "clear";
+      readonly action: "show" | "pause" | "resume" | "complete" | "clear";
     }
   | {
       readonly kind: "goal";
@@ -149,6 +149,8 @@ export function formatInteractiveHelp(): string {
     "  /goal verify <cmd> Set the command that proves the goal is done.",
     "  /goal done-when <criterion>",
     "                     Set an assertion completion criterion.",
+    "  /goal pause        Pause the current session goal.",
+    "  /goal resume       Resume a paused or blocked session goal.",
     "  /goal complete     Mark the current session goal completed.",
     "  /goal clear        Clear the current session goal.",
     "  /tasks             Show current session tasks.",
@@ -393,6 +395,12 @@ function parseGoalCommandArgs(
   }
   if (trimmedArgs === "complete") {
     return { kind: "goal", action: "complete" };
+  }
+  if (trimmedArgs === "pause") {
+    return { kind: "goal", action: "pause" };
+  }
+  if (trimmedArgs === "resume") {
+    return { kind: "goal", action: "resume" };
   }
   if (trimmedArgs === "clear") {
     return { kind: "goal", action: "clear" };
@@ -668,6 +676,14 @@ export function formatInteractiveGoalSet(goal: SessionGoal): string {
 
 export function formatInteractiveGoalCompleted(goal: SessionGoal): string {
   return `Goal completed: ${formatInteractiveGoalText(goal.objective)}\n`;
+}
+
+export function formatInteractiveGoalPaused(goal: SessionGoal): string {
+  return `Goal paused: ${formatInteractiveGoalText(goal.objective)}\n`;
+}
+
+export function formatInteractiveGoalResumed(goal: SessionGoal): string {
+  return `Goal resumed: ${formatInteractiveGoalText(goal.objective)}\n`;
 }
 
 export function formatInteractiveGoalVerificationSet(

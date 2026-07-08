@@ -56,6 +56,8 @@ import {
   formatInteractiveGoalCleared,
   formatInteractiveGoalCompleted,
   formatInteractiveGoalCriterionSet,
+  formatInteractiveGoalPaused,
+  formatInteractiveGoalResumed,
   formatInteractiveGoalSet,
   formatInteractiveGoalVerificationSet,
   formatInteractiveHelp,
@@ -628,6 +630,81 @@ export async function runInteractiveSession(
             }
             break;
           }
+          case "pause": {
+            if (options.persistSessionGoal === undefined) {
+              options.writeStderr(formatGoalRequiresSavedSession());
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (sessionGoal === undefined) {
+              options.writeStderr("Error: no session goal is set.\n");
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (sessionGoal.status !== "active") {
+              options.writeStderr(
+                "Error: only active session goals can be paused.\n",
+              );
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            try {
+              const { statusReason: _statusReason, ...goalWithoutReason } =
+                copySessionGoal(sessionGoal);
+              const pausedGoal: SessionGoal = {
+                ...goalWithoutReason,
+                status: "paused",
+              };
+              sessionGoal = options.persistSessionGoal({
+                goal: pausedGoal,
+                consumedInputIds: queuedInputIds([rawInput]),
+              });
+              options.writeStdout(formatInteractiveGoalPaused(pausedGoal));
+            } catch (error) {
+              options.writeStderr(formatInteractiveCommandFailure(error));
+              consumeQueuedInputLines([rawInput]);
+            }
+            break;
+          }
+          case "resume": {
+            if (options.persistSessionGoal === undefined) {
+              options.writeStderr(formatGoalRequiresSavedSession());
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (sessionGoal === undefined) {
+              options.writeStderr("Error: no session goal is set.\n");
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (
+              sessionGoal.status !== "paused" &&
+              sessionGoal.status !== "blocked"
+            ) {
+              options.writeStderr(
+                "Error: only paused or blocked session goals can be resumed.\n",
+              );
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            try {
+              const { statusReason: _statusReason, ...goalWithoutReason } =
+                copySessionGoal(sessionGoal);
+              const resumedGoal: SessionGoal = {
+                ...goalWithoutReason,
+                status: "active",
+              };
+              sessionGoal = options.persistSessionGoal({
+                goal: resumedGoal,
+                consumedInputIds: queuedInputIds([rawInput]),
+              });
+              options.writeStdout(formatInteractiveGoalResumed(resumedGoal));
+            } catch (error) {
+              options.writeStderr(formatInteractiveCommandFailure(error));
+              consumeQueuedInputLines([rawInput]);
+            }
+            break;
+          }
           case "complete": {
             if (options.persistSessionGoal === undefined) {
               options.writeStderr(formatGoalRequiresSavedSession());
@@ -677,7 +754,7 @@ export async function runInteractiveSession(
             }
             if (sessionGoal.status !== "active") {
               options.writeStderr(
-                "Error: completed session goal cannot change the completion criterion. Set a new goal instead.\n",
+                "Error: only active session goals can change the completion criterion. Resume the goal or set a new goal first.\n",
               );
               consumeQueuedInputLines([rawInput]);
               break;
@@ -722,7 +799,7 @@ export async function runInteractiveSession(
             }
             if (sessionGoal.status !== "active") {
               options.writeStderr(
-                "Error: completed session goal cannot change the completion criterion. Set a new goal instead.\n",
+                "Error: only active session goals can change the completion criterion. Resume the goal or set a new goal first.\n",
               );
               consumeQueuedInputLines([rawInput]);
               break;

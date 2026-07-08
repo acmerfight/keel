@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   activeSessionGoalSystemPrompt,
+  formatSessionGoalBlockedToolResult,
   formatSessionGoalCompletedToolResult,
   sessionGoalSchema,
 } from "../../src/core/session-goal.ts";
@@ -37,6 +38,35 @@ describe("Session Goal Tool", () => {
       criterionKind: "command",
       completionCriterion: "pnpm test",
     });
+  });
+
+  test(`Given a blocked session goal has a reason,
+    When the goal schema parses it,
+    Then Keel preserves the paused work boundary and normalizes the reason`, () => {
+    expect(
+      sessionGoalSchema.parse({
+        objective: "Wait for credentials",
+        status: "blocked",
+        statusReason: " Need the API key\nfrom the user. ",
+      }),
+    ).toEqual({
+      objective: "Wait for credentials",
+      status: "blocked",
+      statusReason: "Need the API key from the user.",
+    });
+    expect(
+      sessionGoalSchema.safeParse({
+        objective: "Wait for credentials",
+        status: "blocked",
+      }).success,
+    ).toBe(false);
+    expect(
+      sessionGoalSchema.safeParse({
+        objective: "Wait for credentials",
+        status: "active",
+        statusReason: "Need the API key from the user.",
+      }).success,
+    ).toBe(false);
   });
 
   test(`Given a saved session goal has only one completion criterion field,
@@ -85,6 +115,30 @@ describe("Session Goal Tool", () => {
     );
   });
 
+  test(`Given a paused or blocked goal exists,
+    When Keel builds the provider system prompt,
+    Then it does not inject that goal as active work`, () => {
+    expect(
+      activeSessionGoalSystemPrompt(
+        {
+          objective: "Paused objective",
+          status: "paused",
+        },
+        { bashToolVisible: true },
+      ),
+    ).toBeNull();
+    expect(
+      activeSessionGoalSystemPrompt(
+        {
+          objective: "Blocked objective",
+          status: "blocked",
+          statusReason: "Need credentials from the user.",
+        },
+        { bashToolVisible: true },
+      ),
+    ).toBeNull();
+  });
+
   test(`Given a completed session goal already has sentence punctuation,
     When the tool result is formatted,
     Then Keel does not append a duplicate period`, () => {
@@ -96,9 +150,23 @@ describe("Session Goal Tool", () => {
     ).toBe("Session goal completed: Finish the migration?");
   });
 
+  test(`Given a blocked session goal already has sentence punctuation,
+    When the tool result is formatted,
+    Then Keel reports the blocker reason without duplicating punctuation`, () => {
+    expect(
+      formatSessionGoalBlockedToolResult({
+        objective: "Finish the migration?",
+        status: "blocked",
+        statusReason: "Need production credentials.",
+      }),
+    ).toBe(
+      "Session goal blocked: Finish the migration? Reason: Need production credentials.",
+    );
+  });
+
   test(`Given provider tools are listed,
     When bash is disabled,
-    Then update_goal is exposed as a narrow completion-proposal agent-state tool`, () => {
+    Then update_goal is exposed as a narrow lifecycle-proposal agent-state tool`, () => {
     // Given / When
     const tools = openAICompatibleTools(false);
     const updateGoal = tools.find(
@@ -111,12 +179,64 @@ describe("Session Goal Tool", () => {
       properties: {
         status: {
           type: "string",
-          enum: ["completed"],
+          enum: ["completed", "blocked"],
+        },
+        reason: {
+          type: "string",
         },
       },
       required: ["status"],
       additionalProperties: false,
     });
+  });
+
+  test(`Given update_goal receives blocked for an active goal,
+    When the builtin tool executes,
+    Then it persists a blocked goal with the model-provided reason`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-update-goal-blocked-"),
+    );
+    const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
+      status: "blocked",
+      reason: " Need an API key\nfrom the user. ",
+    });
+
+    try {
+      if (toolCall === null) {
+        throw new Error("expected valid update_goal call");
+      }
+
+      // When
+      const execution = await executeToolCall({
+        workspace,
+        toolCall,
+        signal: freshSignal(),
+        allowBash: false,
+        sessionGoal: {
+          objective: "Finish the durable checkout goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      });
+
+      // Then
+      expect(execution).toMatchObject({
+        ok: true,
+        content:
+          "Session goal blocked: Finish the durable checkout goal. Reason: Need an API key from the user.",
+        sessionGoalUpdate: {
+          objective: "Finish the durable checkout goal",
+          status: "blocked",
+          statusReason: "Need an API key from the user.",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test(`Given update_goal receives completed for an active goal without a completion criterion,

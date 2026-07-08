@@ -648,7 +648,7 @@ describe("tool registry", () => {
 
     expect(argumentsByTool).toEqual({
       update_plan: { fields: ["plan"], required: ["plan"] },
-      update_goal: { fields: ["status"], required: ["status"] },
+      update_goal: { fields: ["status", "reason"], required: ["status"] },
       read: { fields: ["path", "offset", "limit"], required: ["path"] },
       ls: { fields: ["path", "limit"], required: [] },
       glob: { fields: ["pattern", "path"], required: ["pattern"] },
@@ -684,12 +684,16 @@ describe("tool registry", () => {
       const providerFields = providerParameters.properties;
       const fieldKeys = Object.keys(providerFields).sort();
       const requiredFields = [...providerParameters.required].sort();
-      const completeArgs = Object.fromEntries(
+      const completeArgsFromMetadata = Object.fromEntries(
         Object.entries(providerFields).map(([name, field]) => [
           name,
           validProviderValue(field),
         ]),
       );
+      const completeArgs =
+        tool.name === "update_goal"
+          ? { ...completeArgsFromMetadata, status: "blocked" }
+          : completeArgsFromMetadata;
 
       expect(jsonSchema.type, `${tool.name} schema must be an object`).toBe(
         "object",
