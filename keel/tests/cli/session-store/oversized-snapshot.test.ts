@@ -16,6 +16,7 @@ import {
   persistSessionBashApprovalGrant,
   persistSessionMessages,
   persistSessionQueuedInput,
+  persistSessionTitle,
   resumeSessionStore,
   type SessionQueuedInput,
   SessionStoreError,
@@ -275,7 +276,9 @@ describe("Session Store Oversized Snapshot", () => {
       { role: "user", content: "remember boundary" },
       { role: "assistant", content: "Boundary retained.", toolCalls: [] },
     ];
-    const snapshotRecord = `${snapshotLine(snapshottedMessages, [])}\n`;
+    const snapshotRecord = `${snapshotLine(snapshottedMessages, [], {
+      title: "Bounded tail title",
+    })}\n`;
     const emptyPaddingRecord = `${appendLine([
       { role: "user", content: "" },
     ])}\n`;
@@ -306,6 +309,7 @@ describe("Session Store Oversized Snapshot", () => {
 
       // Then
       expect(resumed.messages).toEqual(snapshottedMessages);
+      expect(resumed.title).toBe("Bounded tail title");
       expect(resumed.pendingInputs).toEqual([]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -469,17 +473,22 @@ describe("Session Store Oversized Snapshot", () => {
         workspace,
         runtime: runtime(home),
       });
+      const title = persistSessionTitle({
+        session,
+        title: "Fix oversized snapshot",
+        runtime: runtime(home, 1),
+      });
       const queuedInput = persistSessionQueuedInput({
         session,
         sequence: 7,
         line: "continue after the summary",
-        runtime: runtime(home, 1),
+        runtime: runtime(home, 2),
       });
       const persistedLargeMessages = persistSessionMessages({
         session,
         previousMessages: [],
         currentMessages: largeMessages,
-        runtime: runtime(home, 2),
+        runtime: runtime(home, 3),
         reason: "turn",
       });
 
@@ -488,7 +497,7 @@ describe("Session Store Oversized Snapshot", () => {
         session,
         previousMessages: persistedLargeMessages,
         currentMessages: compactedMessages,
-        runtime: runtime(home, 3),
+        runtime: runtime(home, 4),
         reason: "compaction",
       });
 
@@ -504,11 +513,18 @@ describe("Session Store Oversized Snapshot", () => {
       expect(JSON.parse(lastLine)).toEqual({
         schemaVersion: 2,
         type: "snapshot",
-        timestamp: "1970-01-01T00:00:00.003Z",
+        timestamp: "1970-01-01T00:00:00.004Z",
         reason: "size_threshold",
+        title,
         messages: expectedStoredMessages(compactedMessages),
         pendingInputs: [queuedInput],
       });
+      const resumed = resumeSessionStore({
+        sessionId: "snapshot-threshold",
+        workspace,
+        runtime: runtime(home, 5),
+      });
+      expect(resumed.title).toBe(title);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

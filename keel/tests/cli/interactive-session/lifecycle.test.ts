@@ -6,7 +6,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
-import type { LLMProvider } from "../../../src/llm/types.ts";
+import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   ForcedExit,
   withTimeout,
@@ -382,6 +382,110 @@ describe("Interactive Session - Lifecycle", () => {
     expect(providerResolved).toBe(false);
   });
 
+  test(`Given no session title has been set,
+    When user enters /title without text,
+    Then Keel reports that the title is not set without starting a model turn`, async () => {
+    // When
+    const result = await runInteractiveLocalCommand("/title", process.cwd());
+
+    // Then
+    expect(result.stdout).toBe("Session title: (not set)\n");
+    expect(result.stderr).toBe("");
+    expect(result.providerResolved).toBe(false);
+  });
+
+  test(`Given the interactive session is not saved,
+    When user enters /title with text,
+    Then Keel rejects the title without starting a model turn`, async () => {
+    // When
+    const result = await runInteractiveLocalCommand(
+      "/title Fix login timeout",
+      process.cwd(),
+    );
+
+    // Then
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Error: /title requires a saved session. Start without --ephemeral, or use --session or --resume.\n",
+    );
+    expect(result.providerResolved).toBe(false);
+  });
+
+  test(`Given a saved session cannot persist a title,
+    When user enters /title and then continues,
+    Then Keel reports the local command failure and keeps the next prompt usable`, async () => {
+    // Given
+    let stdout = "";
+    let stderr = "";
+    let providerResolved = false;
+    let observedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        observedMessages = structuredClone([...options.messages]);
+        yield { type: "text", text: "Continued." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      sessionId: "title-error",
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionTitle: () => {
+        throw new Error("Error: cannot write session title.");
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        return {
+          provider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        };
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("/title Fix login timeout\nafter failure\n");
+
+    // Then
+    await session;
+    expect(stderr).toBe("Error: cannot write session title.\n");
+    expect(stdout).toBe("Continued.\n");
+    expect(providerResolved).toBe(true);
+    expect(observedMessages).toEqual([
+      { role: "user", content: "after failure" },
+    ]);
+  });
+
   test(`Given an interactive session already resolved a provider,
     When user enters /status,
     Then Keel reports the active provider and model without starting another turn`, async () => {
@@ -600,6 +704,7 @@ describe("Interactive Session - Lifecycle", () => {
     );
     expect(stdout).toContain("/help");
     expect(stdout).toContain("/status");
+    expect(stdout).toContain("/title [text]");
     expect(stdout).toContain("/diff");
     expect(stdout).toContain("/undo");
     expect(stdout).toContain("/compact [focus]");

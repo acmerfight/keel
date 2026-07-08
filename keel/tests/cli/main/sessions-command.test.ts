@@ -12,6 +12,7 @@ import {
   inputAdmittedRecordLine,
   inputConsumedRecordLine,
   replaceSessionRecordLine,
+  sessionTitleRecordLine,
   snapshotSessionRecordLine,
   writeSessionLedger,
 } from "../../../src/testing/session-ledger-fixtures.ts";
@@ -279,6 +280,7 @@ describe("CLI Main - Sessions Command", () => {
           },
         ]),
         modelSwitchRecordLine("2026-02-01T00:00:02.000Z"),
+        sessionTitleRecordLine("2026-02-01T00:00:02.500Z", "Fix login timeout"),
         inputAdmittedRecordLine({
           timestamp: "2026-02-01T00:00:03.000Z",
           id: "queued-detail-input",
@@ -309,6 +311,7 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain("created: 2026-02-01T00:00:00.000Z\n");
       expect(stdout).toContain("updated: 2026-02-01T00:00:04.000Z\n");
       expect(stdout).toContain("branch: detail\n");
+      expect(stdout).toContain("title: Fix login timeout\n");
       expect(stdout).toContain("parent: source\n");
       expect(stdout).toContain(
         "workflow skill: review (.agents/skills/review/SKILL.md)\n",
@@ -322,6 +325,7 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain("preview: Use [REDACTED_SECRET]");
       expect(stdout).toContain("status:\n");
       expect(stdout).toContain("  session: detail\n");
+      expect(stdout).toContain("  title: Fix login timeout\n");
       expect(stdout).toContain(`  workspace: ${ledgerWorkspace}\n`);
       expect(stdout).toContain("  active model: qwen/qwen3.7-max\n");
       expect(stdout).toContain(
@@ -903,6 +907,7 @@ describe("CLI Main - Sessions Command", () => {
             toolCalls: [],
           },
         ]),
+        sessionTitleRecordLine("2026-01-04T00:00:06.000Z", "Fix login timeout"),
       ],
     });
     await writeSessionLedger({
@@ -1118,12 +1123,13 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain(`Sessions for workspace ${ledgerWorkspace}:\n`);
       expect(stdout).toContain("resume latest: keel --resume\n");
       expect(stdout).toContain(
-        "graph long-preview root long-preview  updated 2026-01-04T00:00:05.000Z\n",
+        "graph long-preview root long-preview  updated 2026-01-04T00:00:06.000Z\n",
       );
       expect(stdout).toContain(
-        "long-preview  updated 2026-01-04T00:00:05.000Z\n",
+        "long-preview  updated 2026-01-04T00:00:06.000Z\n",
       );
       expect(stdout).toContain("   branch: main\n");
+      expect(stdout).toContain("   title: Fix login timeout\n");
       expect(stdout).toContain(`   preview: ${longPromptPreview}\n`);
       expect(stdout).toContain(
         "graph older root older  updated 2026-01-02T00:00:06.000Z\n",

@@ -131,6 +131,7 @@ function applySessionCatalogMutation(
   switch (record.type) {
     case "append":
       return {
+        ...state,
         updatedAt: record.timestamp,
         preview: appendCatalogPreviewState(
           state.preview,
@@ -138,10 +139,22 @@ function applySessionCatalogMutation(
         ),
       };
     case "replace":
+      return {
+        ...state,
+        updatedAt: record.timestamp,
+        preview: catalogPreviewStateFromStoredMessages(record.messages),
+      };
     case "snapshot":
       return {
         updatedAt: record.timestamp,
+        ...(record.title !== undefined ? { title: record.title } : {}),
         preview: catalogPreviewStateFromStoredMessages(record.messages),
+      };
+    case "session_title":
+      return {
+        ...state,
+        updatedAt: record.timestamp,
+        title: record.title,
       };
     case "input_admitted":
     case "input_consumed":
@@ -182,6 +195,7 @@ function sessionCatalogEntry(records: SessionRecords): SessionCatalogEntry {
           ),
         }
       : {}),
+    ...(state.title !== undefined ? { title: state.title } : {}),
     preview: catalogPreviewValue(state.preview),
   };
 }

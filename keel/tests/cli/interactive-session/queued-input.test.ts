@@ -2,6 +2,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
+import type { SessionQueuedInput } from "../../../src/cli/session-store.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   ForcedExit,
@@ -363,6 +364,123 @@ describe("Interactive Session - Queued Input", () => {
       content: "after help",
     });
     expect(JSON.stringify(observedContexts)).not.toContain("/help");
+  });
+
+  test(`Given user enters /title while an interactive tool turn is running,
+    When the assistant continues after the tool result,
+    Then the title command is deferred, consumed, and not sent to the provider`, async () => {
+    // Given
+    let turn = 0;
+    let titleWritten = false;
+    const observedContexts: Message[][] = [];
+    const persistedQueuedInputs: SessionQueuedInput[] = [];
+    const consumedMessageInputIds: string[][] = [];
+    let titlePersisted = "";
+    let titleConsumedInputIds: readonly string[] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        turn++;
+        observedContexts.push(structuredClone([...options.messages]));
+        if (turn === 1) {
+          yield {
+            type: "tool_call",
+            id: "deferred_title_read",
+            tool: "read",
+            path: "package.json",
+            limit: 1,
+          };
+        } else if (turn === 2) {
+          yield { type: "text", text: "Tool turn done." };
+        } else {
+          yield { type: "text", text: "After title done." };
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      sessionId: "queued-title",
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistQueuedInput: (queuedInput) => {
+        const persisted = {
+          id: `queued-${queuedInput.sequence}`,
+          timestamp: `1970-01-01T00:00:0${queuedInput.sequence}.000Z`,
+          sequence: queuedInput.sequence,
+          line: queuedInput.line,
+        };
+        persistedQueuedInputs.push(persisted);
+        return persisted;
+      },
+      persistSessionTitle: (titleRecord) => {
+        titlePersisted = titleRecord.title;
+        titleConsumedInputIds = titleRecord.consumedInputIds;
+        return titleRecord.title;
+      },
+      persistSessionMessages: (_messages, _reason, consumedInputIds) => {
+        consumedMessageInputIds.push([...consumedInputIds]);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "tool_start" && !titleWritten) {
+            titleWritten = true;
+            input.write("/title Queued session title\n");
+            input.end("after title\n");
+          } else if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("inspect package\n");
+
+    // Then
+    await session;
+    expect(stdout).toBe(
+      "Tool turn done.\nSession title set to: Queued session title\nAfter title done.\n",
+    );
+    expect(
+      persistedQueuedInputs.map((queuedInput) => queuedInput.line),
+    ).toEqual(["/title Queued session title", "after title"]);
+    expect(titlePersisted).toBe("Queued session title");
+    expect(titleConsumedInputIds).toEqual(["queued-2"]);
+    expect(consumedMessageInputIds).toContainEqual(["queued-3"]);
+    expect(observedContexts[2]).toContainEqual({
+      role: "user",
+      content: "after title",
+    });
+    expect(JSON.stringify(observedContexts)).not.toContain("/title");
+    expect(JSON.stringify(observedContexts)).not.toContain(
+      "Queued session title",
+    );
   });
 
   test(`Given user enters /fork while an interactive tool turn is running,

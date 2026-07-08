@@ -86,7 +86,8 @@ export function appendLine(messages: readonly Message[]): string {
 export function snapshotLine(
   messages: readonly Message[],
   pendingInputs: readonly SessionQueuedInput[],
-  modelState?: {
+  snapshotState?: {
+    readonly title?: string;
     readonly activeModel?: {
       readonly providerId: "fake" | "deepseek" | "kimi" | "qwen";
       readonly model: string;
@@ -112,7 +113,7 @@ export function snapshotLine(
     reason: "size_threshold",
     messages: storedMessages(messages),
     pendingInputs,
-    ...(modelState !== undefined ? modelState : {}),
+    ...(snapshotState !== undefined ? snapshotState : {}),
   });
 }
 

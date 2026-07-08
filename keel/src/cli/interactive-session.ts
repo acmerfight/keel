@@ -47,6 +47,9 @@ import {
   formatForkRequiresNamedSession,
   formatInteractiveCommandFailure,
   formatInteractiveHelp,
+  formatInteractiveTitle,
+  formatInteractiveTitleSet,
+  formatTitleRequiresSavedSession,
   parseInteractiveCommand,
   undoRestoredContextMessage,
 } from "./interactive-session/commands.ts";
@@ -215,6 +218,7 @@ export async function runInteractiveSession(
   let taskProgress = copySessionTaskProgress(
     options.initialTaskProgress ?? emptySessionTaskProgress(),
   );
+  let sessionTitle = options.initialSessionTitle;
   const updateTaskProgress = (next: SessionTaskProgress): void => {
     taskProgress = copySessionTaskProgress(next);
   };
@@ -503,6 +507,7 @@ export async function runInteractiveSession(
         options.writeStdout(
           formatSessionStatusSnapshot({
             session: options.sessionId ?? "(ephemeral, not persisted)",
+            ...(sessionTitle !== undefined ? { title: sessionTitle } : {}),
             workspace: options.workspace,
             activeModel: activeModelStatus(),
             ...(options.workflowSkill !== undefined
@@ -521,6 +526,29 @@ export async function runInteractiveSession(
           }),
         );
         consumeQueuedInputLines([rawInput]);
+        continue;
+      }
+      if (interactiveCommand?.kind === "title") {
+        if (interactiveCommand.title === undefined) {
+          options.writeStdout(formatInteractiveTitle(sessionTitle));
+          consumeQueuedInputLines([rawInput]);
+          continue;
+        }
+        if (options.persistSessionTitle === undefined) {
+          options.writeStderr(formatTitleRequiresSavedSession());
+          consumeQueuedInputLines([rawInput]);
+          continue;
+        }
+        try {
+          sessionTitle = options.persistSessionTitle({
+            title: interactiveCommand.title,
+            consumedInputIds: queuedInputIds([rawInput]),
+          });
+          options.writeStdout(formatInteractiveTitleSet(sessionTitle));
+        } catch (error) {
+          options.writeStderr(formatInteractiveCommandFailure(error));
+          consumeQueuedInputLines([rawInput]);
+        }
         continue;
       }
       if (interactiveCommand?.kind === "tasks") {

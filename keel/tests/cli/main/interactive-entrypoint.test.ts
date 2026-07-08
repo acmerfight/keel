@@ -335,6 +335,135 @@ describe("CLI Main - Interactive Entrypoint", () => {
     }
   });
 
+  test(`Given the user names a saved interactive session,
+    When they return through session recovery surfaces,
+    Then Keel shows the task title before resuming`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-title-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const input = new PassThrough();
+    input.end(
+      "/title Fix login timeout\nremember login timeout\n/title\n/status\n",
+    );
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain("Remembered: remember login timeout\n");
+      expect(stdout).toContain("Session title set to: Fix login timeout\n");
+      expect(stdout).toContain("Session title: Fix login timeout\n");
+      expect(stdout).toContain("  title: Fix login timeout\n");
+      expect(fixture.stderr()).toBe("");
+
+      const listFixture = createRuntime(["sessions"], {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+      });
+      const listExitCode = await runCliMain(listFixture.runtime);
+      expect(listExitCode).toBe(0);
+      expect(listFixture.stdout()).toContain("   title: Fix login timeout\n");
+      const sessionId = sessionIdFromResumeLine(listFixture.stdout());
+
+      const showFixture = createRuntime(["sessions", "show", sessionId], {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+      });
+      const showExitCode = await runCliMain(showFixture.runtime);
+      expect(showExitCode).toBe(0);
+      expect(showFixture.stdout()).toContain("title: Fix login timeout\n");
+      expect(showFixture.stdout()).toContain("  title: Fix login timeout\n");
+
+      const resumeInput = new PassThrough();
+      resumeInput.end("/title\n/status\n");
+      const resumeFixture = createRuntime(["--resume", sessionId], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input: resumeInput,
+      });
+      const resumeExitCode = await runCliMain(resumeFixture.runtime);
+      expect(resumeExitCode).toBe(0);
+      expect(resumeFixture.stdout()).toContain(
+        "Session title: Fix login timeout\n",
+      );
+      expect(resumeFixture.stdout()).toContain("  title: Fix login timeout\n");
+
+      const startupInput = new PassThrough();
+      const startupFixture = createRuntime([], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_HOME: home,
+        },
+        input: startupInput,
+        inputIsTTY: true,
+        stderrIsTTY: false,
+      });
+      const startupRun = runCliMain(startupFixture.runtime);
+      await waitForCondition(
+        () => startupFixture.stdout().includes("Resume latest saved session?"),
+        "resume-first startup prompt did not render",
+      );
+      startupInput.end("q\n");
+      const startupExitCode = await startupRun;
+      expect(startupExitCode).toBe(0);
+      expect(startupFixture.stdout()).toContain(
+        `Saved sessions for workspace ${ledgerWorkspace}:\n`,
+      );
+      expect(startupFixture.stdout()).toContain("title: Fix login timeout\n");
+      expect(startupFixture.stdout()).toContain("Startup cancelled.\n");
+
+      const pickerInput = new PassThrough();
+      const pickerFixture = createRuntime(["--resume", "--pick"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_HOME: home,
+        },
+        input: pickerInput,
+        inputIsTTY: true,
+        stderrIsTTY: false,
+      });
+      const pickerRun = runCliMain(pickerFixture.runtime);
+      await waitForCondition(
+        () =>
+          pickerFixture
+            .stdout()
+            .includes("Select session [1-1], or q to cancel:"),
+        "resume picker did not render the session choice",
+      );
+      pickerInput.end("q\n");
+      const pickerExitCode = await pickerRun;
+      expect(pickerExitCode).toBe(0);
+      expect(pickerFixture.stdout()).toContain("   title: Fix login timeout\n");
+      expect(pickerFixture.stdout()).toContain("Resume cancelled.\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given saved sessions exist in multiple workspaces,
     When the user resumes without a session id,
     Then Keel continues the latest saved session for the current workspace`, async () => {

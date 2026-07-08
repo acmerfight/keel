@@ -25,6 +25,7 @@ import {
   type SessionState,
   type SessionStoreRuntime,
   type SessionTaskProgressCheckpoint,
+  type SessionTitleSessionRecord,
   type StoredMessage,
   sessionReplayStateKey,
   type WorkflowSkill,
@@ -231,6 +232,7 @@ function sessionStateFromReplay(options: {
   readonly bashApprovalGrants: readonly BashApprovalGrant[];
   readonly taskProgress: SessionTaskProgress;
   readonly taskProgressCheckpoints?: readonly SessionTaskProgressCheckpoint[];
+  readonly title?: string;
   readonly activeModel?: SessionModelSelection;
   readonly modelSwitches?: readonly SessionModelSwitch[];
   readonly workflowSkill?: WorkflowSkill;
@@ -246,6 +248,7 @@ function sessionStateFromReplay(options: {
     copySessionTaskProgressCheckpoint,
   );
   const taskProgress = copySessionTaskProgress(options.taskProgress);
+  const title = options.title;
   const activeModel =
     options.activeModel === undefined
       ? undefined
@@ -265,6 +268,7 @@ function sessionStateFromReplay(options: {
     taskProgressCheckpoints: taskProgressCheckpoints.map(
       copySessionTaskProgressCheckpoint,
     ),
+    ...(title !== undefined ? { title } : {}),
     ...(activeModel !== undefined ? { activeModel } : {}),
     modelSwitches: modelSwitches.map(copySessionModelSwitch),
   };
@@ -279,6 +283,7 @@ function sessionStateFromReplay(options: {
     pendingInputs: pendingInputsInReplayOrder(pendingInputsById),
     bashApprovalGrants,
     taskProgress,
+    ...(title !== undefined ? { title } : {}),
     ...(activeModel !== undefined ? { activeModel } : {}),
     modelSwitches,
     ...(workflowSkill !== undefined ? { workflowSkill } : {}),
@@ -394,9 +399,21 @@ function sessionRecordWithConsumedInputIds(
   consumedInputIds: readonly string[],
 ): ModelSwitchSessionRecord;
 function sessionRecordWithConsumedInputIds(
-  record: AppendSessionRecord | ReplaceSessionRecord | ModelSwitchSessionRecord,
+  record: SessionTitleSessionRecord,
   consumedInputIds: readonly string[],
-): AppendSessionRecord | ReplaceSessionRecord | ModelSwitchSessionRecord {
+): SessionTitleSessionRecord;
+function sessionRecordWithConsumedInputIds(
+  record:
+    | AppendSessionRecord
+    | ReplaceSessionRecord
+    | ModelSwitchSessionRecord
+    | SessionTitleSessionRecord,
+  consumedInputIds: readonly string[],
+):
+  | AppendSessionRecord
+  | ReplaceSessionRecord
+  | ModelSwitchSessionRecord
+  | SessionTitleSessionRecord {
   if (consumedInputIds.length === 0) {
     return record;
   }
@@ -423,6 +440,7 @@ function appendSessionSnapshotIfNeeded(options: {
     type: "snapshot",
     timestamp: isoTimestamp(options.runtime),
     reason: "size_threshold",
+    ...(replayState.title !== undefined ? { title: replayState.title } : {}),
     messages: replayState.storedMessages.map(copyStoredMessage),
     pendingInputs: pendingInputsInReplayOrder(
       replayState.pendingInputsById,

@@ -1,6 +1,7 @@
 import { errorMessage } from "../../core/error.ts";
 import { isProviderId } from "../../core/provider-id.ts";
 import { sanitizeStatusLineText } from "../output.ts";
+import { redactTextForPersistence } from "../persistence-redaction.ts";
 import type { ProviderSelection } from "../provider-config.ts";
 
 interface HelpCommand {
@@ -34,6 +35,11 @@ interface SkillCommand {
 
 interface StatusCommand {
   readonly kind: "status";
+}
+
+interface TitleCommand {
+  readonly kind: "title";
+  readonly title?: string;
 }
 
 interface TasksCommand {
@@ -77,6 +83,7 @@ export type InteractiveCommand =
   | ModelCommand
   | SkillCommand
   | StatusCommand
+  | TitleCommand
   | TasksCommand
   | DiffCommand
   | ApprovalsCommand
@@ -106,6 +113,7 @@ export function formatInteractiveHelp(): string {
     "                     Switch the active provider/model for later prompts.",
     "  /skill             Show the active workflow skill.",
     "  /status            Show session state and recovery commands.",
+    "  /title [text]      Show or set this saved session title.",
     "  /tasks             Show current session tasks.",
     "  /diff              Show current git status and diff.",
     "  /approvals         List active bash approvals.",
@@ -359,6 +367,14 @@ export function parseInteractiveCommand(
     return { kind: "status" };
   }
 
+  const titleMatch = /^\/title(?:\s+(.*))?$/u.exec(trimmed);
+  if (titleMatch !== null) {
+    const title = titleMatch[1]?.trim();
+    return title === undefined || title === ""
+      ? { kind: "title" }
+      : { kind: "title", title };
+  }
+
   const tasksMatch = /^\/tasks(?:\s+(.*))?$/u.exec(trimmed);
   if (tasksMatch !== null) {
     const extraArgs = tasksMatch[1]?.trim();
@@ -500,4 +516,24 @@ export function formatForkRequiresNamedSession(
   command: "/fork" | "/fork-points",
 ): string {
   return `Error: ${command} requires a saved session. Start without --ephemeral, or use --session or --resume.\n`;
+}
+
+function formatInteractiveTitleText(title: string): string {
+  return sanitizeStatusLineText(
+    redactTextForPersistence(title).replace(/\s+/gu, " ").trim(),
+  );
+}
+
+export function formatInteractiveTitle(title: string | undefined): string {
+  return `Session title: ${
+    title === undefined ? "(not set)" : formatInteractiveTitleText(title)
+  }\n`;
+}
+
+export function formatInteractiveTitleSet(title: string): string {
+  return `Session title set to: ${formatInteractiveTitleText(title)}\n`;
+}
+
+export function formatTitleRequiresSavedSession(): string {
+  return "Error: /title requires a saved session. Start without --ephemeral, or use --session or --resume.\n";
 }

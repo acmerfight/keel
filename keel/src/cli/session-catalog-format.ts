@@ -21,6 +21,9 @@ function sessionCatalogEntryLines(
   return [
     `${indent}${entry.id}  updated ${entry.updatedAt}`,
     `${detailIndent}branch: ${entry.graph.branchTitle}`,
+    ...(entry.title !== undefined
+      ? [`${detailIndent}title: ${formatSessionDetailText(entry.title)}`]
+      : []),
     ...(entry.graph.parentSessionId !== null
       ? [`${detailIndent}parent: ${entry.graph.parentSessionId}`]
       : []),
@@ -177,6 +180,9 @@ function sessionPickerEntryLines(
   return [
     `${index + 1}. ${formatSessionDetailText(entry.id)}  updated ${formatSessionDetailText(entry.updatedAt)}`,
     `${detailIndent}branch: ${formatSessionDetailText(entry.graph.branchTitle)}`,
+    ...(entry.title !== undefined
+      ? [`${detailIndent}title: ${formatSessionDetailText(entry.title)}`]
+      : []),
     `${detailIndent}preview: ${formatSessionDetailText(entry.preview)}`,
   ];
 }
@@ -203,6 +209,9 @@ export function formatSessionStartupPrompt(options: {
     `Saved sessions for workspace ${formatSessionDetailText(options.workspace)}:`,
     "Keep one saved session open per task; resume it for follow-ups until the task is done.",
     `latest: ${latestSessionId}  updated ${formatSessionDetailText(latestSession.updatedAt)}`,
+    ...(latestSession.title !== undefined
+      ? [`title: ${formatSessionDetailText(latestSession.title)}`]
+      : []),
     `preview: ${formatSessionDetailText(latestSession.preview)}`,
     "Resume latest saved session?",
     `  Enter/y  resume latest: ${latestSessionId}`,
@@ -296,6 +305,9 @@ export function formatSessionDetail(options: {
     `created: ${options.entry.createdAt}`,
     `updated: ${options.entry.updatedAt}`,
     `branch: ${options.entry.graph.branchTitle}`,
+    ...(options.entry.title !== undefined
+      ? [`title: ${formatSessionDetailText(options.entry.title)}`]
+      : []),
     ...(options.entry.graph.parentSessionId !== null
       ? [`parent: ${options.entry.graph.parentSessionId}`]
       : []),
@@ -315,6 +327,9 @@ export function formatSessionDetail(options: {
     `preview: ${formatSessionDetailText(options.entry.preview)}`,
     formatSessionStatusSnapshot({
       session: options.entry.id,
+      ...(options.entry.title !== undefined
+        ? { title: options.entry.title }
+        : {}),
       workspace: options.entry.workspace,
       activeModel: formatSessionDetailActiveModel(options.session),
       ...(options.entry.workflowSkill !== undefined

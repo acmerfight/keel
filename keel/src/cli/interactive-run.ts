@@ -60,6 +60,7 @@ import {
   persistSessionModelSwitch,
   persistSessionQueuedInput,
   persistSessionTaskProgress,
+  persistSessionTitle,
   resumeSessionStore,
   type SessionCatalog,
   type SessionCatalogEntry,
@@ -544,6 +545,7 @@ export async function runInteractiveCli(
       let sessionPersistence:
         | {
             readonly initialMessages: readonly Message[];
+            readonly initialSessionTitle?: string;
             readonly initialTaskProgress: SessionState["taskProgress"];
             readonly initialModelSelection?: SessionModelSelection;
             readonly initialModelSwitchCount: number;
@@ -558,6 +560,10 @@ export async function runInteractiveCli(
               reason: SessionPersistenceReason,
               consumedInputIds: readonly string[],
             ) => void;
+            readonly persistSessionTitle: (titleRecord: {
+              readonly title: string;
+              readonly consumedInputIds: readonly string[];
+            }) => string;
             readonly persistTaskProgress: (update: {
               readonly taskProgress: SessionState["taskProgress"];
               readonly messageOrdinal: number;
@@ -653,6 +659,9 @@ export async function runInteractiveCli(
         const initialSession = session;
         sessionPersistence = {
           initialMessages: initialSession?.messages ?? [],
+          ...(initialSession?.title !== undefined
+            ? { initialSessionTitle: initialSession.title }
+            : {}),
           initialTaskProgress: initialSession?.taskProgress ?? {
             tasks: [],
           },
@@ -694,6 +703,16 @@ export async function runInteractiveCli(
               consumedInputIds,
             });
           },
+          persistSessionTitle: (titleRecord: {
+            readonly title: string;
+            readonly consumedInputIds: readonly string[];
+          }) =>
+            persistSessionTitle({
+              session: ensureActiveSession(),
+              title: titleRecord.title,
+              runtime,
+              consumedInputIds: titleRecord.consumedInputIds,
+            }),
           persistTaskProgress: (update: {
             readonly taskProgress: SessionState["taskProgress"];
             readonly messageOrdinal: number;
