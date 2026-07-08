@@ -6,6 +6,7 @@ import {
   copySessionGoal,
   normalizeSessionGoalCompletionCommand,
   type SessionGoal,
+  sessionGoalCommandCriterion,
 } from "../core/session-goal.ts";
 import {
   copySessionTaskProgress,
@@ -145,8 +146,9 @@ function bashCommandEvidenceMatchesGoal(
   goal: SessionGoal | undefined,
   execution: ToolExecution,
 ): boolean {
+  const commandCriterion = sessionGoalCommandCriterion(goal);
   if (
-    goal?.completionCommand === undefined ||
+    commandCriterion === undefined ||
     execution.bashCommandEvidence === undefined
   ) {
     return false;
@@ -154,7 +156,7 @@ function bashCommandEvidenceMatchesGoal(
   return (
     normalizeSessionGoalCompletionCommand(
       execution.bashCommandEvidence.command,
-    ) === normalizeSessionGoalCompletionCommand(goal.completionCommand)
+    ) === normalizeSessionGoalCompletionCommand(commandCriterion)
   );
 }
 

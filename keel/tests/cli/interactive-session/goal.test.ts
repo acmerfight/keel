@@ -54,9 +54,21 @@ describe("Interactive Session - Goals", () => {
       action: "verify",
       command: "pnpm test",
     });
+    expect(
+      parseInteractiveCommand("/goal done-when release notes cover every flag"),
+    ).toEqual({
+      kind: "goal",
+      action: "criterion",
+      criterionKind: "assertion",
+      criterion: "release notes cover every flag",
+    });
     expect(parseInteractiveCommand("/goal verify")).toEqual({
       kind: "invalid",
       message: "Error: /goal verify requires a command.",
+    });
+    expect(parseInteractiveCommand("/goal done-when")).toEqual({
+      kind: "invalid",
+      message: "Error: /goal done-when requires a completion criterion.",
     });
     expect(parseInteractiveCommand("/goal clear")).toEqual({
       kind: "goal",
@@ -142,7 +154,8 @@ describe("Interactive Session - Goals", () => {
       expect(persistedGoal).toEqual({
         objective: "Fix every failing checkout test and run the checkout suite",
         status: "active",
-        completionCommand: "pnpm test",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
       });
       expect(stdout).toContain("Goal set: active\n");
       expect(stdout).toContain("Goal verification command set: pnpm test\n");
@@ -150,7 +163,7 @@ describe("Interactive Session - Goals", () => {
         "Note: bash is disabled in this run, so the agent cannot run this verification command. Resume with --bash-policy ask or --bash-policy trusted, or use /goal complete after checking it manually.\n",
       );
       expect(stdout).toContain(
-        "  goal: active - Fix every failing checkout test and run the checkout suite; verify: pnpm test\n",
+        "  goal: active - Fix every failing checkout test and run the checkout suite; criterion(command): pnpm test\n",
       );
       expect(stdout).toContain("Continuing goal.\n");
       expect(providerPrompts).toHaveLength(1);
@@ -158,12 +171,14 @@ describe("Interactive Session - Goals", () => {
       expect(providerPrompts[0]).toContain(
         "Fix every failing checkout test and run the checkout suite",
       );
-      expect(providerPrompts[0]).toContain("Completion command: pnpm test");
       expect(providerPrompts[0]).toContain(
-        "Bash is disabled in this run, so you cannot run the completion command yourself.",
+        "Completion criterion (command): pnpm test",
+      );
+      expect(providerPrompts[0]).toContain(
+        "Bash is disabled in this run, so you cannot run the command completion criterion yourself.",
       );
       expect(providerPrompts[0]).not.toContain(
-        "Before proposing completion, run the completion command with bash",
+        "Before proposing completion, run the command completion criterion with bash",
       );
       expect(providerMessages).toEqual([
         [{ role: "user", content: "continue with the next fix" }],
@@ -172,6 +187,73 @@ describe("Interactive Session - Goals", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  test(`Given a saved interactive session has an active goal,
+    When the user sets an assertion completion criterion,
+    Then Keel shows the criterion without contacting the provider`, async () => {
+    // Given
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    let persistedGoal: SessionGoal | undefined = {
+      objective: "Publish release notes",
+      status: "active",
+    };
+    const provider = unusedProvider("unused-assertion-criterion-provider");
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      sessionId: "goal-assertion-criterion-session",
+      initialSessionGoal: persistedGoal,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionGoal: ({ goal }) => {
+        persistedGoal = goal ?? undefined;
+        return persistedGoal;
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => undefined,
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("/goal done-when release notes cover every changed command\n");
+    input.end("/status\n");
+    await session;
+
+    // Then
+    expect(persistedGoal).toEqual({
+      objective: "Publish release notes",
+      status: "active",
+      criterionKind: "assertion",
+      completionCriterion: "release notes cover every changed command",
+    });
+    expect(stdout).toContain(
+      "Goal assertion criterion set: release notes cover every changed command\n",
+    );
+    expect(stdout).toContain(
+      "  goal: active - Publish release notes; criterion(assertion): release notes cover every changed command\n",
+    );
+    expect(stderr).toBe("");
   });
 
   test(`Given bash is enabled for a saved interactive session with an active goal,
@@ -228,7 +310,8 @@ describe("Interactive Session - Goals", () => {
     expect(persistedGoal).toEqual({
       objective: "Ship the checkout fix",
       status: "active",
-      completionCommand: "pnpm test",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
     });
     expect(stdout).toBe("Goal verification command set: pnpm test\n");
     expect(stderr).toBe("");
@@ -287,7 +370,9 @@ describe("Interactive Session - Goals", () => {
 
     // Then
     expect(persistedGoal).toBeUndefined();
-    expect(stdout).toContain("Session goal: active - Refine status output\n");
+    expect(stdout).toContain(
+      "Session goal: active - Refine status output; criterion: missing\n",
+    );
     expect(stdout).toContain("Goal cleared.\n");
     expect(stdout).toContain("Session goal: none\n");
   });
@@ -446,7 +531,8 @@ describe("Interactive Session - Goals", () => {
     let persistedGoal: SessionGoal | undefined = {
       objective: "Ship the release notes",
       status: "active",
-      completionCommand: "pnpm test",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
     };
     const providerPrompts: string[] = [];
     const provider: LLMProvider = {
@@ -513,14 +599,15 @@ describe("Interactive Session - Goals", () => {
     expect(persistedGoal).toEqual({
       objective: "Ship the release notes",
       status: "completed",
-      completionCommand: "pnpm test",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
     });
     expect(stdout).toContain("Goal completed: Ship the release notes\n");
     expect(stdout).toContain(
-      "  goal: completed - Ship the release notes; verify: pnpm test\n",
+      "  goal: completed - Ship the release notes; criterion(command): pnpm test\n",
     );
     expect(stderr).toBe(
-      "Error: completed session goal cannot add a verification command. Set a new goal instead.\n",
+      "Error: completed session goal cannot change the completion criterion. Set a new goal instead.\n",
     );
     expect(providerPrompts).toHaveLength(1);
     expect(providerPrompts[0]).not.toContain("Session goal:");
@@ -541,7 +628,8 @@ describe("Interactive Session - Goals", () => {
     let persistedGoal: SessionGoal | undefined = {
       objective: "Finish the checkout goal",
       status: "active",
-      completionCommand: 'node -e "process.exit(0)"',
+      criterionKind: "command",
+      completionCriterion: 'node -e "process.exit(0)"',
     };
     let providerRequestCount = 0;
     const provider: LLMProvider = {
@@ -629,11 +717,12 @@ describe("Interactive Session - Goals", () => {
       expect(persistedGoal).toEqual({
         objective: "Finish the checkout goal",
         status: "completed",
-        completionCommand: 'node -e "process.exit(0)"',
+        criterionKind: "command",
+        completionCriterion: 'node -e "process.exit(0)"',
       });
       expect(stdout).toContain("Goal finished.\n");
       expect(stdout).toContain(
-        '  goal: completed - Finish the checkout goal; verify: node -e "process.exit(0)"\n',
+        '  goal: completed - Finish the checkout goal; criterion(command): node -e "process.exit(0)"\n',
       );
       expect(stderr).toBe("");
     } finally {
@@ -658,7 +747,8 @@ describe("Interactive Session - Goals", () => {
     const initialGoal: SessionGoal = {
       objective: "Finish the interrupted goal",
       status: "active",
-      completionCommand: 'node -e "process.exit(0)"',
+      criterionKind: "command",
+      completionCriterion: 'node -e "process.exit(0)"',
     };
     let providerRequestCount = 0;
     const provider: LLMProvider = {
@@ -768,7 +858,7 @@ describe("Interactive Session - Goals", () => {
       expect(persistedGoalUpdates).toEqual([]);
       expect(stdout).toContain("Cancel after goal");
       expect(stdout).toContain(
-        '  goal: active - Finish the interrupted goal; verify: node -e "process.exit(0)"\n',
+        '  goal: active - Finish the interrupted goal; criterion(command): node -e "process.exit(0)"\n',
       );
       expect(stderr).toBe("");
     } finally {
@@ -880,7 +970,7 @@ describe("Interactive Session - Goals", () => {
       // Then
       expect(stdout).toContain("Throw after abort");
       expect(stdout).toContain(
-        "  goal: active - Keep the goal after abort errors\n",
+        "  goal: active - Keep the goal after abort errors; criterion: missing\n",
       );
       expect(stderr).toBe("");
     } finally {

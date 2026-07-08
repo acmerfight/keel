@@ -2,8 +2,9 @@ import { z } from "zod";
 import { providerIds } from "../../core/provider-id.ts";
 import {
   normalizeSessionGoalCompletionCommand,
+  normalizeSessionGoalCompletionCriterion,
   normalizeSessionGoalObjective,
-  SESSION_GOAL_COMPLETION_COMMAND_MAX_LENGTH,
+  SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
   SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
   type SessionGoal,
   sessionGoalSchema,
@@ -753,12 +754,16 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
   const objective = normalizeSessionGoalObjective(
     redactTextForPersistence(goal.objective),
   );
-  const completionCommand =
-    goal.completionCommand === undefined
+  const completionCriterion =
+    goal.completionCriterion === undefined
       ? undefined
-      : normalizeSessionGoalCompletionCommand(
-          redactTextForPersistence(goal.completionCommand),
-        );
+      : goal.criterionKind === "command"
+        ? normalizeSessionGoalCompletionCommand(
+            redactTextForPersistence(goal.completionCriterion),
+          )
+        : normalizeSessionGoalCompletionCriterion(
+            redactTextForPersistence(goal.completionCriterion),
+          );
   if (objective === "") {
     sessionStoreError("Error: /goal requires non-empty text.");
   }
@@ -767,21 +772,26 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       `Error: /goal objective must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
     );
   }
-  if (completionCommand === "") {
-    sessionStoreError("Error: /goal verify requires a command.");
+  if (completionCriterion === "") {
+    sessionStoreError("Error: /goal completion criterion requires text.");
   }
   if (
-    completionCommand !== undefined &&
-    completionCommand.length > SESSION_GOAL_COMPLETION_COMMAND_MAX_LENGTH
+    completionCriterion !== undefined &&
+    completionCriterion.length > SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH
   ) {
     sessionStoreError(
-      `Error: /goal verification command must be ${SESSION_GOAL_COMPLETION_COMMAND_MAX_LENGTH} characters or fewer.`,
+      `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
     );
   }
   return {
     objective,
     status: goal.status,
-    ...(completionCommand !== undefined ? { completionCommand } : {}),
+    ...(goal.criterionKind !== undefined && completionCriterion !== undefined
+      ? {
+          criterionKind: goal.criterionKind,
+          completionCriterion,
+        }
+      : {}),
   };
 }
 

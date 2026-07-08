@@ -150,9 +150,11 @@ describe("CLI Main - Sessions Command", () => {
       expect(exitCode).toBe(0);
       const stdout = fixture.stdout();
       expect(stdout).toContain(
-        "   goal: active - Fix the session resume flow\n",
+        "   goal: active - Fix the session resume flow; criterion: missing\n",
       );
-      expect(stdout).toContain("   goal: completed - Ship the release notes\n");
+      expect(stdout).toContain(
+        "   goal: completed - Ship the release notes; criterion: missing\n",
+      );
       expect(stdout.indexOf("   goal: active")).toBeLessThan(
         stdout.indexOf("   resume: keel --resume active-goal"),
       );
@@ -362,7 +364,7 @@ describe("CLI Main - Sessions Command", () => {
         "   tasks: 1/2 completed; current: Render recovery status\n",
       );
       expect(stdout).toContain(
-        "   goal: active - Finish snapshotted recovery state\n",
+        "   goal: active - Finish snapshotted recovery state; criterion: missing\n",
       );
       expect(stdout).toContain("   pending inputs: 1\n");
       expect(fixture.stderr()).toBe("");
@@ -687,7 +689,7 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain("  session: detail\n");
       expect(stdout).toContain("  title: Fix login timeout\n");
       expect(stdout).toContain(
-        "  goal: active - Keep detail status goal visible\n",
+        "  goal: active - Keep detail status goal visible; criterion: missing\n",
       );
       expect(stdout).toContain(`  workspace: ${ledgerWorkspace}\n`);
       expect(stdout).toContain("  active model: qwen/qwen3.7-max\n");

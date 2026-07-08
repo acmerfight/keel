@@ -270,7 +270,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       // Then
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toContain(
-        "  goal: active - Resume durable goal state\n",
+        "  goal: active - Resume durable goal state; criterion: missing\n",
       );
       expect(fixture.stderr()).toBe("");
     } finally {
@@ -309,7 +309,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toContain("Goal set: active\n");
       expect(fixture.stdout()).toContain(
-        "  goal: active - Track durable goal from entrypoint\n",
+        "  goal: active - Track durable goal from entrypoint; criterion: missing\n",
       );
       const ledger = await readFile(
         join(home, "sessions", "goal-command", "ledger.jsonl"),
@@ -382,16 +382,17 @@ describe("CLI Main - Interactive Entrypoint", () => {
         "Goal verification command set: pnpm test\n",
       );
       expect(firstRun.stdout()).toContain(
-        "  goal: active - Track verified goal from entrypoint; verify: pnpm test\n",
+        "  goal: active - Track verified goal from entrypoint; criterion(command): pnpm test\n",
       );
       const ledger = await readFile(
         join(home, "sessions", "goal-verify-command", "ledger.jsonl"),
         "utf8",
       );
-      expect(ledger).toContain('"completionCommand":"pnpm test"');
+      expect(ledger).toContain('"criterionKind":"command"');
+      expect(ledger).toContain('"completionCriterion":"pnpm test"');
       expect(resumeExitCode).toBe(0);
       expect(resumeRun.stdout()).toContain(
-        "  goal: active - Track verified goal from entrypoint; verify: pnpm test\n",
+        "  goal: active - Track verified goal from entrypoint; criterion(command): pnpm test\n",
       );
       expect(firstRun.stderr()).toBe("");
       expect(resumeRun.stderr()).toBe("");

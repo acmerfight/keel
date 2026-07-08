@@ -11,6 +11,7 @@ import {
   formatSessionGoalCompletedToolResult,
   normalizeSessionGoalCompletionCommand,
   type SessionGoal,
+  sessionGoalCommandCriterion,
 } from "../core/session-goal.ts";
 import {
   formatSessionTaskProgressToolResult,
@@ -208,20 +209,37 @@ function executeUpdateGoalTool(
       ok: false,
     };
   }
-  if (sessionGoal.completionCommand === undefined) {
+  if (
+    sessionGoal.criterionKind === undefined ||
+    sessionGoal.completionCriterion === undefined
+  ) {
     return {
       content:
-        "Tool failed: update_goal failed: no completion command is set for the active session goal.\nRecovery: Ask the user to add one with /goal verify <command>, continue working, or ask the user to use /goal complete for an explicit override.",
+        "Tool failed: update_goal failed: no completion criterion is set for the active session goal.\nRecovery: Ask the user to add one with /goal verify <command> or /goal done-when <criterion>, continue working, or ask the user to use /goal complete for an explicit override.",
       ok: false,
     };
   }
-  const expectedCommand = normalizeSessionGoalCompletionCommand(
-    sessionGoal.completionCommand,
-  );
+  if (sessionGoal.criterionKind === "assertion") {
+    return {
+      content:
+        "Tool failed: update_goal failed: assertion completion criteria are not supported yet.\nRecovery: Continue gathering evidence, ask the user to use /goal complete for an explicit override, or wait for assertion evaluation support.",
+      ok: false,
+    };
+  }
+  const commandCriterion = sessionGoalCommandCriterion(sessionGoal);
+  if (commandCriterion === undefined) {
+    return {
+      content:
+        "Tool failed: update_goal failed: no command completion criterion is set for the active session goal.\nRecovery: Ask the user to add one with /goal verify <command>, continue working, or ask the user to use /goal complete for an explicit override.",
+      ok: false,
+    };
+  }
+  const expectedCommand =
+    normalizeSessionGoalCompletionCommand(commandCriterion);
   if (goalCompletionCommandEvidence === undefined) {
     return {
       content:
-        `Tool failed: update_goal failed: completion command has not run for the active session goal.\n` +
+        `Tool failed: update_goal failed: command completion criterion has not run for the active session goal.\n` +
         (allowBash
           ? `Recovery: Run bash with "${expectedCommand}" after finishing the work, then call update_goal again if it exits 0.`
           : `Recovery: Bash is disabled in this run, so the agent cannot run "${expectedCommand}". Ask the user to resume with --bash-policy ask or --bash-policy trusted, or to use /goal complete after checking it manually.`),
@@ -233,7 +251,7 @@ function executeUpdateGoalTool(
   );
   if (actualCommand !== expectedCommand) {
     return {
-      content: `Tool failed: update_goal failed: latest command evidence does not match the goal completion command.\nRecovery: Run bash with "${expectedCommand}" after finishing the work, then call update_goal again if it exits 0.`,
+      content: `Tool failed: update_goal failed: latest command evidence does not match the goal command criterion.\nRecovery: Run bash with "${expectedCommand}" after finishing the work, then call update_goal again if it exits 0.`,
       ok: false,
     };
   }
@@ -245,7 +263,7 @@ function executeUpdateGoalTool(
   }
   if (goalCompletionCommandEvidence.exitCode !== 0) {
     return {
-      content: `Tool failed: update_goal failed: completion command exited with code ${goalCompletionCommandEvidence.exitCode ?? "unknown"}.\nRecovery: Fix the failing verification, rerun "${expectedCommand}", then call update_goal again if it exits 0.`,
+      content: `Tool failed: update_goal failed: command completion criterion exited with code ${goalCompletionCommandEvidence.exitCode ?? "unknown"}.\nRecovery: Fix the failing verification, rerun "${expectedCommand}", then call update_goal again if it exits 0.`,
       ok: false,
     };
   }
@@ -255,7 +273,7 @@ function executeUpdateGoalTool(
   ) {
     return {
       content:
-        `Tool failed: update_goal failed: completion command evidence is stale because the workspace changed after it ran.\n` +
+        `Tool failed: update_goal failed: command completion criterion evidence is stale because the workspace changed after it ran.\n` +
         `Recovery: Rerun bash with "${expectedCommand}" after the latest mutation, then call update_goal again if it exits 0.`,
       ok: false,
     };
@@ -263,7 +281,8 @@ function executeUpdateGoalTool(
   const completedGoal: SessionGoal = {
     objective: sessionGoal.objective,
     status: toolCall.status,
-    completionCommand: sessionGoal.completionCommand,
+    criterionKind: sessionGoal.criterionKind,
+    completionCriterion: sessionGoal.completionCriterion,
   };
   return {
     content: formatSessionGoalCompletedToolResult(completedGoal),

@@ -196,7 +196,7 @@ describe("Task Progress", () => {
           role: "tool",
           toolCallId: "goal_1",
           content: expect.stringContaining(
-            "Tool failed: update_goal failed: no completion command is set",
+            "Tool failed: update_goal failed: no completion criterion is set",
           ),
         },
       ]);
@@ -210,7 +210,7 @@ describe("Task Progress", () => {
     }
   });
 
-  test(`Given a model verifies an active session goal with its completion command,
+  test(`Given a model verifies an active session goal with its command completion criterion,
     When the model proposes completion after the successful command,
     Then Keel persists the completed goal and returns the goal result`, async () => {
     // Given
@@ -224,7 +224,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
-      completionCommand: 'node -e "process.exit(0)"',
+      criterionKind: "command",
+      completionCriterion: 'node -e "process.exit(0)"',
     };
     const provider: LLMProvider = {
       id: "goal-command-evidence-provider",
@@ -277,7 +278,8 @@ describe("Task Progress", () => {
         goal: {
           objective: "Finish the durable session goal",
           status: "completed",
-          completionCommand: 'node -e "process.exit(0)"',
+          criterionKind: "command",
+          completionCriterion: 'node -e "process.exit(0)"',
         },
       });
       expect(providerRequests).toHaveLength(3);
@@ -326,7 +328,7 @@ describe("Task Progress", () => {
     }
   });
 
-  test(`Given a model mutates the workspace after running the completion command,
+  test(`Given a model mutates the workspace after running the command completion criterion,
     When the model proposes completion from stale command evidence,
     Then Keel keeps the goal active and asks for fresh evidence`, async () => {
     // Given
@@ -340,7 +342,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
-      completionCommand: 'node -e "process.exit(0)"',
+      criterionKind: "command",
+      completionCriterion: 'node -e "process.exit(0)"',
     };
     const provider: LLMProvider = {
       id: "goal-stale-command-evidence-provider",
@@ -406,7 +409,7 @@ describe("Task Progress", () => {
         role: "tool",
         toolCallId: "goal_1",
         content: expect.stringContaining(
-          "Tool failed: update_goal failed: completion command evidence is stale",
+          "Tool failed: update_goal failed: command completion criterion evidence is stale",
         ),
       });
       expect(messages.at(-1)).toEqual({
