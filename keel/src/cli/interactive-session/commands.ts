@@ -442,7 +442,7 @@ function parseGoalCommandArgs(
 function parseUnknownGoalSubcommand(
   trimmedArgs: string,
 ): InvalidInteractiveCommand | null {
-  const firstArg = /^\S+/u.exec(trimmedArgs)?.[0] ?? trimmedArgs;
+  const firstArg = trimmedArgs.replace(/\s.*$/u, "");
   if (firstArg.startsWith("done-when")) {
     return {
       kind: "invalid",
