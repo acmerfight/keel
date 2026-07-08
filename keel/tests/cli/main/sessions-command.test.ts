@@ -12,6 +12,7 @@ import {
   inputAdmittedRecordLine,
   inputConsumedRecordLine,
   replaceSessionRecordLine,
+  sessionGoalRecordLine,
   sessionTitleRecordLine,
   snapshotSessionRecordLine,
   taskProgressRecordLine,
@@ -89,6 +90,136 @@ describe("CLI Main - Sessions Command", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe('Error: unknown sessions option "--all"\n');
+  });
+
+  test(`Given saved sessions have active and completed goals,
+    When the user lists sessions,
+    Then the catalog shows each goal before the resume command`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "active-goal",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-03-03T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-03-03T00:00:01.000Z", [
+          { role: "user", content: "fix resume status" },
+        ]),
+        sessionGoalRecordLine({
+          timestamp: "2026-03-03T00:00:02.000Z",
+          goal: {
+            objective: "Fix the session resume flow",
+            status: "active",
+          },
+        }),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "completed-goal",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-03-03T00:00:03.000Z",
+      records: [
+        appendSessionRecordLine("2026-03-03T00:00:04.000Z", [
+          { role: "user", content: "ship release notes" },
+        ]),
+        sessionGoalRecordLine({
+          timestamp: "2026-03-03T00:00:05.000Z",
+          goal: {
+            objective: "Ship the release notes",
+            status: "completed",
+          },
+        }),
+      ],
+    });
+    const fixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain(
+        "   goal: active - Fix the session resume flow\n",
+      );
+      expect(stdout).toContain("   goal: completed - Ship the release notes\n");
+      expect(stdout.indexOf("   goal: active")).toBeLessThan(
+        stdout.indexOf("   resume: keel --resume active-goal"),
+      );
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a saved session goal is cleared after a title is set,
+    When the user lists sessions,
+    Then the catalog preserves the title without showing a stale goal`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "cleared-goal",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-03-04T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-03-04T00:00:01.000Z", [
+          { role: "user", content: "clean stale goal state" },
+        ]),
+        sessionTitleRecordLine(
+          "2026-03-04T00:00:02.000Z",
+          "Clean stale goal state",
+        ),
+        sessionGoalRecordLine({
+          timestamp: "2026-03-04T00:00:03.000Z",
+          goal: {
+            objective: "Remove stale goal from catalog",
+            status: "active",
+          },
+        }),
+        sessionGoalRecordLine({
+          timestamp: "2026-03-04T00:00:04.000Z",
+          goal: null,
+        }),
+      ],
+    });
+    const fixture = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain(
+        "cleared-goal  updated 2026-03-04T00:00:04.000Z\n",
+      );
+      expect(stdout).toContain("   title: Clean stale goal state\n");
+      expect(stdout).not.toContain("Remove stale goal from catalog");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given a saved session has active task progress and queued input,
@@ -190,6 +321,10 @@ describe("CLI Main - Sessions Command", () => {
                 line: "also update picker",
               },
             ],
+            goal: {
+              objective: "Finish snapshotted recovery state",
+              status: "active",
+            },
             taskProgressCheckpoints: [
               {
                 messageOrdinal: 0,
@@ -225,6 +360,9 @@ describe("CLI Main - Sessions Command", () => {
       );
       expect(stdout).toContain(
         "   tasks: 1/2 completed; current: Render recovery status\n",
+      );
+      expect(stdout).toContain(
+        "   goal: active - Finish snapshotted recovery state\n",
       );
       expect(stdout).toContain("   pending inputs: 1\n");
       expect(fixture.stderr()).toBe("");
@@ -489,6 +627,13 @@ describe("CLI Main - Sessions Command", () => {
         ]),
         modelSwitchRecordLine("2026-02-01T00:00:02.000Z"),
         sessionTitleRecordLine("2026-02-01T00:00:02.500Z", "Fix login timeout"),
+        sessionGoalRecordLine({
+          timestamp: "2026-02-01T00:00:02.600Z",
+          goal: {
+            objective: "Keep detail status goal visible",
+            status: "active",
+          },
+        }),
         taskProgressRecordLine({
           timestamp: "2026-02-01T00:00:02.750Z",
           tasks: [
@@ -541,6 +686,9 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain("status:\n");
       expect(stdout).toContain("  session: detail\n");
       expect(stdout).toContain("  title: Fix login timeout\n");
+      expect(stdout).toContain(
+        "  goal: active - Keep detail status goal visible\n",
+      );
       expect(stdout).toContain(`  workspace: ${ledgerWorkspace}\n`);
       expect(stdout).toContain("  active model: qwen/qwen3.7-max\n");
       expect(stdout).toContain(

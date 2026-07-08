@@ -32,6 +32,29 @@ describe("CLI Session Status Format", () => {
     expect(formatted).not.toContain("recovery:\n");
   });
 
+  test(`Given a session goal is present,
+    When the status snapshot is formatted,
+    Then the goal status and objective are visible`, () => {
+    // Given / When
+    const formatted = formatSessionStatusSnapshot({
+      session: "scratch",
+      workspace: "/tmp/workspace",
+      activeModel: "(default for next prompt)",
+      goal: { objective: "Ship the release notes", status: "completed" },
+      messages: [],
+      messageCount: 0,
+      pendingInputCount: 0,
+      bashApprovalCount: 0,
+      taskProgress: emptySessionTaskProgress(),
+      modelSwitchCount: 0,
+      undoCheckpoints: [],
+      recoveryActions: [],
+    });
+
+    // Then
+    expect(formatted).toContain("  goal: completed - Ship the release notes\n");
+  });
+
   test(`Given a recovery command is long and contains terminal controls,
     When the status snapshot is formatted,
     Then the command is escaped without truncation`, () => {

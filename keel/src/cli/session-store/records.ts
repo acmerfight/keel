@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { providerIds } from "../../core/provider-id.ts";
 import {
+  normalizeSessionGoalObjective,
+  SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
+  type SessionGoal,
+  sessionGoalSchema,
+} from "../../core/session-goal.ts";
+import {
   type SessionTaskProgress,
   sessionTaskPlanSchema,
   sessionTaskProgressSchema,
@@ -29,6 +35,7 @@ import {
   SESSION_TITLE_MAX_LENGTH,
   type SessionForkPointRecord,
   type SessionForkPolicyRecord,
+  type SessionGoalSessionRecord,
   type SessionGraphRecord,
   type SessionHeaderRecord,
   type SessionModelSelection,
@@ -254,6 +261,16 @@ const sessionTitleRecordSchema = z
   })
   .strict();
 
+const sessionGoalRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("session_goal"),
+    timestamp: z.string(),
+    goal: sessionGoalSchema.nullable(),
+    consumedInputIds: consumedInputIdsSchema.optional(),
+  })
+  .strict();
+
 const taskProgressRecordSchema = z
   .object({
     schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
@@ -356,6 +373,7 @@ const snapshotRecordSchema = z
     timestamp: z.string(),
     reason: z.literal("size_threshold"),
     title: sessionTitleSchema.optional(),
+    goal: sessionGoalSchema.optional(),
     messages: z.array(storedMessageSchema),
     pendingInputs: z.array(queuedInputSchema),
     bashApprovalGrants: z.array(bashApprovalGrantSchema).optional(),
@@ -378,6 +396,7 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   replaceRecordSchema,
   modelSwitchRecordSchema,
   sessionTitleRecordSchema,
+  sessionGoalRecordSchema,
   taskProgressRecordSchema,
   inputAdmittedRecordSchema,
   inputConsumedRecordSchema,
@@ -396,6 +415,7 @@ type RawSessionQueuedInput = z.infer<typeof queuedInputSchema>;
 type RawBashApprovalGrant = z.infer<typeof bashApprovalGrantSchema>;
 type RawSessionModelSelection = z.infer<typeof sessionModelSelectionSchema>;
 type RawSessionModelSwitch = z.infer<typeof sessionModelSwitchSchema>;
+type RawSessionGoal = z.infer<typeof sessionGoalSchema>;
 type RawSessionTaskProgressCheckpoint = z.infer<
   typeof sessionTaskProgressCheckpointSchema
 >;
@@ -650,6 +670,10 @@ function toSessionModelSwitch(
   };
 }
 
+function toSessionGoal(goal: RawSessionGoal): SessionGoal {
+  return redactSessionGoalForPersistence(goal);
+}
+
 function appendConsumedInputIds(
   record: AppendSessionRecord,
   inputIds: readonly string[] | undefined,
@@ -667,6 +691,10 @@ function appendConsumedInputIds(
   inputIds: readonly string[] | undefined,
 ): SessionTitleSessionRecord;
 function appendConsumedInputIds(
+  record: SessionGoalSessionRecord,
+  inputIds: readonly string[] | undefined,
+): SessionGoalSessionRecord;
+function appendConsumedInputIds(
   record: BashApprovalRevokedSessionRecord,
   inputIds: readonly string[] | undefined,
 ): BashApprovalRevokedSessionRecord;
@@ -680,6 +708,7 @@ function appendConsumedInputIds(
     | ReplaceSessionRecord
     | ModelSwitchSessionRecord
     | SessionTitleSessionRecord
+    | SessionGoalSessionRecord
     | BashApprovalRevokedSessionRecord
     | BashApprovalsClearedSessionRecord,
   inputIds: readonly string[] | undefined,
@@ -688,6 +717,7 @@ function appendConsumedInputIds(
   | ReplaceSessionRecord
   | ModelSwitchSessionRecord
   | SessionTitleSessionRecord
+  | SessionGoalSessionRecord
   | BashApprovalRevokedSessionRecord
   | BashApprovalsClearedSessionRecord {
   if (inputIds === undefined) {
@@ -715,6 +745,24 @@ function normalizeSessionTitleForPersistence(title: string): string {
     return normalized;
   }
   return normalized.slice(0, SESSION_TITLE_MAX_LENGTH).trimEnd();
+}
+
+function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
+  const objective = normalizeSessionGoalObjective(
+    redactTextForPersistence(goal.objective),
+  );
+  if (objective === "") {
+    sessionStoreError("Error: /goal requires non-empty text.");
+  }
+  if (objective.length > SESSION_GOAL_OBJECTIVE_MAX_LENGTH) {
+    sessionStoreError(
+      `Error: /goal objective must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
+    );
+  }
+  return {
+    objective,
+    status: goal.status,
+  };
 }
 
 function redactSessionTaskProgressCheckpointForPersistence(
@@ -858,6 +906,16 @@ function toSessionMutationRecord(
         },
         record.consumedInputIds,
       );
+    case "session_goal":
+      return appendConsumedInputIds(
+        {
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          type: "session_goal",
+          timestamp: record.timestamp,
+          goal: record.goal === null ? null : toSessionGoal(record.goal),
+        },
+        record.consumedInputIds,
+      );
     case "task_progress":
       return {
         schemaVersion: SESSION_SCHEMA_VERSION,
@@ -919,6 +977,9 @@ function toSessionMutationRecord(
         reason: "size_threshold",
         ...(record.title !== undefined
           ? { title: normalizeSessionTitleForPersistence(record.title) }
+          : {}),
+        ...(record.goal !== undefined
+          ? { goal: toSessionGoal(record.goal) }
           : {}),
         messages: record.messages.map(toStoredMessage),
         pendingInputs: record.pendingInputs.map(toSessionQueuedInput),
@@ -1090,6 +1151,7 @@ export {
   parseSessionMutationRecord,
   parseSnapshotSessionMutationRecord,
   redactBashApprovalGrantForPersistence,
+  redactSessionGoalForPersistence,
   redactSessionQueuedInputForPersistence,
   redactSessionTaskProgressCheckpointForPersistence,
   redactSessionTaskProgressForPersistence,

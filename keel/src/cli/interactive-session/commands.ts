@@ -1,5 +1,10 @@
 import { errorMessage } from "../../core/error.ts";
 import { isProviderId } from "../../core/provider-id.ts";
+import {
+  formatSessionGoalSummary,
+  normalizeSessionGoalObjective,
+  type SessionGoal,
+} from "../../core/session-goal.ts";
 import { sanitizeStatusLineText } from "../output.ts";
 import { redactTextForPersistence } from "../persistence-redaction.ts";
 import type { ProviderSelection } from "../provider-config.ts";
@@ -41,6 +46,17 @@ interface TitleCommand {
   readonly kind: "title";
   readonly title?: string;
 }
+
+type GoalCommand =
+  | {
+      readonly kind: "goal";
+      readonly action: "show" | "complete" | "clear";
+    }
+  | {
+      readonly kind: "goal";
+      readonly action: "set";
+      readonly objective: string;
+    };
 
 interface TasksCommand {
   readonly kind: "tasks";
@@ -84,6 +100,7 @@ export type InteractiveCommand =
   | SkillCommand
   | StatusCommand
   | TitleCommand
+  | GoalCommand
   | TasksCommand
   | DiffCommand
   | ApprovalsCommand
@@ -114,6 +131,9 @@ export function formatInteractiveHelp(): string {
     "  /skill             Show the active workflow skill.",
     "  /status            Show session state and recovery commands.",
     "  /title [text]      Show or set this saved session title.",
+    "  /goal [objective]  Show or set this saved session goal.",
+    "  /goal complete     Mark the current session goal completed.",
+    "  /goal clear        Clear the current session goal.",
     "  /tasks             Show current session tasks.",
     "  /diff              Show current git status and diff.",
     "  /approvals         List active bash approvals.",
@@ -347,6 +367,26 @@ function parseApprovalsCommandArgs(
   };
 }
 
+function parseGoalCommandArgs(
+  rawArgs: string | undefined,
+): GoalCommand | InvalidInteractiveCommand {
+  const trimmedArgs = rawArgs?.trim() ?? "";
+  if (trimmedArgs === "" || trimmedArgs === "status") {
+    return { kind: "goal", action: "show" };
+  }
+  if (trimmedArgs === "complete") {
+    return { kind: "goal", action: "complete" };
+  }
+  if (trimmedArgs === "clear") {
+    return { kind: "goal", action: "clear" };
+  }
+  return {
+    kind: "goal",
+    action: "set",
+    objective: normalizeSessionGoalObjective(trimmedArgs),
+  };
+}
+
 export function parseInteractiveCommand(
   userMessage: string,
 ): InteractiveCommand | null {
@@ -373,6 +413,11 @@ export function parseInteractiveCommand(
     return title === undefined || title === ""
       ? { kind: "title" }
       : { kind: "title", title };
+  }
+
+  const goalMatch = /^\/goal(?:\s+(.*))?$/u.exec(trimmed);
+  if (goalMatch !== null) {
+    return parseGoalCommandArgs(goalMatch[1]);
   }
 
   const tasksMatch = /^\/tasks(?:\s+(.*))?$/u.exec(trimmed);
@@ -524,6 +569,12 @@ function formatInteractiveTitleText(title: string): string {
   );
 }
 
+function formatInteractiveGoalText(text: string): string {
+  return sanitizeStatusLineText(
+    redactTextForPersistence(text).replace(/\s+/gu, " ").trim(),
+  );
+}
+
 export function formatInteractiveTitle(title: string | undefined): string {
   return `Session title: ${
     title === undefined ? "(not set)" : formatInteractiveTitleText(title)
@@ -536,4 +587,24 @@ export function formatInteractiveTitleSet(title: string): string {
 
 export function formatTitleRequiresSavedSession(): string {
   return "Error: /title requires a saved session. Start without --ephemeral, or use --session or --resume.\n";
+}
+
+export function formatInteractiveGoal(goal: SessionGoal | undefined): string {
+  return `Session goal: ${formatInteractiveGoalText(formatSessionGoalSummary(goal))}\n`;
+}
+
+export function formatInteractiveGoalSet(goal: SessionGoal): string {
+  return `Goal set: ${formatInteractiveGoalText(goal.status)}\n`;
+}
+
+export function formatInteractiveGoalCompleted(goal: SessionGoal): string {
+  return `Goal completed: ${formatInteractiveGoalText(goal.objective)}\n`;
+}
+
+export function formatInteractiveGoalCleared(): string {
+  return "Goal cleared.\n";
+}
+
+export function formatGoalRequiresSavedSession(): string {
+  return "Error: /goal requires a saved session. Start without --ephemeral, or use --session or --resume.\n";
 }

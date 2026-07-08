@@ -32,6 +32,7 @@ import {
 import {
   appendSessionRecordLine,
   inputAdmittedRecordLine,
+  sessionGoalRecordLine,
   taskProgressRecordLine,
   writeSessionLedger,
 } from "../../../src/testing/session-ledger-fixtures.ts";
@@ -218,6 +219,107 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(fixture.stderr()).toBe("");
       expect(await sessionDirectoryNames(home)).toEqual([]);
     } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a resumed saved session has an active goal,
+    When the user asks for status,
+    Then the interactive entrypoint restores the goal into the status snapshot`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-goal-resume-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-goal-home-"));
+    await writeSessionLedger({
+      home,
+      id: "goal-entrypoint",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-03-05T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-03-05T00:00:01.000Z", [
+          { role: "user", content: "resume the durable goal" },
+        ]),
+        sessionGoalRecordLine({
+          timestamp: "2026-03-05T00:00:02.000Z",
+          goal: {
+            objective: "Resume durable goal state",
+            status: "active",
+          },
+        }),
+      ],
+    });
+    const input = new PassThrough();
+    input.end("/status\n");
+    const fixture = createRuntime(
+      ["--resume", "goal-entrypoint", "--provider=fake", "--bash-policy=deny"],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+          KEEL_PROVIDER: "fake",
+        },
+        input,
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain(
+        "  goal: active - Resume durable goal state\n",
+      );
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a saved interactive session receives a goal command first,
+    When the user checks status,
+    Then the CLI entrypoint persists and displays the goal`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-goal-command-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-goal-command-home-"));
+    const input = new PassThrough();
+    input.write("/goal Track durable goal from entrypoint\n");
+    input.end("/status\n");
+    const fixture = createRuntime(
+      ["--session", "goal-command", "--provider=fake", "--bash-policy=deny"],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+          KEEL_PROVIDER: "fake",
+        },
+        input,
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("Goal set: active\n");
+      expect(fixture.stdout()).toContain(
+        "  goal: active - Track durable goal from entrypoint\n",
+      );
+      const ledger = await readFile(
+        join(home, "sessions", "goal-command", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(ledger).toContain('"type":"session_goal"');
+      expect(ledger).toContain("Track durable goal from entrypoint");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
   });

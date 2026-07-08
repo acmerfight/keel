@@ -17,6 +17,11 @@ import {
   restoreUndoCheckpointsThrough,
 } from "../core/git.ts";
 import {
+  activeSessionGoalSystemPrompt,
+  copySessionGoal,
+  type SessionGoal,
+} from "../core/session-goal.ts";
+import {
   copySessionTaskProgress,
   emptySessionTaskProgress,
   type SessionTaskProgress,
@@ -45,11 +50,17 @@ import {
 } from "./interactive-session/bash-approvals.ts";
 import {
   formatForkRequiresNamedSession,
+  formatGoalRequiresSavedSession,
   formatInteractiveCommandFailure,
+  formatInteractiveGoal,
+  formatInteractiveGoalCleared,
+  formatInteractiveGoalCompleted,
+  formatInteractiveGoalSet,
   formatInteractiveHelp,
   formatInteractiveTitle,
   formatInteractiveTitleSet,
   formatTitleRequiresSavedSession,
+  type InteractiveCommand,
   parseInteractiveCommand,
   undoRestoredContextMessage,
 } from "./interactive-session/commands.ts";
@@ -116,6 +127,17 @@ function formatActiveWorkflowSkill(
     return "No workflow skill selected.\n";
   }
   return `Workflow skill: ${workflowSkill.name} (${workflowSkill.relativePath})\n`;
+}
+
+function systemPromptWithSessionGoal(
+  systemPrompt: string,
+  goal: SessionGoal | undefined,
+): string {
+  const goalPrompt = activeSessionGoalSystemPrompt(goal);
+  if (goalPrompt === null) {
+    return systemPrompt;
+  }
+  return `${systemPrompt}\n\n${goalPrompt}`;
 }
 
 const NON_GIT_DIFF_MESSAGE =
@@ -219,6 +241,12 @@ export async function runInteractiveSession(
     options.initialTaskProgress ?? emptySessionTaskProgress(),
   );
   let sessionTitle = options.initialSessionTitle;
+  let sessionGoal =
+    options.initialSessionGoal === undefined
+      ? undefined
+      : copySessionGoal(options.initialSessionGoal);
+  const currentSystemPrompt = (): string =>
+    systemPromptWithSessionGoal(systemPrompt, sessionGoal);
   const updateTaskProgress = (next: SessionTaskProgress): void => {
     taskProgress = copySessionTaskProgress(next);
   };
@@ -510,6 +538,7 @@ export async function runInteractiveSession(
             ...(sessionTitle !== undefined ? { title: sessionTitle } : {}),
             workspace: options.workspace,
             activeModel: activeModelStatus(),
+            ...(sessionGoal !== undefined ? { goal: sessionGoal } : {}),
             ...(options.workflowSkill !== undefined
               ? { workflowSkill: options.workflowSkill }
               : {}),
@@ -551,6 +580,87 @@ export async function runInteractiveSession(
         }
         continue;
       }
+      if (interactiveCommand?.kind === "goal") {
+        const goalCommand: Extract<
+          InteractiveCommand,
+          { readonly kind: "goal" }
+        > = interactiveCommand;
+        switch (goalCommand.action) {
+          case "show":
+            options.writeStdout(formatInteractiveGoal(sessionGoal));
+            consumeQueuedInputLines([rawInput]);
+            break;
+          case "set": {
+            if (options.persistSessionGoal === undefined) {
+              options.writeStderr(formatGoalRequiresSavedSession());
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            try {
+              const nextGoal: SessionGoal = {
+                objective: goalCommand.objective,
+                status: "active",
+              };
+              sessionGoal = options.persistSessionGoal({
+                goal: nextGoal,
+                consumedInputIds: queuedInputIds([rawInput]),
+              });
+              options.writeStdout(formatInteractiveGoalSet(nextGoal));
+            } catch (error) {
+              options.writeStderr(formatInteractiveCommandFailure(error));
+              consumeQueuedInputLines([rawInput]);
+            }
+            break;
+          }
+          case "complete": {
+            if (options.persistSessionGoal === undefined) {
+              options.writeStderr(formatGoalRequiresSavedSession());
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (sessionGoal === undefined) {
+              options.writeStderr("Error: no session goal is set.\n");
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            try {
+              const completedGoal: SessionGoal = {
+                objective: sessionGoal.objective,
+                status: "completed",
+              };
+              sessionGoal = options.persistSessionGoal({
+                goal: completedGoal,
+                consumedInputIds: queuedInputIds([rawInput]),
+              });
+              options.writeStdout(
+                formatInteractiveGoalCompleted(completedGoal),
+              );
+            } catch (error) {
+              options.writeStderr(formatInteractiveCommandFailure(error));
+              consumeQueuedInputLines([rawInput]);
+            }
+            break;
+          }
+          case "clear":
+            if (options.persistSessionGoal === undefined) {
+              options.writeStderr(formatGoalRequiresSavedSession());
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            try {
+              sessionGoal = options.persistSessionGoal({
+                goal: null,
+                consumedInputIds: queuedInputIds([rawInput]),
+              });
+              options.writeStdout(formatInteractiveGoalCleared());
+            } catch (error) {
+              options.writeStderr(formatInteractiveCommandFailure(error));
+              consumeQueuedInputLines([rawInput]);
+            }
+            break;
+        }
+        continue;
+      }
       if (interactiveCommand?.kind === "tasks") {
         options.writeStdout(formatSessionTasks(taskProgress));
         consumeQueuedInputLines([rawInput]);
@@ -570,7 +680,11 @@ export async function runInteractiveSession(
         continue;
       }
       if (interactiveCommand?.kind === "approvals") {
-        switch (interactiveCommand.action) {
+        const approvalsCommand: Extract<
+          InteractiveCommand,
+          { readonly kind: "approvals" }
+        > = interactiveCommand;
+        switch (approvalsCommand.action) {
           case "list":
             options.writeStdout(
               [
@@ -594,10 +708,10 @@ export async function runInteractiveSession(
           }
           case "revoke": {
             const grants = activeBashApprovalGrants();
-            const grant = grants[interactiveCommand.index - 1];
+            const grant = grants[approvalsCommand.index - 1];
             if (grant === undefined) {
               options.writeStderr(
-                `Error: no bash approval at index ${interactiveCommand.index}.\n`,
+                `Error: no bash approval at index ${approvalsCommand.index}.\n`,
               );
               consumeQueuedInputLines([rawInput]);
               break;
@@ -612,7 +726,7 @@ export async function runInteractiveSession(
               consumeQueuedInputLines([rawInput]);
             }
             options.writeStdout(
-              formatBashApprovalRevoked(interactiveCommand.index),
+              formatBashApprovalRevoked(approvalsCommand.index),
             );
             break;
           }
@@ -716,7 +830,7 @@ export async function runInteractiveSession(
           let modelSwitchCost: CostReport | undefined;
           if (
             modelSwitchRequiresCompaction({
-              systemPrompt,
+              systemPrompt: currentSystemPrompt(),
               messages,
               target: nextResolved,
               cliArgs: options.cliArgs,
@@ -734,7 +848,7 @@ export async function runInteractiveSession(
                 target: nextResolved,
                 workspace: options.workspace,
                 messages,
-                systemPrompt,
+                systemPrompt: currentSystemPrompt(),
                 signal: compactAbortController.signal,
                 readVisibility,
                 projectInstructionVisibility,
@@ -829,7 +943,7 @@ export async function runInteractiveSession(
             resolved: compactResolved,
             workspace: options.workspace,
             messages,
-            systemPrompt,
+            systemPrompt: currentSystemPrompt(),
             signal: compactAbortController.signal,
             readVisibility,
             projectInstructionVisibility,
@@ -940,7 +1054,7 @@ export async function runInteractiveSession(
             workspace: options.workspace,
             provider: resolved.provider,
             messages,
-            systemPrompt,
+            systemPrompt: currentSystemPrompt(),
             signal: turnAbortController.signal,
             allowBash: bashModeExposesTool(options.cliArgs.bashMode),
             stopPolicy: defaultStopPolicy(),

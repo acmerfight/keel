@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { copySessionGoal, type SessionGoal } from "../../core/session-goal.ts";
 import {
   copySessionTaskProgress,
   emptySessionTaskProgress,
@@ -17,6 +18,7 @@ import {
   type ReplaceSessionRecord,
   SESSION_LEDGER_SNAPSHOT_THRESHOLD_BYTES,
   SESSION_SCHEMA_VERSION,
+  type SessionGoalSessionRecord,
   type SessionGraphRecord,
   type SessionModelSelection,
   type SessionModelSwitch,
@@ -233,6 +235,7 @@ function sessionStateFromReplay(options: {
   readonly taskProgress: SessionTaskProgress;
   readonly taskProgressCheckpoints?: readonly SessionTaskProgressCheckpoint[];
   readonly title?: string;
+  readonly goal?: SessionGoal;
   readonly activeModel?: SessionModelSelection;
   readonly modelSwitches?: readonly SessionModelSwitch[];
   readonly workflowSkill?: WorkflowSkill;
@@ -249,6 +252,8 @@ function sessionStateFromReplay(options: {
   );
   const taskProgress = copySessionTaskProgress(options.taskProgress);
   const title = options.title;
+  const goal =
+    options.goal === undefined ? undefined : copySessionGoal(options.goal);
   const activeModel =
     options.activeModel === undefined
       ? undefined
@@ -269,6 +274,7 @@ function sessionStateFromReplay(options: {
       copySessionTaskProgressCheckpoint,
     ),
     ...(title !== undefined ? { title } : {}),
+    ...(goal !== undefined ? { goal } : {}),
     ...(activeModel !== undefined ? { activeModel } : {}),
     modelSwitches: modelSwitches.map(copySessionModelSwitch),
   };
@@ -284,6 +290,7 @@ function sessionStateFromReplay(options: {
     bashApprovalGrants,
     taskProgress,
     ...(title !== undefined ? { title } : {}),
+    ...(goal !== undefined ? { goal: copySessionGoal(goal) } : {}),
     ...(activeModel !== undefined ? { activeModel } : {}),
     modelSwitches,
     ...(workflowSkill !== undefined ? { workflowSkill } : {}),
@@ -403,17 +410,23 @@ function sessionRecordWithConsumedInputIds(
   consumedInputIds: readonly string[],
 ): SessionTitleSessionRecord;
 function sessionRecordWithConsumedInputIds(
+  record: SessionGoalSessionRecord,
+  consumedInputIds: readonly string[],
+): SessionGoalSessionRecord;
+function sessionRecordWithConsumedInputIds(
   record:
     | AppendSessionRecord
     | ReplaceSessionRecord
     | ModelSwitchSessionRecord
-    | SessionTitleSessionRecord,
+    | SessionTitleSessionRecord
+    | SessionGoalSessionRecord,
   consumedInputIds: readonly string[],
 ):
   | AppendSessionRecord
   | ReplaceSessionRecord
   | ModelSwitchSessionRecord
-  | SessionTitleSessionRecord {
+  | SessionTitleSessionRecord
+  | SessionGoalSessionRecord {
   if (consumedInputIds.length === 0) {
     return record;
   }
@@ -441,6 +454,9 @@ function appendSessionSnapshotIfNeeded(options: {
     timestamp: isoTimestamp(options.runtime),
     reason: "size_threshold",
     ...(replayState.title !== undefined ? { title: replayState.title } : {}),
+    ...(replayState.goal !== undefined
+      ? { goal: copySessionGoal(replayState.goal) }
+      : {}),
     messages: replayState.storedMessages.map(copyStoredMessage),
     pendingInputs: pendingInputsInReplayOrder(
       replayState.pendingInputsById,

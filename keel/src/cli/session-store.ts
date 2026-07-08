@@ -31,6 +31,7 @@ export {
   persistSessionBashApprovalGrant,
   persistSessionBashApprovalRevoked,
   persistSessionBashApprovalsCleared,
+  persistSessionGoal,
   persistSessionMessages,
   persistSessionModelSwitch,
   persistSessionQueuedInput,

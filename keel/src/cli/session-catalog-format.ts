@@ -1,4 +1,8 @@
 import {
+  formatSessionGoalSummary,
+  type SessionGoal,
+} from "../core/session-goal.ts";
+import {
   formatSessionTaskProgressSummary,
   type SessionTaskProgress,
 } from "../core/task-progress.ts";
@@ -62,11 +66,18 @@ function hasActiveSessionTasks(taskProgress: SessionTaskProgress): boolean {
   return taskProgress.tasks.some((task) => task.status !== "completed");
 }
 
+function formatSessionGoalRecoveryState(goal: SessionGoal): string {
+  return formatSessionDetailText(formatSessionGoalSummary(goal));
+}
+
 function sessionRecoveryStateLines(
   entry: SessionCatalogEntry,
   indent: string,
 ): readonly string[] {
   return [
+    ...(entry.goal !== undefined
+      ? [`${indent}goal: ${formatSessionGoalRecoveryState(entry.goal)}`]
+      : []),
     ...(hasActiveSessionTasks(entry.taskProgress)
       ? [
           `${indent}tasks: ${formatSessionDetailText(formatSessionTaskProgressSummary(entry.taskProgress))}`,
@@ -362,6 +373,9 @@ export function formatSessionDetail(options: {
         : {}),
       workspace: options.entry.workspace,
       activeModel: formatSessionDetailActiveModel(options.session),
+      ...(options.session.goal !== undefined
+        ? { goal: options.session.goal }
+        : {}),
       ...(options.entry.workflowSkill !== undefined
         ? { workflowSkill: options.entry.workflowSkill }
         : {}),
