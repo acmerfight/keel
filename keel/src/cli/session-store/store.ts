@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
+import { copySessionGoal, type SessionGoal } from "../../core/session-goal.ts";
 import {
   copySessionTaskProgress,
   emptySessionTaskProgress,
@@ -48,6 +49,7 @@ import {
   normalizeSessionTitleForPersistence,
   parseProviderVisibleMessages,
   redactBashApprovalGrantForPersistence,
+  redactSessionGoalForPersistence,
   redactSessionQueuedInputForPersistence,
   redactSessionTaskProgressForPersistence,
   redactStoredMessageForPersistence,
@@ -341,6 +343,7 @@ export function resumeSessionStore(options: {
   let taskProgress = emptySessionTaskProgress();
   let taskProgressCheckpoints: SessionTaskProgressCheckpoint[] = [];
   let title: string | undefined;
+  let goal: SessionGoal | undefined;
   for (const record of records.mutations) {
     switch (record.type) {
       case "append":
@@ -389,6 +392,10 @@ export function resumeSessionStore(options: {
         break;
       case "session_title":
         title = record.title;
+        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
+        break;
+      case "session_goal":
+        goal = record.goal === null ? undefined : copySessionGoal(record.goal);
         consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         break;
       case "task_progress":
@@ -440,6 +447,8 @@ export function resumeSessionStore(options: {
         break;
       case "snapshot": {
         title = record.title;
+        goal =
+          record.goal === undefined ? undefined : copySessionGoal(record.goal);
         storedMessages = record.messages.map(copyStoredMessage);
         pendingInputsById.clear();
         for (const input of record.pendingInputs) {
@@ -507,6 +516,7 @@ export function resumeSessionStore(options: {
     taskProgress,
     taskProgressCheckpoints,
     ...(title !== undefined ? { title } : {}),
+    ...(goal !== undefined ? { goal } : {}),
     ...(activeModel !== undefined
       ? { activeModel: copySessionModelSelection(activeModel) }
       : {}),
@@ -549,6 +559,46 @@ export function persistSessionTitle(options: {
     runtime: options.runtime,
   });
   return title;
+}
+
+export function persistSessionGoal(options: {
+  readonly session: SessionState;
+  readonly goal: SessionGoal | null;
+  readonly runtime: SessionStoreRuntime;
+  readonly consumedInputIds?: readonly string[];
+}): SessionGoal | undefined {
+  const goal =
+    options.goal === null
+      ? null
+      : redactSessionGoalForPersistence(options.goal);
+  const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
+  const timestamp = isoTimestamp(options.runtime);
+  appendJsonLine(
+    options.session.filePath,
+    sessionRecordWithConsumedInputIds(
+      {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "session_goal",
+        timestamp,
+        goal,
+      },
+      consumedInputIds,
+    ),
+  );
+  const replayState = replayStateForSession(options.session);
+  if (goal === null) {
+    delete replayState.goal;
+  } else {
+    replayState.goal = copySessionGoal(goal);
+  }
+  consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+  return replayState.goal === undefined
+    ? undefined
+    : copySessionGoal(replayState.goal);
 }
 
 export function persistSessionTaskProgress(options: {

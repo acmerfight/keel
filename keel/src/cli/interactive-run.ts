@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isAbortThrow } from "../core/error.ts";
+import type { SessionGoal } from "../core/session-goal.ts";
 import type { Message } from "../llm/types.ts";
 import type { BashApprovalGrant } from "../permissions/bash.ts";
 import type { CliArgs } from "./args.ts";
@@ -56,6 +57,7 @@ import {
   persistSessionBashApprovalGrant,
   persistSessionBashApprovalRevoked,
   persistSessionBashApprovalsCleared,
+  persistSessionGoal,
   persistSessionMessages,
   persistSessionModelSwitch,
   persistSessionQueuedInput,
@@ -546,6 +548,7 @@ export async function runInteractiveCli(
         | {
             readonly initialMessages: readonly Message[];
             readonly initialSessionTitle?: string;
+            readonly initialSessionGoal?: SessionGoal;
             readonly initialTaskProgress: SessionState["taskProgress"];
             readonly initialModelSelection?: SessionModelSelection;
             readonly initialModelSwitchCount: number;
@@ -564,6 +567,10 @@ export async function runInteractiveCli(
               readonly title: string;
               readonly consumedInputIds: readonly string[];
             }) => string;
+            readonly persistSessionGoal: (update: {
+              readonly goal: SessionGoal | null;
+              readonly consumedInputIds: readonly string[];
+            }) => SessionGoal | undefined;
             readonly persistTaskProgress: (update: {
               readonly taskProgress: SessionState["taskProgress"];
               readonly messageOrdinal: number;
@@ -662,6 +669,9 @@ export async function runInteractiveCli(
           ...(initialSession?.title !== undefined
             ? { initialSessionTitle: initialSession.title }
             : {}),
+          ...(initialSession?.goal !== undefined
+            ? { initialSessionGoal: initialSession.goal }
+            : {}),
           initialTaskProgress: initialSession?.taskProgress ?? {
             tasks: [],
           },
@@ -712,6 +722,16 @@ export async function runInteractiveCli(
               title: titleRecord.title,
               runtime,
               consumedInputIds: titleRecord.consumedInputIds,
+            }),
+          persistSessionGoal: (update: {
+            readonly goal: SessionGoal | null;
+            readonly consumedInputIds: readonly string[];
+          }) =>
+            persistSessionGoal({
+              session: ensureActiveSession(),
+              goal: update.goal,
+              runtime,
+              consumedInputIds: update.consumedInputIds,
             }),
           persistTaskProgress: (update: {
             readonly taskProgress: SessionState["taskProgress"];

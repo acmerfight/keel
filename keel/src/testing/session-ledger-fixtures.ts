@@ -5,6 +5,7 @@ import type {
   SessionQueuedInput,
   SessionTaskProgressCheckpoint,
 } from "../cli/session-store.ts";
+import type { SessionGoal } from "../core/session-goal.ts";
 import type { SessionTask } from "../core/task-progress.ts";
 import type { Message } from "../llm/types.ts";
 
@@ -40,6 +41,7 @@ export function snapshotSessionRecordLine(
   title?: string,
   options: {
     readonly pendingInputs?: readonly SessionQueuedInput[];
+    readonly goal?: SessionGoal;
     readonly taskProgressCheckpoints?: readonly SessionTaskProgressCheckpoint[];
   } = {},
 ): string {
@@ -50,10 +52,27 @@ export function snapshotSessionRecordLine(
     reason: "size_threshold",
     messages: storedMessages(messages, `snapshot-${timestamp}`),
     pendingInputs: options.pendingInputs ?? [],
+    ...(options.goal !== undefined ? { goal: options.goal } : {}),
     ...(options.taskProgressCheckpoints !== undefined
       ? { taskProgressCheckpoints: options.taskProgressCheckpoints }
       : {}),
     ...(title !== undefined ? { title } : {}),
+  });
+}
+
+export function sessionGoalRecordLine(options: {
+  readonly timestamp: string;
+  readonly goal: SessionGoal | null;
+  readonly consumedInputIds?: readonly string[];
+}): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    type: "session_goal",
+    timestamp: options.timestamp,
+    goal: options.goal,
+    ...(options.consumedInputIds !== undefined
+      ? { consumedInputIds: options.consumedInputIds }
+      : {}),
   });
 }
 

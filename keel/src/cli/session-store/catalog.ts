@@ -1,6 +1,7 @@
 import { readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { errorMessage } from "../../core/error.ts";
+import { copySessionGoal } from "../../core/session-goal.ts";
 import {
   copySessionTaskProgress,
   emptySessionTaskProgress,
@@ -177,6 +178,9 @@ function applySessionCatalogMutation(
       return {
         updatedAt: record.timestamp,
         ...(record.title !== undefined ? { title: record.title } : {}),
+        ...(record.goal !== undefined
+          ? { goal: copySessionGoal(record.goal) }
+          : {}),
         preview: catalogPreviewStateFromStoredMessages(record.messages),
         pendingInputsById: new Map(
           record.pendingInputs.map((input) => [input.id, input]),
@@ -195,6 +199,22 @@ function applySessionCatalogMutation(
           record.consumedInputIds,
         ),
       };
+    case "session_goal": {
+      const pendingInputsById = consumeSessionCatalogInputs(
+        state.pendingInputsById,
+        record.consumedInputIds,
+      );
+      const nextState = {
+        updatedAt: record.timestamp,
+        ...(state.title !== undefined ? { title: state.title } : {}),
+        preview: state.preview,
+        pendingInputsById,
+        taskProgress: copySessionTaskProgress(state.taskProgress),
+      };
+      return record.goal === null
+        ? nextState
+        : { ...nextState, goal: copySessionGoal(record.goal) };
+    }
     case "input_admitted":
       return {
         ...state,
@@ -271,6 +291,7 @@ function sessionCatalogEntry(records: SessionRecords): SessionCatalogEntry {
         }
       : {}),
     ...(state.title !== undefined ? { title: state.title } : {}),
+    ...(state.goal !== undefined ? { goal: copySessionGoal(state.goal) } : {}),
     preview: catalogPreviewValue(state.preview),
     pendingInputCount: state.pendingInputsById.size,
     taskProgress: copySessionTaskProgress(state.taskProgress),

@@ -1,5 +1,6 @@
 import type { WorkflowSkill } from "../../agent/prompt.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
+import type { SessionGoal } from "../../core/session-goal.ts";
 import type {
   SessionTask,
   SessionTaskProgress,
@@ -126,6 +127,14 @@ export interface SessionTitleSessionRecord {
   readonly consumedInputIds?: readonly string[];
 }
 
+export interface SessionGoalSessionRecord {
+  readonly schemaVersion: 2;
+  readonly type: "session_goal";
+  readonly timestamp: string;
+  readonly goal: SessionGoal | null;
+  readonly consumedInputIds?: readonly string[];
+}
+
 interface TaskProgressSessionRecord {
   readonly schemaVersion: 2;
   readonly type: "task_progress";
@@ -183,6 +192,7 @@ export interface SnapshotSessionRecord {
   readonly timestamp: string;
   readonly reason: "size_threshold";
   readonly title?: string;
+  readonly goal?: SessionGoal;
   readonly messages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
   readonly bashApprovalGrants?: readonly BashApprovalGrant[];
@@ -196,6 +206,7 @@ export type SessionMutationRecord =
   | ReplaceSessionRecord
   | ModelSwitchSessionRecord
   | SessionTitleSessionRecord
+  | SessionGoalSessionRecord
   | TaskProgressSessionRecord
   | InputAdmittedSessionRecord
   | InputConsumedSessionRecord
@@ -225,6 +236,7 @@ export interface SessionState {
   readonly workspace: string;
   readonly graph: SessionGraphRecord;
   readonly title?: string;
+  readonly goal?: SessionGoal;
   readonly messages: readonly Message[];
   readonly storedMessages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
@@ -251,6 +263,7 @@ export interface SessionCatalogEntry {
   readonly graph: SessionGraphRecord;
   readonly workflowSkill?: SessionCatalogWorkflowSkill;
   readonly title?: string;
+  readonly goal?: SessionGoal;
   readonly preview: string;
   readonly pendingInputCount: number;
   readonly taskProgress: SessionTaskProgress;
@@ -279,6 +292,7 @@ export type CatalogPreviewState =
 export interface SessionCatalogReplayState {
   readonly updatedAt: string;
   readonly title?: string;
+  readonly goal?: SessionGoal;
   readonly preview: CatalogPreviewState;
   readonly pendingInputsById: Map<string, SessionQueuedInput>;
   readonly taskProgress: SessionTaskProgress;
@@ -291,6 +305,7 @@ export interface SessionReplayState {
   taskProgress: SessionTaskProgress;
   readonly taskProgressCheckpoints: SessionTaskProgressCheckpoint[];
   title?: string;
+  goal?: SessionGoal;
   activeModel?: SessionModelSelection;
   readonly modelSwitches: SessionModelSwitch[];
 }

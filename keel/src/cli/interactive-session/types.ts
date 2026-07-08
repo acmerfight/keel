@@ -5,6 +5,7 @@ import type { ToolOutputArtifactsOptions } from "../../agent/tool-output-artifac
 import type { CostModel } from "../../core/cost.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
+import type { SessionGoal } from "../../core/session-goal.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
 import type {
@@ -73,6 +74,7 @@ export interface InteractiveSessionOptions {
   readonly projectInstructions?: ProjectInstructions;
   readonly workflowSkill?: WorkflowSkill;
   readonly initialSessionTitle?: string;
+  readonly initialSessionGoal?: SessionGoal;
   readonly initialMessages?: readonly Message[];
   readonly initialTaskProgress?: SessionTaskProgress;
   readonly initialModelSelection?: SessionModelSelection;
@@ -101,6 +103,10 @@ export interface InteractiveSessionOptions {
     readonly title: string;
     readonly consumedInputIds: readonly string[];
   }) => string;
+  readonly persistSessionGoal?: (update: {
+    readonly goal: SessionGoal | null;
+    readonly consumedInputIds: readonly string[];
+  }) => SessionGoal | undefined;
   readonly persistTaskProgress?: (update: {
     readonly taskProgress: SessionTaskProgress;
     readonly messageOrdinal: number;

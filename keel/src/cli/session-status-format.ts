@@ -1,5 +1,9 @@
 import { conversationCheckpointSummaryFromMessage } from "../agent/context-compaction.ts";
 import {
+  formatSessionGoalSummary,
+  type SessionGoal,
+} from "../core/session-goal.ts";
+import {
   formatSessionTaskProgressSummary,
   type SessionTaskProgress,
 } from "../core/task-progress.ts";
@@ -22,6 +26,7 @@ export interface SessionStatusSnapshotOptions {
   readonly title?: string;
   readonly workspace: string;
   readonly activeModel: string;
+  readonly goal?: SessionGoal;
   readonly workflowSkill?: SessionStatusWorkflowSkill;
   readonly messages: readonly Message[];
   readonly messageCount: number;
@@ -104,6 +109,7 @@ export function formatSessionStatusSnapshot(
         : formatStatusText(options.title)
     }`,
     "  continue: send follow-ups or corrections here until the task is done",
+    `  goal: ${formatStatusText(formatSessionGoalSummary(options.goal))}`,
     `  workspace: ${formatStatusText(options.workspace)}`,
     `  active model: ${formatStatusText(options.activeModel)}`,
     `  workflow skill: ${formatWorkflowSkill(options.workflowSkill)}`,
