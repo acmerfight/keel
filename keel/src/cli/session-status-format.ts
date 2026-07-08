@@ -19,6 +19,7 @@ interface SessionStatusRecoveryAction {
 
 export interface SessionStatusSnapshotOptions {
   readonly session: string;
+  readonly title?: string;
   readonly workspace: string;
   readonly activeModel: string;
   readonly workflowSkill?: SessionStatusWorkflowSkill;
@@ -97,6 +98,11 @@ export function formatSessionStatusSnapshot(
   const lines = [
     "status:",
     `  session: ${formatStatusText(options.session)}`,
+    `  title: ${
+      options.title === undefined
+        ? "(not set)"
+        : formatStatusText(options.title)
+    }`,
     "  continue: send follow-ups or corrections here until the task is done",
     `  workspace: ${formatStatusText(options.workspace)}`,
     `  active model: ${formatStatusText(options.activeModel)}`,

@@ -45,6 +45,7 @@ import {
   copyStoredMessage,
   copyWorkflowSkill,
   messagesFromStoredMessages,
+  normalizeSessionTitleForPersistence,
   parseProviderVisibleMessages,
   redactBashApprovalGrantForPersistence,
   redactSessionQueuedInputForPersistence,
@@ -339,6 +340,7 @@ export function resumeSessionStore(options: {
   let modelSwitches: SessionModelSwitch[] = [];
   let taskProgress = emptySessionTaskProgress();
   let taskProgressCheckpoints: SessionTaskProgressCheckpoint[] = [];
+  let title: string | undefined;
   for (const record of records.mutations) {
     switch (record.type) {
       case "append":
@@ -383,6 +385,10 @@ export function resumeSessionStore(options: {
             messageOrdinal: storedMessages.length,
           },
         ];
+        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
+        break;
+      case "session_title":
+        title = record.title;
         consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         break;
       case "task_progress":
@@ -433,6 +439,7 @@ export function resumeSessionStore(options: {
         consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         break;
       case "snapshot": {
+        title = record.title;
         storedMessages = record.messages.map(copyStoredMessage);
         pendingInputsById.clear();
         for (const input of record.pendingInputs) {
@@ -499,6 +506,7 @@ export function resumeSessionStore(options: {
     bashApprovalGrants,
     taskProgress,
     taskProgressCheckpoints,
+    ...(title !== undefined ? { title } : {}),
     ...(activeModel !== undefined
       ? { activeModel: copySessionModelSelection(activeModel) }
       : {}),
@@ -507,6 +515,40 @@ export function resumeSessionStore(options: {
       ? { workflowSkill: copyWorkflowSkill(header.workflowSkill) }
       : {}),
   });
+}
+
+export function persistSessionTitle(options: {
+  readonly session: SessionState;
+  readonly title: string;
+  readonly runtime: SessionStoreRuntime;
+  readonly consumedInputIds?: readonly string[];
+}): string {
+  const title = normalizeSessionTitleForPersistence(options.title);
+  if (title === "") {
+    sessionStoreError("Error: /title requires non-empty text.");
+  }
+  const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
+  const timestamp = isoTimestamp(options.runtime);
+  appendJsonLine(
+    options.session.filePath,
+    sessionRecordWithConsumedInputIds(
+      {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "session_title",
+        timestamp,
+        title,
+      },
+      consumedInputIds,
+    ),
+  );
+  const replayState = replayStateForSession(options.session);
+  replayState.title = title;
+  consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+  return title;
 }
 
 export function persistSessionTaskProgress(options: {

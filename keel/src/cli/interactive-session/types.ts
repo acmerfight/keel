@@ -72,6 +72,7 @@ export interface InteractiveSessionOptions {
   readonly sessionId?: string;
   readonly projectInstructions?: ProjectInstructions;
   readonly workflowSkill?: WorkflowSkill;
+  readonly initialSessionTitle?: string;
   readonly initialMessages?: readonly Message[];
   readonly initialTaskProgress?: SessionTaskProgress;
   readonly initialModelSelection?: SessionModelSelection;
@@ -96,6 +97,10 @@ export interface InteractiveSessionOptions {
     reason: SessionPersistenceReason,
     consumedInputIds: readonly string[],
   ) => void;
+  readonly persistSessionTitle?: (titleRecord: {
+    readonly title: string;
+    readonly consumedInputIds: readonly string[];
+  }) => string;
   readonly persistTaskProgress?: (update: {
     readonly taskProgress: SessionTaskProgress;
     readonly messageOrdinal: number;

@@ -382,6 +382,35 @@ describe("Interactive Session - Lifecycle", () => {
     expect(providerResolved).toBe(false);
   });
 
+  test(`Given no session title has been set,
+    When user enters /title without text,
+    Then Keel reports that the title is not set without starting a model turn`, async () => {
+    // When
+    const result = await runInteractiveLocalCommand("/title", process.cwd());
+
+    // Then
+    expect(result.stdout).toBe("Session title: (not set)\n");
+    expect(result.stderr).toBe("");
+    expect(result.providerResolved).toBe(false);
+  });
+
+  test(`Given the interactive session is not saved,
+    When user enters /title with text,
+    Then Keel rejects the title without starting a model turn`, async () => {
+    // When
+    const result = await runInteractiveLocalCommand(
+      "/title Fix login timeout",
+      process.cwd(),
+    );
+
+    // Then
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Error: /title requires a saved session. Start without --ephemeral, or use --session or --resume.\n",
+    );
+    expect(result.providerResolved).toBe(false);
+  });
+
   test(`Given an interactive session already resolved a provider,
     When user enters /status,
     Then Keel reports the active provider and model without starting another turn`, async () => {
@@ -600,6 +629,7 @@ describe("Interactive Session - Lifecycle", () => {
     );
     expect(stdout).toContain("/help");
     expect(stdout).toContain("/status");
+    expect(stdout).toContain("/title [text]");
     expect(stdout).toContain("/diff");
     expect(stdout).toContain("/undo");
     expect(stdout).toContain("/compact [focus]");

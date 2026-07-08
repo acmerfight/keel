@@ -17,6 +17,7 @@ export const SESSION_LEDGER_RESUME_MAX_BYTES = 32 * 1024 * 1024;
 export const SESSION_LEDGER_SNAPSHOT_THRESHOLD_BYTES = 16 * 1024 * 1024;
 export const SESSION_LEDGER_HEADER_READ_MAX_BYTES = 64 * 1024;
 export const SESSION_CATALOG_PREVIEW_MAX_LENGTH = 120;
+export const SESSION_TITLE_MAX_LENGTH = 200;
 export const EMPTY_SESSION_CATALOG_PREVIEW = "(no restored user messages)";
 export const CONVERSATION_CHECKPOINT_OPEN = "<conversation-checkpoint>";
 export const CONVERSATION_CHECKPOINT_CLOSE = "</conversation-checkpoint>";
@@ -117,6 +118,14 @@ export interface ModelSwitchSessionRecord {
   readonly consumedInputIds?: readonly string[];
 }
 
+export interface SessionTitleSessionRecord {
+  readonly schemaVersion: 2;
+  readonly type: "session_title";
+  readonly timestamp: string;
+  readonly title: string;
+  readonly consumedInputIds?: readonly string[];
+}
+
 interface TaskProgressSessionRecord {
   readonly schemaVersion: 2;
   readonly type: "task_progress";
@@ -173,6 +182,7 @@ export interface SnapshotSessionRecord {
   readonly type: "snapshot";
   readonly timestamp: string;
   readonly reason: "size_threshold";
+  readonly title?: string;
   readonly messages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
   readonly bashApprovalGrants?: readonly BashApprovalGrant[];
@@ -185,6 +195,7 @@ export type SessionMutationRecord =
   | AppendSessionRecord
   | ReplaceSessionRecord
   | ModelSwitchSessionRecord
+  | SessionTitleSessionRecord
   | TaskProgressSessionRecord
   | InputAdmittedSessionRecord
   | InputConsumedSessionRecord
@@ -213,6 +224,7 @@ export interface SessionState {
   readonly filePath: string;
   readonly workspace: string;
   readonly graph: SessionGraphRecord;
+  readonly title?: string;
   readonly messages: readonly Message[];
   readonly storedMessages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
@@ -238,6 +250,7 @@ export interface SessionCatalogEntry {
   readonly updatedAt: string;
   readonly graph: SessionGraphRecord;
   readonly workflowSkill?: SessionCatalogWorkflowSkill;
+  readonly title?: string;
   readonly preview: string;
 }
 
@@ -263,6 +276,7 @@ export type CatalogPreviewState =
 
 export interface SessionCatalogReplayState {
   readonly updatedAt: string;
+  readonly title?: string;
   readonly preview: CatalogPreviewState;
 }
 
@@ -272,6 +286,7 @@ export interface SessionReplayState {
   readonly bashApprovalGrants: BashApprovalGrant[];
   taskProgress: SessionTaskProgress;
   readonly taskProgressCheckpoints: SessionTaskProgressCheckpoint[];
+  title?: string;
   activeModel?: SessionModelSelection;
   readonly modelSwitches: SessionModelSwitch[];
 }

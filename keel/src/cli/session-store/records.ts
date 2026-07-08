@@ -26,6 +26,7 @@ import {
   type ModelSwitchSessionRecord,
   type ReplaceSessionRecord,
   SESSION_SCHEMA_VERSION,
+  SESSION_TITLE_MAX_LENGTH,
   type SessionForkPointRecord,
   type SessionForkPolicyRecord,
   type SessionGraphRecord,
@@ -35,6 +36,7 @@ import {
   type SessionMutationRecord,
   type SessionQueuedInput,
   type SessionTaskProgressCheckpoint,
+  type SessionTitleSessionRecord,
   type SnapshotSessionRecord,
   type StoredMessage,
   type WorkflowSkill,
@@ -48,6 +50,8 @@ type BashApprovalsClearedSessionRecord = Extract<
   SessionMutationRecord,
   { readonly type: "bash_approvals_cleared" }
 >;
+
+const sessionTitleSchema = z.string().min(1).max(SESSION_TITLE_MAX_LENGTH);
 
 const userMessageContextCompactionEvidenceSchema = z
   .object({
@@ -240,6 +244,16 @@ const modelSwitchRecordSchema = z
   })
   .strict();
 
+const sessionTitleRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("session_title"),
+    timestamp: z.string(),
+    title: sessionTitleSchema,
+    consumedInputIds: consumedInputIdsSchema.optional(),
+  })
+  .strict();
+
 const taskProgressRecordSchema = z
   .object({
     schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
@@ -341,6 +355,7 @@ const snapshotRecordSchema = z
     type: z.literal("snapshot"),
     timestamp: z.string(),
     reason: z.literal("size_threshold"),
+    title: sessionTitleSchema.optional(),
     messages: z.array(storedMessageSchema),
     pendingInputs: z.array(queuedInputSchema),
     bashApprovalGrants: z.array(bashApprovalGrantSchema).optional(),
@@ -362,6 +377,7 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   appendRecordSchema,
   replaceRecordSchema,
   modelSwitchRecordSchema,
+  sessionTitleRecordSchema,
   taskProgressRecordSchema,
   inputAdmittedRecordSchema,
   inputConsumedRecordSchema,
@@ -647,6 +663,10 @@ function appendConsumedInputIds(
   inputIds: readonly string[] | undefined,
 ): ModelSwitchSessionRecord;
 function appendConsumedInputIds(
+  record: SessionTitleSessionRecord,
+  inputIds: readonly string[] | undefined,
+): SessionTitleSessionRecord;
+function appendConsumedInputIds(
   record: BashApprovalRevokedSessionRecord,
   inputIds: readonly string[] | undefined,
 ): BashApprovalRevokedSessionRecord;
@@ -659,6 +679,7 @@ function appendConsumedInputIds(
     | AppendSessionRecord
     | ReplaceSessionRecord
     | ModelSwitchSessionRecord
+    | SessionTitleSessionRecord
     | BashApprovalRevokedSessionRecord
     | BashApprovalsClearedSessionRecord,
   inputIds: readonly string[] | undefined,
@@ -666,6 +687,7 @@ function appendConsumedInputIds(
   | AppendSessionRecord
   | ReplaceSessionRecord
   | ModelSwitchSessionRecord
+  | SessionTitleSessionRecord
   | BashApprovalRevokedSessionRecord
   | BashApprovalsClearedSessionRecord {
   if (inputIds === undefined) {
@@ -683,6 +705,16 @@ function redactSessionTaskProgressForPersistence(
       status: task.status,
     })),
   };
+}
+
+function normalizeSessionTitleForPersistence(title: string): string {
+  const normalized = redactTextForPersistence(title)
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (normalized.length <= SESSION_TITLE_MAX_LENGTH) {
+    return normalized;
+  }
+  return normalized.slice(0, SESSION_TITLE_MAX_LENGTH).trimEnd();
 }
 
 function redactSessionTaskProgressCheckpointForPersistence(
@@ -816,6 +848,16 @@ function toSessionMutationRecord(
         },
         record.consumedInputIds,
       );
+    case "session_title":
+      return appendConsumedInputIds(
+        {
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          type: "session_title",
+          timestamp: record.timestamp,
+          title: normalizeSessionTitleForPersistence(record.title),
+        },
+        record.consumedInputIds,
+      );
     case "task_progress":
       return {
         schemaVersion: SESSION_SCHEMA_VERSION,
@@ -875,6 +917,9 @@ function toSessionMutationRecord(
         type: "snapshot",
         timestamp: record.timestamp,
         reason: "size_threshold",
+        ...(record.title !== undefined
+          ? { title: normalizeSessionTitleForPersistence(record.title) }
+          : {}),
         messages: record.messages.map(toStoredMessage),
         pendingInputs: record.pendingInputs.map(toSessionQueuedInput),
         ...(record.bashApprovalGrants !== undefined
@@ -1039,6 +1084,7 @@ export {
   copyStoredMessage,
   copyWorkflowSkill,
   messagesFromStoredMessages,
+  normalizeSessionTitleForPersistence,
   parseProviderVisibleMessages,
   parseSessionHeaderRecord,
   parseSessionMutationRecord,

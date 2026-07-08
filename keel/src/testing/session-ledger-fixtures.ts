@@ -32,6 +32,7 @@ export function replaceSessionRecordLine(
 export function snapshotSessionRecordLine(
   timestamp: string,
   messages: readonly Message[],
+  title?: string,
 ): string {
   return JSON.stringify({
     schemaVersion: 2,
@@ -40,6 +41,19 @@ export function snapshotSessionRecordLine(
     reason: "size_threshold",
     messages: storedMessages(messages, `snapshot-${timestamp}`),
     pendingInputs: [],
+    ...(title !== undefined ? { title } : {}),
+  });
+}
+
+export function sessionTitleRecordLine(
+  timestamp: string,
+  title: string,
+): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    type: "session_title",
+    timestamp,
+    title,
   });
 }
 
