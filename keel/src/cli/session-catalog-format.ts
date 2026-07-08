@@ -193,6 +193,25 @@ export function formatSessionPicker(catalog: SessionCatalog): string {
   return `${lines.join("\n")}\n`;
 }
 
+export function formatSessionStartupPrompt(options: {
+  readonly workspace: string;
+  readonly latestSession: SessionCatalogEntry;
+}): string {
+  const { latestSession } = options;
+  const latestSessionId = formatSessionDetailText(latestSession.id);
+  return `${[
+    `Saved sessions for workspace ${formatSessionDetailText(options.workspace)}:`,
+    "Keep one saved session open per task; resume it for follow-ups until the task is done.",
+    `latest: ${latestSessionId}  updated ${formatSessionDetailText(latestSession.updatedAt)}`,
+    `preview: ${formatSessionDetailText(latestSession.preview)}`,
+    "Resume latest saved session?",
+    `  Enter/y  resume latest: ${latestSessionId}`,
+    "  p        pick another session",
+    "  n        start a new session",
+    "  q        quit",
+  ].join("\n")}\n`;
+}
+
 function formatSessionDetailText(text: string): string {
   const normalized = redactTextForPersistence(text)
     .replace(/\s+/gu, " ")
