@@ -60,6 +60,8 @@ Use a shared helper when two tools perform the same safety-sensitive transformat
 
 Use curated invariants for declared registries and mechanical completeness, not broad structural similarity scans. The shared invariant AST helpers in `tests/invariants/_ast.ts` are for focused checks such as builtin tool metadata, limited-output registrations, and edit matching single sources. Prefer behavioral tests when the risk is runtime semantics rather than source ownership.
 
+Hand-written projections of structured state are lossy until proven otherwise. Redaction, persistence, snapshots, provider serialization, reports, and display code must preserve, derive, or intentionally drop each semantic field. Preserved or derived fields need roundtrip or invariant coverage; intentionally dropped fields need a named boundary reason.
+
 ## Shell And Provider Visibility
 
 Keel's project ignore policy is enforced by the built-in file tools: `read`, `ls`, `glob`, `grep`, `edit`, and `write`.

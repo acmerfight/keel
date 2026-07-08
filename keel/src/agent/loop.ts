@@ -2,7 +2,11 @@ import {
   type RecordLastBatchCheckpointOperation,
   recordLastTaskCheckpoint,
 } from "../core/git.ts";
-import { copySessionGoal, type SessionGoal } from "../core/session-goal.ts";
+import {
+  copySessionGoal,
+  normalizeSessionGoalCompletionCommand,
+  type SessionGoal,
+} from "../core/session-goal.ts";
 import {
   copySessionTaskProgress,
   emptySessionTaskProgress,
@@ -15,7 +19,11 @@ import type {
   ToolCall,
 } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
-import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
+import {
+  executeToolCall,
+  type GoalCompletionCommandEvidence,
+  type ToolExecution,
+} from "../tools/execution.ts";
 import {
   createProjectInstructionVisibilityState,
   type ProjectInstructionVisibilityState,
@@ -131,6 +139,23 @@ function mutatedTargetPathsFromExecution(
     targetPaths.push(...execution.mutatedTargetPaths);
   }
   return targetPaths;
+}
+
+function bashCommandEvidenceMatchesGoal(
+  goal: SessionGoal | undefined,
+  execution: ToolExecution,
+): boolean {
+  if (
+    goal?.completionCommand === undefined ||
+    execution.bashCommandEvidence === undefined
+  ) {
+    return false;
+  }
+  return (
+    normalizeSessionGoalCompletionCommand(
+      execution.bashCommandEvidence.command,
+    ) === normalizeSessionGoalCompletionCommand(goal.completionCommand)
+  );
 }
 
 function publishVisibleProjectInstructions(
@@ -487,6 +512,8 @@ export async function* runAgentTurn(
     options.sessionGoal === undefined
       ? undefined
       : copySessionGoal(options.sessionGoal);
+  let workspaceMutationSequence = 0;
+  let goalCompletionCommandEvidence: GoalCompletionCommandEvidence | undefined;
   let postCompactionReadSequence = 0;
   const config: CompactionConfig = {
     provider,
@@ -659,7 +686,11 @@ export async function* runAgentTurn(
           hasRead: readVisibility.hasRead,
         },
         projectInstructions: projectInstructionVisibility,
+        workspaceMutationSequence,
         ...(sessionGoal !== undefined ? { sessionGoal } : {}),
+        ...(goalCompletionCommandEvidence !== undefined
+          ? { goalCompletionCommandEvidence }
+          : {}),
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
 
@@ -715,6 +746,24 @@ export async function* runAgentTurn(
       projectInstructionVisibility.applyMutationTargetPaths(
         mutatedTargetPathsFromExecution(completed.execution),
       );
+      if (completed.execution.ok) {
+        if (completed.execution.bashCommandEvidence !== undefined) {
+          if (
+            bashCommandEvidenceMatchesGoal(sessionGoal, completed.execution)
+          ) {
+            goalCompletionCommandEvidence = {
+              ...completed.execution.bashCommandEvidence,
+              observedMutationSequence: workspaceMutationSequence,
+            };
+          } else {
+            workspaceMutationSequence++;
+          }
+        } else if (
+          mutatedTargetPathsFromExecution(completed.execution).length > 0
+        ) {
+          workspaceMutationSequence++;
+        }
+      }
       completedToolExecutions.push(completed);
       pendingToolExecutions.push(completed);
     };

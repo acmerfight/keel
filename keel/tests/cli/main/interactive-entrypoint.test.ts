@@ -324,6 +324,83 @@ describe("CLI Main - Interactive Entrypoint", () => {
     }
   });
 
+  test(`Given a saved interactive session receives a goal verification command,
+    When the user checks status and later resumes the session,
+    Then the CLI entrypoint persists and displays the verification command`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-verify-command-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-verify-command-home-"),
+    );
+    const firstInput = new PassThrough();
+    firstInput.write("/goal Track verified goal from entrypoint\n");
+    firstInput.write("/goal verify pnpm test\n");
+    firstInput.end("/status\n");
+    const firstRun = createRuntime(
+      [
+        "--session",
+        "goal-verify-command",
+        "--provider=fake",
+        "--bash-policy=deny",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+          KEEL_PROVIDER: "fake",
+        },
+        input: firstInput,
+      },
+    );
+
+    try {
+      const firstExitCode = await runCliMain(firstRun.runtime);
+      const resumeInput = new PassThrough();
+      resumeInput.end("/status\n");
+      const resumeRun = createRuntime(
+        ["--resume", "goal-verify-command", "--provider=fake"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+            KEEL_PROVIDER: "fake",
+          },
+          input: resumeInput,
+        },
+      );
+
+      // When
+      const resumeExitCode = await runCliMain(resumeRun.runtime);
+
+      // Then
+      expect(firstExitCode).toBe(0);
+      expect(firstRun.stdout()).toContain(
+        "Goal verification command set: pnpm test\n",
+      );
+      expect(firstRun.stdout()).toContain(
+        "  goal: active - Track verified goal from entrypoint; verify: pnpm test\n",
+      );
+      const ledger = await readFile(
+        join(home, "sessions", "goal-verify-command", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(ledger).toContain('"completionCommand":"pnpm test"');
+      expect(resumeExitCode).toBe(0);
+      expect(resumeRun.stdout()).toContain(
+        "  goal: active - Track verified goal from entrypoint; verify: pnpm test\n",
+      );
+      expect(firstRun.stderr()).toBe("");
+      expect(resumeRun.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test.each([
     {
       args: ["--provider=fake", "--bash-policy=deny"],

@@ -2,6 +2,7 @@ import { errorMessage } from "../../core/error.ts";
 import { isProviderId } from "../../core/provider-id.ts";
 import {
   formatSessionGoalSummary,
+  normalizeSessionGoalCompletionCommand,
   normalizeSessionGoalObjective,
   type SessionGoal,
 } from "../../core/session-goal.ts";
@@ -56,6 +57,11 @@ type GoalCommand =
       readonly kind: "goal";
       readonly action: "set";
       readonly objective: string;
+    }
+  | {
+      readonly kind: "goal";
+      readonly action: "verify";
+      readonly command: string;
     };
 
 interface TasksCommand {
@@ -132,6 +138,7 @@ export function formatInteractiveHelp(): string {
     "  /status            Show session state and recovery commands.",
     "  /title [text]      Show or set this saved session title.",
     "  /goal [objective]  Show or set this saved session goal.",
+    "  /goal verify <cmd> Set the command that proves the goal is done.",
     "  /goal complete     Mark the current session goal completed.",
     "  /goal clear        Clear the current session goal.",
     "  /tasks             Show current session tasks.",
@@ -380,6 +387,19 @@ function parseGoalCommandArgs(
   if (trimmedArgs === "clear") {
     return { kind: "goal", action: "clear" };
   }
+  if (trimmedArgs === "verify") {
+    return {
+      kind: "invalid",
+      message: "Error: /goal verify requires a command.",
+    };
+  }
+  const verifyPrefix = "verify ";
+  if (trimmedArgs.startsWith(verifyPrefix)) {
+    const command = normalizeSessionGoalCompletionCommand(
+      trimmedArgs.slice(verifyPrefix.length),
+    );
+    return { kind: "goal", action: "verify", command };
+  }
   return {
     kind: "goal",
     action: "set",
@@ -599,6 +619,19 @@ export function formatInteractiveGoalSet(goal: SessionGoal): string {
 
 export function formatInteractiveGoalCompleted(goal: SessionGoal): string {
   return `Goal completed: ${formatInteractiveGoalText(goal.objective)}\n`;
+}
+
+export function formatInteractiveGoalVerificationSet(
+  goal: SessionGoal & { readonly completionCommand: string },
+  options: { readonly bashToolVisible: boolean },
+): string {
+  const setMessage = `Goal verification command set: ${formatInteractiveGoalText(
+    goal.completionCommand,
+  )}\n`;
+  if (options.bashToolVisible) {
+    return setMessage;
+  }
+  return `${setMessage}Note: bash is disabled in this run, so the agent cannot run this verification command. Resume with --bash-policy ask or --bash-policy trusted, or use /goal complete after checking it manually.\n`;
 }
 
 export function formatInteractiveGoalCleared(): string {

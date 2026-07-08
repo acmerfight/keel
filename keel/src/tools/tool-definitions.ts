@@ -423,11 +423,12 @@ const updatePlanTool = defineTool({
 const updateGoalTool = defineTool({
   name: "update_goal",
   description: [
-    "Mark the current active saved session goal completed.",
-    "Use when: the durable session goal has actually been achieved and no required work remains for that goal.",
-    "Provide status completed. This tool cannot create, rewrite, pause, clear, block, or budget a goal.",
-    "Do not use when: no saved session goal is active, the current user request is only a step toward the goal, or more required work remains.",
-    "On failure: continue working toward the goal, or ask the user to set a saved session goal first.",
+    "Propose that the current active saved session goal is completed.",
+    "Use when: the durable session goal has actually been achieved, no required work remains, and the completion command has run successfully after the latest workspace mutation.",
+    "Provide status completed. Runtime treats this as a proposal and only persists completion when the command evidence gate passes.",
+    "This tool cannot create, rewrite, pause, clear, block, budget, or self-certify a goal.",
+    "Do not use when: no saved session goal is active, no completion command is set, the current user request is only a step toward the goal, the completion command has not run, command evidence is stale or failed, or more required work remains.",
+    "On failure: continue working toward the goal, rerun the completion command, ask the user to set /goal verify <command>, or ask the user to use /goal complete for an explicit override.",
   ].join("\n"),
   args: toolArgs(updateGoalToolArgumentsSchema),
   permission: { kind: "none" },
