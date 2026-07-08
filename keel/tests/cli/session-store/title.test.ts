@@ -9,6 +9,10 @@ import {
   resumeSessionStore,
   SessionStoreError,
 } from "../../../src/cli/session-store.ts";
+import {
+  snapshotSessionRecordLine,
+  writeSessionLedger,
+} from "../../../src/testing/session-ledger-fixtures.ts";
 import { runtime } from "../../../src/testing/session-store-fixtures.ts";
 
 describe("Session Store - Title", () => {
@@ -91,6 +95,49 @@ describe("Session Store - Title", () => {
         throw new Error("Expected blank title to throw an Error");
       }
       expect(titleError.message).toBe("Error: /title requires non-empty text.");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a session catalog reads a snapshot with a title,
+    When sessions are listed,
+    Then the catalog restores the title from the snapshot record`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-title-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    await writeSessionLedger({
+      home,
+      id: "snapshotted-title",
+      workspace: ledgerWorkspace,
+      createdAt: "1970-01-01T00:00:00.000Z",
+      records: [
+        snapshotSessionRecordLine(
+          "1970-01-01T00:00:01.000Z",
+          [{ role: "user", content: "remember release title" }],
+          "Release QA",
+        ),
+      ],
+    });
+
+    try {
+      // When
+      const catalog = listSessionCatalog({
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(catalog.sessions).toEqual([
+        expect.objectContaining({
+          id: "snapshotted-title",
+          workspace: ledgerWorkspace,
+          title: "Release QA",
+          preview: "remember release title",
+        }),
+      ]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

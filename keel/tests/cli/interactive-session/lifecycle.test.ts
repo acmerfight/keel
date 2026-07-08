@@ -6,7 +6,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
-import type { LLMProvider } from "../../../src/llm/types.ts";
+import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   ForcedExit,
   withTimeout,
@@ -409,6 +409,81 @@ describe("Interactive Session - Lifecycle", () => {
       "Error: /title requires a saved session. Start without --ephemeral, or use --session or --resume.\n",
     );
     expect(result.providerResolved).toBe(false);
+  });
+
+  test(`Given a saved session cannot persist a title,
+    When user enters /title and then continues,
+    Then Keel reports the local command failure and keeps the next prompt usable`, async () => {
+    // Given
+    let stdout = "";
+    let stderr = "";
+    let providerResolved = false;
+    let observedMessages: readonly Message[] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        observedMessages = structuredClone([...options.messages]);
+        yield { type: "text", text: "Continued." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      sessionId: "title-error",
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionTitle: () => {
+        throw new Error("Error: cannot write session title.");
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        return {
+          provider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        };
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("/title Fix login timeout\nafter failure\n");
+
+    // Then
+    await session;
+    expect(stderr).toBe("Error: cannot write session title.\n");
+    expect(stdout).toBe("Continued.\n");
+    expect(providerResolved).toBe(true);
+    expect(observedMessages).toEqual([
+      { role: "user", content: "after failure" },
+    ]);
   });
 
   test(`Given an interactive session already resolved a provider,
