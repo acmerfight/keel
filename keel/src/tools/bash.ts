@@ -31,6 +31,10 @@ interface BashProcessResult {
   readonly timeoutMs: number;
 }
 
+export interface BashToolResult extends ToolResult {
+  readonly exitCode: number | null;
+}
+
 function normalizeTimeout(timeoutMs: number | undefined): number {
   if (timeoutMs === undefined) return DEFAULT_TIMEOUT_MS;
   if (
@@ -130,7 +134,7 @@ function formatResultSections(
   return sections.join("\n\n");
 }
 
-function formatResult(result: BashProcessResult): ToolResult {
+function formatResult(result: BashProcessResult): BashToolResult {
   const content = formatResultSections(result, {
     stdout: result.stdout,
     stderr: result.stderr,
@@ -149,6 +153,7 @@ function formatResult(result: BashProcessResult): ToolResult {
 
   return {
     content,
+    exitCode: result.exitCode,
     ...(previewTruncated ? { sourceTruncated: true } : {}),
     ...(previewTruncated || artifactSourceTruncated ? { artifactContent } : {}),
     ...(previewTruncated || artifactSourceTruncated
@@ -390,7 +395,7 @@ export async function executeBash(
   workspacePath: string,
   command: string,
   options: BashOptions = {},
-): Promise<ToolResult> {
+): Promise<BashToolResult> {
   if (command.trim() === "") {
     throw new KeelError(
       "tool_empty_command",

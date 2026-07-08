@@ -9,7 +9,10 @@ import {
   persistSessionQueuedInput,
   resumeSessionStore,
 } from "../../../src/cli/session-store.ts";
-import { SESSION_GOAL_OBJECTIVE_MAX_LENGTH } from "../../../src/core/session-goal.ts";
+import {
+  SESSION_GOAL_COMPLETION_COMMAND_MAX_LENGTH,
+  SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
+} from "../../../src/core/session-goal.ts";
 import type { Message } from "../../../src/llm/types.ts";
 import { runtime } from "../../../src/testing/session-store-fixtures.ts";
 
@@ -37,7 +40,11 @@ describe("Session Store Goal", () => {
       // When
       persistSessionGoal({
         session,
-        goal: { objective: "Fix checkout tests", status: "active" },
+        goal: {
+          objective: "Fix checkout tests",
+          status: "active",
+          completionCommand: " pnpm test ",
+        },
         consumedInputIds: [queuedInput.id],
         runtime: runtime(home, 2),
       });
@@ -51,6 +58,7 @@ describe("Session Store Goal", () => {
       expect(resumed.goal).toEqual({
         objective: "Fix checkout tests",
         status: "active",
+        completionCommand: "pnpm test",
       });
       expect(resumed.pendingInputs).toEqual([]);
       const ledgerRecords = (await readFile(session.filePath, "utf8"))
@@ -64,6 +72,7 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Fix checkout tests",
           status: "active",
+          completionCommand: "pnpm test",
         },
         consumedInputIds: [queuedInput.id],
       });
@@ -91,7 +100,11 @@ describe("Session Store Goal", () => {
       });
       persistSessionGoal({
         session,
-        goal: { objective: "Keep the checkout suite green", status: "active" },
+        goal: {
+          objective: "Keep the checkout suite green",
+          status: "active",
+          completionCommand: "pnpm test:coverage",
+        },
         runtime: runtime(home, 1),
       });
 
@@ -113,6 +126,7 @@ describe("Session Store Goal", () => {
       expect(resumed.goal).toEqual({
         objective: "Keep the checkout suite green",
         status: "active",
+        completionCommand: "pnpm test:coverage",
       });
       const ledgerRecords = (await readFile(session.filePath, "utf8"))
         .trimEnd()
@@ -123,6 +137,7 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Keep the checkout suite green",
           status: "active",
+          completionCommand: "pnpm test:coverage",
         },
       });
     } finally {
@@ -212,6 +227,32 @@ describe("Session Store Goal", () => {
         }),
       ).toThrow(
         `Error: /goal objective must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
+      );
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: {
+            objective: "Verify command",
+            status: "active",
+            completionCommand: "   ",
+          },
+          runtime: runtime(home, 3),
+        }),
+      ).toThrow("Error: /goal verify requires a command.");
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: {
+            objective: "Verify command",
+            status: "active",
+            completionCommand: "x".repeat(
+              SESSION_GOAL_COMPLETION_COMMAND_MAX_LENGTH + 1,
+            ),
+          },
+          runtime: runtime(home, 4),
+        }),
+      ).toThrow(
+        `Error: /goal verification command must be ${SESSION_GOAL_COMPLETION_COMMAND_MAX_LENGTH} characters or fewer.`,
       );
       const ledgerRecords = (await readFile(session.filePath, "utf8"))
         .trimEnd()

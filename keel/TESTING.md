@@ -71,6 +71,8 @@ Coverage gaps require triage, not automatic tests.
 
 Tests must verify reachable product behavior through real CLI, API, config, or external entrypoints. Do not manufacture impossible internal states just to satisfy coverage.
 
+State-bearing slices must prove the state lifecycle, not just the handler. Any user-visible or agent-control state introduced by a slice must be tested through the first real product boundary that can set and observe it. If the state is durable, acceptance must prove it survives the persistence and resume, fork, or snapshot paths supported by that feature.
+
 If a branch is reachable through a supported boundary, cover its observable behavior with BDD.
 If it is unreachable under current invariants, remove or refactor it.
 If it is a necessary guard, document the invariant it protects.

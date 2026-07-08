@@ -56,6 +56,7 @@ import {
   formatInteractiveGoalCleared,
   formatInteractiveGoalCompleted,
   formatInteractiveGoalSet,
+  formatInteractiveGoalVerificationSet,
   formatInteractiveHelp,
   formatInteractiveTitle,
   formatInteractiveTitleSet,
@@ -132,8 +133,9 @@ function formatActiveWorkflowSkill(
 function systemPromptWithSessionGoal(
   systemPrompt: string,
   goal: SessionGoal | undefined,
+  bashToolVisible: boolean,
 ): string {
-  const goalPrompt = activeSessionGoalSystemPrompt(goal);
+  const goalPrompt = activeSessionGoalSystemPrompt(goal, { bashToolVisible });
   if (goalPrompt === null) {
     return systemPrompt;
   }
@@ -246,7 +248,11 @@ export async function runInteractiveSession(
       ? undefined
       : copySessionGoal(options.initialSessionGoal);
   const currentSystemPrompt = (): string =>
-    systemPromptWithSessionGoal(systemPrompt, sessionGoal);
+    systemPromptWithSessionGoal(
+      systemPrompt,
+      sessionGoal,
+      bashModeExposesTool(options.cliArgs.bashMode),
+    );
   const updateTaskProgress = (next: SessionTaskProgress): void => {
     taskProgress = copySessionTaskProgress(next);
   };
@@ -636,6 +642,9 @@ export async function runInteractiveSession(
               const completedGoal: SessionGoal = {
                 objective: sessionGoal.objective,
                 status: "completed",
+                ...(sessionGoal.completionCommand !== undefined
+                  ? { completionCommand: sessionGoal.completionCommand }
+                  : {}),
               };
               sessionGoal = options.persistSessionGoal({
                 goal: completedGoal,
@@ -643,6 +652,47 @@ export async function runInteractiveSession(
               });
               options.writeStdout(
                 formatInteractiveGoalCompleted(completedGoal),
+              );
+            } catch (error) {
+              options.writeStderr(formatInteractiveCommandFailure(error));
+              consumeQueuedInputLines([rawInput]);
+            }
+            break;
+          }
+          case "verify": {
+            if (options.persistSessionGoal === undefined) {
+              options.writeStderr(formatGoalRequiresSavedSession());
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (sessionGoal === undefined) {
+              options.writeStderr("Error: no session goal is set.\n");
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (sessionGoal.status !== "active") {
+              options.writeStderr(
+                "Error: completed session goal cannot add a verification command. Set a new goal instead.\n",
+              );
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            try {
+              const verifiedGoal = {
+                objective: sessionGoal.objective,
+                status: "active",
+                completionCommand: goalCommand.command,
+              } satisfies SessionGoal & { readonly completionCommand: string };
+              sessionGoal = options.persistSessionGoal({
+                goal: verifiedGoal,
+                consumedInputIds: queuedInputIds([rawInput]),
+              });
+              options.writeStdout(
+                formatInteractiveGoalVerificationSet(verifiedGoal, {
+                  bashToolVisible: bashModeExposesTool(
+                    options.cliArgs.bashMode,
+                  ),
+                }),
               );
             } catch (error) {
               options.writeStderr(formatInteractiveCommandFailure(error));

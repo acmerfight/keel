@@ -9,6 +9,7 @@ import type { RecordLastBatchCheckpointOperation } from "../core/git.ts";
 import {
   copySessionGoal,
   formatSessionGoalCompletedToolResult,
+  normalizeSessionGoalCompletionCommand,
   type SessionGoal,
 } from "../core/session-goal.ts";
 import {
@@ -79,6 +80,21 @@ interface BuiltinToolExecutionContext {
   };
   readonly projectInstructions?: ProjectInstructionVisibilityState;
   readonly sessionGoal?: SessionGoal;
+  readonly goalCompletionCommandEvidence?: GoalCompletionCommandEvidence;
+  readonly workspaceMutationSequence?: number;
+}
+
+interface BashCommandEvidence {
+  readonly command: string;
+  readonly cwd: string;
+  readonly exitCode: number | null;
+}
+
+export interface GoalCompletionCommandEvidence {
+  readonly command: string;
+  readonly cwd: string;
+  readonly exitCode: number | null;
+  readonly observedMutationSequence: number;
 }
 
 export interface ToolExecution {
@@ -96,6 +112,7 @@ export interface ToolExecution {
   readonly checkpointOperations?: readonly RecordLastBatchCheckpointOperation[];
   readonly taskProgressUpdate?: SessionTaskProgress;
   readonly sessionGoalUpdate?: SessionGoal;
+  readonly bashCommandEvidence?: BashCommandEvidence;
 }
 
 export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
@@ -175,7 +192,13 @@ function executeUpdatePlanTool(toolCall: UpdatePlanToolCall): ToolExecution {
 }
 
 function executeUpdateGoalTool(
-  { sessionGoal }: BuiltinToolExecutionContext,
+  {
+    workspace,
+    allowBash,
+    sessionGoal,
+    goalCompletionCommandEvidence,
+    workspaceMutationSequence,
+  }: BuiltinToolExecutionContext,
   toolCall: UpdateGoalToolCall,
 ): ToolExecution {
   if (sessionGoal?.status !== "active") {
@@ -185,9 +208,62 @@ function executeUpdateGoalTool(
       ok: false,
     };
   }
+  if (sessionGoal.completionCommand === undefined) {
+    return {
+      content:
+        "Tool failed: update_goal failed: no completion command is set for the active session goal.\nRecovery: Ask the user to add one with /goal verify <command>, continue working, or ask the user to use /goal complete for an explicit override.",
+      ok: false,
+    };
+  }
+  const expectedCommand = normalizeSessionGoalCompletionCommand(
+    sessionGoal.completionCommand,
+  );
+  if (goalCompletionCommandEvidence === undefined) {
+    return {
+      content:
+        `Tool failed: update_goal failed: completion command has not run for the active session goal.\n` +
+        (allowBash
+          ? `Recovery: Run bash with "${expectedCommand}" after finishing the work, then call update_goal again if it exits 0.`
+          : `Recovery: Bash is disabled in this run, so the agent cannot run "${expectedCommand}". Ask the user to resume with --bash-policy ask or --bash-policy trusted, or to use /goal complete after checking it manually.`),
+      ok: false,
+    };
+  }
+  const actualCommand = normalizeSessionGoalCompletionCommand(
+    goalCompletionCommandEvidence.command,
+  );
+  if (actualCommand !== expectedCommand) {
+    return {
+      content: `Tool failed: update_goal failed: latest command evidence does not match the goal completion command.\nRecovery: Run bash with "${expectedCommand}" after finishing the work, then call update_goal again if it exits 0.`,
+      ok: false,
+    };
+  }
+  if (goalCompletionCommandEvidence.cwd !== workspace) {
+    return {
+      content: `Tool failed: update_goal failed: latest command evidence came from a different working directory.\nRecovery: Run bash with "${expectedCommand}" in the current workspace, then call update_goal again if it exits 0.`,
+      ok: false,
+    };
+  }
+  if (goalCompletionCommandEvidence.exitCode !== 0) {
+    return {
+      content: `Tool failed: update_goal failed: completion command exited with code ${goalCompletionCommandEvidence.exitCode ?? "unknown"}.\nRecovery: Fix the failing verification, rerun "${expectedCommand}", then call update_goal again if it exits 0.`,
+      ok: false,
+    };
+  }
+  if (
+    goalCompletionCommandEvidence.observedMutationSequence !==
+    (workspaceMutationSequence ?? 0)
+  ) {
+    return {
+      content:
+        `Tool failed: update_goal failed: completion command evidence is stale because the workspace changed after it ran.\n` +
+        `Recovery: Rerun bash with "${expectedCommand}" after the latest mutation, then call update_goal again if it exits 0.`,
+      ok: false,
+    };
+  }
   const completedGoal: SessionGoal = {
     objective: sessionGoal.objective,
     status: toolCall.status,
+    completionCommand: sessionGoal.completionCommand,
   };
   return {
     content: formatSessionGoalCompletedToolResult(completedGoal),
@@ -427,6 +503,11 @@ async function executeBashTool(
   return {
     content: result.content,
     ok: true,
+    bashCommandEvidence: {
+      command: toolCall.command,
+      cwd: workspace,
+      exitCode: result.exitCode,
+    },
     ...sourceTruncation(result),
   };
 }

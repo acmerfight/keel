@@ -218,7 +218,7 @@ export const updateGoalToolArgumentsSchema = z
     status: z
       .enum(["completed"])
       .describe(
-        "Mark the active saved session goal completed. This is the only supported goal status update.",
+        "Propose that the active saved session goal is completed. Runtime only accepts the proposal when the goal completion gate passes.",
       ),
   })
   .strict();
