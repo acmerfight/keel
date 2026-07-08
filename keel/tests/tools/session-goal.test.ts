@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { formatSessionGoalCompletedToolResult } from "../../src/core/session-goal.ts";
 import { executeToolCall } from "../../src/tools/execution.ts";
 import {
   openAICompatibleTools,
@@ -13,6 +14,17 @@ function freshSignal(): AbortSignal {
 }
 
 describe("Session Goal Tool", () => {
+  test(`Given a completed session goal already has sentence punctuation,
+    When the tool result is formatted,
+    Then Keel does not append a duplicate period`, () => {
+    expect(
+      formatSessionGoalCompletedToolResult({
+        objective: "Finish the migration?",
+        status: "completed",
+      }),
+    ).toBe("Session goal completed: Finish the migration?");
+  });
+
   test(`Given provider tools are listed,
     When bash is disabled,
     Then update_goal is exposed as a narrow completion-only agent-state tool`, () => {

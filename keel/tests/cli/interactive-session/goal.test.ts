@@ -535,4 +535,243 @@ describe("Interactive Session - Goals", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test(`Given the model completes a goal during a turn,
+    When the turn is interrupted before persistence,
+    Then Keel restores the active goal and does not save completion`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-goal-abort-"));
+    let cancelTextSeen: () => void = () => {};
+    const cancelTextReceived = new Promise<void>((resolve) => {
+      cancelTextSeen = resolve;
+    });
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    const persistedGoalUpdates: SessionGoal[] = [];
+    const initialGoal: SessionGoal = {
+      objective: "Finish the interrupted goal",
+      status: "active",
+    };
+    const provider: LLMProvider = {
+      id: "goal-abort-provider",
+      async *stream(options) {
+        const completedGoalResults = options.messages.filter(
+          (message) =>
+            message.role === "tool" &&
+            message.content.includes("Session goal completed:"),
+        ).length;
+        if (completedGoalResults === 0) {
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "Cancel after goal" };
+        if (!options.signal.aborted) {
+          await new Promise<void>((resolve) => {
+            options.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      sessionId: "goal-abort-session",
+      initialSessionGoal: initialGoal,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionGoal: ({ goal }) => {
+        if (goal !== null) {
+          persistedGoalUpdates.push(goal);
+        }
+        return goal ?? undefined;
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+            if (event.text === "Cancel after goal") {
+              cancelTextSeen();
+              for (const handler of [...sigintHandlers]) {
+                handler();
+              }
+              input.end("/status\n");
+            }
+          }
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("finish then interrupt\n");
+      await withTimeout(
+        cancelTextReceived,
+        5000,
+        "goal abort turn did not start",
+      );
+      await withTimeout(session, 5000, "goal abort session did not finish");
+
+      // Then
+      expect(persistedGoalUpdates).toEqual([]);
+      expect(stdout).toContain("Cancel after goal");
+      expect(stdout).toContain(
+        "  goal: active - Finish the interrupted goal\n",
+      );
+      expect(stderr).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an active goal turn throws after interruption,
+    When the user checks status after the abort,
+    Then Keel restores the pre-turn goal before continuing`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-session-goal-throw-abort-"),
+    );
+    let cancelTextSeen: () => void = () => {};
+    const cancelTextReceived = new Promise<void>((resolve) => {
+      cancelTextSeen = resolve;
+    });
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let stdout = "";
+    let stderr = "";
+    const provider: LLMProvider = {
+      id: "goal-throw-abort-provider",
+      async *stream(options) {
+        yield { type: "text", text: "Throw after abort" };
+        if (!options.signal.aborted) {
+          await new Promise<void>((resolve) => {
+            options.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+        }
+        throw new Error("stream failed after abort");
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      sessionId: "goal-throw-abort-session",
+      initialSessionGoal: {
+        objective: "Keep the goal after abort errors",
+        status: "active",
+      },
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionGoal: () => {
+        throw new Error("interrupted turn should not persist a goal");
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+            if (event.text === "Throw after abort") {
+              cancelTextSeen();
+              for (const handler of [...sigintHandlers]) {
+                handler();
+              }
+              input.end("/status\n");
+            }
+          }
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("throw after interrupt\n");
+      await withTimeout(
+        cancelTextReceived,
+        5000,
+        "goal throw-abort turn did not start",
+      );
+      await withTimeout(
+        session,
+        5000,
+        "goal throw-abort session did not finish",
+      );
+
+      // Then
+      expect(stdout).toContain("Throw after abort");
+      expect(stdout).toContain(
+        "  goal: active - Keep the goal after abort errors\n",
+      );
+      expect(stderr).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 });

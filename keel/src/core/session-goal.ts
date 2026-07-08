@@ -31,16 +31,6 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
   };
 }
 
-export function sessionGoalsEqual(
-  left: SessionGoal | undefined,
-  right: SessionGoal | undefined,
-): boolean {
-  if (left === undefined || right === undefined) {
-    return left === right;
-  }
-  return left.objective === right.objective && left.status === right.status;
-}
-
 export function formatSessionGoalSummary(
   goal: SessionGoal | undefined,
 ): string {

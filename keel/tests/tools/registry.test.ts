@@ -265,6 +265,7 @@ describe("tool registry", () => {
     const writeTool = builtinToolByName("write");
     const applyPatchTool = builtinToolByName("apply_patch");
     const bashTool = builtinToolByName("bash");
+    const updateGoalTool = builtinToolByName("update_goal");
 
     expect(readTool.display.formatLabel({ path: "src/index.ts" })).toBe(
       "read src/index.ts",
@@ -323,6 +324,9 @@ describe("tool registry", () => {
     ).toBe("apply_patch");
     expect(bashTool.display.formatLabel({ command: "pnpm test" })).toBe(
       "bash pnpm test",
+    );
+    expect(updateGoalTool.display.formatLabel({ status: "completed" })).toBe(
+      "update_goal",
     );
 
     expect(bashTool.permission.kind).toBe("approval");

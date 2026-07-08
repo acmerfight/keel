@@ -93,6 +93,7 @@ function isRecoverableAgentStateToolName(
     case "update_plan":
     case "update_goal":
       return true;
+    /* v8 ignore next 2: current agent-state tools are exactly the recoverable tools above; registry tests pin the set. */
     default:
       return false;
   }
@@ -195,6 +196,7 @@ function parseToolCallFromParsedArguments(
   const result = tool.args.schema.safeParse(parsedArguments);
   if (!result.success) {
     if (tool.risk.kind === "agent-state") {
+      /* v8 ignore next 3: current agent-state tools are exactly the recoverable tools above; keep the guard for future registry changes. */
       if (!isRecoverableAgentStateToolName(name)) {
         return { success: false, error: result.error };
       }

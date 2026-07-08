@@ -20,7 +20,6 @@ import {
   activeSessionGoalSystemPrompt,
   copySessionGoal,
   type SessionGoal,
-  sessionGoalsEqual,
 } from "../core/session-goal.ts";
 import {
   copySessionTaskProgress,
@@ -1181,19 +1180,11 @@ export async function runInteractiveSession(
           }
         }
         if (options.persistSessionGoal !== undefined) {
-          let lastPersistedGoal = sessionGoalBeforeTurn;
           for (const goal of sessionGoalUpdatesDuringTurn) {
-            if (sessionGoalsEqual(goal, lastPersistedGoal)) {
-              continue;
-            }
             sessionGoal = options.persistSessionGoal({
               goal,
               consumedInputIds: [],
             });
-            lastPersistedGoal =
-              sessionGoal === undefined
-                ? undefined
-                : copySessionGoal(sessionGoal);
           }
         }
         options.writeStdout("\n");
