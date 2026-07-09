@@ -737,7 +737,9 @@ describe("Bash Commands", () => {
     });
 
     try {
-      execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+      execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+        cwd: workspace,
+      });
 
       // When
       const events = await collect(
@@ -959,8 +961,12 @@ describe("Bash Commands", () => {
     });
 
     try {
-      execFileSync("git", ["init", "--quiet"], { cwd: firstWorkspace });
-      execFileSync("git", ["init", "--quiet"], { cwd: secondWorkspace });
+      execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+        cwd: firstWorkspace,
+      });
+      execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+        cwd: secondWorkspace,
+      });
 
       // When
       await collect(

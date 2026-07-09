@@ -37,7 +37,7 @@ async function createPatchCoverageWorkspace(
   lcov: LcovFixture,
 ): Promise<string> {
   const workspace = await mkdtemp(join(tmpdir(), "keel-patch-coverage-"));
-  await runGit(workspace, ["init"]);
+  await runGit(workspace, ["init", "--quiet", "--initial-branch=main"]);
   await runGit(workspace, ["config", "user.name", "Keel Test"]);
   await runGit(workspace, ["config", "user.email", "keel@example.com"]);
   await mkdir(join(workspace, "src"), { recursive: true });
@@ -69,7 +69,7 @@ async function createOneLinePatchCoverageWorkspace(
   lcov: string,
 ): Promise<string> {
   const workspace = await mkdtemp(join(tmpdir(), "keel-patch-coverage-"));
-  await runGit(workspace, ["init"]);
+  await runGit(workspace, ["init", "--quiet", "--initial-branch=main"]);
   await runGit(workspace, ["config", "user.name", "Keel Test"]);
   await runGit(workspace, ["config", "user.email", "keel@example.com"]);
   await mkdir(join(workspace, "src"), { recursive: true });
@@ -98,7 +98,7 @@ async function createNestedPatchCoverageWorkspace(
 ): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "keel-patch-coverage-root-"));
   const workspace = join(root, "keel");
-  await runGit(root, ["init"]);
+  await runGit(root, ["init", "--quiet", "--initial-branch=main"]);
   await runGit(root, ["config", "user.name", "Keel Test"]);
   await runGit(root, ["config", "user.email", "keel@example.com"]);
   await mkdir(join(workspace, "src"), { recursive: true });

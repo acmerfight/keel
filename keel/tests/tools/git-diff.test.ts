@@ -21,7 +21,9 @@ function freshSignal(): AbortSignal {
 
 async function createGitWorkspace(prefix: string): Promise<string> {
   const workspace = await mkdtemp(join(tmpdir(), prefix));
-  execFileSync("git", ["init"], { cwd: workspace });
+  execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+    cwd: workspace,
+  });
   execFileSync("git", ["config", "user.email", "keel@example.test"], {
     cwd: workspace,
   });

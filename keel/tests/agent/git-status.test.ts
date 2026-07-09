@@ -31,8 +31,9 @@ const ZERO_USAGE: Usage = {
 
 async function createGitStatusWorkspace(): Promise<string> {
   const workspace = await mkdtemp(join(tmpdir(), "keel-agent-git-status-"));
-  execFileSync("git", ["init"], { cwd: workspace });
-  execFileSync("git", ["branch", "-M", "main"], { cwd: workspace });
+  execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+    cwd: workspace,
+  });
   execFileSync("git", ["config", "user.email", "keel@example.test"], {
     cwd: workspace,
   });

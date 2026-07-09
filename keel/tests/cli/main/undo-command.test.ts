@@ -33,7 +33,7 @@ describe("CLI Main - Undo Command", () => {
     Then it restores the file and reports the path`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-undo-ok-"));
-    await runGit(workspace, ["init"]);
+    await runGit(workspace, ["init", "--quiet", "--initial-branch=main"]);
     await writeFile(join(workspace, "note.txt"), "after\n", "utf8");
     recordLastEditCheckpoint({
       workspace,
@@ -64,7 +64,7 @@ describe("CLI Main - Undo Command", () => {
     Then it reports the checkpoints without restoring files`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-undo-list-"));
-    await runGit(workspace, ["init"]);
+    await runGit(workspace, ["init", "--quiet", "--initial-branch=main"]);
     await writeFile(join(workspace, "first.txt"), "after first\n", "utf8");
     recordLastEditCheckpoint({
       workspace,
@@ -107,7 +107,7 @@ describe("CLI Main - Undo Command", () => {
     Then it restores every newer checkpoint and reports the count`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-undo-to-"));
-    await runGit(workspace, ["init"]);
+    await runGit(workspace, ["init", "--quiet", "--initial-branch=main"]);
     await writeFile(join(workspace, "first.txt"), "after first\n", "utf8");
     recordLastEditCheckpoint({
       workspace,
@@ -150,7 +150,7 @@ describe("CLI Main - Undo Command", () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-cli-main-undo-blocked-"),
     );
-    await runGit(workspace, ["init"]);
+    await runGit(workspace, ["init", "--quiet", "--initial-branch=main"]);
     await writeFile(join(workspace, "note.txt"), "after\n", "utf8");
     recordLastEditCheckpoint({
       workspace,

@@ -2,5 +2,5 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "project": ["src/**/*.ts", "scripts/**/*.ts"],
   "ignoreBinaries": ["ps"],
-  "ignoreDependencies": ["@fast-check/vitest", "fast-check"]
+  "ignoreDependencies": ["@fast-check/vitest"]
 }

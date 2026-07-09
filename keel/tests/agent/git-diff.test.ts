@@ -31,7 +31,9 @@ const ZERO_USAGE: Usage = {
 
 async function createGitWorkspace(): Promise<string> {
   const workspace = await mkdtemp(join(tmpdir(), "keel-agent-git-diff-"));
-  execFileSync("git", ["init"], { cwd: workspace });
+  execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+    cwd: workspace,
+  });
   execFileSync("git", ["config", "user.email", "keel@example.test"], {
     cwd: workspace,
   });
@@ -56,7 +58,9 @@ async function createMetadataHeavyGitWorkspace(): Promise<string> {
   const workspace = await mkdtemp(
     join(tmpdir(), "keel-agent-git-diff-metadata-"),
   );
-  execFileSync("git", ["init"], { cwd: workspace });
+  execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+    cwd: workspace,
+  });
   execFileSync("git", ["config", "user.email", "keel@example.test"], {
     cwd: workspace,
   });
@@ -110,7 +114,9 @@ async function createSemanticMetadataGitWorkspace(): Promise<string> {
   const workspace = await mkdtemp(
     join(tmpdir(), "keel-agent-git-diff-semantic-"),
   );
-  execFileSync("git", ["init"], { cwd: workspace });
+  execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+    cwd: workspace,
+  });
   execFileSync("git", ["config", "user.email", "keel@example.test"], {
     cwd: workspace,
   });

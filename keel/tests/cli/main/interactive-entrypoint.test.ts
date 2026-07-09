@@ -2239,7 +2239,9 @@ describe("CLI Main - Interactive Entrypoint", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-bash-"));
     const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
-    execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: workspace,
+    });
     const capturedBodies: unknown[] = [];
     const server = createServer((req, res) => {
       if (req.url !== "/chat/completions") {
