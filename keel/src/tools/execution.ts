@@ -209,28 +209,6 @@ function executeUpdatePlanTool(toolCall: UpdatePlanToolCall): ToolExecution {
   };
 }
 
-function blockedReasonStem(reason: string): string {
-  return reason.replace(/[.!?]+$/u, "");
-}
-
-function startsWithReasonBoundary(value: string, prefix: string): boolean {
-  if (!value.startsWith(prefix)) {
-    return false;
-  }
-  const next = value.at(prefix.length);
-  return next === undefined || /[\s.!?]/u.test(next);
-}
-
-function blockedReasonsMatch(first: string, second: string): boolean {
-  const firstStem = blockedReasonStem(first);
-  const secondStem = blockedReasonStem(second);
-  return (
-    firstStem === secondStem ||
-    startsWithReasonBoundary(firstStem, secondStem) ||
-    startsWithReasonBoundary(secondStem, firstStem)
-  );
-}
-
 async function executeUpdateGoalTool(
   {
     workspace,
@@ -254,18 +232,11 @@ async function executeUpdateGoalTool(
       z.string().parse(toolCall.reason),
     );
     const priorAudit = sessionGoal.blockedAudit;
-    const sameBlockedReason =
-      priorAudit !== undefined &&
-      blockedReasonsMatch(priorAudit.reason, blockedReason);
-    const auditReason =
-      priorAudit !== undefined && sameBlockedReason
-        ? priorAudit.reason
-        : blockedReason;
-    if (sameBlockedReason && priorAudit.consecutiveCount === 2) {
+    if (priorAudit?.consecutiveCount === 2) {
       const blockedGoal: SessionGoal = {
         objective: sessionGoal.objective,
         status: "blocked",
-        statusReason: auditReason,
+        statusReason: blockedReason,
         ...(sessionGoal.criterionKind !== undefined &&
         sessionGoal.completionCriterion !== undefined
           ? {
@@ -280,15 +251,14 @@ async function executeUpdateGoalTool(
         sessionGoalUpdate: copySessionGoal(blockedGoal),
       };
     }
-    const consecutiveCount: SessionGoalBlockedAuditCount = sameBlockedReason
-      ? 2
-      : 1;
+    const consecutiveCount: SessionGoalBlockedAuditCount =
+      priorAudit?.consecutiveCount === 1 ? 2 : 1;
     const blockedProposalGoal = {
       objective: sessionGoal.objective,
       status: "active",
       blockedAudit: {
         consecutiveCount,
-        reason: auditReason,
+        reason: blockedReason,
       },
       ...(sessionGoal.criterionKind !== undefined &&
       sessionGoal.completionCriterion !== undefined

@@ -210,7 +210,7 @@ describe("Task Progress", () => {
     }
   });
 
-  test(`Given a model repeatedly marks an active session goal blocked for the same reason,
+  test(`Given a model repeatedly marks an active session goal blocked,
     When the agent continues after the tool call,
     Then Keel keeps the goal active until the blocker passes the runtime audit`, async () => {
     // Given
@@ -225,17 +225,26 @@ describe("Task Progress", () => {
       criterionKind: "command",
       completionCriterion: "pnpm test",
     };
+    const blockedReasons = [
+      "Need credentials from the user.",
+      "Credentials remain unavailable.",
+      "The user still has not provided credentials.",
+    ];
     const provider: LLMProvider = {
       id: "goal-blocked-provider",
       async *stream(options) {
         providerRequests.push(structuredClone([...options.messages]));
         if (providerRequests.length <= 3) {
+          const reason = blockedReasons.at(providerRequests.length - 1);
+          if (reason === undefined) {
+            throw new Error("missing blocked reason");
+          }
           yield {
             type: "tool_call",
             id: `goal_${providerRequests.length}`,
             tool: "update_goal",
             status: "blocked",
-            reason: "Need credentials from the user.",
+            reason,
           };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -288,7 +297,7 @@ describe("Task Progress", () => {
           completionCriterion: "pnpm test",
           blockedAudit: {
             consecutiveCount: 2,
-            reason: "Need credentials from the user.",
+            reason: "Credentials remain unavailable.",
           },
         },
       });
@@ -298,7 +307,7 @@ describe("Task Progress", () => {
         goal: {
           objective: "Finish the durable session goal",
           status: "blocked",
-          statusReason: "Need credentials from the user.",
+          statusReason: "The user still has not provided credentials.",
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -308,19 +317,19 @@ describe("Task Progress", () => {
         role: "tool",
         toolCallId: "goal_1",
         content:
-          "Session goal blocked proposal recorded (1/3): Finish the durable session goal. Reason: Need credentials from the user. Goal remains active; continue working unless the same blocker repeats.",
+          "Session goal blocked proposal recorded (1/3): Finish the durable session goal. Reason: Need credentials from the user. Goal remains active; continue working unless blocked proposals continue.",
       });
       expect(providerRequests[2]?.at(-1)).toEqual({
         role: "tool",
         toolCallId: "goal_2",
         content:
-          "Session goal blocked proposal recorded (2/3): Finish the durable session goal. Reason: Need credentials from the user. Goal remains active; continue working unless the same blocker repeats.",
+          "Session goal blocked proposal recorded (2/3): Finish the durable session goal. Reason: Credentials remain unavailable. Goal remains active; continue working unless blocked proposals continue.",
       });
       expect(providerRequests[3]?.at(-1)).toEqual({
         role: "tool",
         toolCallId: "goal_3",
         content:
-          "Session goal blocked: Finish the durable session goal. Reason: Need credentials from the user.",
+          "Session goal blocked: Finish the durable session goal. Reason: The user still has not provided credentials.",
       });
       expect(messages.at(-1)).toEqual({
         role: "assistant",

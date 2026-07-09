@@ -172,7 +172,7 @@ describe("Session Goal Tool", () => {
       throw new Error("expected active goal prompt");
     }
     expect(prompt).toContain(
-      "- Pending blocked audit: 2/3 consecutive blocked proposals for: Need credentials from the user.",
+      "- Pending blocked audit: 2/3 consecutive blocked proposals. Most recent reason: Need credentials from the user.",
     );
   });
 
@@ -238,7 +238,7 @@ describe("Session Goal Tool", () => {
         },
       }),
     ).toBe(
-      "Session goal blocked proposal recorded (2/3): Finish the migration? Reason: Need production credentials. Goal remains active; continue working unless the same blocker repeats.",
+      "Session goal blocked proposal recorded (2/3): Finish the migration? Reason: Need production credentials. Goal remains active; continue working unless blocked proposals continue.",
     );
   });
 
@@ -335,7 +335,7 @@ describe("Session Goal Tool", () => {
       expect(execution).toMatchObject({
         ok: true,
         content:
-          "Session goal blocked proposal recorded (1/3): Finish the durable checkout goal. Reason: Need an API key from the user. Goal remains active; continue working unless the same blocker repeats.",
+          "Session goal blocked proposal recorded (1/3): Finish the durable checkout goal. Reason: Need an API key from the user. Goal remains active; continue working unless blocked proposals continue.",
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -352,7 +352,7 @@ describe("Session Goal Tool", () => {
     }
   });
 
-  test(`Given update_goal receives the same blocked reason for a goal with two prior blocked proposals,
+  test(`Given update_goal receives blocked for a goal with two prior blocked proposals,
     When the builtin tool executes,
     Then it persists the blocked goal with the model-provided reason`, async () => {
     // Given
@@ -405,9 +405,9 @@ describe("Session Goal Tool", () => {
     }
   });
 
-  test(`Given update_goal receives an elaborated blocked reason for an existing blocker,
+  test(`Given update_goal receives a paraphrased blocked reason after two prior blocked proposals,
     When the builtin tool executes,
-    Then it treats the proposal as the same blocker and preserves the original concise reason`, async () => {
+    Then it persists the blocked goal with the latest reason`, async () => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-update-goal-blocked-elaborated-"),
@@ -415,7 +415,7 @@ describe("Session Goal Tool", () => {
     const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
       status: "blocked",
       reason:
-        "Need an API key from the user. The current environment does not include one.",
+        "Credentials are unavailable from the user, so checkout cannot proceed.",
     });
 
     try {
@@ -445,11 +445,12 @@ describe("Session Goal Tool", () => {
       expect(execution).toMatchObject({
         ok: true,
         content:
-          "Session goal blocked: Finish the durable checkout goal. Reason: Need an API key from the user.",
+          "Session goal blocked: Finish the durable checkout goal. Reason: Credentials are unavailable from the user, so checkout cannot proceed.",
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "blocked",
-          statusReason: "Need an API key from the user.",
+          statusReason:
+            "Credentials are unavailable from the user, so checkout cannot proceed.",
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -459,9 +460,9 @@ describe("Session Goal Tool", () => {
     }
   });
 
-  test(`Given update_goal receives a different blocked reason after a prior proposal,
+  test(`Given update_goal receives a different blocked reason after one prior proposal,
     When the builtin tool executes,
-    Then it restarts the blocked audit instead of completing the blocked transition`, async () => {
+    Then it records the second consecutive blocked proposal`, async () => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-update-goal-blocked-reset-"),
@@ -488,7 +489,7 @@ describe("Session Goal Tool", () => {
           criterionKind: "command",
           completionCriterion: "pnpm test",
           blockedAudit: {
-            consecutiveCount: 2,
+            consecutiveCount: 1,
             reason: "Need an API key from the user.",
           },
         },
@@ -503,7 +504,7 @@ describe("Session Goal Tool", () => {
           criterionKind: "command",
           completionCriterion: "pnpm test",
           blockedAudit: {
-            consecutiveCount: 1,
+            consecutiveCount: 2,
             reason: "Need VPN access.",
           },
         },
