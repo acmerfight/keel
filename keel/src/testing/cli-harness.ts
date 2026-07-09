@@ -1,9 +1,11 @@
 import { execFile, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const CLI_PATH = join(import.meta.dirname, "../cli/index.ts");
+const SOURCE_CLI_PATH = join(import.meta.dirname, "../cli/index.ts");
+const DIST_CLI_PATH = join(import.meta.dirname, "../../dist/cli/index.js");
 const DEFAULT_CLI_TIMEOUT_MS = 15_000;
 
 export interface CommandResult {
@@ -57,6 +59,25 @@ function commandExitCode(
   return error === null ? 0 : 1;
 }
 
+function cliNodeArgs(): readonly string[] {
+  // biome-ignore lint/complexity/useLiteralKeys: ProcessEnv requires bracket access under noPropertyAccessFromIndexSignature.
+  const entry = process.env["KEEL_TEST_CLI_ENTRY"];
+  if (entry === undefined || entry === "source") {
+    return ["--experimental-strip-types", SOURCE_CLI_PATH];
+  }
+  if (entry === "dist") {
+    if (!existsSync(DIST_CLI_PATH)) {
+      throw new Error(
+        "KEEL_TEST_CLI_ENTRY=dist requires pnpm build before CLI process tests",
+      );
+    }
+    return [DIST_CLI_PATH];
+  }
+  throw new Error(
+    `Unsupported KEEL_TEST_CLI_ENTRY "${entry}". Use "source" or "dist".`,
+  );
+}
+
 export function runCli(
   args: readonly string[],
   options: {
@@ -65,7 +86,7 @@ export function runCli(
     readonly timeoutMs?: number;
   } = {},
 ): Promise<CommandResult> {
-  return runCommand("node", ["--experimental-strip-types", CLI_PATH, ...args], {
+  return runCommand("node", [...cliNodeArgs(), ...args], {
     ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
     ...(options.env !== undefined ? { env: options.env } : {}),
     ...(options.timeoutMs !== undefined
@@ -84,15 +105,11 @@ export function runCliProcess(
 ) {
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
-  const child = spawn(
-    "node",
-    ["--experimental-strip-types", CLI_PATH, ...args],
-    {
-      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-      env: { ...process.env, ...options.env },
-      stdio: [options.stdin ?? "ignore", "pipe", "pipe"],
-    },
-  );
+  const child = spawn("node", [...cliNodeArgs(), ...args], {
+    ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+    env: { ...process.env, ...options.env },
+    stdio: [options.stdin ?? "ignore", "pipe", "pipe"],
+  });
   if (child.stdout === null || child.stderr === null) {
     throw new Error("CLI process harness requires piped stdout and stderr");
   }
