@@ -9,11 +9,13 @@ import {
 import type { RecordLastBatchCheckpointOperation } from "../core/git.ts";
 import {
   copySessionGoal,
+  formatSessionGoalBlockedProposalToolResult,
   formatSessionGoalBlockedToolResult,
   formatSessionGoalCompletedToolResult,
   normalizeSessionGoalCompletionCommand,
   normalizeSessionGoalStatusReason,
   type SessionGoal,
+  type SessionGoalBlockedAuditCount,
 } from "../core/session-goal.ts";
 import {
   formatSessionTaskProgressToolResult,
@@ -207,6 +209,28 @@ function executeUpdatePlanTool(toolCall: UpdatePlanToolCall): ToolExecution {
   };
 }
 
+function blockedReasonStem(reason: string): string {
+  return reason.replace(/[.!?]+$/u, "");
+}
+
+function startsWithReasonBoundary(value: string, prefix: string): boolean {
+  if (!value.startsWith(prefix)) {
+    return false;
+  }
+  const next = value.at(prefix.length);
+  return next === undefined || /[\s.!?]/u.test(next);
+}
+
+function blockedReasonsMatch(first: string, second: string): boolean {
+  const firstStem = blockedReasonStem(first);
+  const secondStem = blockedReasonStem(second);
+  return (
+    firstStem === secondStem ||
+    startsWithReasonBoundary(firstStem, secondStem) ||
+    startsWithReasonBoundary(secondStem, firstStem)
+  );
+}
+
 async function executeUpdateGoalTool(
   {
     workspace,
@@ -226,12 +250,46 @@ async function executeUpdateGoalTool(
     };
   }
   if (toolCall.status === "blocked") {
-    const blockedGoal: SessionGoal = {
+    const blockedReason = normalizeSessionGoalStatusReason(
+      z.string().parse(toolCall.reason),
+    );
+    const priorAudit = sessionGoal.blockedAudit;
+    const sameBlockedReason =
+      priorAudit !== undefined &&
+      blockedReasonsMatch(priorAudit.reason, blockedReason);
+    const auditReason =
+      priorAudit !== undefined && sameBlockedReason
+        ? priorAudit.reason
+        : blockedReason;
+    if (sameBlockedReason && priorAudit.consecutiveCount === 2) {
+      const blockedGoal: SessionGoal = {
+        objective: sessionGoal.objective,
+        status: "blocked",
+        statusReason: auditReason,
+        ...(sessionGoal.criterionKind !== undefined &&
+        sessionGoal.completionCriterion !== undefined
+          ? {
+              criterionKind: sessionGoal.criterionKind,
+              completionCriterion: sessionGoal.completionCriterion,
+            }
+          : {}),
+      };
+      return {
+        content: formatSessionGoalBlockedToolResult(blockedGoal),
+        ok: true,
+        sessionGoalUpdate: copySessionGoal(blockedGoal),
+      };
+    }
+    const consecutiveCount: SessionGoalBlockedAuditCount = sameBlockedReason
+      ? 2
+      : 1;
+    const blockedProposalGoal = {
       objective: sessionGoal.objective,
-      status: "blocked",
-      statusReason: normalizeSessionGoalStatusReason(
-        z.string().parse(toolCall.reason),
-      ),
+      status: "active",
+      blockedAudit: {
+        consecutiveCount,
+        reason: auditReason,
+      },
       ...(sessionGoal.criterionKind !== undefined &&
       sessionGoal.completionCriterion !== undefined
         ? {
@@ -239,11 +297,15 @@ async function executeUpdateGoalTool(
             completionCriterion: sessionGoal.completionCriterion,
           }
         : {}),
+    } satisfies Extract<SessionGoal, { readonly status: "active" }> & {
+      readonly blockedAudit: NonNullable<
+        Extract<SessionGoal, { readonly status: "active" }>["blockedAudit"]
+      >;
     };
     return {
-      content: formatSessionGoalBlockedToolResult(blockedGoal),
+      content: formatSessionGoalBlockedProposalToolResult(blockedProposalGoal),
       ok: true,
-      sessionGoalUpdate: copySessionGoal(blockedGoal),
+      sessionGoalUpdate: copySessionGoal(blockedProposalGoal),
     };
   }
   if (

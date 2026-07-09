@@ -210,9 +210,9 @@ describe("Task Progress", () => {
     }
   });
 
-  test(`Given a model marks an active session goal blocked,
+  test(`Given a model repeatedly marks an active session goal blocked for the same reason,
     When the agent continues after the tool call,
-    Then Keel persists the blocked goal and returns the blocker reason to the model`, async () => {
+    Then Keel keeps the goal active until the blocker passes the runtime audit`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-goal-blocked-"));
     const messages: Message[] = [
@@ -229,10 +229,10 @@ describe("Task Progress", () => {
       id: "goal-blocked-provider",
       async *stream(options) {
         providerRequests.push(structuredClone([...options.messages]));
-        if (providerRequests.length === 1) {
+        if (providerRequests.length <= 3) {
           yield {
             type: "tool_call",
-            id: "goal_1",
+            id: `goal_${providerRequests.length}`,
             tool: "update_goal",
             status: "blocked",
             reason: "Need credentials from the user.",
@@ -269,34 +269,59 @@ describe("Task Progress", () => {
         messageOrdinal: 3,
         goal: {
           objective: "Finish the durable session goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          blockedAudit: {
+            consecutiveCount: 1,
+            reason: "Need credentials from the user.",
+          },
+        },
+      });
+      expect(events).toContainEqual({
+        type: "session_goal_updated",
+        messageOrdinal: 5,
+        goal: {
+          objective: "Finish the durable session goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          blockedAudit: {
+            consecutiveCount: 2,
+            reason: "Need credentials from the user.",
+          },
+        },
+      });
+      expect(events).toContainEqual({
+        type: "session_goal_updated",
+        messageOrdinal: 7,
+        goal: {
+          objective: "Finish the durable session goal",
           status: "blocked",
           statusReason: "Need credentials from the user.",
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
       });
-      expect(providerRequests).toHaveLength(2);
-      expect(providerRequests[1]).toEqual([
-        { role: "user", content: "Finish the durable session goal." },
-        {
-          role: "assistant",
-          content: "",
-          toolCalls: [
-            {
-              id: "goal_1",
-              tool: "update_goal",
-              status: "blocked",
-              reason: "Need credentials from the user.",
-            },
-          ],
-        },
-        {
-          role: "tool",
-          toolCallId: "goal_1",
-          content:
-            "Session goal blocked: Finish the durable session goal. Reason: Need credentials from the user.",
-        },
-      ]);
+      expect(providerRequests).toHaveLength(4);
+      expect(providerRequests[1]?.at(-1)).toEqual({
+        role: "tool",
+        toolCallId: "goal_1",
+        content:
+          "Session goal blocked proposal recorded (1/3): Finish the durable session goal. Reason: Need credentials from the user. Goal remains active; continue working unless the same blocker repeats.",
+      });
+      expect(providerRequests[2]?.at(-1)).toEqual({
+        role: "tool",
+        toolCallId: "goal_2",
+        content:
+          "Session goal blocked proposal recorded (2/3): Finish the durable session goal. Reason: Need credentials from the user. Goal remains active; continue working unless the same blocker repeats.",
+      });
+      expect(providerRequests[3]?.at(-1)).toEqual({
+        role: "tool",
+        toolCallId: "goal_3",
+        content:
+          "Session goal blocked: Finish the durable session goal. Reason: Need credentials from the user.",
+      });
       expect(messages.at(-1)).toEqual({
         role: "assistant",
         content: "The session goal is blocked on credentials.",

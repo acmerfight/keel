@@ -767,10 +767,16 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
             redactTextForPersistence(goal.completionCriterion),
           );
   const statusReason =
-    goal.statusReason === undefined
+    goal.status === "blocked"
+      ? normalizeSessionGoalStatusReason(
+          redactTextForPersistence(goal.statusReason),
+        )
+      : undefined;
+  const blockedAuditReason =
+    goal.status !== "active" || goal.blockedAudit === undefined
       ? undefined
       : normalizeSessionGoalStatusReason(
-          redactTextForPersistence(goal.statusReason),
+          redactTextForPersistence(goal.blockedAudit.reason),
         );
   if (objective === "") {
     sessionStoreError("Error: /goal requires non-empty text.");
@@ -791,14 +797,8 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
     );
   }
-  if (goal.status === "blocked" && statusReason === undefined) {
-    sessionStoreError("Error: /goal blocked status requires a reason.");
-  }
   if (goal.status === "blocked" && statusReason === "") {
     sessionStoreError("Error: /goal blocked status requires a reason.");
-  }
-  if (goal.status !== "blocked" && statusReason !== undefined) {
-    sessionStoreError("Error: /goal blocked reason requires blocked status.");
   }
   if (
     statusReason !== undefined &&
@@ -808,19 +808,59 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       `Error: /goal blocked reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
     );
   }
-  return {
-    objective,
-    status: goal.status,
-    ...(goal.status === "blocked" && statusReason !== undefined
-      ? { statusReason }
-      : {}),
-    ...(goal.criterionKind !== undefined && completionCriterion !== undefined
+  if (goal.status === "active" && blockedAuditReason === "") {
+    sessionStoreError("Error: /goal blocked audit requires a reason.");
+  }
+  if (
+    blockedAuditReason !== undefined &&
+    blockedAuditReason.length > SESSION_GOAL_STATUS_REASON_MAX_LENGTH
+  ) {
+    sessionStoreError(
+      `Error: /goal blocked audit reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
+    );
+  }
+  const criterion =
+    goal.criterionKind !== undefined && completionCriterion !== undefined
       ? {
           criterionKind: goal.criterionKind,
           completionCriterion,
         }
-      : {}),
-  };
+      : {};
+  switch (goal.status) {
+    case "active":
+      return {
+        objective,
+        status: "active",
+        ...criterion,
+        ...(goal.blockedAudit !== undefined && blockedAuditReason !== undefined
+          ? {
+              blockedAudit: {
+                consecutiveCount: goal.blockedAudit.consecutiveCount,
+                reason: blockedAuditReason,
+              },
+            }
+          : {}),
+      };
+    case "blocked":
+      return {
+        objective,
+        status: "blocked",
+        statusReason: z.string().parse(statusReason),
+        ...criterion,
+      };
+    case "paused":
+      return {
+        objective,
+        status: "paused",
+        ...criterion,
+      };
+    case "completed":
+      return {
+        objective,
+        status: "completed",
+        ...criterion,
+      };
+  }
 }
 
 function redactSessionTaskProgressCheckpointForPersistence(
