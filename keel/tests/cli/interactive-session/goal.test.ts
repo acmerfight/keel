@@ -4,9 +4,19 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
-import { parseInteractiveCommand } from "../../../src/cli/interactive-session/commands.ts";
+import {
+  formatInteractiveGoal,
+  parseInteractiveCommand,
+} from "../../../src/cli/interactive-session/commands.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
-import type { SessionGoal } from "../../../src/core/session-goal.ts";
+import {
+  createSessionStore,
+  persistSessionGoal,
+} from "../../../src/cli/session-store.ts";
+import {
+  SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
+  type SessionGoal,
+} from "../../../src/core/session-goal.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   ForcedExit,
@@ -14,6 +24,7 @@ import {
   ZERO_COST_MODEL,
   ZERO_USAGE,
 } from "../../../src/testing/interactive-session-fixtures.ts";
+import { runtime } from "../../../src/testing/session-store-fixtures.ts";
 
 function unusedProvider(id: string): LLMProvider {
   return {
@@ -28,7 +39,50 @@ function unusedProvider(id: string): LLMProvider {
   };
 }
 
+const REDACTION_EXPANDING_SECRET = " sk-aaaa";
+const REDACTION_EXPANDING_SECRET_REPETITIONS = 40;
+
+function redactionExpandingText(maxLength: number): string {
+  return `${"x".repeat(
+    maxLength -
+      REDACTION_EXPANDING_SECRET.length *
+        REDACTION_EXPANDING_SECRET_REPETITIONS,
+  )}${REDACTION_EXPANDING_SECRET.repeat(
+    REDACTION_EXPANDING_SECRET_REPETITIONS,
+  )}`;
+}
+
 describe("Interactive Session - Goals", () => {
+  test(`Given a goal has no completion evidence,
+    When the interactive goal status is formatted,
+    Then Keel does not print an empty evidence line`, () => {
+    expect(
+      formatInteractiveGoal({
+        objective: "Continue checkout",
+        status: "active",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+      }),
+    ).toBe(
+      "Session goal: active - Continue checkout; criterion(command): pnpm test\n",
+    );
+  });
+
+  test(`Given a completed goal has completion evidence,
+    When the interactive goal status is formatted,
+    Then Keel prints the evidence on a separate line`, () => {
+    expect(
+      formatInteractiveGoal({
+        objective: "Ship checkout",
+        status: "completed",
+        completionEvidence: { kind: "user_override" },
+      }),
+    ).toBe(
+      "Session goal: completed - Ship checkout; criterion: missing\n" +
+        "Session goal evidence: user explicitly completed the goal with /goal complete\n",
+    );
+  });
+
   test(`Given the goal command receives an objective,
     When the interactive command is parsed,
     Then Keel treats it as a local goal command instead of a prompt`, () => {
@@ -322,6 +376,7 @@ describe("Interactive Session - Goals", () => {
     let persistedGoal: SessionGoal | undefined = {
       objective: "Finish lifecycle guard coverage",
       status: "completed",
+      completionEvidence: { kind: "user_override" },
     };
     const provider = unusedProvider("unused-goal-lifecycle-guards-provider");
     const session = runInteractiveSession({
@@ -1035,10 +1090,14 @@ describe("Interactive Session - Goals", () => {
       status: "completed",
       criterionKind: "command",
       completionCriterion: "pnpm test",
+      completionEvidence: { kind: "user_override" },
     });
     expect(stdout).toContain("Goal completed: Ship the release notes\n");
     expect(stdout).toContain(
       "  goal: completed - Ship the release notes; criterion(command): pnpm test\n",
+    );
+    expect(stdout).toContain(
+      "  goal evidence: user explicitly completed the goal with /goal complete\n",
     );
     expect(stderr).toBe(
       "Error: only active session goals can change the completion criterion. Resume the goal or set a new goal first.\n".repeat(
@@ -1155,14 +1214,174 @@ describe("Interactive Session - Goals", () => {
         status: "completed",
         criterionKind: "command",
         completionCriterion: 'node -e "process.exit(0)"',
+        completionEvidence: {
+          kind: "command",
+          command: 'node -e "process.exit(0)"',
+          cwd: workspace,
+          exitCode: 0,
+          freshness: "after_latest_workspace_mutation",
+        },
       });
       expect(stdout).toContain("Goal finished.\n");
       expect(stdout).toContain(
         '  goal: completed - Finish the checkout goal; criterion(command): node -e "process.exit(0)"\n',
       );
+      expect(stdout).toContain(
+        `  goal evidence: node -e "process.exit(0)" exited 0 after the latest workspace mutation in ${workspace}`,
+      );
       expect(stderr).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given assertion completion evidence expands during redaction,
+    When the model completes the goal during an interactive turn,
+    Then Keel persists the completed goal and keeps the session alive`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-session-goal-assertion-redaction-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const store = createSessionStore({
+      sessionId: "goal-assertion-redaction-session",
+      workspace,
+      runtime: runtime(home),
+    });
+    let timestamp = 1;
+    let turnEnded: () => void = () => {};
+    const turnDone = new Promise<void>((resolve) => {
+      turnEnded = resolve;
+    });
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const initialGoal: SessionGoal = {
+      objective: "Publish the release notes",
+      status: "active",
+      criterionKind: "assertion",
+      completionCriterion: "release notes explain every changed command",
+    };
+    const persistedGoals: SessionGoal[] = [];
+    const expandingReason = redactionExpandingText(
+      SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
+    );
+    let providerRequestCount = 0;
+    const provider: LLMProvider = {
+      id: "goal-assertion-redaction-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          yield {
+            type: "text",
+            text: JSON.stringify({
+              completed: true,
+              reason: expandingReason,
+            }),
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        providerRequestCount++;
+        if (providerRequestCount === 1) {
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "Goal finished after evaluation." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      sessionId: "goal-assertion-redaction-session",
+      initialSessionGoal: initialGoal,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionGoal: ({ goal, consumedInputIds }) => {
+        const persistedGoal = persistSessionGoal({
+          session: store,
+          goal,
+          runtime: runtime(home, timestamp++),
+          ...(consumedInputIds !== undefined ? { consumedInputIds } : {}),
+        });
+        if (persistedGoal !== undefined) {
+          persistedGoals.push(persistedGoal);
+        }
+        return persistedGoal;
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          }
+          if (event.type === "end") {
+            finalEnd = event;
+            turnEnded();
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.write("finish the saved assertion goal\n");
+      await withTimeout(turnDone, 5000, "goal turn did not finish");
+      input.end("/status\n");
+      await session;
+
+      // Then
+      const persistedGoal = persistedGoals.at(-1);
+      if (persistedGoal?.status !== "completed") {
+        throw new Error("expected completed goal");
+      }
+      expect(persistedGoal.completionEvidence.kind).toBe("assertion_evaluator");
+      if (persistedGoal.completionEvidence.kind !== "assertion_evaluator") {
+        throw new Error("expected assertion evaluator evidence");
+      }
+      expect(
+        persistedGoal.completionEvidence.reason.length,
+      ).toBeLessThanOrEqual(SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH);
+      expect(persistedGoal.completionEvidence.reason).toContain(
+        "[REDACTED_SECRET]",
+      );
+      expect(persistedGoal.completionEvidence.reason).not.toContain("sk-aaaa");
+      expect(stdout).toContain("Goal finished after evaluation.\n");
+      expect(stdout).toContain(
+        "  goal: completed - Publish the release notes; criterion(assertion): release notes explain every changed command\n",
+      );
+      expect(stdout).toContain("  goal evidence: evaluator approved: ");
+      expect(stderr).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   });
 

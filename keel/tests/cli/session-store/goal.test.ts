@@ -11,11 +11,25 @@ import {
 } from "../../../src/cli/session-store.ts";
 import {
   SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
+  SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
   SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
   SESSION_GOAL_STATUS_REASON_MAX_LENGTH,
 } from "../../../src/core/session-goal.ts";
 import type { Message } from "../../../src/llm/types.ts";
 import { runtime } from "../../../src/testing/session-store-fixtures.ts";
+
+const REDACTION_EXPANDING_SECRET = " sk-aaaa";
+const REDACTION_EXPANDING_SECRET_REPETITIONS = 40;
+
+function redactionExpandingText(maxLength: number): string {
+  return `${"x".repeat(
+    maxLength -
+      REDACTION_EXPANDING_SECRET.length *
+        REDACTION_EXPANDING_SECRET_REPETITIONS,
+  )}${REDACTION_EXPANDING_SECRET.repeat(
+    REDACTION_EXPANDING_SECRET_REPETITIONS,
+  )}`;
+}
 
 describe("Session Store Goal", () => {
   test(`Given a session goal is persisted with queued input,
@@ -124,6 +138,202 @@ describe("Session Store Goal", () => {
         criterionKind: "assertion",
         completionCriterion: "release notes cover every changed command",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a completed session goal has command completion evidence,
+    When the session is resumed,
+    Then the durable goal explains why completion was accepted`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+
+    try {
+      const session = createSessionStore({
+        sessionId: "session-goal-completed-evidence",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When
+      persistSessionGoal({
+        session,
+        goal: {
+          objective: "Fix checkout tests",
+          status: "completed",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          completionEvidence: {
+            kind: "command",
+            command: " pnpm test ",
+            cwd: workspace,
+            exitCode: 0,
+            freshness: "after_latest_workspace_mutation",
+          },
+        },
+        runtime: runtime(home, 1),
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "session-goal-completed-evidence",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(resumed.goal).toEqual({
+        objective: "Fix checkout tests",
+        status: "completed",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        completionEvidence: {
+          kind: "command",
+          command: "pnpm test",
+          cwd: workspace,
+          exitCode: 0,
+          freshness: "after_latest_workspace_mutation",
+        },
+      });
+      const ledgerRecords = (await readFile(session.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerRecords.at(-1)).toEqual({
+        schemaVersion: 2,
+        type: "session_goal",
+        timestamp: "1970-01-01T00:00:00.001Z",
+        goal: {
+          objective: "Fix checkout tests",
+          status: "completed",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          completionEvidence: {
+            kind: "command",
+            command: "pnpm test",
+            cwd: workspace,
+            exitCode: 0,
+            freshness: "after_latest_workspace_mutation",
+          },
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a completed session goal has assertion evaluator evidence,
+    When the session is resumed,
+    Then the evaluator reason survives the ledger boundary`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+
+    try {
+      const session = createSessionStore({
+        sessionId: "session-goal-assertion-evidence",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When
+      persistSessionGoal({
+        session,
+        goal: {
+          objective: "Publish release notes",
+          status: "completed",
+          criterionKind: "assertion",
+          completionCriterion: "release notes explain the command",
+          completionEvidence: {
+            kind: "assertion_evaluator",
+            reason: " Evaluator\napproved the RELEASE.md evidence. ",
+          },
+        },
+        runtime: runtime(home, 1),
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "session-goal-assertion-evidence",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(resumed.goal).toEqual({
+        objective: "Publish release notes",
+        status: "completed",
+        criterionKind: "assertion",
+        completionCriterion: "release notes explain the command",
+        completionEvidence: {
+          kind: "assertion_evaluator",
+          reason: "Evaluator approved the RELEASE.md evidence.",
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given assertion completion evidence expands during redaction,
+    When the completed goal is persisted,
+    Then Keel stores bounded redacted evidence instead of rejecting completion`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const reason = redactionExpandingText(
+      SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
+    );
+
+    try {
+      const session = createSessionStore({
+        sessionId: "session-goal-redaction-expansion",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When
+      persistSessionGoal({
+        session,
+        goal: {
+          objective: "Publish release notes",
+          status: "completed",
+          criterionKind: "assertion",
+          completionCriterion: "release notes explain the command",
+          completionEvidence: {
+            kind: "assertion_evaluator",
+            reason,
+          },
+        },
+        runtime: runtime(home, 1),
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "session-goal-redaction-expansion",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      if (resumed.goal?.status !== "completed") {
+        throw new Error("expected completed goal");
+      }
+      expect(resumed.goal.completionEvidence.kind).toBe("assertion_evaluator");
+      if (resumed.goal.completionEvidence.kind !== "assertion_evaluator") {
+        throw new Error("expected assertion evaluator evidence");
+      }
+      expect(resumed.goal.completionEvidence.reason.length).toBeLessThanOrEqual(
+        SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
+      );
+      expect(resumed.goal.completionEvidence.reason).toContain(
+        "[REDACTED_SECRET]",
+      );
+      expect(resumed.goal.completionEvidence.reason).not.toContain("sk-aaaa");
+      const ledgerRecords = (await readFile(session.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(JSON.stringify(ledgerRecords.at(-1))).not.toContain("sk-aaaa");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -550,6 +760,136 @@ describe("Session Store Goal", () => {
         }),
       ).toThrow(
         `Error: /goal blocked audit reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
+      );
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: JSON.parse(
+            JSON.stringify({
+              objective: "Completed without evidence",
+              status: "completed",
+            }),
+          ),
+          runtime: runtime(home, 9),
+        }),
+      ).toThrow("Error: /goal completed status requires evidence.");
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: JSON.parse(
+            JSON.stringify({
+              objective: "Completed with blank evidence command",
+              status: "completed",
+              completionEvidence: {
+                kind: "command",
+                command: "   ",
+                cwd: workspace,
+                exitCode: 0,
+                freshness: "after_latest_workspace_mutation",
+              },
+            }),
+          ),
+          runtime: runtime(home, 10),
+        }),
+      ).toThrow("Error: /goal completion evidence command is empty.");
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: JSON.parse(
+            JSON.stringify({
+              objective: "Completed with long evidence command",
+              status: "completed",
+              completionEvidence: {
+                kind: "command",
+                command: "x".repeat(
+                  SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH + 1,
+                ),
+                cwd: workspace,
+                exitCode: 0,
+                freshness: "after_latest_workspace_mutation",
+              },
+            }),
+          ),
+          runtime: runtime(home, 11),
+        }),
+      ).toThrow(
+        `Error: /goal completion evidence command must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
+      );
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: JSON.parse(
+            JSON.stringify({
+              objective: "Completed with blank evidence cwd",
+              status: "completed",
+              completionEvidence: {
+                kind: "command",
+                command: "pnpm test",
+                cwd: "   ",
+                exitCode: 0,
+                freshness: "after_latest_workspace_mutation",
+              },
+            }),
+          ),
+          runtime: runtime(home, 12),
+        }),
+      ).toThrow("Error: /goal completion evidence cwd is empty.");
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: JSON.parse(
+            JSON.stringify({
+              objective: "Completed with long evidence cwd",
+              status: "completed",
+              completionEvidence: {
+                kind: "command",
+                command: "pnpm test",
+                cwd: "x".repeat(SESSION_GOAL_OBJECTIVE_MAX_LENGTH + 1),
+                exitCode: 0,
+                freshness: "after_latest_workspace_mutation",
+              },
+            }),
+          ),
+          runtime: runtime(home, 13),
+        }),
+      ).toThrow(
+        `Error: /goal completion evidence cwd must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
+      );
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: JSON.parse(
+            JSON.stringify({
+              objective: "Completed with blank evaluator reason",
+              status: "completed",
+              completionEvidence: {
+                kind: "assertion_evaluator",
+                reason: "   ",
+              },
+            }),
+          ),
+          runtime: runtime(home, 14),
+        }),
+      ).toThrow("Error: /goal completion evidence reason is empty.");
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: JSON.parse(
+            JSON.stringify({
+              objective: "Completed with long evaluator reason",
+              status: "completed",
+              completionEvidence: {
+                kind: "assertion_evaluator",
+                reason: "x".repeat(
+                  SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH + 1,
+                ),
+              },
+            }),
+          ),
+          runtime: runtime(home, 15),
+        }),
+      ).toThrow(
+        `Error: /goal completion evidence reason must be ${SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH} characters or fewer.`,
       );
       const ledgerRecords = (await readFile(session.filePath, "utf8"))
         .trimEnd()

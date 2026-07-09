@@ -840,6 +840,13 @@ describe("Task Progress", () => {
           status: "completed",
           criterionKind: "command",
           completionCriterion: 'node -e "process.exit(0)"',
+          completionEvidence: {
+            kind: "command",
+            command: 'node -e "process.exit(0)"',
+            cwd: workspace,
+            exitCode: 0,
+            freshness: "after_latest_workspace_mutation",
+          },
         },
       });
       expect(providerRequests).toHaveLength(3);
@@ -875,7 +882,7 @@ describe("Task Progress", () => {
         {
           role: "tool",
           toolCallId: "goal_1",
-          content: "Session goal completed: Finish the durable session goal.",
+          content: `Session goal completed: Finish the durable session goal. Evidence: node -e "process.exit(0)" exited 0 after the latest workspace mutation in ${workspace}.`,
         },
       ]);
       expect(messages.at(-1)).toEqual({
@@ -1130,6 +1137,11 @@ describe("Task Progress", () => {
           criterionKind: "assertion",
           completionCriterion:
             "The release notes explain every changed command.",
+          completionEvidence: {
+            kind: "assertion_evaluator",
+            reason:
+              "The surfaced notes explicitly cover every changed command.",
+          },
         },
       });
       expect(events).toContainEqual(
@@ -1171,7 +1183,7 @@ describe("Task Progress", () => {
         role: "tool",
         toolCallId: "goal_1",
         content: expect.stringContaining(
-          "Evidence: The surfaced notes explicitly cover every changed command.",
+          "Evidence: evaluator approved: The surfaced notes explicitly cover every changed command.",
         ),
       });
       expect(messages.at(-1)).toEqual({

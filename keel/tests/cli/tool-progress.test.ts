@@ -242,7 +242,11 @@ describe("CLI Tool Progress", () => {
       yield {
         type: "session_goal_updated",
         messageOrdinal: 2,
-        goal: { objective: "Finish checkout", status: "completed" },
+        goal: {
+          objective: "Finish checkout",
+          status: "completed",
+          completionEvidence: { kind: "user_override" },
+        },
       };
     }
     let stderr = "";
@@ -257,7 +261,40 @@ describe("CLI Tool Progress", () => {
 
     // Then
     expect(stderr).toBe(
-      "Session goal: completed - Finish checkout; criterion: missing\n",
+      "Session goal: completed - Finish checkout; criterion: missing\n" +
+        "Session goal evidence: user explicitly completed the goal with /goal complete\n",
+    );
+  });
+
+  test(`Given an agent updates a visible session goal without completion evidence,
+    When classic CLI output prints agent events,
+    Then stderr omits the evidence line`, async () => {
+    // Given
+    async function* events(): AsyncIterable<AgentEvent> {
+      yield {
+        type: "session_goal_updated",
+        messageOrdinal: 2,
+        goal: {
+          objective: "Continue checkout",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      };
+    }
+    let stderr = "";
+
+    // When
+    await printAgentEvents(events(), {
+      writeStdout() {},
+      writeStderr(text) {
+        stderr += text;
+      },
+    });
+
+    // Then
+    expect(stderr).toBe(
+      "Session goal: active - Continue checkout; criterion(command): pnpm test\n",
     );
   });
 
@@ -269,7 +306,11 @@ describe("CLI Tool Progress", () => {
       yield {
         type: "session_goal_updated",
         messageOrdinal: 2,
-        goal: { objective: "Finish checkout", status: "completed" },
+        goal: {
+          objective: "Finish checkout",
+          status: "completed",
+          completionEvidence: { kind: "user_override" },
+        },
       };
     }
     const statusLines: string[] = [];
@@ -286,6 +327,40 @@ describe("CLI Tool Progress", () => {
     // Then
     expect(statusLines).toEqual([
       "Session goal: completed - Finish checkout; criterion: missing",
+      "Session goal evidence: user explicitly completed the goal with /goal complete",
+    ]);
+  });
+
+  test(`Given an agent updates a visible session goal without completion evidence,
+    When stable interactive output prints agent events,
+    Then the status lines omit the evidence line`, async () => {
+    // Given
+    async function* events(): AsyncIterable<AgentEvent> {
+      yield {
+        type: "session_goal_updated",
+        messageOrdinal: 2,
+        goal: {
+          objective: "Continue checkout",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      };
+    }
+    const statusLines: string[] = [];
+
+    // When
+    await printStableInteractiveAgentEvents(events(), {
+      writeStdout() {},
+      writeAssistantHeader() {},
+      writeStatusLine(text) {
+        statusLines.push(text);
+      },
+    });
+
+    // Then
+    expect(statusLines).toEqual([
+      "Session goal: active - Continue checkout; criterion(command): pnpm test",
     ]);
   });
 });

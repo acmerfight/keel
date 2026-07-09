@@ -40,7 +40,11 @@ describe("CLI Session Status Format", () => {
       session: "scratch",
       workspace: "/tmp/workspace",
       activeModel: "(default for next prompt)",
-      goal: { objective: "Ship the release notes", status: "completed" },
+      goal: {
+        objective: "Ship the release notes",
+        status: "completed",
+        completionEvidence: { kind: "user_override" },
+      },
       messages: [],
       messageCount: 0,
       pendingInputCount: 0,
@@ -54,6 +58,46 @@ describe("CLI Session Status Format", () => {
     // Then
     expect(formatted).toContain(
       "  goal: completed - Ship the release notes; criterion: missing\n",
+    );
+    expect(formatted).toContain(
+      "  goal evidence: user explicitly completed the goal with /goal complete\n",
+    );
+  });
+
+  test(`Given a completed session goal has a long objective,
+    When the status snapshot is formatted,
+    Then completion evidence remains visible on its own line`, () => {
+    // Given
+    const longObjective =
+      "Document the post-release verification evidence so a reviewer can audit exactly why completion happened after recovery ".repeat(
+        4,
+      );
+
+    // When
+    const formatted = formatSessionStatusSnapshot({
+      session: "scratch",
+      workspace: "/tmp/workspace",
+      activeModel: "(default for next prompt)",
+      goal: {
+        objective: longObjective,
+        status: "completed",
+        completionEvidence: { kind: "user_override" },
+      },
+      messages: [],
+      messageCount: 0,
+      pendingInputCount: 0,
+      bashApprovalCount: 0,
+      taskProgress: emptySessionTaskProgress(),
+      modelSwitchCount: 0,
+      undoCheckpoints: [],
+      recoveryActions: [],
+    });
+
+    // Then
+    expect(formatted).toContain("  goal: completed - Document");
+    expect(formatted).toContain("...\n  goal evidence: user explicitly");
+    expect(formatted).toContain(
+      "  goal evidence: user explicitly completed the goal with /goal complete\n",
     );
   });
 

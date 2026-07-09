@@ -3,12 +3,16 @@ import { providerIds } from "../../core/provider-id.ts";
 import {
   normalizeSessionGoalCompletionCommand,
   normalizeSessionGoalCompletionCriterion,
+  normalizeSessionGoalCompletionEvidence,
+  normalizeSessionGoalCompletionEvidenceReason,
   normalizeSessionGoalObjective,
   normalizeSessionGoalStatusReason,
   SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
+  SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
   SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
   SESSION_GOAL_STATUS_REASON_MAX_LENGTH,
   type SessionGoal,
+  type SessionGoalCompletionEvidence,
   sessionGoalSchema,
 } from "../../core/session-goal.ts";
 import {
@@ -752,82 +756,145 @@ function normalizeSessionTitleForPersistence(title: string): string {
   return normalized.slice(0, SESSION_TITLE_MAX_LENGTH).trimEnd();
 }
 
+interface RedactBoundedGoalTextOptions {
+  readonly value: string;
+  readonly normalize: (value: string) => string;
+  readonly maxLength: number;
+  readonly emptyError: string;
+  readonly lengthError: string;
+}
+
+function truncateTextForPersistence(text: string, maxLength: number): string {
+  const truncated = text.slice(0, maxLength).trimEnd();
+  return truncated === "" ? text.slice(0, maxLength) : truncated;
+}
+
+function redactBoundedGoalTextForPersistence(
+  options: RedactBoundedGoalTextOptions,
+): string {
+  const redacted = options.normalize(redactTextForPersistence(options.value));
+  if (redacted === "") {
+    sessionStoreError(options.emptyError);
+  }
+  if (redacted.length <= options.maxLength) {
+    return redacted;
+  }
+  const raw = options.normalize(options.value);
+  if (raw.length <= options.maxLength) {
+    return truncateTextForPersistence(redacted, options.maxLength);
+  }
+  sessionStoreError(options.lengthError);
+}
+
+function redactSessionGoalCompletionEvidenceForPersistence(
+  evidence: SessionGoalCompletionEvidence,
+): SessionGoalCompletionEvidence {
+  const redactedEvidence: SessionGoalCompletionEvidence = (() => {
+    switch (evidence.kind) {
+      case "command":
+        return {
+          kind: "command",
+          command: redactBoundedGoalTextForPersistence({
+            value: evidence.command,
+            normalize: normalizeSessionGoalCompletionCommand,
+            maxLength: SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
+            emptyError: "Error: /goal completion evidence command is empty.",
+            lengthError: `Error: /goal completion evidence command must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
+          }),
+          cwd: redactBoundedGoalTextForPersistence({
+            value: evidence.cwd,
+            normalize: (value) => value.trim(),
+            maxLength: SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
+            emptyError: "Error: /goal completion evidence cwd is empty.",
+            lengthError: `Error: /goal completion evidence cwd must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
+          }),
+          exitCode: 0,
+          freshness: "after_latest_workspace_mutation",
+        };
+      case "assertion_evaluator":
+        return {
+          kind: "assertion_evaluator",
+          reason: redactBoundedGoalTextForPersistence({
+            value: evidence.reason,
+            normalize: normalizeSessionGoalCompletionEvidenceReason,
+            maxLength: SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
+            emptyError: "Error: /goal completion evidence reason is empty.",
+            lengthError: `Error: /goal completion evidence reason must be ${SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH} characters or fewer.`,
+          }),
+        };
+      case "user_override":
+        return { kind: "user_override" };
+    }
+  })();
+  return normalizeSessionGoalCompletionEvidence(redactedEvidence);
+}
+
+function requireSessionGoalCompletionEvidenceForPersistence(
+  evidence: SessionGoalCompletionEvidence | undefined,
+): SessionGoalCompletionEvidence {
+  if (evidence === undefined) {
+    sessionStoreError("Error: /goal completed status requires evidence.");
+  }
+  return evidence;
+}
+
 function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
-  const objective = normalizeSessionGoalObjective(
-    redactTextForPersistence(goal.objective),
-  );
+  const objective = redactBoundedGoalTextForPersistence({
+    value: goal.objective,
+    normalize: normalizeSessionGoalObjective,
+    maxLength: SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
+    emptyError: "Error: /goal requires non-empty text.",
+    lengthError: `Error: /goal objective must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
+  });
   const completionCriterion =
     goal.completionCriterion === undefined
       ? undefined
       : goal.criterionKind === "command"
-        ? normalizeSessionGoalCompletionCommand(
-            redactTextForPersistence(goal.completionCriterion),
-          )
-        : normalizeSessionGoalCompletionCriterion(
-            redactTextForPersistence(goal.completionCriterion),
-          );
+        ? redactBoundedGoalTextForPersistence({
+            value: goal.completionCriterion,
+            normalize: normalizeSessionGoalCompletionCommand,
+            maxLength: SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
+            emptyError: "Error: /goal completion criterion requires text.",
+            lengthError: `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
+          })
+        : redactBoundedGoalTextForPersistence({
+            value: goal.completionCriterion,
+            normalize: normalizeSessionGoalCompletionCriterion,
+            maxLength: SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
+            emptyError: "Error: /goal completion criterion requires text.",
+            lengthError: `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
+          });
   const statusReason =
     goal.status === "blocked" ||
     goal.status === "budget_limited" ||
     goal.status === "usage_limited"
-      ? normalizeSessionGoalStatusReason(
-          redactTextForPersistence(goal.statusReason),
-        )
+      ? redactBoundedGoalTextForPersistence({
+          value: goal.statusReason,
+          normalize: normalizeSessionGoalStatusReason,
+          maxLength: SESSION_GOAL_STATUS_REASON_MAX_LENGTH,
+          emptyError:
+            "Error: /goal blocked or limited status requires a reason.",
+          lengthError: `Error: /goal blocked or limited reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
+        })
       : undefined;
   const blockedAuditReason =
     goal.status !== "active" || goal.blockedAudit === undefined
       ? undefined
-      : normalizeSessionGoalStatusReason(
-          redactTextForPersistence(goal.blockedAudit.reason),
-        );
-  if (objective === "") {
-    sessionStoreError("Error: /goal requires non-empty text.");
-  }
-  if (objective.length > SESSION_GOAL_OBJECTIVE_MAX_LENGTH) {
-    sessionStoreError(
-      `Error: /goal objective must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
-    );
-  }
-  if (completionCriterion === "") {
-    sessionStoreError("Error: /goal completion criterion requires text.");
-  }
-  if (
-    completionCriterion !== undefined &&
-    completionCriterion.length > SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH
-  ) {
-    sessionStoreError(
-      `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
-    );
-  }
-  if (
-    (goal.status === "blocked" ||
-      goal.status === "budget_limited" ||
-      goal.status === "usage_limited") &&
-    statusReason === ""
-  ) {
-    sessionStoreError(
-      "Error: /goal blocked or limited status requires a reason.",
-    );
-  }
-  if (
-    statusReason !== undefined &&
-    statusReason.length > SESSION_GOAL_STATUS_REASON_MAX_LENGTH
-  ) {
-    sessionStoreError(
-      `Error: /goal blocked or limited reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
-    );
-  }
-  if (goal.status === "active" && blockedAuditReason === "") {
-    sessionStoreError("Error: /goal blocked audit requires a reason.");
-  }
-  if (
-    blockedAuditReason !== undefined &&
-    blockedAuditReason.length > SESSION_GOAL_STATUS_REASON_MAX_LENGTH
-  ) {
-    sessionStoreError(
-      `Error: /goal blocked audit reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
-    );
-  }
+      : redactBoundedGoalTextForPersistence({
+          value: goal.blockedAudit.reason,
+          normalize: normalizeSessionGoalStatusReason,
+          maxLength: SESSION_GOAL_STATUS_REASON_MAX_LENGTH,
+          emptyError: "Error: /goal blocked audit requires a reason.",
+          lengthError: `Error: /goal blocked audit reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
+        });
+  const completionEvidence =
+    goal.status === "completed"
+      ? redactSessionGoalCompletionEvidenceForPersistence(
+          requireSessionGoalCompletionEvidenceForPersistence(
+            goal.completionEvidence,
+          ),
+        )
+      : undefined;
   const criterion =
     goal.criterionKind !== undefined && completionCriterion !== undefined
       ? {
@@ -882,6 +949,10 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
         objective,
         status: "completed",
         ...criterion,
+        completionEvidence:
+          requireSessionGoalCompletionEvidenceForPersistence(
+            completionEvidence,
+          ),
       };
   }
 }

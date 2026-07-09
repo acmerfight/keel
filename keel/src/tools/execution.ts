@@ -314,11 +314,13 @@ async function executeUpdateGoalTool(
       status: "completed",
       criterionKind: sessionGoal.criterionKind,
       completionCriterion: sessionGoal.completionCriterion,
+      completionEvidence: {
+        kind: "assertion_evaluator",
+        reason: evaluation.reason,
+      },
     };
     return {
-      content: formatSessionGoalCompletedToolResult(completedGoal, {
-        evidenceBasis: evaluation.reason,
-      }),
+      content: formatSessionGoalCompletedToolResult(completedGoal),
       ok: true,
       sessionGoalUpdate: copySessionGoal(completedGoal),
     };
@@ -373,6 +375,13 @@ async function executeUpdateGoalTool(
     status: "completed",
     criterionKind: sessionGoal.criterionKind,
     completionCriterion: sessionGoal.completionCriterion,
+    completionEvidence: {
+      kind: "command",
+      command: expectedCommand,
+      cwd: workspace,
+      exitCode: 0,
+      freshness: "after_latest_workspace_mutation",
+    },
   };
   return {
     content: formatSessionGoalCompletedToolResult(completedGoal),

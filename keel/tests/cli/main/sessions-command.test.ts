@@ -133,6 +133,7 @@ describe("CLI Main - Sessions Command", () => {
           goal: {
             objective: "Ship the release notes",
             status: "completed",
+            completionEvidence: { kind: "user_override" },
           },
         }),
       ],
@@ -156,6 +157,9 @@ describe("CLI Main - Sessions Command", () => {
       );
       expect(stdout).toContain(
         "   goal: completed - Ship the release notes; criterion: missing\n",
+      );
+      expect(stdout).toContain(
+        "   goal evidence: user explicitly completed the goal with /goal complete\n",
       );
       expect(stdout.indexOf("   goal: active")).toBeLessThan(
         stdout.indexOf("   resume: keel --resume active-goal"),

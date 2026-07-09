@@ -1,5 +1,6 @@
 import { conversationCheckpointSummaryFromMessage } from "../agent/context-compaction.ts";
 import {
+  formatSessionGoalCompletionEvidenceSummary,
   formatSessionGoalSummary,
   type SessionGoal,
 } from "../core/session-goal.ts";
@@ -47,6 +48,21 @@ function formatStatusText(text: string): string {
 
 function formatStatusGoalText(text: string): string {
   return sanitizeStatusLineText(redactTextForPersistence(text).trim());
+}
+
+function formatStatusGoalLines(
+  goal: SessionGoal | undefined,
+): readonly string[] {
+  const summary = formatSessionGoalSummary(goal, {
+    includeCompletionEvidence: false,
+  });
+  const evidence = formatSessionGoalCompletionEvidenceSummary(goal);
+  return [
+    `  goal: ${formatStatusGoalText(summary)}`,
+    ...(evidence === null
+      ? []
+      : [`  goal evidence: ${formatStatusGoalText(evidence)}`]),
+  ];
 }
 
 function escapeStatusTextWithoutLimit(text: string): string {
@@ -113,7 +129,7 @@ export function formatSessionStatusSnapshot(
         : formatStatusText(options.title)
     }`,
     "  continue: send follow-ups or corrections here until the task is done",
-    `  goal: ${formatStatusGoalText(formatSessionGoalSummary(options.goal))}`,
+    ...formatStatusGoalLines(options.goal),
     `  workspace: ${formatStatusText(options.workspace)}`,
     `  active model: ${formatStatusText(options.activeModel)}`,
     `  workflow skill: ${formatWorkflowSkill(options.workflowSkill)}`,

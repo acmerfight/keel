@@ -1,4 +1,5 @@
 import {
+  formatSessionGoalCompletionEvidenceSummary,
   formatSessionGoalSummary,
   type SessionGoal,
 } from "../core/session-goal.ts";
@@ -66,8 +67,20 @@ function hasActiveSessionTasks(taskProgress: SessionTaskProgress): boolean {
   return taskProgress.tasks.some((task) => task.status !== "completed");
 }
 
-function formatSessionGoalRecoveryState(goal: SessionGoal): string {
-  return formatSessionGoalDetailText(formatSessionGoalSummary(goal));
+function sessionGoalRecoveryStateLines(
+  goal: SessionGoal,
+  indent: string,
+): readonly string[] {
+  const summary = formatSessionGoalSummary(goal, {
+    includeCompletionEvidence: false,
+  });
+  const evidence = formatSessionGoalCompletionEvidenceSummary(goal);
+  return [
+    `${indent}goal: ${formatSessionGoalDetailText(summary)}`,
+    ...(evidence === null
+      ? []
+      : [`${indent}goal evidence: ${formatSessionGoalDetailText(evidence)}`]),
+  ];
 }
 
 function sessionRecoveryStateLines(
@@ -76,7 +89,7 @@ function sessionRecoveryStateLines(
 ): readonly string[] {
   return [
     ...(entry.goal !== undefined
-      ? [`${indent}goal: ${formatSessionGoalRecoveryState(entry.goal)}`]
+      ? sessionGoalRecoveryStateLines(entry.goal, indent)
       : []),
     ...(hasActiveSessionTasks(entry.taskProgress)
       ? [
