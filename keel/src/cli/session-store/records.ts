@@ -767,7 +767,9 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
             redactTextForPersistence(goal.completionCriterion),
           );
   const statusReason =
-    goal.status === "blocked"
+    goal.status === "blocked" ||
+    goal.status === "budget_limited" ||
+    goal.status === "usage_limited"
       ? normalizeSessionGoalStatusReason(
           redactTextForPersistence(goal.statusReason),
         )
@@ -797,15 +799,22 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
     );
   }
-  if (goal.status === "blocked" && statusReason === "") {
-    sessionStoreError("Error: /goal blocked status requires a reason.");
+  if (
+    (goal.status === "blocked" ||
+      goal.status === "budget_limited" ||
+      goal.status === "usage_limited") &&
+    statusReason === ""
+  ) {
+    sessionStoreError(
+      "Error: /goal blocked or limited status requires a reason.",
+    );
   }
   if (
     statusReason !== undefined &&
     statusReason.length > SESSION_GOAL_STATUS_REASON_MAX_LENGTH
   ) {
     sessionStoreError(
-      `Error: /goal blocked reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
+      `Error: /goal blocked or limited reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
     );
   }
   if (goal.status === "active" && blockedAuditReason === "") {
@@ -845,6 +854,20 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       return {
         objective,
         status: "blocked",
+        statusReason: z.string().parse(statusReason),
+        ...criterion,
+      };
+    case "budget_limited":
+      return {
+        objective,
+        status: "budget_limited",
+        statusReason: z.string().parse(statusReason),
+        ...criterion,
+      };
+    case "usage_limited":
+      return {
+        objective,
+        status: "usage_limited",
         statusReason: z.string().parse(statusReason),
         ...criterion,
       };

@@ -501,7 +501,8 @@ describe("CLI Main - Interactive Entrypoint", () => {
     const input = new PassThrough();
     input.write("/goal Finish the durable session goal\n");
     input.write("/goal verify pnpm test\n");
-    input.end("continue the durable goal\n");
+    input.write("continue the durable goal\n");
+    input.end("/status\n");
     const fixture = createRuntime(
       ["--session", "goal-blocked-burst", "--bash-policy", "deny"],
       {
@@ -665,7 +666,8 @@ describe("CLI Main - Interactive Entrypoint", () => {
     input.write("/goal verify pnpm test\n");
     input.write("first blocked proposal\n");
     input.write("read note.txt\n");
-    input.end("blocked again\n");
+    input.write("blocked again\n");
+    input.end("/status\n");
     const fixture = createRuntime(
       ["--session", "goal-blocked-reset", "--bash-policy", "deny"],
       {
@@ -736,6 +738,145 @@ describe("CLI Main - Interactive Entrypoint", () => {
           "Tool: update_goal\n",
           "Session goal: active - Finish the durable session goal; criterion(command): pnpm test; blocked audit: 1/3 - Credentials are unavailable again.\n",
         ].join(""),
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a saved active goal remains incomplete after a user turn,
+    When no user input is queued,
+    Then the CLI automatically continues the goal until evidence completes it`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-auto-continue-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-auto-continue-home-"),
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.end(sseTextReplyWithUsage("Initial goal turn done."));
+          return;
+        }
+        if (capturedBodies.length === 2) {
+          res.write(
+            sseToolCall("write_done", "write", {
+              path: "done.txt",
+              content: "complete\n",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (capturedBodies.length === 3) {
+          res.write(
+            sseToolCall("verify_done", "bash", {
+              command: "test -f done.txt",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (capturedBodies.length === 4) {
+          res.write(
+            sseToolCall("complete_goal", "update_goal", {
+              status: "completed",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Goal completed from continuation."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.write("/goal Finish the continuation goal\n");
+    input.write("/goal verify test -f done.txt\n");
+    input.end("start the goal\n");
+    const fixture = createRuntime(
+      ["--session", "goal-auto-continue", "--bash-policy", "trusted"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input,
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(capturedBodies).toHaveLength(5);
+      expect(fixture.stdout()).toContain("Initial goal turn done.\n");
+      expect(fixture.stdout()).toContain("Goal completed from continuation.\n");
+      const continuationRequest = requestWithMessagesSchema.parse(
+        capturedBodies[1],
+      );
+      expect(
+        continuationRequest.messages?.filter(
+          (message) =>
+            message.role === "user" &&
+            typeof message.content === "string" &&
+            message.content.includes("Keel runtime goal continuation"),
+        ),
+      ).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining(
+            "This is runtime-generated continuation context, not a new user request.",
+          ),
+        }),
+      ]);
+      const ledger = jsonlRecords(
+        await readFile(
+          join(home, "sessions", "goal-auto-continue", "ledger.jsonl"),
+          "utf8",
+        ),
+      );
+      expect(sessionGoalLedgerRecords(ledger).at(-1)?.goal).toEqual({
+        objective: "Finish the continuation goal",
+        status: "completed",
+        criterionKind: "command",
+        completionCriterion: "test -f done.txt",
+      });
+      await expect(readFile(join(workspace, "done.txt"), "utf8")).resolves.toBe(
+        "complete\n",
       );
     } finally {
       await close(server);

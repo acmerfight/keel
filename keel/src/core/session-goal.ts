@@ -9,10 +9,13 @@ const sessionGoalStatuses = [
   "active",
   "paused",
   "blocked",
+  "budget_limited",
+  "usage_limited",
   "completed",
 ] as const;
 const sessionGoalCriterionKinds = ["command", "assertion"] as const;
 
+type SessionGoalStatus = (typeof sessionGoalStatuses)[number];
 export type SessionGoalCriterionKind =
   (typeof sessionGoalCriterionKinds)[number];
 export type SessionGoalBlockedAuditCount = 1 | 2;
@@ -42,6 +45,16 @@ interface BlockedSessionGoal extends SessionGoalContract {
   readonly statusReason: string;
 }
 
+interface BudgetLimitedSessionGoal extends SessionGoalContract {
+  readonly status: "budget_limited";
+  readonly statusReason: string;
+}
+
+interface UsageLimitedSessionGoal extends SessionGoalContract {
+  readonly status: "usage_limited";
+  readonly statusReason: string;
+}
+
 interface CompletedSessionGoal extends SessionGoalContract {
   readonly status: "completed";
 }
@@ -50,6 +63,8 @@ export type SessionGoal =
   | ActiveSessionGoal
   | PausedSessionGoal
   | BlockedSessionGoal
+  | BudgetLimitedSessionGoal
+  | UsageLimitedSessionGoal
   | CompletedSessionGoal;
 
 const sessionGoalStatusSchema = z.enum(sessionGoalStatuses);
@@ -96,18 +111,25 @@ const sessionGoalBaseSchema = z
           "criterionKind and completionCriterion must be provided together",
       });
     }
-    if (goal.status === "blocked" && goal.statusReason === undefined) {
+    if (
+      sessionGoalStatusRequiresReason(goal.status) &&
+      goal.statusReason === undefined
+    ) {
       ctx.addIssue({
         code: "custom",
         path: ["statusReason"],
-        message: "blocked session goals require a status reason",
+        message: `${goal.status} session goals require a status reason`,
       });
     }
-    if (goal.status !== "blocked" && goal.statusReason !== undefined) {
+    if (
+      !sessionGoalStatusRequiresReason(goal.status) &&
+      goal.statusReason !== undefined
+    ) {
       ctx.addIssue({
         code: "custom",
         path: ["statusReason"],
-        message: "statusReason is only valid for blocked session goals",
+        message:
+          "statusReason is only valid for blocked or limited session goals",
       });
     }
     if (goal.status !== "active" && goal.blockedAudit !== undefined) {
@@ -118,6 +140,21 @@ const sessionGoalBaseSchema = z
       });
     }
   });
+
+function sessionGoalStatusRequiresReason(
+  status: SessionGoalStatus,
+): status is "blocked" | "budget_limited" | "usage_limited" {
+  switch (status) {
+    case "blocked":
+    case "budget_limited":
+    case "usage_limited":
+      return true;
+    case "active":
+    case "paused":
+    case "completed":
+      return false;
+  }
+}
 
 export const sessionGoalSchema: z.ZodType<SessionGoal> =
   sessionGoalBaseSchema.transform((goal): SessionGoal => {
@@ -149,6 +186,24 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
         return {
           objective: goal.objective,
           status: "blocked",
+          statusReason: normalizeSessionGoalStatusReason(
+            z.string().parse(goal.statusReason),
+          ),
+          ...criterion,
+        };
+      case "budget_limited":
+        return {
+          objective: goal.objective,
+          status: "budget_limited",
+          statusReason: normalizeSessionGoalStatusReason(
+            z.string().parse(goal.statusReason),
+          ),
+          ...criterion,
+        };
+      case "usage_limited":
+        return {
+          objective: goal.objective,
+          status: "usage_limited",
           statusReason: normalizeSessionGoalStatusReason(
             z.string().parse(goal.statusReason),
           ),
@@ -225,6 +280,20 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
         statusReason: goal.statusReason,
         ...criterion,
       };
+    case "budget_limited":
+      return {
+        objective: goal.objective,
+        status: "budget_limited",
+        statusReason: goal.statusReason,
+        ...criterion,
+      };
+    case "usage_limited":
+      return {
+        objective: goal.objective,
+        status: "usage_limited",
+        statusReason: goal.statusReason,
+        ...criterion,
+      };
     case "paused":
       return {
         objective: goal.objective,
@@ -266,8 +335,18 @@ export function formatSessionGoalSummary(
   if (goal === undefined) {
     return "none";
   }
-  const reason =
-    goal.status === "blocked" ? `; reason: ${goal.statusReason}` : "";
+  const reason = (() => {
+    switch (goal.status) {
+      case "blocked":
+      case "budget_limited":
+      case "usage_limited":
+        return `; reason: ${goal.statusReason}`;
+      case "active":
+      case "paused":
+      case "completed":
+        return "";
+    }
+  })();
   const blockedAudit =
     goal.status !== "active" || goal.blockedAudit === undefined
       ? ""

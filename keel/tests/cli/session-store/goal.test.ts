@@ -130,9 +130,9 @@ describe("Session Store Goal", () => {
     }
   });
 
-  test(`Given paused and blocked session goals are persisted,
+  test(`Given paused, blocked, and limited session goals are persisted,
     When the session is resumed,
-    Then lifecycle state and blocked reason survive the ledger boundary`, async () => {
+    Then lifecycle state and status reason survive the ledger boundary`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
@@ -166,17 +166,39 @@ describe("Session Store Goal", () => {
         },
         runtime: runtime(home, 2),
       });
+      persistSessionGoal({
+        session,
+        goal: {
+          objective: "Finish lifecycle states",
+          status: "usage_limited",
+          statusReason: " Automatic continuation stopped. ",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+        runtime: runtime(home, 3),
+      });
+      persistSessionGoal({
+        session,
+        goal: {
+          objective: "Finish lifecycle states",
+          status: "budget_limited",
+          statusReason: " Session budget stopped continuation. ",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+        runtime: runtime(home, 4),
+      });
       const resumed = resumeSessionStore({
         sessionId: "session-goal-lifecycle",
         workspace,
-        runtime: runtime(home, 3),
+        runtime: runtime(home, 5),
       });
 
       // Then
       expect(resumed.goal).toEqual({
         objective: "Finish lifecycle states",
-        status: "blocked",
-        statusReason: "Need credentials from the user.",
+        status: "budget_limited",
+        statusReason: "Session budget stopped continuation.",
         criterionKind: "command",
         completionCriterion: "pnpm test",
       });
@@ -184,7 +206,7 @@ describe("Session Store Goal", () => {
         .trimEnd()
         .split("\n")
         .map((line) => JSON.parse(line));
-      expect(ledgerRecords.at(-2)).toMatchObject({
+      expect(ledgerRecords.at(-4)).toMatchObject({
         type: "session_goal",
         goal: {
           objective: "Finish lifecycle states",
@@ -193,12 +215,32 @@ describe("Session Store Goal", () => {
           completionCriterion: "pnpm test",
         },
       });
-      expect(ledgerRecords.at(-1)).toMatchObject({
+      expect(ledgerRecords.at(-3)).toMatchObject({
         type: "session_goal",
         goal: {
           objective: "Finish lifecycle states",
           status: "blocked",
           statusReason: "Need credentials from the user.",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      });
+      expect(ledgerRecords.at(-2)).toMatchObject({
+        type: "session_goal",
+        goal: {
+          objective: "Finish lifecycle states",
+          status: "usage_limited",
+          statusReason: "Automatic continuation stopped.",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      });
+      expect(ledgerRecords.at(-1)).toMatchObject({
+        type: "session_goal",
+        goal: {
+          objective: "Finish lifecycle states",
+          status: "budget_limited",
+          statusReason: "Session budget stopped continuation.",
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -465,7 +507,7 @@ describe("Session Store Goal", () => {
           },
           runtime: runtime(home, 5),
         }),
-      ).toThrow("Error: /goal blocked status requires a reason.");
+      ).toThrow("Error: /goal blocked or limited status requires a reason.");
       expect(() =>
         persistSessionGoal({
           session,
@@ -477,7 +519,7 @@ describe("Session Store Goal", () => {
           runtime: runtime(home, 6),
         }),
       ).toThrow(
-        `Error: /goal blocked reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
+        `Error: /goal blocked or limited reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
       );
       expect(() =>
         persistSessionGoal({

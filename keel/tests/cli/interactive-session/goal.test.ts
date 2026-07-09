@@ -155,7 +155,8 @@ describe("Interactive Session - Goals", () => {
       );
       input.write("/goal verify pnpm test\n");
       input.write("/status\n");
-      input.end("continue with the next fix\n");
+      input.write("continue with the next fix\n");
+      input.end("/status\n");
       await session;
 
       // Then
@@ -275,7 +276,8 @@ describe("Interactive Session - Goals", () => {
     input.write("handle a side request while paused\n");
     input.write("/goal resume\n");
     input.write("/status\n");
-    input.end("continue the durable goal\n");
+    input.write("continue the durable goal\n");
+    input.end("/status\n");
     await session;
 
     // Then
@@ -375,7 +377,7 @@ describe("Interactive Session - Goals", () => {
     });
     expect(stderr).toBe(
       "Error: only active session goals can be paused.\n" +
-        "Error: only paused or blocked session goals can be resumed.\n",
+        "Error: only paused, blocked, or limited session goals can be resumed.\n",
     );
     expect(stdout).toContain("Goal paused: Blocked objective\n");
     expect(stdout).toContain("Goal resumed: Blocked objective\n");
@@ -384,26 +386,60 @@ describe("Interactive Session - Goals", () => {
     );
   });
 
-  test(`Given a saved interactive session has a blocked goal,
+  const resumableGoalCases: ReadonlyArray<{
+    readonly label: string;
+    readonly initialGoal: SessionGoal;
+  }> = [
+    {
+      label: "blocked",
+      initialGoal: {
+        objective: "Continue blocked goal",
+        status: "blocked",
+        statusReason: "Need credentials.",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+      },
+    },
+    {
+      label: "usage-limited",
+      initialGoal: {
+        objective: "Continue usage-limited goal",
+        status: "usage_limited",
+        statusReason: "Automatic continuation stopped.",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+      },
+    },
+    {
+      label: "budget-limited",
+      initialGoal: {
+        objective: "Continue budget-limited goal",
+        status: "budget_limited",
+        statusReason: "Session budget stopped continuation.",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+      },
+    },
+  ];
+
+  test.each(
+    resumableGoalCases,
+  )(`Given a saved interactive session has a $label goal,
     When the user resumes it,
-    Then Keel clears the blocker reason and reactivates the goal`, async () => {
+    Then Keel clears the status reason and reactivates the goal`, async ({
+    initialGoal,
+  }) => {
     // Given
     const input = new PassThrough();
     let stdout = "";
     let stderr = "";
-    let persistedGoal: SessionGoal | undefined = {
-      objective: "Continue blocked goal",
-      status: "blocked",
-      statusReason: "Need credentials.",
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
-    };
-    const provider = unusedProvider("unused-blocked-goal-resume-provider");
+    let persistedGoal: SessionGoal | undefined = initialGoal;
+    const provider = unusedProvider("unused-goal-resume-provider");
     const session = runInteractiveSession({
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "blocked-goal-resume-session",
+      sessionId: "goal-resume-session",
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -440,14 +476,14 @@ describe("Interactive Session - Goals", () => {
 
     // Then
     expect(persistedGoal).toEqual({
-      objective: "Continue blocked goal",
+      objective: initialGoal.objective,
       status: "active",
       criterionKind: "command",
       completionCriterion: "pnpm test",
     });
-    expect(stdout).toContain("Goal resumed: Continue blocked goal\n");
+    expect(stdout).toContain(`Goal resumed: ${initialGoal.objective}\n`);
     expect(stdout).toContain(
-      "Session goal: active - Continue blocked goal; criterion(command): pnpm test\n",
+      `Session goal: active - ${initialGoal.objective}; criterion(command): pnpm test\n`,
     );
     expect(stderr).toBe("");
   });
