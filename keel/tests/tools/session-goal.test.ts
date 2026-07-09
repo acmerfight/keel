@@ -390,8 +390,26 @@ describe("Session Goal Tool", () => {
         },
       }),
     ).toBe(
-      "completed - Fix checkout tests; criterion(command): pnpm test; evidence: pnpm test exited 0 in /repo after the latest workspace mutation",
+      "completed - Fix checkout tests; criterion(command): pnpm test; evidence: pnpm test exited 0 after the latest workspace mutation in /repo",
     );
+    expect(
+      formatSessionGoalSummary(
+        {
+          objective: "Fix checkout tests",
+          status: "completed",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          completionEvidence: {
+            kind: "command",
+            command: "pnpm test",
+            cwd: "/repo",
+            exitCode: 0,
+            freshness: "after_latest_workspace_mutation",
+          },
+        },
+        { includeCompletionEvidence: false },
+      ),
+    ).toBe("completed - Fix checkout tests; criterion(command): pnpm test");
     expect(
       formatSessionGoalSummary({
         objective: "Publish release notes",
@@ -986,7 +1004,7 @@ describe("Session Goal Tool", () => {
       // Then
       expect(execution).toMatchObject({
         ok: true,
-        content: `Session goal completed: Finish the durable checkout goal. Evidence: pnpm test exited 0 in ${workspace} after the latest workspace mutation.`,
+        content: `Session goal completed: Finish the durable checkout goal. Evidence: pnpm test exited 0 after the latest workspace mutation in ${workspace}.`,
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "completed",

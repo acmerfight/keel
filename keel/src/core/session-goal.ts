@@ -454,12 +454,18 @@ export function clearSessionGoalBlockedAudit(
   };
 }
 
+interface SessionGoalSummaryOptions {
+  readonly includeCompletionEvidence?: boolean;
+}
+
 export function formatSessionGoalSummary(
   goal: SessionGoal | undefined,
+  options: SessionGoalSummaryOptions = {},
 ): string {
   if (goal === undefined) {
     return "none";
   }
+  const includeCompletionEvidence = options.includeCompletionEvidence !== false;
   const reason = (() => {
     switch (goal.status) {
       case "blocked":
@@ -477,7 +483,7 @@ export function formatSessionGoalSummary(
       ? ""
       : `; blocked audit: ${goal.blockedAudit.consecutiveCount}/${SESSION_GOAL_BLOCKED_AUDIT_THRESHOLD} - ${goal.blockedAudit.reason}`;
   const completionEvidence =
-    goal.status === "completed"
+    goal.status === "completed" && includeCompletionEvidence
       ? `; evidence: ${formatSessionGoalCompletionEvidence(goal.completionEvidence)}`
       : "";
   if (
@@ -493,12 +499,20 @@ function withSentencePeriod(text: string): string {
   return /[.!?]$/u.test(text) ? text : `${text}.`;
 }
 
+export function formatSessionGoalCompletionEvidenceSummary(
+  goal: SessionGoal | undefined,
+): string | null {
+  return goal?.status === "completed"
+    ? formatSessionGoalCompletionEvidence(goal.completionEvidence)
+    : null;
+}
+
 function formatSessionGoalCompletionEvidence(
   evidence: SessionGoalCompletionEvidence,
 ): string {
   switch (evidence.kind) {
     case "command":
-      return `${evidence.command} exited 0 in ${evidence.cwd} after the latest workspace mutation`;
+      return `${evidence.command} exited 0 after the latest workspace mutation in ${evidence.cwd}`;
     case "assertion_evaluator":
       return `evaluator approved: ${evidence.reason}`;
     case "user_override":

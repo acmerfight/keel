@@ -261,7 +261,8 @@ describe("CLI Tool Progress", () => {
 
     // Then
     expect(stderr).toBe(
-      "Session goal: completed - Finish checkout; criterion: missing; evidence: user explicitly completed the goal with /goal complete\n",
+      "Session goal: completed - Finish checkout; criterion: missing\n" +
+        "Session goal evidence: user explicitly completed the goal with /goal complete\n",
     );
   });
 
@@ -293,7 +294,8 @@ describe("CLI Tool Progress", () => {
 
     // Then
     expect(statusLines).toEqual([
-      "Session goal: completed - Finish checkout; criterion: missing; evidence: user explicitly completed the goal with /goal complete",
+      "Session goal: completed - Finish checkout; criterion: missing",
+      "Session goal evidence: user explicitly completed the goal with /goal complete",
     ]);
   });
 });

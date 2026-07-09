@@ -882,7 +882,7 @@ describe("Task Progress", () => {
         {
           role: "tool",
           toolCallId: "goal_1",
-          content: `Session goal completed: Finish the durable session goal. Evidence: node -e "process.exit(0)" exited 0 in ${workspace} after the latest workspace mutation.`,
+          content: `Session goal completed: Finish the durable session goal. Evidence: node -e "process.exit(0)" exited 0 after the latest workspace mutation in ${workspace}.`,
         },
       ]);
       expect(messages.at(-1)).toEqual({

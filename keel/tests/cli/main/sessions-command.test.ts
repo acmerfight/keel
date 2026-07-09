@@ -156,7 +156,10 @@ describe("CLI Main - Sessions Command", () => {
         '   goal: active - Fix the session resume flow; criterion(command): node  -e "process.exit(0)"\n',
       );
       expect(stdout).toContain(
-        "   goal: completed - Ship the release notes; criterion: missing; evidence: user explicitly completed the goal with /goal complete\n",
+        "   goal: completed - Ship the release notes; criterion: missing\n",
+      );
+      expect(stdout).toContain(
+        "   goal evidence: user explicitly completed the goal with /goal complete\n",
       );
       expect(stdout.indexOf("   goal: active")).toBeLessThan(
         stdout.indexOf("   resume: keel --resume active-goal"),

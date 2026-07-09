@@ -861,7 +861,9 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
   const completionEvidence =
     goal.status === "completed"
       ? redactSessionGoalCompletionEvidenceForPersistence(
-          goal.completionEvidence,
+          requireSessionGoalCompletionEvidenceForPersistence(
+            goal.completionEvidence,
+          ),
         )
       : undefined;
   if (objective === "") {

@@ -1,7 +1,10 @@
 import type { ContextCompactionStats } from "../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import type { ToolOutputArtifactNotice } from "../agent/tool-output-artifacts.ts";
-import { formatSessionGoalSummary } from "../core/session-goal.ts";
+import {
+  formatSessionGoalCompletionEvidenceSummary,
+  formatSessionGoalSummary,
+} from "../core/session-goal.ts";
 import { formatSessionTaskProgressSummary } from "../core/task-progress.ts";
 import { toolCallLabel } from "../tools/registry.ts";
 import type { AgentEventReportRecorder } from "./report-events.ts";
@@ -235,9 +238,15 @@ export async function printAgentEvents(
         `Task progress: ${sanitizeStatusLineText(formatSessionTaskProgressSummary(event.taskProgress))}\n`,
       );
     } else if (event.type === "session_goal_updated") {
+      const evidence = formatSessionGoalCompletionEvidenceSummary(event.goal);
       runtime.writeStderr(
-        `Session goal: ${sanitizeStatusLineText(formatSessionGoalSummary(event.goal))}\n`,
+        `Session goal: ${sanitizeStatusLineText(formatSessionGoalSummary(event.goal, { includeCompletionEvidence: false }))}\n`,
       );
+      if (evidence !== null) {
+        runtime.writeStderr(
+          `Session goal evidence: ${sanitizeStatusLineText(evidence)}\n`,
+        );
+      }
     } else if (event.type === "tool_output_artifact") {
       runtime.writeStderr(`${formatToolOutputArtifactNotice(event)}\n`);
     } else if (event.type === "end") {
@@ -294,11 +303,18 @@ export async function printStableInteractiveAgentEvents(
           `Task progress: ${sanitizeStatusLineText(formatSessionTaskProgressSummary(event.taskProgress))}`,
         );
         break;
-      case "session_goal_updated":
+      case "session_goal_updated": {
+        const evidence = formatSessionGoalCompletionEvidenceSummary(event.goal);
         runtime.writeStatusLine(
-          `Session goal: ${sanitizeStatusLineText(formatSessionGoalSummary(event.goal))}`,
+          `Session goal: ${sanitizeStatusLineText(formatSessionGoalSummary(event.goal, { includeCompletionEvidence: false }))}`,
         );
+        if (evidence !== null) {
+          runtime.writeStatusLine(
+            `Session goal evidence: ${sanitizeStatusLineText(evidence)}`,
+          );
+        }
         break;
+      }
       case "tool_output_artifact":
         runtime.writeStatusLine(formatToolOutputArtifactNotice(event));
         break;

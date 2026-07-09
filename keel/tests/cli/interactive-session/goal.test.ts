@@ -1040,7 +1040,10 @@ describe("Interactive Session - Goals", () => {
     });
     expect(stdout).toContain("Goal completed: Ship the release notes\n");
     expect(stdout).toContain(
-      "  goal: completed - Ship the release notes; criterion(command): pnpm test; evidence: user explicitly completed the goal with /goal complete\n",
+      "  goal: completed - Ship the release notes; criterion(command): pnpm test\n",
+    );
+    expect(stdout).toContain(
+      "  goal evidence: user explicitly completed the goal with /goal complete\n",
     );
     expect(stderr).toBe(
       "Error: only active session goals can change the completion criterion. Resume the goal or set a new goal first.\n".repeat(
@@ -1167,7 +1170,10 @@ describe("Interactive Session - Goals", () => {
       });
       expect(stdout).toContain("Goal finished.\n");
       expect(stdout).toContain(
-        `  goal: completed - Finish the checkout goal; criterion(command): node -e "process.exit(0)"; evidence: node -e "process.exit(0)" exited 0 in ${workspace}`,
+        '  goal: completed - Finish the checkout goal; criterion(command): node -e "process.exit(0)"\n',
+      );
+      expect(stdout).toContain(
+        `  goal evidence: node -e "process.exit(0)" exited 0 after the latest workspace mutation in ${workspace}`,
       );
       expect(stderr).toBe("");
     } finally {
