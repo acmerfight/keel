@@ -3,12 +3,16 @@ import { providerIds } from "../../core/provider-id.ts";
 import {
   normalizeSessionGoalCompletionCommand,
   normalizeSessionGoalCompletionCriterion,
+  normalizeSessionGoalCompletionEvidence,
+  normalizeSessionGoalCompletionEvidenceReason,
   normalizeSessionGoalObjective,
   normalizeSessionGoalStatusReason,
   SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
+  SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
   SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
   SESSION_GOAL_STATUS_REASON_MAX_LENGTH,
   type SessionGoal,
+  type SessionGoalCompletionEvidence,
   sessionGoalSchema,
 } from "../../core/session-goal.ts";
 import {
@@ -752,6 +756,80 @@ function normalizeSessionTitleForPersistence(title: string): string {
   return normalized.slice(0, SESSION_TITLE_MAX_LENGTH).trimEnd();
 }
 
+function redactSessionGoalCompletionEvidenceForPersistence(
+  evidence: SessionGoalCompletionEvidence,
+): SessionGoalCompletionEvidence {
+  const redactedEvidence: SessionGoalCompletionEvidence = (() => {
+    switch (evidence.kind) {
+      case "command":
+        return {
+          kind: "command",
+          command: normalizeSessionGoalCompletionCommand(
+            redactTextForPersistence(evidence.command),
+          ),
+          cwd: redactTextForPersistence(evidence.cwd).trim(),
+          exitCode: 0,
+          freshness: "after_latest_workspace_mutation",
+        };
+      case "assertion_evaluator":
+        return {
+          kind: "assertion_evaluator",
+          reason: normalizeSessionGoalCompletionEvidenceReason(
+            redactTextForPersistence(evidence.reason),
+          ),
+        };
+      case "user_override":
+        return { kind: "user_override" };
+    }
+  })();
+  if (redactedEvidence.kind === "command") {
+    if (redactedEvidence.command === "") {
+      sessionStoreError("Error: /goal completion evidence command is empty.");
+    }
+    if (
+      redactedEvidence.command.length >
+      SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH
+    ) {
+      sessionStoreError(
+        `Error: /goal completion evidence command must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
+      );
+    }
+    if (redactedEvidence.cwd === "") {
+      sessionStoreError("Error: /goal completion evidence cwd is empty.");
+    }
+    if (redactedEvidence.cwd.length > SESSION_GOAL_OBJECTIVE_MAX_LENGTH) {
+      sessionStoreError(
+        `Error: /goal completion evidence cwd must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
+      );
+    }
+  }
+  if (
+    redactedEvidence.kind === "assertion_evaluator" &&
+    redactedEvidence.reason === ""
+  ) {
+    sessionStoreError("Error: /goal completion evidence reason is empty.");
+  }
+  if (
+    redactedEvidence.kind === "assertion_evaluator" &&
+    redactedEvidence.reason.length >
+      SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH
+  ) {
+    sessionStoreError(
+      `Error: /goal completion evidence reason must be ${SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH} characters or fewer.`,
+    );
+  }
+  return normalizeSessionGoalCompletionEvidence(redactedEvidence);
+}
+
+function requireSessionGoalCompletionEvidenceForPersistence(
+  evidence: SessionGoalCompletionEvidence | undefined,
+): SessionGoalCompletionEvidence {
+  if (evidence === undefined) {
+    sessionStoreError("Error: /goal completed status requires evidence.");
+  }
+  return evidence;
+}
+
 function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
   const objective = normalizeSessionGoalObjective(
     redactTextForPersistence(goal.objective),
@@ -780,6 +858,12 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       : normalizeSessionGoalStatusReason(
           redactTextForPersistence(goal.blockedAudit.reason),
         );
+  const completionEvidence =
+    goal.status === "completed"
+      ? redactSessionGoalCompletionEvidenceForPersistence(
+          goal.completionEvidence,
+        )
+      : undefined;
   if (objective === "") {
     sessionStoreError("Error: /goal requires non-empty text.");
   }
@@ -882,6 +966,10 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
         objective,
         status: "completed",
         ...criterion,
+        completionEvidence:
+          requireSessionGoalCompletionEvidenceForPersistence(
+            completionEvidence,
+          ),
       };
   }
 }

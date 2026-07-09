@@ -130,6 +130,86 @@ describe("Session Store Goal", () => {
     }
   });
 
+  test(`Given a completed session goal has command completion evidence,
+    When the session is resumed,
+    Then the durable goal explains why completion was accepted`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+
+    try {
+      const session = createSessionStore({
+        sessionId: "session-goal-completed-evidence",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When
+      persistSessionGoal({
+        session,
+        goal: {
+          objective: "Fix checkout tests",
+          status: "completed",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          completionEvidence: {
+            kind: "command",
+            command: " pnpm test ",
+            cwd: workspace,
+            exitCode: 0,
+            freshness: "after_latest_workspace_mutation",
+          },
+        },
+        runtime: runtime(home, 1),
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "session-goal-completed-evidence",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(resumed.goal).toEqual({
+        objective: "Fix checkout tests",
+        status: "completed",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        completionEvidence: {
+          kind: "command",
+          command: "pnpm test",
+          cwd: workspace,
+          exitCode: 0,
+          freshness: "after_latest_workspace_mutation",
+        },
+      });
+      const ledgerRecords = (await readFile(session.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerRecords.at(-1)).toEqual({
+        schemaVersion: 2,
+        type: "session_goal",
+        timestamp: "1970-01-01T00:00:00.001Z",
+        goal: {
+          objective: "Fix checkout tests",
+          status: "completed",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          completionEvidence: {
+            kind: "command",
+            command: "pnpm test",
+            cwd: workspace,
+            exitCode: 0,
+            freshness: "after_latest_workspace_mutation",
+          },
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given paused, blocked, and limited session goals are persisted,
     When the session is resumed,
     Then lifecycle state and status reason survive the ledger boundary`, async () => {

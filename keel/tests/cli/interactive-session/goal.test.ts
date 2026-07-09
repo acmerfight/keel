@@ -322,6 +322,7 @@ describe("Interactive Session - Goals", () => {
     let persistedGoal: SessionGoal | undefined = {
       objective: "Finish lifecycle guard coverage",
       status: "completed",
+      completionEvidence: { kind: "user_override" },
     };
     const provider = unusedProvider("unused-goal-lifecycle-guards-provider");
     const session = runInteractiveSession({
@@ -1035,10 +1036,11 @@ describe("Interactive Session - Goals", () => {
       status: "completed",
       criterionKind: "command",
       completionCriterion: "pnpm test",
+      completionEvidence: { kind: "user_override" },
     });
     expect(stdout).toContain("Goal completed: Ship the release notes\n");
     expect(stdout).toContain(
-      "  goal: completed - Ship the release notes; criterion(command): pnpm test\n",
+      "  goal: completed - Ship the release notes; criterion(command): pnpm test; evidence: user explicitly completed the goal with /goal complete\n",
     );
     expect(stderr).toBe(
       "Error: only active session goals can change the completion criterion. Resume the goal or set a new goal first.\n".repeat(
@@ -1155,10 +1157,17 @@ describe("Interactive Session - Goals", () => {
         status: "completed",
         criterionKind: "command",
         completionCriterion: 'node -e "process.exit(0)"',
+        completionEvidence: {
+          kind: "command",
+          command: 'node -e "process.exit(0)"',
+          cwd: workspace,
+          exitCode: 0,
+          freshness: "after_latest_workspace_mutation",
+        },
       });
       expect(stdout).toContain("Goal finished.\n");
       expect(stdout).toContain(
-        '  goal: completed - Finish the checkout goal; criterion(command): node -e "process.exit(0)"\n',
+        `  goal: completed - Finish the checkout goal; criterion(command): node -e "process.exit(0)"; evidence: node -e "process.exit(0)" exited 0 in ${workspace}`,
       );
       expect(stderr).toBe("");
     } finally {

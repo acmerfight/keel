@@ -266,8 +266,11 @@ describe("Session Goal Tool", () => {
       formatSessionGoalCompletedToolResult({
         objective: "Finish the migration?",
         status: "completed",
+        completionEvidence: { kind: "user_override" },
       }),
-    ).toBe("Session goal completed: Finish the migration?");
+    ).toBe(
+      "Session goal completed: Finish the migration? Evidence: user explicitly completed the goal with /goal complete.",
+    );
   });
 
   test(`Given a blocked session goal already has sentence punctuation,
@@ -340,6 +343,108 @@ describe("Session Goal Tool", () => {
     ).toBe(
       "active - Continue active work; criterion: missing; blocked audit: 2/3 - Need credentials.",
     );
+  });
+
+  test(`Given completed session goals carry completion evidence,
+    When summaries are formatted,
+    Then Keel explains why completion was accepted`, () => {
+    expect(
+      sessionGoalSchema.parse({
+        objective: "Fix checkout tests",
+        status: "completed",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        completionEvidence: {
+          kind: "command",
+          command: "pnpm test",
+          cwd: "/repo",
+          exitCode: 0,
+          freshness: "after_latest_workspace_mutation",
+        },
+      }),
+    ).toEqual({
+      objective: "Fix checkout tests",
+      status: "completed",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+      completionEvidence: {
+        kind: "command",
+        command: "pnpm test",
+        cwd: "/repo",
+        exitCode: 0,
+        freshness: "after_latest_workspace_mutation",
+      },
+    });
+    expect(
+      formatSessionGoalSummary({
+        objective: "Fix checkout tests",
+        status: "completed",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        completionEvidence: {
+          kind: "command",
+          command: "pnpm test",
+          cwd: "/repo",
+          exitCode: 0,
+          freshness: "after_latest_workspace_mutation",
+        },
+      }),
+    ).toBe(
+      "completed - Fix checkout tests; criterion(command): pnpm test; evidence: pnpm test exited 0 in /repo after the latest workspace mutation",
+    );
+    expect(
+      formatSessionGoalSummary({
+        objective: "Publish release notes",
+        status: "completed",
+        criterionKind: "assertion",
+        completionCriterion: "release notes explain command-a and command-b",
+        completionEvidence: {
+          kind: "assertion_evaluator",
+          reason: "RELEASE.md contains both command descriptions.",
+        },
+      }),
+    ).toBe(
+      "completed - Publish release notes; criterion(assertion): release notes explain command-a and command-b; evidence: evaluator approved: RELEASE.md contains both command descriptions.",
+    );
+    expect(
+      sessionGoalSchema.parse({
+        objective: "Publish release notes",
+        status: "completed",
+        completionEvidence: {
+          kind: "assertion_evaluator",
+          reason: " Evaluator\napproved the evidence. ",
+        },
+      }),
+    ).toEqual({
+      objective: "Publish release notes",
+      status: "completed",
+      completionEvidence: {
+        kind: "assertion_evaluator",
+        reason: "Evaluator approved the evidence.",
+      },
+    });
+    expect(
+      formatSessionGoalSummary({
+        objective: "Publish report",
+        status: "completed",
+        completionEvidence: { kind: "user_override" },
+      }),
+    ).toBe(
+      "completed - Publish report; criterion: missing; evidence: user explicitly completed the goal with /goal complete",
+    );
+    expect(
+      sessionGoalSchema.safeParse({
+        objective: "Invisible completion",
+        status: "completed",
+      }).success,
+    ).toBe(false);
+    expect(
+      sessionGoalSchema.safeParse({
+        objective: "Premature evidence",
+        status: "active",
+        completionEvidence: { kind: "user_override" },
+      }).success,
+    ).toBe(false);
   });
 
   test(`Given provider tools are listed,
@@ -881,12 +986,19 @@ describe("Session Goal Tool", () => {
       // Then
       expect(execution).toMatchObject({
         ok: true,
-        content: "Session goal completed: Finish the durable checkout goal.",
+        content: `Session goal completed: Finish the durable checkout goal. Evidence: pnpm test exited 0 in ${workspace} after the latest workspace mutation.`,
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "completed",
           criterionKind: "command",
           completionCriterion: "pnpm test",
+          completionEvidence: {
+            kind: "command",
+            command: "pnpm test",
+            cwd: workspace,
+            exitCode: 0,
+            freshness: "after_latest_workspace_mutation",
+          },
         },
       });
     } finally {

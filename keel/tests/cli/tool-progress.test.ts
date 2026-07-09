@@ -242,7 +242,11 @@ describe("CLI Tool Progress", () => {
       yield {
         type: "session_goal_updated",
         messageOrdinal: 2,
-        goal: { objective: "Finish checkout", status: "completed" },
+        goal: {
+          objective: "Finish checkout",
+          status: "completed",
+          completionEvidence: { kind: "user_override" },
+        },
       };
     }
     let stderr = "";
@@ -257,7 +261,7 @@ describe("CLI Tool Progress", () => {
 
     // Then
     expect(stderr).toBe(
-      "Session goal: completed - Finish checkout; criterion: missing\n",
+      "Session goal: completed - Finish checkout; criterion: missing; evidence: user explicitly completed the goal with /goal complete\n",
     );
   });
 
@@ -269,7 +273,11 @@ describe("CLI Tool Progress", () => {
       yield {
         type: "session_goal_updated",
         messageOrdinal: 2,
-        goal: { objective: "Finish checkout", status: "completed" },
+        goal: {
+          objective: "Finish checkout",
+          status: "completed",
+          completionEvidence: { kind: "user_override" },
+        },
       };
     }
     const statusLines: string[] = [];
@@ -285,7 +293,7 @@ describe("CLI Tool Progress", () => {
 
     // Then
     expect(statusLines).toEqual([
-      "Session goal: completed - Finish checkout; criterion: missing",
+      "Session goal: completed - Finish checkout; criterion: missing; evidence: user explicitly completed the goal with /goal complete",
     ]);
   });
 });

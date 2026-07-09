@@ -874,6 +874,13 @@ describe("CLI Main - Interactive Entrypoint", () => {
         status: "completed",
         criterionKind: "command",
         completionCriterion: "test -f done.txt",
+        completionEvidence: {
+          kind: "command",
+          command: "test -f done.txt",
+          cwd: workspace,
+          exitCode: 0,
+          freshness: "after_latest_workspace_mutation",
+        },
       });
       await expect(readFile(join(workspace, "done.txt"), "utf8")).resolves.toBe(
         "complete\n",

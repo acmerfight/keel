@@ -1092,6 +1092,7 @@ export async function runInteractiveSession(
               const completedGoal: SessionGoal = {
                 objective: sessionGoal.objective,
                 status: "completed",
+                completionEvidence: { kind: "user_override" },
                 ...(sessionGoal.criterionKind !== undefined &&
                 sessionGoal.completionCriterion !== undefined
                   ? {

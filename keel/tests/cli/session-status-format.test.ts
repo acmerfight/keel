@@ -40,7 +40,11 @@ describe("CLI Session Status Format", () => {
       session: "scratch",
       workspace: "/tmp/workspace",
       activeModel: "(default for next prompt)",
-      goal: { objective: "Ship the release notes", status: "completed" },
+      goal: {
+        objective: "Ship the release notes",
+        status: "completed",
+        completionEvidence: { kind: "user_override" },
+      },
       messages: [],
       messageCount: 0,
       pendingInputCount: 0,
@@ -53,7 +57,7 @@ describe("CLI Session Status Format", () => {
 
     // Then
     expect(formatted).toContain(
-      "  goal: completed - Ship the release notes; criterion: missing\n",
+      "  goal: completed - Ship the release notes; criterion: missing; evidence: user explicitly completed the goal with /goal complete\n",
     );
   });
 

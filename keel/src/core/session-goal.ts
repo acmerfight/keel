@@ -3,6 +3,7 @@ import { z } from "zod";
 export const SESSION_GOAL_OBJECTIVE_MAX_LENGTH = 4000;
 export const SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH = 1000;
 export const SESSION_GOAL_STATUS_REASON_MAX_LENGTH = 1000;
+export const SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH = 2000;
 const SESSION_GOAL_BLOCKED_AUDIT_THRESHOLD = 3;
 
 const sessionGoalStatuses = [
@@ -24,6 +25,28 @@ export interface SessionGoalBlockedAudit {
   readonly reason: string;
   readonly consecutiveCount: SessionGoalBlockedAuditCount;
 }
+
+interface CommandSessionGoalCompletionEvidence {
+  readonly kind: "command";
+  readonly command: string;
+  readonly cwd: string;
+  readonly exitCode: 0;
+  readonly freshness: "after_latest_workspace_mutation";
+}
+
+interface AssertionEvaluatorSessionGoalCompletionEvidence {
+  readonly kind: "assertion_evaluator";
+  readonly reason: string;
+}
+
+interface UserOverrideSessionGoalCompletionEvidence {
+  readonly kind: "user_override";
+}
+
+export type SessionGoalCompletionEvidence =
+  | CommandSessionGoalCompletionEvidence
+  | AssertionEvaluatorSessionGoalCompletionEvidence
+  | UserOverrideSessionGoalCompletionEvidence;
 
 interface SessionGoalContract {
   readonly objective: string;
@@ -57,6 +80,7 @@ interface UsageLimitedSessionGoal extends SessionGoalContract {
 
 interface CompletedSessionGoal extends SessionGoalContract {
   readonly status: "completed";
+  readonly completionEvidence: SessionGoalCompletionEvidence;
 }
 
 export type SessionGoal =
@@ -79,6 +103,36 @@ const sessionGoalBlockedAuditSchema = z
     consecutiveCount: sessionGoalBlockedAuditCountSchema,
   })
   .strict();
+const sessionGoalCompletionEvidenceSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("command"),
+      command: z
+        .string()
+        .trim()
+        .min(1)
+        .max(SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH),
+      cwd: z.string().trim().min(1).max(SESSION_GOAL_OBJECTIVE_MAX_LENGTH),
+      exitCode: z.literal(0),
+      freshness: z.literal("after_latest_workspace_mutation"),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("assertion_evaluator"),
+      reason: z
+        .string()
+        .trim()
+        .min(1)
+        .max(SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("user_override"),
+    })
+    .strict(),
+]);
 
 const sessionGoalBaseSchema = z
   .object({
@@ -98,6 +152,7 @@ const sessionGoalBaseSchema = z
       .max(SESSION_GOAL_STATUS_REASON_MAX_LENGTH)
       .optional(),
     blockedAudit: sessionGoalBlockedAuditSchema.optional(),
+    completionEvidence: sessionGoalCompletionEvidenceSchema.optional(),
   })
   .strict()
   .superRefine((goal, ctx) => {
@@ -137,6 +192,20 @@ const sessionGoalBaseSchema = z
         code: "custom",
         path: ["blockedAudit"],
         message: "blockedAudit is only valid for active session goals",
+      });
+    }
+    if (goal.status === "completed" && goal.completionEvidence === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["completionEvidence"],
+        message: "completed session goals require completion evidence",
+      });
+    }
+    if (goal.status !== "completed" && goal.completionEvidence !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["completionEvidence"],
+        message: "completionEvidence is only valid for completed session goals",
       });
     }
   });
@@ -220,6 +289,9 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
           objective: goal.objective,
           status: "completed",
           ...criterion,
+          completionEvidence: normalizeSessionGoalCompletionEvidence(
+            sessionGoalCompletionEvidenceSchema.parse(goal.completionEvidence),
+          ),
         };
     }
   });
@@ -240,6 +312,56 @@ export function normalizeSessionGoalCompletionCommand(command: string): string {
 
 export function normalizeSessionGoalStatusReason(reason: string): string {
   return reason.replace(/\s+/gu, " ").trim();
+}
+
+export function normalizeSessionGoalCompletionEvidenceReason(
+  reason: string,
+): string {
+  return reason.replace(/\s+/gu, " ").trim();
+}
+
+export function normalizeSessionGoalCompletionEvidence(
+  evidence: SessionGoalCompletionEvidence,
+): SessionGoalCompletionEvidence {
+  switch (evidence.kind) {
+    case "command":
+      return {
+        kind: "command",
+        command: normalizeSessionGoalCompletionCommand(evidence.command),
+        cwd: evidence.cwd.trim(),
+        exitCode: 0,
+        freshness: "after_latest_workspace_mutation",
+      };
+    case "assertion_evaluator":
+      return {
+        kind: "assertion_evaluator",
+        reason: normalizeSessionGoalCompletionEvidenceReason(evidence.reason),
+      };
+    case "user_override":
+      return { kind: "user_override" };
+  }
+}
+
+function copySessionGoalCompletionEvidence(
+  evidence: SessionGoalCompletionEvidence,
+): SessionGoalCompletionEvidence {
+  switch (evidence.kind) {
+    case "command":
+      return {
+        kind: "command",
+        command: evidence.command,
+        cwd: evidence.cwd,
+        exitCode: 0,
+        freshness: "after_latest_workspace_mutation",
+      };
+    case "assertion_evaluator":
+      return {
+        kind: "assertion_evaluator",
+        reason: evidence.reason,
+      };
+    case "user_override":
+      return { kind: "user_override" };
+  }
 }
 
 export function sessionGoalCommandCriterion(
@@ -305,6 +427,9 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
         objective: goal.objective,
         status: "completed",
         ...criterion,
+        completionEvidence: copySessionGoalCompletionEvidence(
+          goal.completionEvidence,
+        ),
       };
   }
 }
@@ -351,27 +476,41 @@ export function formatSessionGoalSummary(
     goal.status !== "active" || goal.blockedAudit === undefined
       ? ""
       : `; blocked audit: ${goal.blockedAudit.consecutiveCount}/${SESSION_GOAL_BLOCKED_AUDIT_THRESHOLD} - ${goal.blockedAudit.reason}`;
+  const completionEvidence =
+    goal.status === "completed"
+      ? `; evidence: ${formatSessionGoalCompletionEvidence(goal.completionEvidence)}`
+      : "";
   if (
     goal.criterionKind === undefined ||
     goal.completionCriterion === undefined
   ) {
-    return `${goal.status} - ${goal.objective}; criterion: missing${reason}${blockedAudit}`;
+    return `${goal.status} - ${goal.objective}; criterion: missing${reason}${blockedAudit}${completionEvidence}`;
   }
-  return `${goal.status} - ${goal.objective}; criterion(${goal.criterionKind}): ${goal.completionCriterion}${reason}${blockedAudit}`;
+  return `${goal.status} - ${goal.objective}; criterion(${goal.criterionKind}): ${goal.completionCriterion}${reason}${blockedAudit}${completionEvidence}`;
 }
 
 function withSentencePeriod(text: string): string {
   return /[.!?]$/u.test(text) ? text : `${text}.`;
 }
 
+function formatSessionGoalCompletionEvidence(
+  evidence: SessionGoalCompletionEvidence,
+): string {
+  switch (evidence.kind) {
+    case "command":
+      return `${evidence.command} exited 0 in ${evidence.cwd} after the latest workspace mutation`;
+    case "assertion_evaluator":
+      return `evaluator approved: ${evidence.reason}`;
+    case "user_override":
+      return "user explicitly completed the goal with /goal complete";
+  }
+}
+
 export function formatSessionGoalCompletedToolResult(
-  goal: SessionGoal,
-  options?: { readonly evidenceBasis?: string },
+  goal: Extract<SessionGoal, { readonly status: "completed" }>,
 ): string {
   const base = `Session goal completed: ${withSentencePeriod(goal.objective)}`;
-  return options?.evidenceBasis === undefined
-    ? base
-    : `${base} Evidence: ${withSentencePeriod(options.evidenceBasis)}`;
+  return `${base} Evidence: ${withSentencePeriod(formatSessionGoalCompletionEvidence(goal.completionEvidence))}`;
 }
 
 export function formatSessionGoalBlockedToolResult(
