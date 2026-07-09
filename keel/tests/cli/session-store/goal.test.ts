@@ -18,6 +18,19 @@ import {
 import type { Message } from "../../../src/llm/types.ts";
 import { runtime } from "../../../src/testing/session-store-fixtures.ts";
 
+const REDACTION_EXPANDING_SECRET = " sk-aaaa";
+const REDACTION_EXPANDING_SECRET_REPETITIONS = 40;
+
+function redactionExpandingText(maxLength: number): string {
+  return `${"x".repeat(
+    maxLength -
+      REDACTION_EXPANDING_SECRET.length *
+        REDACTION_EXPANDING_SECRET_REPETITIONS,
+  )}${REDACTION_EXPANDING_SECRET.repeat(
+    REDACTION_EXPANDING_SECRET_REPETITIONS,
+  )}`;
+}
+
 describe("Session Store Goal", () => {
   test(`Given a session goal is persisted with queued input,
     When the session is resumed,
@@ -257,6 +270,70 @@ describe("Session Store Goal", () => {
           reason: "Evaluator approved the RELEASE.md evidence.",
         },
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given assertion completion evidence expands during redaction,
+    When the completed goal is persisted,
+    Then Keel stores bounded redacted evidence instead of rejecting completion`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const reason = redactionExpandingText(
+      SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
+    );
+
+    try {
+      const session = createSessionStore({
+        sessionId: "session-goal-redaction-expansion",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When
+      persistSessionGoal({
+        session,
+        goal: {
+          objective: "Publish release notes",
+          status: "completed",
+          criterionKind: "assertion",
+          completionCriterion: "release notes explain the command",
+          completionEvidence: {
+            kind: "assertion_evaluator",
+            reason,
+          },
+        },
+        runtime: runtime(home, 1),
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "session-goal-redaction-expansion",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      if (resumed.goal?.status !== "completed") {
+        throw new Error("expected completed goal");
+      }
+      expect(resumed.goal.completionEvidence.kind).toBe("assertion_evaluator");
+      if (resumed.goal.completionEvidence.kind !== "assertion_evaluator") {
+        throw new Error("expected assertion evaluator evidence");
+      }
+      expect(resumed.goal.completionEvidence.reason.length).toBeLessThanOrEqual(
+        SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
+      );
+      expect(resumed.goal.completionEvidence.reason).toContain(
+        "[REDACTED_SECRET]",
+      );
+      expect(resumed.goal.completionEvidence.reason).not.toContain("sk-aaaa");
+      const ledgerRecords = (await readFile(session.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(JSON.stringify(ledgerRecords.at(-1))).not.toContain("sk-aaaa");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
