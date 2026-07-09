@@ -2,7 +2,7 @@ import { coverageConfigDefaults, defineConfig } from "vitest/config";
 
 const coverage = {
   reporter: ["text", "lcov"],
-  exclude: ["src/testing/**", ...coverageConfigDefaults.exclude],
+  exclude: ["src/testing/**", "tests/**", ...coverageConfigDefaults.exclude],
   thresholds: {
     statements: 95,
     branches: 90,
