@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   activeSessionGoalSystemPrompt,
+  clearSessionGoalBlockedAudit,
   formatSessionGoalBlockedProposalToolResult,
   formatSessionGoalBlockedToolResult,
   formatSessionGoalCompletedToolResult,
@@ -73,6 +74,54 @@ describe("Session Goal Tool", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  test(`Given an active goal has a pending blocked audit,
+    When the audit is cleared,
+    Then Keel removes only the audit and preserves the rest of the active goal`, () => {
+    expect(
+      clearSessionGoalBlockedAudit({
+        objective: "Continue active work",
+        status: "active",
+        blockedAudit: {
+          consecutiveCount: 1,
+          reason: "Need credentials from the user.",
+        },
+      }),
+    ).toEqual({
+      objective: "Continue active work",
+      status: "active",
+    });
+    expect(
+      clearSessionGoalBlockedAudit({
+        objective: "Continue verified work",
+        status: "active",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        blockedAudit: {
+          consecutiveCount: 2,
+          reason: "Need credentials from the user.",
+        },
+      }),
+    ).toEqual({
+      objective: "Continue verified work",
+      status: "active",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+    });
+    expect(
+      clearSessionGoalBlockedAudit({
+        objective: "Continue active work",
+        status: "active",
+      }),
+    ).toBeNull();
+    expect(
+      clearSessionGoalBlockedAudit({
+        objective: "Wait for credentials",
+        status: "blocked",
+        statusReason: "Need credentials from the user.",
+      }),
+    ).toBeNull();
   });
 
   test(`Given a blocked session goal has a reason,
@@ -172,7 +221,7 @@ describe("Session Goal Tool", () => {
       throw new Error("expected active goal prompt");
     }
     expect(prompt).toContain(
-      "- Pending blocked audit: 2/3 consecutive blocked proposals. Most recent reason: Need credentials from the user.",
+      "- Pending blocked audit: 2/3 consecutive blocked agent turns. Most recent reason: Need credentials from the user.",
     );
   });
 
@@ -238,7 +287,7 @@ describe("Session Goal Tool", () => {
         },
       }),
     ).toBe(
-      "Session goal blocked proposal recorded (2/3): Finish the migration? Reason: Need production credentials. Goal remains active; continue working unless blocked proposals continue.",
+      "Session goal blocked proposal recorded (2/3): Finish the migration? Reason: Need production credentials. Goal remains active; continue working unless progress remains blocked in later turns.",
     );
   });
 
@@ -335,7 +384,7 @@ describe("Session Goal Tool", () => {
       expect(execution).toMatchObject({
         ok: true,
         content:
-          "Session goal blocked proposal recorded (1/3): Finish the durable checkout goal. Reason: Need an API key from the user. Goal remains active; continue working unless blocked proposals continue.",
+          "Session goal blocked proposal recorded (1/3): Finish the durable checkout goal. Reason: Need an API key from the user. Goal remains active; continue working unless progress remains blocked in later turns.",
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "active",

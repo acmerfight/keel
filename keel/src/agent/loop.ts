@@ -3,6 +3,7 @@ import {
   recordLastTaskCheckpoint,
 } from "../core/git.ts";
 import {
+  clearSessionGoalBlockedAudit,
   copySessionGoal,
   normalizeSessionGoalCompletionCommand,
   type SessionGoal,
@@ -82,6 +83,8 @@ import {
 } from "./turn-compaction.ts";
 
 const MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS = 512;
+const DUPLICATE_BLOCKED_GOAL_PROPOSAL_TOOL_RESULT =
+  "Tool failed: update_goal blocked proposal already recorded for this agent turn.\nRecovery: Continue working, or wait until the next agent turn before proposing the blocked goal state again.";
 
 export interface RunAgentOptions {
   readonly workspace: string;
@@ -158,6 +161,14 @@ function bashCommandEvidenceMatchesGoal(
     normalizeSessionGoalCompletionCommand(
       execution.bashCommandEvidence.command,
     ) === normalizeSessionGoalCompletionCommand(commandCriterion)
+  );
+}
+
+function isBlockedGoalProposal(toolCall: ToolCall): boolean {
+  return (
+    toolCall.tool === "update_goal" &&
+    "status" in toolCall &&
+    toolCall.status === "blocked"
   );
 }
 
@@ -515,6 +526,23 @@ export async function* runAgentTurn(
     options.sessionGoal === undefined
       ? undefined
       : copySessionGoal(options.sessionGoal);
+  const clearPendingBlockedAudit = (
+    messageOrdinal: number,
+  ): Extract<AgentEvent, { readonly type: "session_goal_updated" }> | null => {
+    if (sessionGoal === undefined) {
+      return null;
+    }
+    const nextGoal = clearSessionGoalBlockedAudit(sessionGoal);
+    if (nextGoal === null) {
+      return null;
+    }
+    sessionGoal = copySessionGoal(nextGoal);
+    return {
+      type: "session_goal_updated",
+      goal: sessionGoal,
+      messageOrdinal,
+    };
+  };
   let workspaceMutationSequence = 0;
   let goalCompletionCommandEvidence: GoalCompletionCommandEvidence | undefined;
   let postCompactionReadSequence = 0;
@@ -598,6 +626,14 @@ export async function* runAgentTurn(
       if (reply !== null) {
         applySessionLedger(appendSessionLedgerMessage(sessionLedger, reply));
       }
+      if (turnResult.toolCalls.length === 0 && priorToolCalls.length === 0) {
+        const sessionGoalEvent = clearPendingBlockedAudit(
+          sessionLedger.entries.length,
+        );
+        if (sessionGoalEvent !== null) {
+          yield sessionGoalEvent;
+        }
+      }
       yield {
         type: "end",
         usage: state.accounting.totalUsage,
@@ -661,6 +697,14 @@ export async function* runAgentTurn(
       if (reply !== null) {
         applySessionLedger(appendSessionLedgerMessage(sessionLedger, reply));
       }
+      if (priorToolCalls.length === 0) {
+        const sessionGoalEvent = clearPendingBlockedAudit(
+          sessionLedger.entries.length,
+        );
+        if (sessionGoalEvent !== null) {
+          yield sessionGoalEvent;
+        }
+      }
       yield {
         type: "end",
         usage: state.accounting.totalUsage,
@@ -675,11 +719,27 @@ export async function* runAgentTurn(
       appendSessionLedgerMessage(sessionLedger, toolRequestMessage(turnResult)),
     );
     priorToolCalls.push(...turnResult.toolCalls);
+    const sessionGoalAtTurnStart =
+      sessionGoal === undefined ? undefined : copySessionGoal(sessionGoal);
+    let blockedGoalProposalRecordedThisTurn = false;
 
     const executeTurnToolCall = async (
       toolCall: ToolCall,
-    ): Promise<ToolExecution> =>
-      await executeToolCall({
+    ): Promise<ToolExecution> => {
+      let toolSessionGoal = sessionGoal;
+      if (isBlockedGoalProposal(toolCall)) {
+        if (blockedGoalProposalRecordedThisTurn) {
+          return {
+            content: DUPLICATE_BLOCKED_GOAL_PROPOSAL_TOOL_RESULT,
+            ok: false,
+          };
+        }
+        if (sessionGoal?.status === "active") {
+          blockedGoalProposalRecordedThisTurn = true;
+          toolSessionGoal = sessionGoalAtTurnStart;
+        }
+      }
+      return await executeToolCall({
         workspace,
         toolCall,
         signal,
@@ -708,12 +768,15 @@ export async function* runAgentTurn(
             reason: evaluation.reason,
           };
         },
-        ...(sessionGoal !== undefined ? { sessionGoal } : {}),
+        ...(toolSessionGoal !== undefined
+          ? { sessionGoal: toolSessionGoal }
+          : {}),
         ...(goalCompletionCommandEvidence !== undefined
           ? { goalCompletionCommandEvidence }
           : {}),
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
+    };
 
     const recordCheckpointOperations = (execution: ToolExecution): void => {
       if (
@@ -887,6 +950,14 @@ export async function* runAgentTurn(
       projectInstructionVisibility,
       completedToolExecutions.map(({ execution }) => execution),
     );
+    if (!blockedGoalProposalRecordedThisTurn) {
+      const sessionGoalEvent = clearPendingBlockedAudit(
+        sessionLedger.entries.length,
+      );
+      if (sessionGoalEvent !== null) {
+        yield sessionGoalEvent;
+      }
+    }
 
     if (drainInjectedUserMessages !== undefined && !signal.aborted) {
       applySessionLedger(

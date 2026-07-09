@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
-import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
+import {
+  type AgentStopPolicy,
+  defaultStopPolicy,
+} from "../../src/agent/stop-policy.ts";
 import type { SessionGoal } from "../../src/core/session-goal.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 
@@ -317,13 +320,13 @@ describe("Task Progress", () => {
         role: "tool",
         toolCallId: "goal_1",
         content:
-          "Session goal blocked proposal recorded (1/3): Finish the durable session goal. Reason: Need credentials from the user. Goal remains active; continue working unless blocked proposals continue.",
+          "Session goal blocked proposal recorded (1/3): Finish the durable session goal. Reason: Need credentials from the user. Goal remains active; continue working unless progress remains blocked in later turns.",
       });
       expect(providerRequests[2]?.at(-1)).toEqual({
         role: "tool",
         toolCallId: "goal_2",
         content:
-          "Session goal blocked proposal recorded (2/3): Finish the durable session goal. Reason: Credentials remain unavailable. Goal remains active; continue working unless blocked proposals continue.",
+          "Session goal blocked proposal recorded (2/3): Finish the durable session goal. Reason: Credentials remain unavailable. Goal remains active; continue working unless progress remains blocked in later turns.",
       });
       expect(providerRequests[3]?.at(-1)).toEqual({
         role: "tool",
@@ -335,6 +338,432 @@ describe("Task Progress", () => {
         role: "assistant",
         content: "The session goal is blocked on credentials.",
         toolCalls: [],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a model emits repeated blocked goal proposals in one turn,
+    When the agent executes the turn,
+    Then Keel records only one blocked audit step for that turn`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-goal-blocked-burst-"));
+    const messages: Message[] = [
+      { role: "user", content: "Finish the durable session goal." },
+    ];
+    const providerRequests: (readonly Message[])[] = [];
+    const sessionGoal: SessionGoal = {
+      objective: "Finish the durable session goal",
+      status: "active",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+    };
+    const provider: LLMProvider = {
+      id: "goal-blocked-burst-provider",
+      async *stream(options) {
+        providerRequests.push(structuredClone([...options.messages]));
+        if (providerRequests.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "blocked",
+            reason: "Need credentials from the user.",
+          };
+          yield {
+            type: "tool_call",
+            id: "goal_2",
+            tool: "update_goal",
+            status: "blocked",
+            reason: "Credentials remain unavailable.",
+          };
+          yield {
+            type: "tool_call",
+            id: "goal_3",
+            tool: "update_goal",
+            status: "blocked",
+            reason: "The user still has not provided credentials.",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield {
+          type: "text",
+          text: "Only one blocked proposal was recorded for this turn.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          sessionGoal,
+        }),
+      );
+
+      // Then
+      const goalEvents = events.filter(
+        (event) => event.type === "session_goal_updated",
+      );
+      expect(goalEvents).toEqual([
+        {
+          type: "session_goal_updated",
+          messageOrdinal: 3,
+          goal: {
+            objective: "Finish the durable session goal",
+            status: "active",
+            criterionKind: "command",
+            completionCriterion: "pnpm test",
+            blockedAudit: {
+              consecutiveCount: 1,
+              reason: "Need credentials from the user.",
+            },
+          },
+        },
+      ]);
+      expect(providerRequests).toHaveLength(2);
+      const toolResults = providerRequests[1]?.filter(
+        (message) => message.role === "tool",
+      );
+      expect(toolResults).toEqual([
+        {
+          role: "tool",
+          toolCallId: "goal_1",
+          content:
+            "Session goal blocked proposal recorded (1/3): Finish the durable session goal. Reason: Need credentials from the user. Goal remains active; continue working unless progress remains blocked in later turns.",
+        },
+        {
+          role: "tool",
+          toolCallId: "goal_2",
+          content:
+            "Tool failed: update_goal blocked proposal already recorded for this agent turn.\nRecovery: Continue working, or wait until the next agent turn before proposing the blocked goal state again.",
+        },
+        {
+          role: "tool",
+          toolCallId: "goal_3",
+          content:
+            "Tool failed: update_goal blocked proposal already recorded for this agent turn.\nRecovery: Continue working, or wait until the next agent turn before proposing the blocked goal state again.",
+        },
+      ]);
+      expect(messages.at(-1)).toEqual({
+        role: "assistant",
+        content: "Only one blocked proposal was recorded for this turn.",
+        toolCalls: [],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given no active session goal is set,
+    When the model proposes a blocked goal state,
+    Then the blocked proposal fails without recording an audit step`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-goal-blocked-no-goal-"),
+    );
+    const messages: Message[] = [
+      { role: "user", content: "Continue the durable session goal." },
+    ];
+    const providerRequests: (readonly Message[])[] = [];
+    const provider: LLMProvider = {
+      id: "goal-blocked-no-goal-provider",
+      async *stream(options) {
+        providerRequests.push(structuredClone([...options.messages]));
+        if (providerRequests.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "blocked",
+            reason: "Need credentials from the user.",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield {
+          type: "text",
+          text: "No goal was active.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+        }),
+      );
+
+      // Then
+      expect(
+        events.some((event) => event.type === "session_goal_updated"),
+      ).toBe(false);
+      expect(providerRequests[1]?.at(-1)).toEqual({
+        role: "tool",
+        toolCallId: "goal_1",
+        content:
+          "Tool failed: update_goal failed: no active session goal is set.\nRecovery: Continue without updating the goal, or ask the user to set a saved session goal first.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a pending blocked audit is followed by a non-blocked tool turn,
+    When the model later proposes blocked again,
+    Then Keel restarts the blocked audit from one`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-goal-blocked-reset-"));
+    await writeFile(join(workspace, "note.txt"), "work can continue\n");
+    const messages: Message[] = [
+      { role: "user", content: "Finish the durable session goal." },
+    ];
+    const providerRequests: (readonly Message[])[] = [];
+    const sessionGoal: SessionGoal = {
+      objective: "Finish the durable session goal",
+      status: "active",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+      blockedAudit: {
+        consecutiveCount: 1,
+        reason: "Need credentials from the user.",
+      },
+    };
+    const provider: LLMProvider = {
+      id: "goal-blocked-reset-provider",
+      async *stream(options) {
+        providerRequests.push(structuredClone([...options.messages]));
+        if (providerRequests.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_1",
+            tool: "read",
+            path: "note.txt",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (providerRequests.length === 2) {
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "blocked",
+            reason: "Credentials are unavailable again.",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield {
+          type: "text",
+          text: "The audit restarted after intervening work.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          sessionGoal,
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "session_goal_updated",
+        messageOrdinal: 3,
+        goal: {
+          objective: "Finish the durable session goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      });
+      expect(events).toContainEqual({
+        type: "session_goal_updated",
+        messageOrdinal: 5,
+        goal: {
+          objective: "Finish the durable session goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          blockedAudit: {
+            consecutiveCount: 1,
+            reason: "Credentials are unavailable again.",
+          },
+        },
+      });
+      expect(
+        events.some(
+          (event) =>
+            event.type === "session_goal_updated" &&
+            event.goal.status === "blocked",
+        ),
+      ).toBe(false);
+      expect(providerRequests).toHaveLength(3);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a pending blocked audit is followed by a no-tool response,
+    When the agent finishes the turn,
+    Then Keel clears the pending blocked audit`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-goal-blocked-clear-"));
+    const messages: Message[] = [
+      { role: "user", content: "Continue the durable session goal." },
+    ];
+    const sessionGoal: SessionGoal = {
+      objective: "Finish the durable session goal",
+      status: "active",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+      blockedAudit: {
+        consecutiveCount: 1,
+        reason: "Need credentials from the user.",
+      },
+    };
+    const provider: LLMProvider = {
+      id: "goal-blocked-clear-provider",
+      async *stream() {
+        yield {
+          type: "text",
+          text: "Continuing without a blocked proposal.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          sessionGoal,
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "session_goal_updated",
+        messageOrdinal: 2,
+        goal: {
+          objective: "Finish the durable session goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      });
+      expect(messages.at(-1)).toEqual({
+        role: "assistant",
+        content: "Continuing without a blocked proposal.",
+        toolCalls: [],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a pending blocked audit and the stop policy stops after a no-tool response,
+    When the agent ends the turn through the stop policy,
+    Then Keel clears the pending blocked audit before ending`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-goal-blocked-stop-clear-"),
+    );
+    const messages: Message[] = [
+      { role: "user", content: "Continue the durable session goal." },
+    ];
+    const sessionGoal: SessionGoal = {
+      objective: "Finish the durable session goal",
+      status: "active",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+      blockedAudit: {
+        consecutiveCount: 1,
+        reason: "Need credentials from the user.",
+      },
+    };
+    const provider: LLMProvider = {
+      id: "goal-blocked-stop-clear-provider",
+      async *stream() {
+        yield {
+          type: "text",
+          text: "Continuing without a blocked proposal.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const stopAfterFirstTurn: AgentStopPolicy = {
+      shouldStopAfterTurn: () => ({ type: "stop", reason: "caller_rule" }),
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: stopAfterFirstTurn,
+          sessionGoal,
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "session_goal_updated",
+        messageOrdinal: 2,
+        goal: {
+          objective: "Finish the durable session goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      });
+      expect(events.at(-1)).toEqual({
+        type: "end",
+        usage: ZERO_USAGE,
+        turns: 1,
+        stopReason: "caller_rule",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

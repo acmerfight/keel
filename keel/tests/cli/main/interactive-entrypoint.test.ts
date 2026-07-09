@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
+import { z } from "zod";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { requestWithMessagesSchema } from "../../../src/testing/cli-main-schemas.ts";
 import {
@@ -129,6 +130,28 @@ function expectDefaultSavedSessionIntro(stderr: string): string {
   const sessionId = intro.match(/^session: ([^\n]+)$/mu)?.at(1);
   expect(sessionId).toMatch(/^session-[0-9a-f-]+$/u);
   return intro;
+}
+
+function jsonlRecords(text: string): readonly unknown[] {
+  const trimmed = text.trimEnd();
+  if (trimmed === "") {
+    return [];
+  }
+  return trimmed.split("\n").map((line) => JSON.parse(line));
+}
+
+const sessionGoalLedgerRecordSchema = z.object({
+  type: z.literal("session_goal"),
+  goal: z.unknown(),
+});
+
+function sessionGoalLedgerRecords(
+  records: readonly unknown[],
+): readonly z.infer<typeof sessionGoalLedgerRecordSchema>[] {
+  return records.flatMap((record) => {
+    const parsed = sessionGoalLedgerRecordSchema.safeParse(record);
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
 const EPHEMERAL_INTERACTIVE_INTRO = [
@@ -397,6 +420,325 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(firstRun.stderr()).toBe("");
       expect(resumeRun.stderr()).toBe("");
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the provider emits repeated blocked goal proposals in one assistant turn,
+    When the CLI entrypoint executes the turn,
+    Then only one blocked audit step is persisted for that turn`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-blocked-burst-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-blocked-burst-home-"),
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall(
+              "goal_1",
+              "update_goal",
+              {
+                status: "blocked",
+                reason: "Need credentials from the user.",
+              },
+              { index: 0 },
+            ),
+          );
+          res.write(
+            sseToolCall(
+              "goal_2",
+              "update_goal",
+              {
+                status: "blocked",
+                reason: "Credentials remain unavailable.",
+              },
+              { index: 1 },
+            ),
+          );
+          res.write(
+            sseToolCall(
+              "goal_3",
+              "update_goal",
+              {
+                status: "blocked",
+                reason: "The user still has not provided credentials.",
+              },
+              { index: 2 },
+            ),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Burst checked."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.write("/goal Finish the durable session goal\n");
+    input.write("/goal verify pnpm test\n");
+    input.end("continue the durable goal\n");
+    const fixture = createRuntime(
+      ["--session", "goal-blocked-burst", "--bash-policy", "deny"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input,
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("Burst checked.\n");
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      const secondMessages = secondRequest.messages ?? [];
+      expect(
+        secondMessages.filter((message) => message.role === "tool"),
+      ).toEqual([
+        {
+          role: "tool",
+          tool_call_id: "goal_1",
+          content:
+            "Session goal blocked proposal recorded (1/3): Finish the durable session goal. Reason: Need credentials from the user. Goal remains active; continue working unless progress remains blocked in later turns.",
+        },
+        {
+          role: "tool",
+          tool_call_id: "goal_2",
+          content:
+            "Tool failed: update_goal blocked proposal already recorded for this agent turn.\nRecovery: Continue working, or wait until the next agent turn before proposing the blocked goal state again.",
+        },
+        {
+          role: "tool",
+          tool_call_id: "goal_3",
+          content:
+            "Tool failed: update_goal blocked proposal already recorded for this agent turn.\nRecovery: Continue working, or wait until the next agent turn before proposing the blocked goal state again.",
+        },
+      ]);
+      const ledger = jsonlRecords(
+        await readFile(
+          join(home, "sessions", "goal-blocked-burst", "ledger.jsonl"),
+          "utf8",
+        ),
+      );
+      const goalRecords = sessionGoalLedgerRecords(ledger);
+      expect(goalRecords.at(-1)?.goal).toEqual({
+        objective: "Finish the durable session goal",
+        status: "active",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        blockedAudit: {
+          consecutiveCount: 1,
+          reason: "Need credentials from the user.",
+        },
+      });
+      expect(goalRecords).not.toContainEqual(
+        expect.objectContaining({
+          goal: expect.objectContaining({ status: "blocked" }),
+        }),
+      );
+      expect(fixture.stderr()).toBe(
+        [
+          "Tool: update_goal\n",
+          "Session goal: active - Finish the durable session goal; criterion(command): pnpm test; blocked audit: 1/3 - Need credentials from the user.\n",
+          "Tool: update_goal\n",
+          "Tool failed: update_goal\n",
+          "Tool: update_goal\n",
+          "Tool failed: update_goal\n",
+        ].join(""),
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a pending blocked audit is followed by a non-blocked tool turn,
+    When the provider later proposes blocked again through the CLI entrypoint,
+    Then the blocked audit restarts from one`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-blocked-reset-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-blocked-reset-home-"),
+    );
+    await writeFile(join(workspace, "note.txt"), "work can continue\n", "utf8");
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("goal_1", "update_goal", {
+              status: "blocked",
+              reason: "Need credentials from the user.",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (capturedBodies.length === 2) {
+          res.end(sseTextReplyWithUsage("First blocked proposal recorded."));
+          return;
+        }
+        if (capturedBodies.length === 3) {
+          res.write(sseToolCall("read_1", "read", { path: "note.txt" }));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (capturedBodies.length === 4) {
+          res.end(sseTextReplyWithUsage("Read completed."));
+          return;
+        }
+        if (capturedBodies.length === 5) {
+          res.write(
+            sseToolCall("goal_2", "update_goal", {
+              status: "blocked",
+              reason: "Credentials are unavailable again.",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Audit restarted."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.write("/goal Finish the durable session goal\n");
+    input.write("/goal verify pnpm test\n");
+    input.write("first blocked proposal\n");
+    input.write("read note.txt\n");
+    input.end("blocked again\n");
+    const fixture = createRuntime(
+      ["--session", "goal-blocked-reset", "--bash-policy", "deny"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input,
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("First blocked proposal recorded.\n");
+      expect(fixture.stdout()).toContain("Read completed.\n");
+      expect(fixture.stdout()).toContain("Audit restarted.\n");
+      const ledger = jsonlRecords(
+        await readFile(
+          join(home, "sessions", "goal-blocked-reset", "ledger.jsonl"),
+          "utf8",
+        ),
+      );
+      const goals = sessionGoalLedgerRecords(ledger).map(
+        (record) => record.goal,
+      );
+      expect(goals).toContainEqual({
+        objective: "Finish the durable session goal",
+        status: "active",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        blockedAudit: {
+          consecutiveCount: 1,
+          reason: "Need credentials from the user.",
+        },
+      });
+      expect(goals).toContainEqual({
+        objective: "Finish the durable session goal",
+        status: "active",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+      });
+      expect(goals.at(-1)).toEqual({
+        objective: "Finish the durable session goal",
+        status: "active",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        blockedAudit: {
+          consecutiveCount: 1,
+          reason: "Credentials are unavailable again.",
+        },
+      });
+      expect(goals).not.toContainEqual(
+        expect.objectContaining({ status: "blocked" }),
+      );
+      expect(fixture.stderr()).toBe(
+        [
+          "Tool: update_goal\n",
+          "Session goal: active - Finish the durable session goal; criterion(command): pnpm test; blocked audit: 1/3 - Need credentials from the user.\n",
+          "Tool: read note.txt\n",
+          "Session goal: active - Finish the durable session goal; criterion(command): pnpm test\n",
+          "Tool: update_goal\n",
+          "Session goal: active - Finish the durable session goal; criterion(command): pnpm test; blocked audit: 1/3 - Credentials are unavailable again.\n",
+        ].join(""),
+      );
+    } finally {
+      await close(server);
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
