@@ -266,6 +266,38 @@ describe("CLI Tool Progress", () => {
     );
   });
 
+  test(`Given an agent updates a visible session goal without completion evidence,
+    When classic CLI output prints agent events,
+    Then stderr omits the evidence line`, async () => {
+    // Given
+    async function* events(): AsyncIterable<AgentEvent> {
+      yield {
+        type: "session_goal_updated",
+        messageOrdinal: 2,
+        goal: {
+          objective: "Continue checkout",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      };
+    }
+    let stderr = "";
+
+    // When
+    await printAgentEvents(events(), {
+      writeStdout() {},
+      writeStderr(text) {
+        stderr += text;
+      },
+    });
+
+    // Then
+    expect(stderr).toBe(
+      "Session goal: active - Continue checkout; criterion(command): pnpm test\n",
+    );
+  });
+
   test(`Given an agent updates the visible session goal,
     When stable interactive output prints agent events,
     Then the status line shows the deterministic goal summary`, async () => {
@@ -296,6 +328,39 @@ describe("CLI Tool Progress", () => {
     expect(statusLines).toEqual([
       "Session goal: completed - Finish checkout; criterion: missing",
       "Session goal evidence: user explicitly completed the goal with /goal complete",
+    ]);
+  });
+
+  test(`Given an agent updates a visible session goal without completion evidence,
+    When stable interactive output prints agent events,
+    Then the status lines omit the evidence line`, async () => {
+    // Given
+    async function* events(): AsyncIterable<AgentEvent> {
+      yield {
+        type: "session_goal_updated",
+        messageOrdinal: 2,
+        goal: {
+          objective: "Continue checkout",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      };
+    }
+    const statusLines: string[] = [];
+
+    // When
+    await printStableInteractiveAgentEvents(events(), {
+      writeStdout() {},
+      writeAssistantHeader() {},
+      writeStatusLine(text) {
+        statusLines.push(text);
+      },
+    });
+
+    // Then
+    expect(statusLines).toEqual([
+      "Session goal: active - Continue checkout; criterion(command): pnpm test",
     ]);
   });
 });

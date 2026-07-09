@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
-import { parseInteractiveCommand } from "../../../src/cli/interactive-session/commands.ts";
+import {
+  formatInteractiveGoal,
+  parseInteractiveCommand,
+} from "../../../src/cli/interactive-session/commands.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { SessionGoal } from "../../../src/core/session-goal.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
@@ -29,6 +32,36 @@ function unusedProvider(id: string): LLMProvider {
 }
 
 describe("Interactive Session - Goals", () => {
+  test(`Given a goal has no completion evidence,
+    When the interactive goal status is formatted,
+    Then Keel does not print an empty evidence line`, () => {
+    expect(
+      formatInteractiveGoal({
+        objective: "Continue checkout",
+        status: "active",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+      }),
+    ).toBe(
+      "Session goal: active - Continue checkout; criterion(command): pnpm test\n",
+    );
+  });
+
+  test(`Given a completed goal has completion evidence,
+    When the interactive goal status is formatted,
+    Then Keel prints the evidence on a separate line`, () => {
+    expect(
+      formatInteractiveGoal({
+        objective: "Ship checkout",
+        status: "completed",
+        completionEvidence: { kind: "user_override" },
+      }),
+    ).toBe(
+      "Session goal: completed - Ship checkout; criterion: missing\n" +
+        "Session goal evidence: user explicitly completed the goal with /goal complete\n",
+    );
+  });
+
   test(`Given the goal command receives an objective,
     When the interactive command is parsed,
     Then Keel treats it as a local goal command instead of a prompt`, () => {
