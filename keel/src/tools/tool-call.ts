@@ -62,7 +62,7 @@ type ParsedToolCall =
 const INVALID_UPDATE_PLAN_RECOVERY =
   "Provide the full replacement plan using non-empty step strings, statuses pending, in_progress, or completed, and at most one in_progress task.";
 const INVALID_UPDATE_GOAL_RECOVERY =
-  "Set status to completed only when the active session goal is actually achieved, no required work remains, and fresh successful command-criterion evidence is available.";
+  "Set status to completed only when the active session goal is actually achieved, no required work remains, and fresh successful command-criterion evidence is available. Set status to blocked only with a concise reason after the required blocker audit.";
 
 const agentStateRecovery: Readonly<
   Record<RecoverableAgentStateToolName, string>

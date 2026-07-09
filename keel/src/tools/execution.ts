@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   errorMessage,
   isAbortThrow,
@@ -8,8 +9,10 @@ import {
 import type { RecordLastBatchCheckpointOperation } from "../core/git.ts";
 import {
   copySessionGoal,
+  formatSessionGoalBlockedToolResult,
   formatSessionGoalCompletedToolResult,
   normalizeSessionGoalCompletionCommand,
+  normalizeSessionGoalStatusReason,
   type SessionGoal,
 } from "../core/session-goal.ts";
 import {
@@ -208,6 +211,27 @@ function executeUpdateGoalTool(
       ok: false,
     };
   }
+  if (toolCall.status === "blocked") {
+    const blockedGoal: SessionGoal = {
+      objective: sessionGoal.objective,
+      status: "blocked",
+      statusReason: normalizeSessionGoalStatusReason(
+        z.string().parse(toolCall.reason),
+      ),
+      ...(sessionGoal.criterionKind !== undefined &&
+      sessionGoal.completionCriterion !== undefined
+        ? {
+            criterionKind: sessionGoal.criterionKind,
+            completionCriterion: sessionGoal.completionCriterion,
+          }
+        : {}),
+    };
+    return {
+      content: formatSessionGoalBlockedToolResult(blockedGoal),
+      ok: true,
+      sessionGoalUpdate: copySessionGoal(blockedGoal),
+    };
+  }
   if (
     sessionGoal.criterionKind === undefined ||
     sessionGoal.completionCriterion === undefined
@@ -272,7 +296,7 @@ function executeUpdateGoalTool(
   }
   const completedGoal: SessionGoal = {
     objective: sessionGoal.objective,
-    status: toolCall.status,
+    status: "completed",
     criterionKind: sessionGoal.criterionKind,
     completionCriterion: sessionGoal.completionCriterion,
   };

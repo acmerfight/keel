@@ -423,12 +423,12 @@ const updatePlanTool = defineTool({
 const updateGoalTool = defineTool({
   name: "update_goal",
   description: [
-    "Propose that the current active saved session goal is completed.",
-    "Use when: the durable session goal has actually been achieved, no required work remains, and a command completion criterion has run successfully after the latest workspace mutation.",
-    "Provide status completed. Runtime treats this as a proposal and only persists completion when the command evidence gate passes.",
-    "This tool cannot create, rewrite, pause, clear, block, budget, or self-certify a goal.",
-    "Do not use when: no saved session goal is active, no command completion criterion is set, the current user request is only a step toward the goal, the command criterion has not run, command evidence is stale or failed, the criterion is assertion-only, or more required work remains.",
-    "On failure: continue working toward the goal, rerun the command criterion, ask the user to set /goal verify <command>, or ask the user to use /goal complete for an explicit override.",
+    "Propose a lifecycle update for the current active saved session goal.",
+    "Use when: status completed applies when the durable session goal has actually been achieved, no required work remains, and a command completion criterion has run successfully after the latest workspace mutation. Status blocked applies when the same blocking condition has repeated for at least three consecutive goal turns and meaningful progress cannot continue without user input or an external state change; provide a concise reason.",
+    "Runtime treats completed as a proposal and only persists completion when the command evidence gate passes. Runtime persists blocked with the provided reason.",
+    "This tool cannot create, rewrite, pause, resume, clear, budget, or self-certify a goal.",
+    "Do not use when: no saved session goal is active, the current user request is only a step toward the goal, more required work remains, or the model would merely benefit from clarification. Do not use completed when no command completion criterion is set, the command criterion has not run, command evidence is stale or failed, or the criterion is assertion-only.",
+    "On failure: continue working toward the goal, rerun the command criterion, ask the user to set /goal verify <command>, ask the user to use /goal complete for an explicit override, or explain the blocker in normal text if blocked is rejected.",
   ].join("\n"),
   args: toolArgs(updateGoalToolArgumentsSchema),
   permission: { kind: "none" },
