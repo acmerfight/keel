@@ -17,7 +17,9 @@ import { executeGrep } from "../../src/tools/grep.ts";
 const execFileAsync = promisify(execFile);
 
 async function initGitRepo(workspace: string): Promise<void> {
-  await execFileAsync("git", ["init"], { cwd: workspace });
+  await execFileAsync("git", ["init", "--quiet", "--initial-branch=main"], {
+    cwd: workspace,
+  });
 }
 
 async function withEnv<T>(

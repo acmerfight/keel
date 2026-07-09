@@ -492,7 +492,10 @@ describe("CLI Main - Tool Smoke", () => {
     Then the command runs and later matching commands run without another approval prompt`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-bash-ask-"));
-    execFileSync("git", ["init"], { cwd: workspace, stdio: "ignore" });
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: workspace,
+      stdio: "ignore",
+    });
     await writeFile(join(workspace, "note.txt"), "hello\n", "utf8");
     const capturedBodies: unknown[] = [];
     const firstCommand = "git status --short";

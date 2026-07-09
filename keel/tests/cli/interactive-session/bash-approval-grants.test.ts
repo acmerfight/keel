@@ -162,7 +162,9 @@ describe("Interactive Session - Bash Approval Grants", () => {
     });
 
     try {
-      execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+      execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+        cwd: workspace,
+      });
 
       // When
       input.write("check status twice\n");
@@ -247,7 +249,9 @@ describe("Interactive Session - Bash Approval Grants", () => {
     });
 
     try {
-      execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+      execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+        cwd: workspace,
+      });
 
       // When
       input.write("check status\n");
@@ -999,7 +1003,9 @@ describe("Interactive Session - Bash Approval Grants", () => {
     });
 
     try {
-      execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+      execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+        cwd: workspace,
+      });
       firstInput.write("check status\n");
       await firstSession;
 

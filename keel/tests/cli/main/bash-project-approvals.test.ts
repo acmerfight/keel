@@ -156,7 +156,10 @@ describe("CLI Main - Bash Project Approvals", () => {
       join(tmpdir(), "keel-cli-main-bash-project-"),
     );
     const home = await mkdtemp(join(tmpdir(), "keel-home-bash-project-"));
-    execFileSync("git", ["init"], { cwd: workspace, stdio: "ignore" });
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: workspace,
+      stdio: "ignore",
+    });
     await writeFile(join(workspace, "note.txt"), "hello\n", "utf8");
 
     try {
@@ -232,7 +235,10 @@ describe("CLI Main - Bash Project Approvals", () => {
     );
     const nestedWorkspace = join(workspace, "packages", "app");
     const home = await mkdtemp(join(tmpdir(), "keel-home-bash-project-"));
-    execFileSync("git", ["init"], { cwd: workspace, stdio: "ignore" });
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: workspace,
+      stdio: "ignore",
+    });
     await mkdir(nestedWorkspace, { recursive: true });
     await writeFile(join(nestedWorkspace, "child.txt"), "hello\n", "utf8");
 
@@ -290,7 +296,10 @@ describe("CLI Main - Bash Project Approvals", () => {
       join(tmpdir(), "keel-cli-main-bash-project-"),
     );
     const home = await mkdtemp(join(tmpdir(), "keel-home-bash-project-"));
-    execFileSync("git", ["init"], { cwd: workspace, stdio: "ignore" });
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: workspace,
+      stdio: "ignore",
+    });
 
     try {
       await saveProjectGitStatusApproval({ workspace, home });
@@ -484,11 +493,14 @@ describe("CLI Main - Bash Project Approvals", () => {
       join(tmpdir(), "keel-cli-main-bash-project-other-"),
     );
     const home = await mkdtemp(join(tmpdir(), "keel-home-bash-project-"));
-    execFileSync("git", ["init"], {
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
       cwd: approvedWorkspace,
       stdio: "ignore",
     });
-    execFileSync("git", ["init"], { cwd: otherWorkspace, stdio: "ignore" });
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: otherWorkspace,
+      stdio: "ignore",
+    });
     await writeFile(join(otherWorkspace, "note.txt"), "hello\n", "utf8");
 
     try {
