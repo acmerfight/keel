@@ -14,6 +14,7 @@ import {
   resumeSessionStore,
   type SessionQueuedInput,
 } from "../../../src/cli/session-store.ts";
+import type { SessionGoal } from "../../../src/core/session-goal.ts";
 import type { LLMProvider, Message, Usage } from "../../../src/llm/types.ts";
 import {
   EXPENSIVE_USAGE,
@@ -292,6 +293,453 @@ describe("Interactive Session - Reports And Queued Input", () => {
     await session;
     expect(providerCalls).toBe(1);
     expect(stderr).toBe("Cost: 2.00 exceeded=true\n");
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given automatic goal continuation makes no progress twice,
+    When no user input is queued,
+    Then the session stops continuation with a usage-limited goal`, async () => {
+    // Given
+    const initialGoal: SessionGoal = {
+      objective: "Finish the continuation goal",
+      status: "active",
+      criterionKind: "assertion",
+      completionCriterion: "The final report exists.",
+    };
+    const observedUserContexts: string[][] = [];
+    const persistedGoals: SessionGoal[] = [];
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        providerCalls++;
+        observedUserContexts.push(
+          options.messages
+            .filter((message) => message.role === "user")
+            .map((message) => message.content),
+        );
+        yield {
+          type: "text",
+          text:
+            providerCalls === 1
+              ? "Initial turn left the goal active."
+              : `No progress continuation ${providerCalls - 1}.`,
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: initialGoal,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionGoal: (update) => {
+        if (update.goal !== null) {
+          persistedGoals.push(update.goal);
+          return update.goal;
+        }
+        return undefined;
+      },
+    });
+    input.end("start the goal\n");
+
+    // When
+    await withTimeout(session, 5000, "goal continuation did not stop");
+
+    // Then
+    expect(providerCalls).toBe(3);
+    expect(stdout).toBe(
+      [
+        "Initial turn left the goal active.",
+        "No progress continuation 1.",
+        "No progress continuation 2.",
+        "",
+      ].join("\n"),
+    );
+    expect(stderr).toBe(
+      "Session goal: usage_limited - Finish the continuation goal; criterion(assertion): The final report exists.; reason: Automatic goal continuation stopped after 2 consecutive continuation turns without tool calls, task progress, or goal updates.\n",
+    );
+    expect(observedUserContexts[1]?.at(-1)).toContain(
+      "Keel runtime goal continuation",
+    );
+    expect(observedUserContexts[2]?.at(-1)).toContain(
+      "Keel runtime goal continuation",
+    );
+    expect(persistedGoals).toEqual([
+      {
+        objective: "Finish the continuation goal",
+        status: "usage_limited",
+        statusReason:
+          "Automatic goal continuation stopped after 2 consecutive continuation turns without tool calls, task progress, or goal updates.",
+        criterionKind: "assertion",
+        completionCriterion: "The final report exists.",
+      },
+    ]);
+  });
+
+  test(`Given automatic goal continuation reaches the cost budget,
+    When no user input is queued,
+    Then the session stops with a budget-limited goal`, async () => {
+    // Given
+    const initialGoal: SessionGoal = {
+      objective: "Finish the budget-limited continuation goal",
+      status: "active",
+    };
+    const persistedGoals: SessionGoal[] = [];
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        providerCalls++;
+        yield {
+          type: "text",
+          text:
+            providerCalls === 1
+              ? "Initial turn left the goal active."
+              : "Continuation exhausted budget.",
+        };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: providerCalls === 1 ? ZERO_USAGE : EXPENSIVE_USAGE,
+        };
+      },
+    };
+    const input = new PassThrough();
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled", maxCostUsd: 1 },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: initialGoal,
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ONE_DOLLAR_PER_MILLION_INPUT,
+      }),
+      requireKnownCostModel: () => ONE_DOLLAR_PER_MILLION_INPUT,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionGoal: (update) => {
+        if (update.goal !== null) {
+          persistedGoals.push(update.goal);
+          return update.goal;
+        }
+        return undefined;
+      },
+    });
+    input.end("start the goal\n");
+
+    // When
+    await session;
+
+    // Then
+    expect(providerCalls).toBe(2);
+    expect(stderr).toBe(
+      "Session goal: budget_limited - Finish the budget-limited continuation goal; criterion: missing; reason: Session cost budget was reached before the active goal completed.\n",
+    );
+    expect(persistedGoals).toEqual([
+      {
+        objective: "Finish the budget-limited continuation goal",
+        status: "budget_limited",
+        statusReason:
+          "Session cost budget was reached before the active goal completed.",
+      },
+    ]);
+  });
+
+  test(`Given automatic goal continuation keeps making progress without completion,
+    When the continuation turn cap is reached,
+    Then the session stops with a usage-limited goal`, async () => {
+    // Given
+    const initialGoal: SessionGoal = {
+      objective: "Keep reading without completing",
+      status: "active",
+      criterionKind: "assertion",
+      completionCriterion: "The goal is explicitly marked complete.",
+    };
+    const persistedGoals: SessionGoal[] = [];
+    const automaticContinuationTurnLimit = 3;
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        providerCalls++;
+        if (providerCalls > 1 && providerCalls % 2 === 0) {
+          yield {
+            type: "tool_call",
+            id: `read_${providerCalls}`,
+            tool: "read",
+            path: "package.json",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: `Turn ${providerCalls} remained active.` };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: initialGoal,
+      goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionGoal: (update) => {
+        if (update.goal !== null) {
+          persistedGoals.push(update.goal);
+          return update.goal;
+        }
+        return undefined;
+      },
+    });
+    input.end("start the goal\n");
+
+    // When
+    await withTimeout(session, 5000, "goal continuation did not hit turn cap");
+
+    // Then
+    expect(providerCalls).toBe(1 + automaticContinuationTurnLimit * 2);
+    expect(persistedGoals).toEqual([
+      {
+        objective: "Keep reading without completing",
+        status: "usage_limited",
+        statusReason: `Automatic goal continuation stopped after ${automaticContinuationTurnLimit} continuation turns without completing the active goal.`,
+        criterionKind: "assertion",
+        completionCriterion: "The goal is explicitly marked complete.",
+      },
+    ]);
+  });
+
+  test(`Given automatic goal continuation has an invalid configured turn limit,
+    When the runtime starts continuation,
+    Then the session fails before running unbounded continuations`, async () => {
+    // Given
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        yield { type: "text", text: "Initial turn left the goal active." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: {
+        objective: "Continue with invalid configuration",
+        status: "active",
+      },
+      goalAutomaticContinuationTurnLimit: 0,
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+    input.end("start the goal\n");
+
+    // When / Then
+    await expect(session).rejects.toThrow(
+      "goalAutomaticContinuationTurnLimit must be a positive safe integer.",
+    );
+  });
+
+  test(`Given automatic goal continuation is interrupted,
+    When SIGINT aborts the continuation turn,
+    Then the session rolls back the continuation and leaves the goal active`, async () => {
+    // Given
+    const initialGoal: SessionGoal = {
+      objective: "Abort continuation safely",
+      status: "active",
+      criterionKind: "assertion",
+      completionCriterion: "The goal is explicitly marked complete.",
+    };
+    const sigintHandlers = new Set<() => void>();
+    const persistedGoals: SessionGoal[] = [];
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        providerCalls++;
+        yield {
+          type: "text",
+          text:
+            providerCalls === 1
+              ? "Initial turn left the goal active."
+              : "Continuation waiting for abort.",
+        };
+        if (providerCalls === 2) {
+          for (const handler of [...sigintHandlers]) {
+            handler();
+          }
+          if (!options.signal.aborted) {
+            await new Promise<void>((resolve) => {
+              options.signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+          }
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: initialGoal,
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionGoal: (update) => {
+        if (update.goal !== null) {
+          persistedGoals.push(update.goal);
+          return update.goal;
+        }
+        return undefined;
+      },
+    });
+    input.end("start the goal\n");
+
+    // When
+    await withTimeout(session, 5000, "goal continuation abort did not stop");
+
+    // Then
+    expect(providerCalls).toBe(2);
+    expect(persistedGoals).toEqual([]);
     expect(sigintHandlers.size).toBe(0);
   });
 

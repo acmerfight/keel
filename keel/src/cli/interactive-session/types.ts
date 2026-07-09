@@ -86,6 +86,7 @@ export interface InteractiveSessionOptions {
   readonly initialBashApprovalGrants?: readonly BashApprovalGrant[];
   readonly projectRoot?: string;
   readonly initialProjectBashApprovalGrants?: readonly BashProjectApprovalGrant[];
+  readonly goalAutomaticContinuationTurnLimit?: number;
   readonly persistProjectBashApprovalGrant?: (
     grant: BashProjectApprovalGrant,
   ) => void;

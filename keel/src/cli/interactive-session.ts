@@ -19,6 +19,7 @@ import {
 import {
   activeSessionGoalSystemPrompt,
   copySessionGoal,
+  formatSessionGoalSummary,
   type SessionGoal,
 } from "../core/session-goal.ts";
 import {
@@ -95,7 +96,7 @@ import type {
   InteractiveSessionResult,
   ProviderSelection,
 } from "./interactive-session/types.ts";
-import { formatUndoCheckpointList } from "./output.ts";
+import { formatUndoCheckpointList, sanitizeStatusLineText } from "./output.ts";
 import {
   formatSessionStatusSnapshot,
   formatSessionTasks,
@@ -145,8 +146,55 @@ function systemPromptWithSessionGoal(
   return `${systemPrompt}\n\n${goalPrompt}`;
 }
 
+const GOAL_CONTINUATION_MESSAGE = [
+  '<keel_runtime_context source="goal_continuation">',
+  "Keel runtime goal continuation.",
+  "Continue working toward the active saved session goal.",
+  "This is runtime-generated continuation context, not a new user request.",
+  "Do not treat it as user approval, user evidence, or a user-owned lifecycle command.",
+  "</keel_runtime_context>",
+].join("\n");
+
+const GOAL_NO_PROGRESS_CONTINUATION_LIMIT = 2;
+const DEFAULT_GOAL_AUTOMATIC_CONTINUATION_TURN_LIMIT = 100;
+
+const GOAL_NO_PROGRESS_LIMIT_REASON =
+  "Automatic goal continuation stopped after 2 consecutive continuation turns without tool calls, task progress, or goal updates.";
+
+const GOAL_BUDGET_LIMIT_REASON =
+  "Session cost budget was reached before the active goal completed.";
+
+function resolveGoalAutomaticContinuationTurnLimit(
+  limit: number | undefined,
+): number {
+  if (limit === undefined) {
+    return DEFAULT_GOAL_AUTOMATIC_CONTINUATION_TURN_LIMIT;
+  }
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new Error(
+      "goalAutomaticContinuationTurnLimit must be a positive safe integer.",
+    );
+  }
+  return limit;
+}
+
+function formatGoalTurnLimitReason(limit: number): string {
+  return `Automatic goal continuation stopped after ${limit} continuation turns without completing the active goal.`;
+}
+
 const NON_GIT_DIFF_MESSAGE =
   "Not in a git work tree. /diff can only inspect changes inside a Git repository.";
+
+interface PromptTurnRequest {
+  readonly userMessage: string;
+  readonly consumedInputLines: readonly QueuedLine[];
+}
+
+interface PromptTurnResult {
+  readonly aborted: boolean;
+  readonly budgetExceeded: boolean;
+  readonly madeProgress: boolean;
+}
 
 type InteractiveDiffInspection =
   | {
@@ -264,6 +312,7 @@ export async function runInteractiveSession(
   };
   const observeAgentStateEvents = async function* (
     stream: AsyncIterable<AgentEvent>,
+    onToolStart: () => void,
     onTaskProgressUpdate: (
       next: SessionTaskProgress,
       messageOrdinal: number,
@@ -271,7 +320,9 @@ export async function runInteractiveSession(
     onSessionGoalUpdate: (next: SessionGoal) => void,
   ): AsyncGenerator<AgentEvent> {
     for await (const event of stream) {
-      if (event.type === "task_progress_updated") {
+      if (event.type === "tool_start") {
+        onToolStart();
+      } else if (event.type === "task_progress_updated") {
         onTaskProgressUpdate(event.taskProgress, event.messageOrdinal);
       } else if (event.type === "session_goal_updated") {
         onSessionGoalUpdate(event.goal);
@@ -524,6 +575,315 @@ export async function runInteractiveSession(
     options.workspace,
   );
   let postCompactionReadSequence = 0;
+  const limitActiveGoal = (
+    status: "budget_limited" | "usage_limited",
+    reason: string,
+  ): void => {
+    const activeGoal = sessionGoal;
+    if (activeGoal?.status !== "active") {
+      return;
+    }
+    const criterion =
+      activeGoal.criterionKind !== undefined &&
+      activeGoal.completionCriterion !== undefined
+        ? {
+            criterionKind: activeGoal.criterionKind,
+            completionCriterion: activeGoal.completionCriterion,
+          }
+        : {};
+    const limitedGoal: SessionGoal =
+      status === "budget_limited"
+        ? {
+            objective: activeGoal.objective,
+            status: "budget_limited",
+            statusReason: reason,
+            ...criterion,
+          }
+        : {
+            objective: activeGoal.objective,
+            status: "usage_limited",
+            statusReason: reason,
+            ...criterion,
+          };
+    updateSessionGoal(limitedGoal);
+    const persistedGoal = options.persistSessionGoal?.({
+      goal: limitedGoal,
+      consumedInputIds: [],
+    });
+    let displayedGoal: SessionGoal = limitedGoal;
+    if (persistedGoal !== undefined) {
+      updateSessionGoal(persistedGoal);
+      displayedGoal = persistedGoal;
+    }
+    options.writeStderr(
+      `Session goal: ${sanitizeStatusLineText(formatSessionGoalSummary(displayedGoal))}\n`,
+    );
+  };
+  const runPromptTurn = async (
+    request: PromptTurnRequest,
+  ): Promise<PromptTurnResult> => {
+    resolved = resolveActiveProvider(request.userMessage);
+    const messagesBeforeTurn = messages.slice();
+    const taskProgressBeforeTurn = copySessionTaskProgress(taskProgress);
+    const sessionGoalBeforeTurn =
+      sessionGoal === undefined ? undefined : copySessionGoal(sessionGoal);
+    const taskProgressUpdatesDuringTurn: {
+      readonly taskProgress: SessionTaskProgress;
+      readonly messageOrdinal: number;
+    }[] = [];
+    const sessionGoalUpdatesDuringTurn: SessionGoal[] = [];
+    const projectInstructionPathsBeforeTurnOldestFirst = [
+      ...projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
+    ]
+      .reverse()
+      .map((snapshot) => snapshot.instructionPath);
+    const checkpointOperations: RecordLastBatchCheckpointOperation[] = [];
+    const turnStartSequence = lineReader.sequence();
+    const drainedInjectedLines: QueuedLine[] = [];
+    const deferredInputLines: QueuedLine[] = [];
+    const turnAbortController = new AbortController();
+    activeAbortController = turnAbortController;
+    messages.push({ role: "user", content: request.userMessage });
+    let deferRemainingInjectedInput = false;
+    let madeProgress = false;
+
+    try {
+      const remainingCostUsd = remainingMaxCostUsd();
+      const stream = observeAgentStateEvents(
+        runAgentTurn({
+          workspace: options.workspace,
+          provider: resolved.provider,
+          messages,
+          systemPrompt: currentSystemPrompt(),
+          signal: turnAbortController.signal,
+          allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+          stopPolicy: defaultStopPolicy(),
+          taskProgress,
+          ...(sessionGoal !== undefined ? { sessionGoal } : {}),
+          ...(bashPermission !== undefined ? { bashPermission } : {}),
+          ...(shouldTrackInteractiveCost(options.cliArgs)
+            ? {
+                costTracking: {
+                  model: options.requireKnownCostModel(resolved),
+                  ...(remainingCostUsd !== undefined
+                    ? { maxCostUsd: remainingCostUsd }
+                    : {}),
+                },
+              }
+            : {}),
+          ...(resolved.contextCompaction !== undefined
+            ? { contextCompaction: resolved.contextCompaction }
+            : {}),
+          ...(options.toolOutputArtifacts !== undefined
+            ? { toolOutputArtifacts: options.toolOutputArtifacts }
+            : {}),
+          readVisibility,
+          projectInstructionVisibility,
+          recordCheckpointOperations: (operations) => {
+            checkpointOperations.push(...operations);
+          },
+          drainInjectedUserMessages: () => {
+            const queuedLines = lineReader
+              .drainLinesAfter(turnStartSequence)
+              .map(trimQueuedLine)
+              .filter((queuedLine) => queuedLine.line !== "");
+            if (deferRemainingInjectedInput) {
+              deferredInputLines.push(...queuedLines);
+              return [];
+            }
+            const firstCommandIndex = queuedLines.findIndex(
+              (queuedLine) => parseInteractiveCommand(queuedLine.line) !== null,
+            );
+            const injectableLines =
+              firstCommandIndex < 0
+                ? queuedLines
+                : queuedLines.slice(0, firstCommandIndex);
+            drainedInjectedLines.push(...injectableLines);
+            if (firstCommandIndex >= 0) {
+              deferRemainingInjectedInput = true;
+              deferredInputLines.push(...queuedLines.slice(firstCommandIndex));
+            }
+            return injectableLines.map((content) => ({
+              role: "user",
+              content: content.line,
+            }));
+          },
+        }),
+        () => {
+          madeProgress = true;
+        },
+        (next, messageOrdinal) => {
+          if (!sessionTaskProgressesEqual(next, taskProgress)) {
+            madeProgress = true;
+          }
+          updateTaskProgress(next);
+          taskProgressUpdatesDuringTurn.push({
+            taskProgress: copySessionTaskProgress(next),
+            messageOrdinal,
+          });
+        },
+        (next) => {
+          madeProgress = true;
+          updateSessionGoal(next);
+          sessionGoalUpdatesDuringTurn.push(copySessionGoal(next));
+        },
+      );
+      const finalEnd = await options.printAgentEvents(stream);
+      if (turnAbortController.signal.aborted) {
+        messages.splice(0, messages.length, ...messagesBeforeTurn);
+        updateTaskProgress(taskProgressBeforeTurn);
+        sessionGoal =
+          sessionGoalBeforeTurn === undefined
+            ? undefined
+            : copySessionGoal(sessionGoalBeforeTurn);
+        projectInstructionVisibility.clear();
+        projectInstructionVisibility.markInstructionPathsVisible(
+          projectInstructionPathsBeforeTurnOldestFirst,
+        );
+        const restoredLines = [...drainedInjectedLines, ...deferredInputLines];
+        restoreDrainedInput(restoredLines);
+        consumeQueuedInputLines(request.consumedInputLines);
+        options.writeStdout("\n");
+        return {
+          aborted: true,
+          budgetExceeded: false,
+          madeProgress: false,
+        };
+      }
+      restoreDrainedInput(deferredInputLines);
+      options.persistSessionMessages?.(messages, "turn", [
+        ...queuedInputIds(request.consumedInputLines),
+        ...queuedInputIds(drainedInjectedLines),
+      ]);
+      if (options.persistTaskProgress !== undefined) {
+        let lastPersistedTurnProgress = taskProgressBeforeTurn;
+        for (const update of taskProgressUpdatesDuringTurn) {
+          if (
+            sessionTaskProgressesEqual(
+              update.taskProgress,
+              lastPersistedTurnProgress,
+            )
+          ) {
+            continue;
+          }
+          options.persistTaskProgress(update);
+          lastPersistedTurnProgress = copySessionTaskProgress(
+            update.taskProgress,
+          );
+        }
+      }
+      if (options.persistSessionGoal !== undefined) {
+        for (const goal of sessionGoalUpdatesDuringTurn) {
+          sessionGoal = options.persistSessionGoal({
+            goal,
+            consumedInputIds: [],
+          });
+        }
+      }
+      options.writeStdout("\n");
+      const cumulativeCost =
+        finalEnd === undefined ? undefined : recordTurnEnd(finalEnd);
+      if (
+        options.cliArgs.maxCostUsd !== undefined &&
+        cumulativeCost !== undefined
+      ) {
+        options.writeStderr(
+          options.formatCostReport(cumulativeCost, options.cliArgs.maxCostUsd),
+        );
+      }
+      if (cumulativeCost?.budgetExceeded === true) {
+        limitActiveGoal("budget_limited", GOAL_BUDGET_LIMIT_REASON);
+        return {
+          aborted: false,
+          budgetExceeded: true,
+          madeProgress,
+        };
+      }
+      return {
+        aborted: false,
+        budgetExceeded: false,
+        madeProgress,
+      };
+    } catch (error) {
+      if (!turnAbortController.signal.aborted) {
+        throw error;
+      }
+      messages.splice(0, messages.length, ...messagesBeforeTurn);
+      updateTaskProgress(taskProgressBeforeTurn);
+      sessionGoal =
+        sessionGoalBeforeTurn === undefined
+          ? undefined
+          : copySessionGoal(sessionGoalBeforeTurn);
+      projectInstructionVisibility.clear();
+      projectInstructionVisibility.markInstructionPathsVisible(
+        projectInstructionPathsBeforeTurnOldestFirst,
+      );
+      const restoredLines = [...drainedInjectedLines, ...deferredInputLines];
+      restoreDrainedInput(restoredLines);
+      consumeQueuedInputLines(request.consumedInputLines);
+      options.writeStdout("\n");
+      return {
+        aborted: true,
+        budgetExceeded: false,
+        madeProgress: false,
+      };
+    } finally {
+      if (checkpointOperations.length > 0) {
+        recordLastTaskCheckpoint({
+          workspace: options.workspace,
+          operations: checkpointOperations,
+        });
+      }
+      activeAbortController = null;
+    }
+  };
+  const runAutomaticGoalContinuations = async (): Promise<boolean> => {
+    const automaticContinuationTurnLimit =
+      resolveGoalAutomaticContinuationTurnLimit(
+        options.goalAutomaticContinuationTurnLimit,
+      );
+    let continuationTurns = 0;
+    let consecutiveNoProgressContinuations = 0;
+    while (
+      sessionGoal?.status === "active" &&
+      lineReader.pendingInputCount() === 0
+    ) {
+      if (continuationTurns >= automaticContinuationTurnLimit) {
+        limitActiveGoal(
+          "usage_limited",
+          formatGoalTurnLimitReason(automaticContinuationTurnLimit),
+        );
+        return false;
+      }
+      const result = await runPromptTurn({
+        userMessage: GOAL_CONTINUATION_MESSAGE,
+        consumedInputLines: [],
+      });
+      if (result.aborted) {
+        return false;
+      }
+      if (result.budgetExceeded) {
+        return true;
+      }
+      continuationTurns++;
+      if (sessionGoal?.status !== "active") {
+        return false;
+      }
+      if (result.madeProgress) {
+        consecutiveNoProgressContinuations = 0;
+      } else {
+        consecutiveNoProgressContinuations++;
+      }
+      if (
+        consecutiveNoProgressContinuations >=
+        GOAL_NO_PROGRESS_CONTINUATION_LIMIT
+      ) {
+        limitActiveGoal("usage_limited", GOAL_NO_PROGRESS_LIMIT_REASON);
+        return false;
+      }
+    }
+    return false;
+  };
 
   options.onSigint(abortActiveTurn);
   try {
@@ -684,10 +1044,12 @@ export async function runInteractiveSession(
             }
             if (
               sessionGoal.status !== "paused" &&
-              sessionGoal.status !== "blocked"
+              sessionGoal.status !== "blocked" &&
+              sessionGoal.status !== "budget_limited" &&
+              sessionGoal.status !== "usage_limited"
             ) {
               options.writeStderr(
-                "Error: only paused or blocked session goals can be resumed.\n",
+                "Error: only paused, blocked, or limited session goals can be resumed.\n",
               );
               consumeQueuedInputLines([rawInput]);
               break;
@@ -1219,201 +1581,18 @@ export async function runInteractiveSession(
         consumeQueuedInputLines([rawInput]);
         continue;
       }
-      resolved = resolveActiveProvider(userMessage);
-      const messagesBeforeTurn = messages.slice();
-      const taskProgressBeforeTurn = copySessionTaskProgress(taskProgress);
-      const sessionGoalBeforeTurn =
-        sessionGoal === undefined ? undefined : copySessionGoal(sessionGoal);
-      const taskProgressUpdatesDuringTurn: {
-        readonly taskProgress: SessionTaskProgress;
-        readonly messageOrdinal: number;
-      }[] = [];
-      const sessionGoalUpdatesDuringTurn: SessionGoal[] = [];
-      const projectInstructionPathsBeforeTurnOldestFirst = [
-        ...projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
-      ]
-        .reverse()
-        .map((snapshot) => snapshot.instructionPath);
-      const checkpointOperations: RecordLastBatchCheckpointOperation[] = [];
-      const turnStartSequence = lineReader.sequence();
-      const drainedInjectedLines: QueuedLine[] = [];
-      const deferredInputLines: QueuedLine[] = [];
-      const turnAbortController = new AbortController();
-      activeAbortController = turnAbortController;
-      messages.push({ role: "user", content: userMessage });
-      let deferRemainingInjectedInput = false;
-
-      try {
-        const remainingCostUsd = remainingMaxCostUsd();
-        const stream = observeAgentStateEvents(
-          runAgentTurn({
-            workspace: options.workspace,
-            provider: resolved.provider,
-            messages,
-            systemPrompt: currentSystemPrompt(),
-            signal: turnAbortController.signal,
-            allowBash: bashModeExposesTool(options.cliArgs.bashMode),
-            stopPolicy: defaultStopPolicy(),
-            taskProgress,
-            ...(sessionGoal !== undefined ? { sessionGoal } : {}),
-            ...(bashPermission !== undefined ? { bashPermission } : {}),
-            ...(shouldTrackInteractiveCost(options.cliArgs)
-              ? {
-                  costTracking: {
-                    model: options.requireKnownCostModel(resolved),
-                    ...(remainingCostUsd !== undefined
-                      ? { maxCostUsd: remainingCostUsd }
-                      : {}),
-                  },
-                }
-              : {}),
-            ...(resolved.contextCompaction !== undefined
-              ? { contextCompaction: resolved.contextCompaction }
-              : {}),
-            ...(options.toolOutputArtifacts !== undefined
-              ? { toolOutputArtifacts: options.toolOutputArtifacts }
-              : {}),
-            readVisibility,
-            projectInstructionVisibility,
-            recordCheckpointOperations: (operations) => {
-              checkpointOperations.push(...operations);
-            },
-            drainInjectedUserMessages: () => {
-              const queuedLines = lineReader
-                .drainLinesAfter(turnStartSequence)
-                .map(trimQueuedLine)
-                .filter((queuedLine) => queuedLine.line !== "");
-              if (deferRemainingInjectedInput) {
-                deferredInputLines.push(...queuedLines);
-                return [];
-              }
-              const firstCommandIndex = queuedLines.findIndex(
-                (queuedLine) =>
-                  parseInteractiveCommand(queuedLine.line) !== null,
-              );
-              const injectableLines =
-                firstCommandIndex < 0
-                  ? queuedLines
-                  : queuedLines.slice(0, firstCommandIndex);
-              drainedInjectedLines.push(...injectableLines);
-              if (firstCommandIndex >= 0) {
-                deferRemainingInjectedInput = true;
-                deferredInputLines.push(
-                  ...queuedLines.slice(firstCommandIndex),
-                );
-              }
-              return injectableLines.map((content) => ({
-                role: "user",
-                content: content.line,
-              }));
-            },
-          }),
-          (next, messageOrdinal) => {
-            updateTaskProgress(next);
-            taskProgressUpdatesDuringTurn.push({
-              taskProgress: copySessionTaskProgress(next),
-              messageOrdinal,
-            });
-          },
-          (next) => {
-            updateSessionGoal(next);
-            sessionGoalUpdatesDuringTurn.push(copySessionGoal(next));
-          },
-        );
-        const finalEnd = await options.printAgentEvents(stream);
-        if (turnAbortController.signal.aborted) {
-          messages.splice(0, messages.length, ...messagesBeforeTurn);
-          updateTaskProgress(taskProgressBeforeTurn);
-          sessionGoal =
-            sessionGoalBeforeTurn === undefined
-              ? undefined
-              : copySessionGoal(sessionGoalBeforeTurn);
-          projectInstructionVisibility.clear();
-          projectInstructionVisibility.markInstructionPathsVisible(
-            projectInstructionPathsBeforeTurnOldestFirst,
-          );
-          const restoredLines = [
-            ...drainedInjectedLines,
-            ...deferredInputLines,
-          ];
-          restoreDrainedInput(restoredLines);
-          consumeQueuedInputLines([rawInput]);
-          options.writeStdout("\n");
-          continue;
-        }
-        restoreDrainedInput(deferredInputLines);
-        options.persistSessionMessages?.(messages, "turn", [
-          ...queuedInputIds([rawInput]),
-          ...queuedInputIds(drainedInjectedLines),
-        ]);
-        if (options.persistTaskProgress !== undefined) {
-          let lastPersistedTurnProgress = taskProgressBeforeTurn;
-          for (const update of taskProgressUpdatesDuringTurn) {
-            if (
-              sessionTaskProgressesEqual(
-                update.taskProgress,
-                lastPersistedTurnProgress,
-              )
-            ) {
-              continue;
-            }
-            options.persistTaskProgress(update);
-            lastPersistedTurnProgress = copySessionTaskProgress(
-              update.taskProgress,
-            );
-          }
-        }
-        if (options.persistSessionGoal !== undefined) {
-          for (const goal of sessionGoalUpdatesDuringTurn) {
-            sessionGoal = options.persistSessionGoal({
-              goal,
-              consumedInputIds: [],
-            });
-          }
-        }
-        options.writeStdout("\n");
-        const cumulativeCost =
-          finalEnd === undefined ? undefined : recordTurnEnd(finalEnd);
-        if (
-          options.cliArgs.maxCostUsd !== undefined &&
-          cumulativeCost !== undefined
-        ) {
-          options.writeStderr(
-            options.formatCostReport(
-              cumulativeCost,
-              options.cliArgs.maxCostUsd,
-            ),
-          );
-        }
-        if (cumulativeCost?.budgetExceeded === true) {
-          break;
-        }
-      } catch (error) {
-        if (!turnAbortController.signal.aborted) {
-          throw error;
-        }
-        messages.splice(0, messages.length, ...messagesBeforeTurn);
-        updateTaskProgress(taskProgressBeforeTurn);
-        sessionGoal =
-          sessionGoalBeforeTurn === undefined
-            ? undefined
-            : copySessionGoal(sessionGoalBeforeTurn);
-        projectInstructionVisibility.clear();
-        projectInstructionVisibility.markInstructionPathsVisible(
-          projectInstructionPathsBeforeTurnOldestFirst,
-        );
-        const restoredLines = [...drainedInjectedLines, ...deferredInputLines];
-        restoreDrainedInput(restoredLines);
-        consumeQueuedInputLines([rawInput]);
-        options.writeStdout("\n");
-      } finally {
-        if (checkpointOperations.length > 0) {
-          recordLastTaskCheckpoint({
-            workspace: options.workspace,
-            operations: checkpointOperations,
-          });
-        }
-        activeAbortController = null;
+      const turnResult = await runPromptTurn({
+        userMessage,
+        consumedInputLines: [rawInput],
+      });
+      if (turnResult.aborted) {
+        continue;
+      }
+      if (turnResult.budgetExceeded) {
+        break;
+      }
+      if (await runAutomaticGoalContinuations()) {
+        break;
       }
     }
   } finally {

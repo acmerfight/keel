@@ -150,7 +150,7 @@ export function formatInteractiveHelp(): string {
     "  /goal done-when <criterion>",
     "                     Set an assertion completion criterion.",
     "  /goal pause        Pause the current session goal.",
-    "  /goal resume       Resume a paused or blocked session goal.",
+    "  /goal resume       Resume a paused, blocked, or limited session goal.",
     "  /goal complete     Mark the current session goal completed.",
     "  /goal clear        Clear the current session goal.",
     "  /tasks             Show current session tasks.",

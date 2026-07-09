@@ -225,7 +225,7 @@ describe("Session Goal Tool", () => {
     );
   });
 
-  test(`Given a paused or blocked goal exists,
+  test(`Given a non-active goal exists,
     When Keel builds the provider system prompt,
     Then it does not inject that goal as active work`, () => {
     expect(
@@ -243,6 +243,16 @@ describe("Session Goal Tool", () => {
           objective: "Blocked objective",
           status: "blocked",
           statusReason: "Need credentials from the user.",
+        },
+        { bashToolVisible: true },
+      ),
+    ).toBeNull();
+    expect(
+      activeSessionGoalSystemPrompt(
+        {
+          objective: "Usage limited objective",
+          status: "usage_limited",
+          statusReason: "Automatic continuation stopped.",
         },
         { bashToolVisible: true },
       ),
@@ -291,9 +301,9 @@ describe("Session Goal Tool", () => {
     );
   });
 
-  test(`Given session goals have and omit blocked reasons,
+  test(`Given session goals have and omit status reasons,
     When summaries are formatted,
-    Then Keel only includes the reason for blocked goals that carry one`, () => {
+    Then Keel only includes the reason for blocked or limited goals that carry one`, () => {
     expect(
       formatSessionGoalSummary({
         objective: "Continue active work",
@@ -308,6 +318,15 @@ describe("Session Goal Tool", () => {
       }),
     ).toBe(
       "blocked - Wait for credentials; criterion: missing; reason: Need credentials.",
+    );
+    expect(
+      formatSessionGoalSummary({
+        objective: "Wait for user input",
+        status: "usage_limited",
+        statusReason: "Automatic continuation stopped.",
+      }),
+    ).toBe(
+      "usage_limited - Wait for user input; criterion: missing; reason: Automatic continuation stopped.",
     );
     expect(
       formatSessionGoalSummary({
