@@ -649,11 +649,16 @@ export async function runInteractiveSession(
               break;
             }
             try {
-              const { statusReason: _statusReason, ...goalWithoutReason } =
-                copySessionGoal(sessionGoal);
               const pausedGoal: SessionGoal = {
-                ...goalWithoutReason,
+                objective: sessionGoal.objective,
                 status: "paused",
+                ...(sessionGoal.criterionKind !== undefined &&
+                sessionGoal.completionCriterion !== undefined
+                  ? {
+                      criterionKind: sessionGoal.criterionKind,
+                      completionCriterion: sessionGoal.completionCriterion,
+                    }
+                  : {}),
               };
               sessionGoal = options.persistSessionGoal({
                 goal: pausedGoal,
@@ -688,11 +693,16 @@ export async function runInteractiveSession(
               break;
             }
             try {
-              const { statusReason: _statusReason, ...goalWithoutReason } =
-                copySessionGoal(sessionGoal);
               const resumedGoal: SessionGoal = {
-                ...goalWithoutReason,
+                objective: sessionGoal.objective,
                 status: "active",
+                ...(sessionGoal.criterionKind !== undefined &&
+                sessionGoal.completionCriterion !== undefined
+                  ? {
+                      criterionKind: sessionGoal.criterionKind,
+                      completionCriterion: sessionGoal.completionCriterion,
+                    }
+                  : {}),
               };
               sessionGoal = options.persistSessionGoal({
                 goal: resumedGoal,

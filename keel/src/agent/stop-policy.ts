@@ -52,6 +52,14 @@ function toolCallKey(toolCall: ToolCall): string {
   return JSON.stringify(args, Object.keys(args).sort());
 }
 
+function isBlockedGoalProposal(toolCall: ToolCall): boolean {
+  return (
+    toolCall.tool === "update_goal" &&
+    "status" in toolCall &&
+    toolCall.status === "blocked"
+  );
+}
+
 export function repeatedToolCallPolicy(
   stopThreshold = DEFAULT_REPEATED_TOOL_CALL_STOP_THRESHOLD,
 ): AgentStopPolicy {
@@ -64,6 +72,9 @@ export function repeatedToolCallPolicy(
       }
 
       const latestKey = toolCallKey(latest);
+      const effectiveStopThreshold = isBlockedGoalProposal(latest)
+        ? stopThreshold + 1
+        : stopThreshold;
       let streak = 0;
       for (let index = calls.length - 1; index >= 0; index--) {
         const call = calls.at(index);
@@ -71,7 +82,7 @@ export function repeatedToolCallPolicy(
           break;
         }
         streak++;
-        if (streak >= stopThreshold) {
+        if (streak >= effectiveStopThreshold) {
           return { type: "stop", reason: "repeated_tool_call" };
         }
       }

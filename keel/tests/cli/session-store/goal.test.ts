@@ -209,6 +209,75 @@ describe("Session Store Goal", () => {
     }
   });
 
+  test(`Given an active session goal has a pending blocked audit,
+    When the session is resumed,
+    Then the blocked audit survives the ledger boundary`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+
+    try {
+      const session = createSessionStore({
+        sessionId: "session-goal-blocked-audit",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When
+      persistSessionGoal({
+        session,
+        goal: {
+          objective: "Finish blocked audit",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          blockedAudit: {
+            consecutiveCount: 2,
+            reason: " Need credentials\nfrom the user. ",
+          },
+        },
+        runtime: runtime(home, 1),
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "session-goal-blocked-audit",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(resumed.goal).toEqual({
+        objective: "Finish blocked audit",
+        status: "active",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        blockedAudit: {
+          consecutiveCount: 2,
+          reason: "Need credentials from the user.",
+        },
+      });
+      const ledgerRecords = (await readFile(session.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(ledgerRecords.at(-1)).toMatchObject({
+        type: "session_goal",
+        goal: {
+          objective: "Finish blocked audit",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          blockedAudit: {
+            consecutiveCount: 2,
+            reason: "Need credentials from the user.",
+          },
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a session goal exists when a bounded snapshot is written,
     When the session is resumed from the snapshot,
     Then the goal survives the snapshot boundary`, async () => {
@@ -392,6 +461,7 @@ describe("Session Store Goal", () => {
           goal: {
             objective: "Blocked command",
             status: "blocked",
+            statusReason: "   ",
           },
           runtime: runtime(home, 5),
         }),
@@ -402,34 +472,42 @@ describe("Session Store Goal", () => {
           goal: {
             objective: "Blocked command",
             status: "blocked",
-            statusReason: "   ",
+            statusReason: "x".repeat(SESSION_GOAL_STATUS_REASON_MAX_LENGTH + 1),
           },
           runtime: runtime(home, 6),
         }),
-      ).toThrow("Error: /goal blocked status requires a reason.");
+      ).toThrow(
+        `Error: /goal blocked reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
+      );
       expect(() =>
         persistSessionGoal({
           session,
           goal: {
-            objective: "Active command",
+            objective: "Blocked audit",
             status: "active",
-            statusReason: "Need credentials.",
+            blockedAudit: {
+              consecutiveCount: 1,
+              reason: "   ",
+            },
           },
           runtime: runtime(home, 7),
         }),
-      ).toThrow("Error: /goal blocked reason requires blocked status.");
+      ).toThrow("Error: /goal blocked audit requires a reason.");
       expect(() =>
         persistSessionGoal({
           session,
           goal: {
-            objective: "Blocked command",
-            status: "blocked",
-            statusReason: "x".repeat(SESSION_GOAL_STATUS_REASON_MAX_LENGTH + 1),
+            objective: "Blocked audit",
+            status: "active",
+            blockedAudit: {
+              consecutiveCount: 1,
+              reason: "x".repeat(SESSION_GOAL_STATUS_REASON_MAX_LENGTH + 1),
+            },
           },
           runtime: runtime(home, 8),
         }),
       ).toThrow(
-        `Error: /goal blocked reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
+        `Error: /goal blocked audit reason must be ${SESSION_GOAL_STATUS_REASON_MAX_LENGTH} characters or fewer.`,
       );
       const ledgerRecords = (await readFile(session.filePath, "utf8"))
         .trimEnd()

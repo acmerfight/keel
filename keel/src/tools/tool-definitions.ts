@@ -424,7 +424,7 @@ const updateGoalTool = defineTool({
   name: "update_goal",
   description: [
     "Propose a lifecycle update for the current active saved session goal.",
-    "Use when: status completed applies when the durable session goal has actually been achieved, no required work remains, and a command completion criterion has run successfully after the latest workspace mutation. Status blocked applies when the same blocking condition has repeated for at least three consecutive goal turns and meaningful progress cannot continue without user input or an external state change; provide a concise reason.",
+    "Use when: status completed applies when the durable session goal has actually been achieved, no required work remains, and a command completion criterion has run successfully after the latest workspace mutation. Status blocked applies when meaningful progress cannot continue without user input or an external state change; provide a concise reason. Runtime records at most one blocked proposal per agent turn and persists blocked only after three consecutive blocked turns for the active goal.",
     "Runtime treats completed as a proposal and only persists completion when the command evidence gate passes. Runtime persists blocked with the provided reason.",
     "This tool cannot create, rewrite, pause, resume, clear, budget, or self-certify a goal.",
     "Do not use when: no saved session goal is active, the current user request is only a step toward the goal, more required work remains, or the model would merely benefit from clarification. Do not use completed when no command completion criterion is set, the command criterion has not run, command evidence is stale or failed, or the criterion is assertion-only.",

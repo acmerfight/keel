@@ -33,6 +33,7 @@ export function sseToolCall(
   id: string,
   name: string,
   args: Record<string, unknown>,
+  options: { readonly index?: number } = {},
 ): string {
   return sseData({
     choices: [
@@ -40,7 +41,7 @@ export function sseToolCall(
         delta: {
           tool_calls: [
             {
-              index: 0,
+              index: options.index ?? 0,
               id,
               type: "function",
               function: {

@@ -19,6 +19,7 @@ import {
   fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../src/llm/types.ts";
+import { toolCallFromParsedArguments } from "../../src/tools/registry.ts";
 
 async function collect(
   source: AsyncIterable<AgentEvent>,
@@ -567,6 +568,61 @@ describe("Agent Stopping", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  test(`Given repeated blocked goal proposals reach the blocker audit threshold,
+    When the repeated-call guard evaluates the third matching proposal,
+    Then it lets runtime execute the blocked audit transition`, () => {
+    // Given
+    const firstProposal = toolCallFromParsedArguments("goal_1", "update_goal", {
+      status: "blocked",
+      reason: "Need credentials.",
+    });
+    const secondProposal = toolCallFromParsedArguments(
+      "goal_2",
+      "update_goal",
+      {
+        status: "blocked",
+        reason: "Need credentials.",
+      },
+    );
+    const thirdProposal = toolCallFromParsedArguments("goal_3", "update_goal", {
+      status: "blocked",
+      reason: "Need credentials.",
+    });
+    const fourthProposal = toolCallFromParsedArguments(
+      "goal_4",
+      "update_goal",
+      {
+        status: "blocked",
+        reason: "Need credentials.",
+      },
+    );
+    if (
+      firstProposal === null ||
+      secondProposal === null ||
+      thirdProposal === null ||
+      fourthProposal === null
+    ) {
+      throw new Error("expected valid update_goal calls");
+    }
+    const policy = repeatedToolCallPolicy();
+
+    // When / Then
+    expect(
+      policy.shouldStopAfterTurn({
+        completedTurns: 3,
+        priorToolCalls: [firstProposal, secondProposal],
+        toolCalls: [thirdProposal],
+      }),
+    ).toEqual({ type: "continue" });
+    expect(
+      policy.shouldStopAfterTurn({
+        completedTurns: 4,
+        priorToolCalls: [firstProposal, secondProposal, thirdProposal],
+        toolCalls: [fourthProposal],
+      }),
+    ).toEqual({ type: "stop", reason: "repeated_tool_call" });
   });
 
   test(`Given a caller reuses one stop policy instance across two sessions,

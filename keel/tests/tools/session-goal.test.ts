@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   activeSessionGoalSystemPrompt,
+  clearSessionGoalBlockedAudit,
+  formatSessionGoalBlockedProposalToolResult,
   formatSessionGoalBlockedToolResult,
   formatSessionGoalCompletedToolResult,
   formatSessionGoalSummary,
@@ -39,6 +41,87 @@ describe("Session Goal Tool", () => {
       criterionKind: "command",
       completionCriterion: "pnpm test",
     });
+  });
+
+  test(`Given an active goal has a pending blocked audit,
+    When the goal schema parses it,
+    Then Keel normalizes the audit reason and rejects audits on non-active goals`, () => {
+    expect(
+      sessionGoalSchema.parse({
+        objective: "Ship the checkout fix",
+        status: "active",
+        blockedAudit: {
+          consecutiveCount: 1,
+          reason: " Need credentials\nfrom the user. ",
+        },
+      }),
+    ).toEqual({
+      objective: "Ship the checkout fix",
+      status: "active",
+      blockedAudit: {
+        consecutiveCount: 1,
+        reason: "Need credentials from the user.",
+      },
+    });
+    expect(
+      sessionGoalSchema.safeParse({
+        objective: "Wait for credentials",
+        status: "blocked",
+        statusReason: "Need credentials from the user.",
+        blockedAudit: {
+          consecutiveCount: 1,
+          reason: "Need credentials from the user.",
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  test(`Given an active goal has a pending blocked audit,
+    When the audit is cleared,
+    Then Keel removes only the audit and preserves the rest of the active goal`, () => {
+    expect(
+      clearSessionGoalBlockedAudit({
+        objective: "Continue active work",
+        status: "active",
+        blockedAudit: {
+          consecutiveCount: 1,
+          reason: "Need credentials from the user.",
+        },
+      }),
+    ).toEqual({
+      objective: "Continue active work",
+      status: "active",
+    });
+    expect(
+      clearSessionGoalBlockedAudit({
+        objective: "Continue verified work",
+        status: "active",
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        blockedAudit: {
+          consecutiveCount: 2,
+          reason: "Need credentials from the user.",
+        },
+      }),
+    ).toEqual({
+      objective: "Continue verified work",
+      status: "active",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+    });
+    expect(
+      clearSessionGoalBlockedAudit({
+        objective: "Continue active work",
+        status: "active",
+      }),
+    ).toBeNull();
+    expect(
+      clearSessionGoalBlockedAudit({
+        objective: "Wait for credentials",
+        status: "blocked",
+        statusReason: "Need credentials from the user.",
+      }),
+    ).toBeNull();
   });
 
   test(`Given a blocked session goal has a reason,
@@ -119,6 +202,29 @@ describe("Session Goal Tool", () => {
     );
   });
 
+  test(`Given an active goal has a pending blocked audit,
+    When Keel builds the provider system prompt,
+    Then it exposes the audit count and blocker reason`, () => {
+    const prompt = activeSessionGoalSystemPrompt(
+      {
+        objective: "Ship the checkout fix",
+        status: "active",
+        blockedAudit: {
+          consecutiveCount: 2,
+          reason: "Need credentials from the user.",
+        },
+      },
+      { bashToolVisible: true },
+    );
+
+    if (prompt === null) {
+      throw new Error("expected active goal prompt");
+    }
+    expect(prompt).toContain(
+      "- Pending blocked audit: 2/3 consecutive blocked agent turns. Most recent reason: Need credentials from the user.",
+    );
+  });
+
   test(`Given a paused or blocked goal exists,
     When Keel builds the provider system prompt,
     Then it does not inject that goal as active work`, () => {
@@ -166,12 +272,23 @@ describe("Session Goal Tool", () => {
     ).toBe(
       "Session goal blocked: Finish the migration? Reason: Need production credentials.",
     );
-    expect(() =>
-      formatSessionGoalBlockedToolResult({
-        objective: "Finish the migration",
-        status: "blocked",
+  });
+
+  test(`Given an active session goal has a pending blocked audit,
+    When the proposal tool result is formatted,
+    Then Keel reports the audit count and keeps the goal active`, () => {
+    expect(
+      formatSessionGoalBlockedProposalToolResult({
+        objective: "Finish the migration?",
+        status: "active",
+        blockedAudit: {
+          consecutiveCount: 2,
+          reason: "Need production credentials.",
+        },
       }),
-    ).toThrow("Blocked session goal requires a reason.");
+    ).toBe(
+      "Session goal blocked proposal recorded (2/3): Finish the migration? Reason: Need production credentials. Goal remains active; continue working unless progress remains blocked in later turns.",
+    );
   });
 
   test(`Given session goals have and omit blocked reasons,
@@ -191,6 +308,18 @@ describe("Session Goal Tool", () => {
       }),
     ).toBe(
       "blocked - Wait for credentials; criterion: missing; reason: Need credentials.",
+    );
+    expect(
+      formatSessionGoalSummary({
+        objective: "Continue active work",
+        status: "active",
+        blockedAudit: {
+          consecutiveCount: 2,
+          reason: "Need credentials.",
+        },
+      }),
+    ).toBe(
+      "active - Continue active work; criterion: missing; blocked audit: 2/3 - Need credentials.",
     );
   });
 
@@ -220,9 +349,9 @@ describe("Session Goal Tool", () => {
     });
   });
 
-  test(`Given update_goal receives blocked for an active goal,
+  test(`Given update_goal receives blocked for an active goal without prior blocked proposals,
     When the builtin tool executes,
-    Then it persists a blocked goal with the model-provided reason`, async () => {
+    Then it records the first blocked proposal and keeps the goal active`, async () => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-update-goal-blocked-"),
@@ -255,6 +384,62 @@ describe("Session Goal Tool", () => {
       expect(execution).toMatchObject({
         ok: true,
         content:
+          "Session goal blocked proposal recorded (1/3): Finish the durable checkout goal. Reason: Need an API key from the user. Goal remains active; continue working unless progress remains blocked in later turns.",
+        sessionGoalUpdate: {
+          objective: "Finish the durable checkout goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          blockedAudit: {
+            consecutiveCount: 1,
+            reason: "Need an API key from the user.",
+          },
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given update_goal receives blocked for a goal with two prior blocked proposals,
+    When the builtin tool executes,
+    Then it persists the blocked goal with the model-provided reason`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-update-goal-blocked-threshold-"),
+    );
+    const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
+      status: "blocked",
+      reason: " Need an API key\nfrom the user. ",
+    });
+
+    try {
+      if (toolCall === null) {
+        throw new Error("expected valid update_goal call");
+      }
+
+      // When
+      const execution = await executeToolCall({
+        workspace,
+        toolCall,
+        signal: freshSignal(),
+        allowBash: false,
+        sessionGoal: {
+          objective: "Finish the durable checkout goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          blockedAudit: {
+            consecutiveCount: 2,
+            reason: "Need an API key from the user.",
+          },
+        },
+      });
+
+      // Then
+      expect(execution).toMatchObject({
+        ok: true,
+        content:
           "Session goal blocked: Finish the durable checkout goal. Reason: Need an API key from the user.",
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
@@ -262,6 +447,115 @@ describe("Session Goal Tool", () => {
           statusReason: "Need an API key from the user.",
           criterionKind: "command",
           completionCriterion: "pnpm test",
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given update_goal receives a paraphrased blocked reason after two prior blocked proposals,
+    When the builtin tool executes,
+    Then it persists the blocked goal with the latest reason`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-update-goal-blocked-elaborated-"),
+    );
+    const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
+      status: "blocked",
+      reason:
+        "Credentials are unavailable from the user, so checkout cannot proceed.",
+    });
+
+    try {
+      if (toolCall === null) {
+        throw new Error("expected valid update_goal call");
+      }
+
+      // When
+      const execution = await executeToolCall({
+        workspace,
+        toolCall,
+        signal: freshSignal(),
+        allowBash: false,
+        sessionGoal: {
+          objective: "Finish the durable checkout goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          blockedAudit: {
+            consecutiveCount: 2,
+            reason: "Need an API key from the user.",
+          },
+        },
+      });
+
+      // Then
+      expect(execution).toMatchObject({
+        ok: true,
+        content:
+          "Session goal blocked: Finish the durable checkout goal. Reason: Credentials are unavailable from the user, so checkout cannot proceed.",
+        sessionGoalUpdate: {
+          objective: "Finish the durable checkout goal",
+          status: "blocked",
+          statusReason:
+            "Credentials are unavailable from the user, so checkout cannot proceed.",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given update_goal receives a different blocked reason after one prior proposal,
+    When the builtin tool executes,
+    Then it records the second consecutive blocked proposal`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-update-goal-blocked-reset-"),
+    );
+    const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
+      status: "blocked",
+      reason: "Need VPN access.",
+    });
+
+    try {
+      if (toolCall === null) {
+        throw new Error("expected valid update_goal call");
+      }
+
+      // When
+      const execution = await executeToolCall({
+        workspace,
+        toolCall,
+        signal: freshSignal(),
+        allowBash: false,
+        sessionGoal: {
+          objective: "Finish the durable checkout goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          blockedAudit: {
+            consecutiveCount: 1,
+            reason: "Need an API key from the user.",
+          },
+        },
+      });
+
+      // Then
+      expect(execution).toMatchObject({
+        ok: true,
+        sessionGoalUpdate: {
+          objective: "Finish the durable checkout goal",
+          status: "active",
+          criterionKind: "command",
+          completionCriterion: "pnpm test",
+          blockedAudit: {
+            consecutiveCount: 2,
+            reason: "Need VPN access.",
+          },
         },
       });
     } finally {
@@ -311,7 +605,7 @@ describe("Session Goal Tool", () => {
 
   test(`Given update_goal receives blocked for an active goal without a criterion,
     When the builtin tool executes,
-    Then it preserves the criterion-less blocked goal state`, async () => {
+    Then it preserves the criterion-less blocked proposal state`, async () => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-update-goal-blocked-no-criterion-"),
@@ -335,6 +629,56 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+        },
+      });
+
+      // Then
+      expect(execution).toMatchObject({
+        ok: true,
+        sessionGoalUpdate: {
+          objective: "Finish the durable checkout goal",
+          status: "active",
+          blockedAudit: {
+            consecutiveCount: 1,
+            reason: "Need user input.",
+          },
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given update_goal receives the same blocked reason for a criterion-less goal with two prior blocked proposals,
+    When the builtin tool executes,
+    Then it persists the criterion-less blocked goal`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-update-goal-blocked-threshold-no-criterion-"),
+    );
+    const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
+      status: "blocked",
+      reason: "Need user input.",
+    });
+
+    try {
+      if (toolCall === null) {
+        throw new Error("expected valid update_goal call");
+      }
+
+      // When
+      const execution = await executeToolCall({
+        workspace,
+        toolCall,
+        signal: freshSignal(),
+        allowBash: false,
+        sessionGoal: {
+          objective: "Finish the durable checkout goal",
+          status: "active",
+          blockedAudit: {
+            consecutiveCount: 2,
+            reason: "Need user input.",
+          },
         },
       });
 
