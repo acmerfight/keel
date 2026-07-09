@@ -37,7 +37,7 @@ export default defineConfig({
           sequence: { groupOrder: 2 },
           include: ["tests/cli/**/*.test.ts"],
           testTimeout: 30_000,
-          fileParallelism: false,
+          fileParallelism: true,
         },
       },
     ],

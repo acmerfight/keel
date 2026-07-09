@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "node --watch src/cli/index.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit && tsc --project tests/tsconfig.json",
+    "typecheck": "tsc --project tests/tsconfig.json",
     "lint": "biome check --error-on-warnings",
     "lint:fix": "biome check --write --error-on-warnings",
     "test": "vitest run",
