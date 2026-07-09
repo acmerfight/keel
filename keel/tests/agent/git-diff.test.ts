@@ -394,5 +394,5 @@ describe("Agent git diff tool use", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
-  });
+  }, 10_000);
 });

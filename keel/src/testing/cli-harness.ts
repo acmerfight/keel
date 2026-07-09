@@ -129,7 +129,7 @@ export async function createGitWorkspace(
   prefix = "keel-git-",
 ): Promise<string> {
   const workspace = await mkdtemp(join(tmpdir(), prefix));
-  await runGit(workspace, ["init"]);
+  await runGit(workspace, ["init", "--quiet"]);
   await runGit(workspace, ["config", "user.name", "Keel Test"]);
   await runGit(workspace, ["config", "user.email", "keel@example.com"]);
   return workspace;
