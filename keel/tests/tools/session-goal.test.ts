@@ -91,7 +91,7 @@ describe("Session Goal Tool", () => {
 
   test(`Given an active goal has an assertion completion criterion,
     When Keel builds the provider system prompt,
-    Then it exposes the criterion without allowing model-owned completion`, () => {
+    Then it exposes the criterion without allowing model self-certification`, () => {
     const prompt = activeSessionGoalSystemPrompt(
       {
         objective: "Publish release notes",
@@ -109,7 +109,10 @@ describe("Session Goal Tool", () => {
       "Completion criterion (assertion): Release notes cover every changed command.",
     );
     expect(prompt).toContain(
-      "Assertion criteria cannot be completed by the acting model yet.",
+      "Assertion criteria cannot be self-certified by the acting model.",
+    );
+    expect(prompt).toContain(
+      "Runtime will complete the goal only if a fresh-context evaluator approves the evidence.",
     );
     expect(prompt).not.toContain(
       "Before proposing completion, run the command completion criterion",
@@ -433,8 +436,8 @@ describe("Session Goal Tool", () => {
   });
 
   test(`Given update_goal receives completed for an active assertion-criterion goal,
-    When the builtin tool executes before assertion evaluation exists,
-    Then it rejects model-owned completion without mutating goal state`, async () => {
+    When the builtin tool executes without an assertion evaluator,
+    Then it rejects completion without mutating goal state`, async () => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-update-goal-assertion-"),
@@ -467,7 +470,7 @@ describe("Session Goal Tool", () => {
       expect(execution).toMatchObject({
         ok: false,
         content: expect.stringContaining(
-          "Tool failed: update_goal failed: assertion completion criteria are not supported yet",
+          "Tool failed: update_goal failed: assertion completion evaluator is unavailable",
         ),
       });
       expect(execution.sessionGoalUpdate).toBeUndefined();

@@ -36,6 +36,7 @@ import {
   type CostTrackingOptions,
   emptyRunAccounting,
 } from "./accounting.ts";
+import { evaluateAssertionGoalCompletionWithProvider } from "./assertion-goal-evaluator.ts";
 import {
   type ContextCompactionOptions,
   projectCompactedToolOutput,
@@ -689,6 +690,24 @@ export async function* runAgentTurn(
         },
         projectInstructions: projectInstructionVisibility,
         workspaceMutationSequence,
+        evaluateAssertionGoalCompletion: async (goal) => {
+          const evaluation = await evaluateAssertionGoalCompletionWithProvider({
+            provider,
+            signal,
+            goal,
+            evidenceMessages:
+              projectSessionLedgerToProviderMessages(sessionLedger),
+          });
+          state.accounting = addRequestAccounting(
+            state.accounting,
+            evaluation.usage,
+            costTracking,
+          );
+          return {
+            completed: evaluation.completed,
+            reason: evaluation.reason,
+          };
+        },
         ...(sessionGoal !== undefined ? { sessionGoal } : {}),
         ...(goalCompletionCommandEvidence !== undefined
           ? { goalCompletionCommandEvidence }

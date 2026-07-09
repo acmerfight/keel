@@ -157,8 +157,12 @@ function withSentencePeriod(text: string): string {
 
 export function formatSessionGoalCompletedToolResult(
   goal: SessionGoal,
+  options?: { readonly evidenceBasis?: string },
 ): string {
-  return `Session goal completed: ${withSentencePeriod(goal.objective)}`;
+  const base = `Session goal completed: ${withSentencePeriod(goal.objective)}`;
+  return options?.evidenceBasis === undefined
+    ? base
+    : `${base} Evidence: ${withSentencePeriod(options.evidenceBasis)}`;
 }
 
 export function formatSessionGoalBlockedToolResult(goal: SessionGoal): string {
@@ -200,7 +204,8 @@ export function activeSessionGoalSystemPrompt(
     );
   } else if (goal.criterionKind === "assertion") {
     lines.push(
-      "- Assertion criteria cannot be completed by the acting model yet. Do not call update_goal with status completed; continue gathering evidence, ask the user to use /goal complete as an explicit override, or wait for assertion evaluation support.",
+      "- Assertion criteria cannot be self-certified by the acting model. Before proposing completion, surface concrete evidence in the conversation.",
+      "- When the objective is achieved and visible evidence satisfies the assertion criterion, call update_goal with status completed. Runtime will complete the goal only if a fresh-context evaluator approves the evidence.",
     );
   } else if (commandCriterion !== undefined && options.bashToolVisible) {
     lines.push(

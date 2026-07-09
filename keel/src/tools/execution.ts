@@ -85,6 +85,9 @@ interface BuiltinToolExecutionContext {
   readonly sessionGoal?: SessionGoal;
   readonly goalCompletionCommandEvidence?: GoalCompletionCommandEvidence;
   readonly workspaceMutationSequence?: number;
+  readonly evaluateAssertionGoalCompletion?: (
+    goal: AssertionGoalCompletionContract,
+  ) => Promise<AssertionGoalCompletionEvaluation>;
 }
 
 interface BashCommandEvidence {
@@ -98,6 +101,16 @@ export interface GoalCompletionCommandEvidence {
   readonly cwd: string;
   readonly exitCode: number | null;
   readonly observedMutationSequence: number;
+}
+
+interface AssertionGoalCompletionContract {
+  readonly objective: string;
+  readonly completionCriterion: string;
+}
+
+interface AssertionGoalCompletionEvaluation {
+  readonly completed: boolean;
+  readonly reason: string;
 }
 
 export interface ToolExecution {
@@ -194,16 +207,17 @@ function executeUpdatePlanTool(toolCall: UpdatePlanToolCall): ToolExecution {
   };
 }
 
-function executeUpdateGoalTool(
+async function executeUpdateGoalTool(
   {
     workspace,
     allowBash,
     sessionGoal,
     goalCompletionCommandEvidence,
     workspaceMutationSequence,
+    evaluateAssertionGoalCompletion,
   }: BuiltinToolExecutionContext,
   toolCall: UpdateGoalToolCall,
-): ToolExecution {
+): Promise<ToolExecution> {
   if (sessionGoal?.status !== "active") {
     return {
       content:
@@ -243,10 +257,38 @@ function executeUpdateGoalTool(
     };
   }
   if (sessionGoal.criterionKind === "assertion") {
+    if (evaluateAssertionGoalCompletion === undefined) {
+      return {
+        content:
+          "Tool failed: update_goal failed: assertion completion evaluator is unavailable.\nRecovery: Continue gathering evidence, ask the user to use /goal complete for an explicit override, or retry in an agent session that supports assertion evaluation.",
+        ok: false,
+      };
+    }
+    const evaluation = await evaluateAssertionGoalCompletion({
+      objective: sessionGoal.objective,
+      completionCriterion: sessionGoal.completionCriterion,
+    });
+    if (!evaluation.completed) {
+      return {
+        content:
+          "Tool failed: update_goal failed: assertion completion evaluator rejected completion.\n" +
+          `Reason: ${evaluation.reason}\n` +
+          "Recovery: Continue gathering or surfacing evidence that satisfies the assertion criterion, then call update_goal again only after the evidence is visible.",
+        ok: false,
+      };
+    }
+    const completedGoal: SessionGoal = {
+      objective: sessionGoal.objective,
+      status: "completed",
+      criterionKind: sessionGoal.criterionKind,
+      completionCriterion: sessionGoal.completionCriterion,
+    };
     return {
-      content:
-        "Tool failed: update_goal failed: assertion completion criteria are not supported yet.\nRecovery: Continue gathering evidence, ask the user to use /goal complete for an explicit override, or wait for assertion evaluation support.",
-      ok: false,
+      content: formatSessionGoalCompletedToolResult(completedGoal, {
+        evidenceBasis: evaluation.reason,
+      }),
+      ok: true,
+      sessionGoalUpdate: copySessionGoal(completedGoal),
     };
   }
   const expectedCommand = normalizeSessionGoalCompletionCommand(
