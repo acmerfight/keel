@@ -4,6 +4,8 @@ import type { Message, ToolCall } from "../../llm/types.ts";
 export interface GoalContinuationToolExecution {
   readonly toolCall: ToolCall;
   readonly ok: boolean;
+  readonly bashExitCode?: number | null;
+  readonly failedGoalVerification: boolean;
 }
 
 function compareKeys(left: string, right: string): number {
@@ -42,9 +44,13 @@ export function goalContinuationStagnationFingerprint(options: {
   readonly stateChanged: boolean;
 }): string | null {
   // Bash is opaque to the runtime and may mutate the workspace even when its
-  // output repeats, so successful executions are not strong stagnation proof.
+  // output repeats. Only an exact, non-zero goal verification is already
+  // treated by the goal runtime as verification evidence rather than mutation.
   const opaqueWorkspaceMutationPossible = options.toolExecutions.some(
-    (execution) => execution.ok && execution.toolCall.tool === "bash",
+    (execution) =>
+      execution.ok &&
+      execution.toolCall.tool === "bash" &&
+      !execution.failedGoalVerification,
   );
   if (
     options.stateChanged ||
@@ -65,6 +71,7 @@ export function goalContinuationStagnationFingerprint(options: {
         execution.toolCall.tool,
         toolCallArgumentsFingerprint(execution.toolCall),
         execution.ok,
+        execution.bashExitCode ?? null,
         result.sourceTruncated === true,
         sha256(result.content),
       ]),

@@ -5,9 +5,8 @@ import {
 import {
   clearSessionGoalBlockedAudit,
   copySessionGoal,
-  normalizeSessionGoalCompletionCommand,
   type SessionGoal,
-  sessionGoalCommandCriterion,
+  sessionGoalCommandMatchesCriterion,
 } from "../core/session-goal.ts";
 import {
   copySessionTaskProgress,
@@ -148,20 +147,23 @@ function mutatedTargetPathsFromExecution(
 
 function bashCommandEvidenceMatchesGoal(
   goal: SessionGoal | undefined,
-  execution: ToolExecution,
+  evidence: NonNullable<ToolExecution["bashCommandEvidence"]>,
 ): boolean {
-  const commandCriterion = sessionGoalCommandCriterion(goal);
-  if (
-    commandCriterion === undefined ||
-    execution.bashCommandEvidence === undefined
-  ) {
-    return false;
-  }
-  return (
-    normalizeSessionGoalCompletionCommand(
-      execution.bashCommandEvidence.command,
-    ) === normalizeSessionGoalCompletionCommand(commandCriterion)
-  );
+  return sessionGoalCommandMatchesCriterion(goal, evidence.command);
+}
+
+function toolEndEvent(
+  toolCall: ToolCall,
+  execution: ToolExecution,
+): Extract<AgentEvent, { readonly type: "tool_end" }> {
+  return {
+    type: "tool_end",
+    toolCall,
+    ok: execution.ok,
+    ...(execution.bashCommandEvidence !== undefined
+      ? { bashExitCode: execution.bashCommandEvidence.exitCode }
+      : {}),
+  };
 }
 
 function isBlockedGoalProposal(toolCall: ToolCall): boolean {
@@ -833,7 +835,10 @@ export async function* runAgentTurn(
       if (completed.execution.ok) {
         if (completed.execution.bashCommandEvidence !== undefined) {
           if (
-            bashCommandEvidenceMatchesGoal(sessionGoal, completed.execution)
+            bashCommandEvidenceMatchesGoal(
+              sessionGoal,
+              completed.execution.bashCommandEvidence,
+            )
           ) {
             goalCompletionCommandEvidence = {
               ...completed.execution.bashCommandEvidence,
@@ -903,7 +908,7 @@ export async function* runAgentTurn(
             throw result.reason;
           }
           const { toolCall, result: execution } = result;
-          yield { type: "tool_end", toolCall, ok: execution.ok };
+          yield toolEndEvent(toolCall, execution);
           const taskProgressEvent = taskProgressEventFromExecution(execution);
           /* v8 ignore next 3: update_plan uses global tool access and is never scheduled in a parallel batch. */
           if (taskProgressEvent !== null) {
@@ -928,7 +933,7 @@ export async function* runAgentTurn(
           }
           throw error;
         }
-        yield { type: "tool_end", toolCall, ok: execution.ok };
+        yield toolEndEvent(toolCall, execution);
         const taskProgressEvent = taskProgressEventFromExecution(execution);
         if (taskProgressEvent !== null) {
           yield taskProgressEvent;

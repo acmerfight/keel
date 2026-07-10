@@ -26,6 +26,7 @@ import {
   formatSessionGoalSummary,
   type SessionGoal,
   sessionGoalAccounting,
+  sessionGoalCommandMatchesCriterion,
   sessionGoalsEqual,
 } from "../core/session-goal.ts";
 import {
@@ -343,7 +344,23 @@ export async function runInteractiveSession(
   ): AsyncGenerator<AgentEvent> {
     for await (const event of stream) {
       if (event.type === "tool_end") {
-        onToolEnd({ toolCall: event.toolCall, ok: event.ok });
+        const failedGoalVerification =
+          event.toolCall.tool === "bash" &&
+          event.bashExitCode !== undefined &&
+          event.bashExitCode !== null &&
+          event.bashExitCode !== 0 &&
+          sessionGoalCommandMatchesCriterion(
+            sessionGoal,
+            event.toolCall.command,
+          );
+        onToolEnd({
+          toolCall: event.toolCall,
+          ok: event.ok,
+          ...(event.bashExitCode !== undefined
+            ? { bashExitCode: event.bashExitCode }
+            : {}),
+          failedGoalVerification,
+        });
       } else if (event.type === "task_progress_updated") {
         onTaskProgressUpdate(event.taskProgress, event.messageOrdinal);
       } else if (event.type === "session_goal_updated") {

@@ -1218,9 +1218,20 @@ describe("Interactive Session - Reports And Queued Input", () => {
     );
   });
 
-  test(`Given repeated successful bash calls can mutate the workspace with identical output,
+  test.each([
+    {
+      description: "successful",
+      command: "printf changed >> state.txt",
+    },
+    {
+      description: "non-verification failing",
+      command: "printf changed >> state.txt; false",
+    },
+  ])(`Given repeated $description bash calls can mutate the workspace with identical output,
     When automatic goal continuation reaches the hard turn cap,
-    Then Keel does not classify the calls as strong stagnation evidence`, async () => {
+    Then Keel does not classify the calls as strong stagnation evidence`, async ({
+    command,
+  }) => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-goal-bash-mutation-"));
     try {
@@ -1244,7 +1255,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
               type: "tool_call",
               id: `mutating_bash_${providerCalls}`,
               tool: "bash",
-              command: "printf changed >> state.txt",
+              command,
             };
             yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
             return;
@@ -1315,6 +1326,119 @@ describe("Interactive Session - Reports And Queued Input", () => {
             message.content.includes('source="goal_stagnation_recovery"'),
         ),
       ).toHaveLength(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a command goal repeatedly runs the same failing verification,
+    When the third identical failure completes without other state changes,
+    Then Keel sends one recovery hint and only the hard turn cap stops the goal`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-goal-bash-verification-"),
+    );
+    try {
+      const verificationCommand = 'node -e "process.exit(1)"';
+      const initialGoal: SessionGoal = {
+        objective: "Make the failing verification pass",
+        status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "command",
+        completionCriterion: verificationCommand,
+      };
+      let persistedMessages: readonly Message[] = [];
+      let persistedGoal: SessionGoal | undefined = initialGoal;
+      const automaticContinuationTurnLimit = 4;
+      let providerCalls = 0;
+      const provider: LLMProvider = {
+        id: "fake",
+        async *stream() {
+          providerCalls++;
+          if (providerCalls > 1 && providerCalls % 2 === 0) {
+            yield {
+              type: "tool_call",
+              id: `failing_verification_${providerCalls}`,
+              tool: "bash",
+              command: verificationCommand,
+            };
+            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+            return;
+          }
+          yield {
+            type: "text",
+            text: `Verification turn ${providerCalls} remained active.`,
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        },
+      };
+      const input = new PassThrough();
+      const session = runInteractiveSession({
+        cliArgs: { bashMode: "trusted" },
+        workspace,
+        platform: process.platform,
+        initialSessionGoal: initialGoal,
+        goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
+        input,
+        writeStdout: () => {},
+        writeStderr: () => {},
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => ({
+          provider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        }),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async (stream) => {
+          let finalEnd:
+            | Extract<AgentEvent, { readonly type: "end" }>
+            | undefined;
+          for await (const event of stream) {
+            if (event.type === "end") {
+              finalEnd = event;
+            }
+          }
+          return finalEnd;
+        },
+        formatCostReport: () => "",
+        persistSessionMessages: (messages) => {
+          persistedMessages = [...messages];
+        },
+        persistSessionGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      });
+      input.end("start the goal\n");
+
+      // When
+      await withTimeout(
+        session,
+        5000,
+        "failing verification continuation did not hit turn cap",
+      );
+
+      // Then
+      expect(providerCalls).toBe(1 + automaticContinuationTurnLimit * 2);
+      expect(
+        persistedMessages.filter(
+          (message) =>
+            message.role === "user" &&
+            message.content.includes('source="goal_stagnation_recovery"'),
+        ),
+      ).toHaveLength(1);
+      expect(persistedGoal).toMatchObject({
+        objective: initialGoal.objective,
+        status: "usage_limited",
+        statusReason: `Automatic goal continuation stopped after ${automaticContinuationTurnLimit} continuation turns without completing the active goal.`,
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
