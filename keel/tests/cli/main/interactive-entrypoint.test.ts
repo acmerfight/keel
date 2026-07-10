@@ -306,12 +306,13 @@ describe("CLI Main - Interactive Entrypoint", () => {
 
   test(`Given a saved interactive session receives a goal command first,
     When the user checks status,
-    Then the CLI entrypoint persists and displays the goal`, async () => {
+    Then the CLI entrypoint persists, displays, and starts the goal`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-goal-command-"));
     const home = await mkdtemp(join(tmpdir(), "keel-cli-goal-command-home-"));
     const input = new PassThrough();
     input.write("/goal Track durable goal from entrypoint\n");
+    input.write("/goal budget --turns 1\n");
     input.end("/status\n");
     const fixture = createRuntime(
       ["--session", "goal-command", "--provider=fake", "--bash-policy=deny"],
@@ -334,15 +335,18 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toContain("Goal set: active\n");
       expect(fixture.stdout()).toContain(
-        "  goal: active - Track durable goal from entrypoint; criterion: missing\n",
+        "  goal: active - Track durable goal from entrypoint; criterion(assertion): Track durable goal from entrypoint; usage: 0 turns, 0 tokens, 0ms active; budget: 1 turn\n",
       );
+      expect(fixture.stdout()).toContain('source="goal_activation"');
       const ledger = await readFile(
         join(home, "sessions", "goal-command", "ledger.jsonl"),
         "utf8",
       );
       expect(ledger).toContain('"type":"session_goal"');
       expect(ledger).toContain("Track durable goal from entrypoint");
-      expect(fixture.stderr()).toBe("");
+      expect(fixture.stderr()).toContain(
+        "Session goal budget reached: turns 1/1",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -362,6 +366,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     const firstInput = new PassThrough();
     firstInput.write("/goal Track verified goal from entrypoint\n");
     firstInput.write("/goal verify pnpm test\n");
+    firstInput.write("/goal budget --turns 1\n");
     firstInput.end("/status\n");
     const firstRun = createRuntime(
       [
@@ -407,7 +412,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
         "Goal verification command set: pnpm test\n",
       );
       expect(firstRun.stdout()).toContain(
-        "  goal: active - Track verified goal from entrypoint; criterion(command): pnpm test\n",
+        "  goal: active - Track verified goal from entrypoint; criterion(command): pnpm test; usage: 0 turns, 0 tokens, 0ms active; budget: 1 turn\n",
       );
       const ledger = await readFile(
         join(home, "sessions", "goal-verify-command", "ledger.jsonl"),
@@ -417,9 +422,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(ledger).toContain('"completionCriterion":"pnpm test"');
       expect(resumeExitCode).toBe(0);
       expect(resumeRun.stdout()).toContain(
-        "  goal: active - Track verified goal from entrypoint; criterion(command): pnpm test\n",
+        "  goal: budget_limited - Track verified goal from entrypoint; criterion(command): pnpm test; reason: Session goal budget reached: turns 1/1",
       );
-      expect(firstRun.stderr()).toBe("");
+      expect(firstRun.stderr()).toContain(
+        "Session goal budget reached: turns 1/1",
+      );
       expect(resumeRun.stderr()).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });

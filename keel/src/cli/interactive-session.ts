@@ -170,6 +170,24 @@ const GOAL_CONTINUATION_MESSAGE = [
   "</keel_runtime_context>",
 ].join("\n");
 
+const GOAL_ACTIVATION_MESSAGE = [
+  '<keel_runtime_context source="goal_activation">',
+  "Keel runtime goal activation.",
+  "Begin working toward the active saved session goal now.",
+  "This is runtime-generated activation context, not a new user request.",
+  "Do not treat it as user approval, user evidence, or a user-owned lifecycle command.",
+  "</keel_runtime_context>",
+].join("\n");
+
+const GOAL_RESUMPTION_MESSAGE = [
+  '<keel_runtime_context source="goal_resumption">',
+  "Keel runtime goal resumption.",
+  "Resume working toward the active saved session goal now.",
+  "This is runtime-generated resumption context, not a new user request.",
+  "Do not treat it as user approval, user evidence, or a user-owned lifecycle command.",
+  "</keel_runtime_context>",
+].join("\n");
+
 const GOAL_STAGNATION_RECOVERY_MATCH_LIMIT = 3;
 const GOAL_STAGNATION_MAX_PATTERN_LENGTH = 2;
 const DEFAULT_GOAL_AUTOMATIC_CONTINUATION_TURN_LIMIT = 100;
@@ -323,6 +341,7 @@ export async function runInteractiveSession(
     options.initialSessionGoal === undefined
       ? undefined
       : copySessionGoal(options.initialSessionGoal);
+  let pendingGoalDriveMessage: string | null = null;
   const currentSystemPrompt = (): string =>
     systemPromptWithSessionGoal(
       systemPrompt,
@@ -511,6 +530,14 @@ export async function runInteractiveSession(
       return;
     }
     options.consumeQueuedInputs?.(inputIds);
+  };
+  const handleGoalPersistenceFailure = (
+    error: unknown,
+    lines: readonly QueuedLine[],
+  ): void => {
+    pendingGoalDriveMessage = null;
+    options.writeStderr(formatInteractiveCommandFailure(error));
+    consumeQueuedInputLines(lines);
   };
   const abortActiveTurn = () => {
     if (activeAbortController !== null) {
@@ -927,14 +954,16 @@ export async function runInteractiveSession(
       activeAbortController = null;
     }
   };
-  const runAutomaticGoalContinuations = async (): Promise<boolean> => {
+  const runAutomaticGoalContinuations = async (
+    initialContinuationMessage = GOAL_CONTINUATION_MESSAGE,
+  ): Promise<boolean> => {
     const automaticContinuationTurnLimit =
       resolveGoalAutomaticContinuationTurnLimit(
         options.goalAutomaticContinuationTurnLimit,
       );
     let continuationTurns = 0;
     const recentStagnationFingerprints: string[] = [];
-    let nextContinuationMessage = GOAL_CONTINUATION_MESSAGE;
+    let nextContinuationMessage = initialContinuationMessage;
     const recoveryHintedPatterns = new Set<string>();
     while (
       sessionGoal?.status === "active" &&
@@ -996,6 +1025,17 @@ export async function runInteractiveSession(
   options.onSigint(abortActiveTurn);
   try {
     for (;;) {
+      if (pendingGoalDriveMessage !== null) {
+        if (sessionGoal?.status !== "active") {
+          pendingGoalDriveMessage = null;
+        } else if (lineReader.pendingInputCount() === 0) {
+          const driveMessage = pendingGoalDriveMessage;
+          pendingGoalDriveMessage = null;
+          if (await runAutomaticGoalContinuations(driveMessage)) {
+            break;
+          }
+        }
+      }
       if (lineReader.needsInput()) {
         options.renderPrompt?.();
       }
@@ -1092,15 +1132,17 @@ export async function runInteractiveSession(
                 status: "active",
                 budget: emptySessionGoalBudget(),
                 usage: emptySessionGoalUsage(),
+                criterionKind: "assertion",
+                completionCriterion: goalCommand.objective,
               };
               sessionGoal = options.persistSessionGoal({
                 goal: nextGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
               });
               options.writeStdout(formatInteractiveGoalSet(nextGoal));
+              pendingGoalDriveMessage = GOAL_ACTIVATION_MESSAGE;
             } catch (error) {
-              options.writeStderr(formatInteractiveCommandFailure(error));
-              consumeQueuedInputLines([rawInput]);
+              handleGoalPersistenceFailure(error, [rawInput]);
             }
             break;
           }
@@ -1141,8 +1183,7 @@ export async function runInteractiveSession(
               });
               options.writeStdout(formatInteractiveGoalPaused(pausedGoal));
             } catch (error) {
-              options.writeStderr(formatInteractiveCommandFailure(error));
-              consumeQueuedInputLines([rawInput]);
+              handleGoalPersistenceFailure(error, [rawInput]);
             }
             break;
           }
@@ -1169,6 +1210,16 @@ export async function runInteractiveSession(
               consumeQueuedInputLines([rawInput]);
               break;
             }
+            if (
+              sessionGoal.criterionKind === undefined ||
+              sessionGoal.completionCriterion === undefined
+            ) {
+              options.writeStderr(
+                "Error: the session goal has no completion criterion. Set a new goal before resuming.\n",
+              );
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
             const budgetLimitReason =
               formatSessionGoalBudgetLimitReason(sessionGoal);
             if (budgetLimitReason !== null) {
@@ -1183,22 +1234,17 @@ export async function runInteractiveSession(
                 objective: sessionGoal.objective,
                 status: "active",
                 ...sessionGoalAccounting(sessionGoal),
-                ...(sessionGoal.criterionKind !== undefined &&
-                sessionGoal.completionCriterion !== undefined
-                  ? {
-                      criterionKind: sessionGoal.criterionKind,
-                      completionCriterion: sessionGoal.completionCriterion,
-                    }
-                  : {}),
+                criterionKind: sessionGoal.criterionKind,
+                completionCriterion: sessionGoal.completionCriterion,
               };
               sessionGoal = options.persistSessionGoal({
                 goal: resumedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
               });
               options.writeStdout(formatInteractiveGoalResumed(resumedGoal));
+              pendingGoalDriveMessage = GOAL_RESUMPTION_MESSAGE;
             } catch (error) {
-              options.writeStderr(formatInteractiveCommandFailure(error));
-              consumeQueuedInputLines([rawInput]);
+              handleGoalPersistenceFailure(error, [rawInput]);
             }
             break;
           }
@@ -1256,8 +1302,7 @@ export async function runInteractiveSession(
                 formatInteractiveGoalBudgetUpdated(budgetedGoal),
               );
             } catch (error) {
-              options.writeStderr(formatInteractiveCommandFailure(error));
-              consumeQueuedInputLines([rawInput]);
+              handleGoalPersistenceFailure(error, [rawInput]);
             }
             break;
           }
@@ -1292,8 +1337,7 @@ export async function runInteractiveSession(
                 formatInteractiveGoalBudgetCleared(clearedGoal),
               );
             } catch (error) {
-              options.writeStderr(formatInteractiveCommandFailure(error));
-              consumeQueuedInputLines([rawInput]);
+              handleGoalPersistenceFailure(error, [rawInput]);
             }
             break;
           }
@@ -1330,8 +1374,7 @@ export async function runInteractiveSession(
                 formatInteractiveGoalCompleted(completedGoal),
               );
             } catch (error) {
-              options.writeStderr(formatInteractiveCommandFailure(error));
-              consumeQueuedInputLines([rawInput]);
+              handleGoalPersistenceFailure(error, [rawInput]);
             }
             break;
           }
@@ -1376,8 +1419,7 @@ export async function runInteractiveSession(
                 }),
               );
             } catch (error) {
-              options.writeStderr(formatInteractiveCommandFailure(error));
-              consumeQueuedInputLines([rawInput]);
+              handleGoalPersistenceFailure(error, [rawInput]);
             }
             break;
           }
@@ -1415,8 +1457,7 @@ export async function runInteractiveSession(
                 formatInteractiveGoalCriterionSet(goalWithCriterion),
               );
             } catch (error) {
-              options.writeStderr(formatInteractiveCommandFailure(error));
-              consumeQueuedInputLines([rawInput]);
+              handleGoalPersistenceFailure(error, [rawInput]);
             }
             break;
           }
@@ -1433,8 +1474,7 @@ export async function runInteractiveSession(
               });
               options.writeStdout(formatInteractiveGoalCleared());
             } catch (error) {
-              options.writeStderr(formatInteractiveCommandFailure(error));
-              consumeQueuedInputLines([rawInput]);
+              handleGoalPersistenceFailure(error, [rawInput]);
             }
             break;
         }
@@ -1513,6 +1553,9 @@ export async function runInteractiveSession(
         continue;
       }
       if (interactiveCommand?.kind === "invalid") {
+        if (interactiveCommand.scope === "goal") {
+          pendingGoalDriveMessage = null;
+        }
         options.writeStderr(`${interactiveCommand.message}\n`);
         consumeQueuedInputLines([rawInput]);
         continue;
@@ -1805,6 +1848,7 @@ export async function runInteractiveSession(
         consumeQueuedInputLines([rawInput]);
         continue;
       }
+      pendingGoalDriveMessage = null;
       const turnResult = await runPromptTurn({
         userMessage,
         consumedInputLines: [rawInput],

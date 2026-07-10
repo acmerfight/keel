@@ -119,6 +119,7 @@ interface ForkPointsCommand {
 interface InvalidInteractiveCommand {
   readonly kind: "invalid";
   readonly message: string;
+  readonly scope?: "goal";
 }
 
 export type InteractiveCommand =
@@ -159,12 +160,12 @@ export function formatInteractiveHelp(): string {
     "  /skill             Show the active workflow skill.",
     "  /status            Show session state and recovery commands.",
     "  /title [text]      Show or set this saved session title.",
-    "  /goal [objective]  Show or set this saved session goal.",
+    "  /goal [condition]  Show or start a goal with this completion condition.",
     "  /goal verify <cmd> Set the command that proves the goal is done.",
     "  /goal done-when <criterion>",
     "                     Set an assertion completion criterion.",
     "  /goal pause        Pause the current session goal.",
-    "  /goal resume       Resume a paused, blocked, or limited session goal.",
+    "  /goal resume       Resume and continue a paused, blocked, or limited goal.",
     "  /goal budget [--turns N] [--tokens N] [--time 30m]",
     "                     Show or update goal execution budgets.",
     "  /goal budget clear Clear goal budgets without resetting usage.",
@@ -597,7 +598,10 @@ export function parseInteractiveCommand(
 
   const goalMatch = /^\/goal(?:\s+(.*))?$/u.exec(trimmed);
   if (goalMatch !== null) {
-    return parseGoalCommandArgs(goalMatch[1]);
+    const goalCommand = parseGoalCommandArgs(goalMatch[1]);
+    return goalCommand.kind === "invalid"
+      ? { ...goalCommand, scope: "goal" }
+      : goalCommand;
   }
 
   const tasksMatch = /^\/tasks(?:\s+(.*))?$/u.exec(trimmed);

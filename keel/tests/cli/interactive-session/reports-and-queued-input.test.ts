@@ -980,8 +980,8 @@ describe("Interactive Session - Reports And Queued Input", () => {
     expect(result.report?.end.stopReason).toBe("goal_budget");
   });
 
-  test(`Given goal and session cost budgets are exhausted by the same turn,
-    When Keel builds the interactive report,
+  test(`Given a newly activated goal exhausts goal and session cost budgets in the same turn,
+    When Keel starts the goal and builds the interactive report,
     Then the terminal session cost reason takes precedence`, async () => {
     const input = new PassThrough();
     const provider: LLMProvider = {
@@ -999,12 +999,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
       workspace: process.cwd(),
       platform: process.platform,
-      initialSessionGoal: {
-        objective: "Report session cost precedence",
-        status: "active",
-        budget: { tokens: 1 },
-        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      },
       now: () => 0,
       input,
       writeStdout: () => {},
@@ -1032,7 +1026,9 @@ describe("Interactive Session - Reports And Queued Input", () => {
       formatCostReport: () => "",
       persistSessionGoal: ({ goal }) => goal ?? undefined,
     });
-    input.end("start goal\n");
+    input.end(
+      "/goal Report session cost precedence\n/goal budget --tokens 1\n",
+    );
 
     const result = await session;
 
@@ -1065,6 +1061,8 @@ describe("Interactive Session - Reports And Queued Input", () => {
         status: "active",
         budget: { turns: 1 },
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "assertion",
+        completionCriterion: "The session remains interactive",
       },
       now: () => 0,
       input,
@@ -1101,9 +1099,14 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
     });
     input.end(
-      ["start goal", "/goal budget clear", "/goal resume", "/goal", ""].join(
-        "\n",
-      ),
+      [
+        "start goal",
+        "/goal budget clear",
+        "/goal resume",
+        "/goal pause",
+        "/goal",
+        "",
+      ].join("\n"),
     );
 
     // When
@@ -1113,9 +1116,11 @@ describe("Interactive Session - Reports And Queued Input", () => {
     expect(providerCalls).toBe(1);
     expect(persistedGoal).toEqual({
       objective: "Remain interactive after goal budget exhaustion",
-      status: "active",
+      status: "paused",
       budget: {},
       usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "assertion",
+      completionCriterion: "The session remains interactive",
     });
     expect(stderr).toContain(
       "Session goal: budget_limited - Remain interactive after goal budget exhaustion",
@@ -1125,7 +1130,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       "Goal resumed: Remain interactive after goal budget exhaustion\n",
     );
     expect(stdout).toContain(
-      "Session goal: active - Remain interactive after goal budget exhaustion; criterion: missing\n",
+      "Session goal: paused - Remain interactive after goal budget exhaustion; criterion(assertion): The session remains interactive\n",
     );
   });
 
