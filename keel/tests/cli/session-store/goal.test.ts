@@ -1088,4 +1088,47 @@ describe("Session Store Goal", () => {
       await rm(home, { recursive: true, force: true });
     }
   });
+
+  test(`Given a runtime outcome violates the current goal schema,
+    When persistence redaction leaves the invalid field unchanged,
+    Then the store fails before appending an unreadable goal record`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+
+    try {
+      const session = createSessionStore({
+        sessionId: "session-goal-invalid-outcome-schema",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When / Then
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: JSON.parse(
+            JSON.stringify({
+              objective: "Reject an invalid runtime outcome",
+              status: "active",
+              budget: {},
+              usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+              latestRuntimeOutcome: {
+                kind: "progress_observed",
+                reason: "Observed evidence.",
+                observedEvidenceFingerprints: ["tools:not-a-sha256"],
+              },
+            }),
+          ),
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow("Error: session goal is invalid after persistence redaction.");
+      expect(
+        (await readFile(session.filePath, "utf8")).trimEnd().split("\n"),
+      ).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
 });

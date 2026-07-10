@@ -769,6 +769,11 @@ interface RedactBoundedGoalTextOptions {
   readonly lengthError: string;
 }
 
+type RedactValidatedBoundedGoalTextOptions = Pick<
+  RedactBoundedGoalTextOptions,
+  "value" | "normalize" | "maxLength"
+>;
+
 function truncateTextForPersistence(text: string, maxLength: number): string {
   const truncated = text.slice(0, maxLength).trimEnd();
   return truncated === "" ? text.slice(0, maxLength) : truncated;
@@ -789,6 +794,15 @@ function redactBoundedGoalTextForPersistence(
     return truncateTextForPersistence(redacted, options.maxLength);
   }
   sessionStoreError(options.lengthError);
+}
+
+function redactValidatedBoundedGoalTextForPersistence(
+  options: RedactValidatedBoundedGoalTextOptions,
+): string {
+  const redacted = options.normalize(redactTextForPersistence(options.value));
+  return redacted.length <= options.maxLength
+    ? redacted
+    : truncateTextForPersistence(redacted, options.maxLength);
 }
 
 function redactSessionGoalCompletionEvidenceForPersistence(
@@ -846,14 +860,21 @@ function requireSessionGoalCompletionEvidenceForPersistence(
 function redactSessionGoalRuntimeOutcomeForPersistence(
   outcome: SessionGoalRuntimeOutcome,
 ): SessionGoalRuntimeOutcome {
+  const reason = normalizeSessionGoalRuntimeOutcomeReason(outcome.reason);
+  if (reason === "") {
+    sessionStoreError("Error: /goal runtime outcome requires a reason.");
+  }
+  if (reason.length > SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH) {
+    sessionStoreError(
+      `Error: /goal runtime outcome reason must be ${SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH} characters or fewer.`,
+    );
+  }
   return normalizeSessionGoalRuntimeOutcome({
     kind: outcome.kind,
-    reason: redactBoundedGoalTextForPersistence({
-      value: outcome.reason,
+    reason: redactValidatedBoundedGoalTextForPersistence({
+      value: reason,
       normalize: normalizeSessionGoalRuntimeOutcomeReason,
       maxLength: SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH,
-      emptyError: "Error: /goal runtime outcome requires a reason.",
-      lengthError: `Error: /goal runtime outcome reason must be ${SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH} characters or fewer.`,
     }),
     ...(outcome.observedEvidenceFingerprints === undefined
       ? {}
