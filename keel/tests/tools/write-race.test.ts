@@ -851,7 +851,13 @@ describe("Write Tool Race Handling", () => {
     const targetPath = join(await realpath(workspace), "created.txt");
     const previousDebug = process.env[DEBUG_ENV_KEY];
     process.env[DEBUG_ENV_KEY] = "1";
-    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    let debugOutput = "";
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        debugOutput += chunk.toString();
+        return true;
+      });
 
     try {
       // Given
@@ -872,12 +878,7 @@ describe("Write Tool Race Handling", () => {
       // Then
       expect(result.content).toBe("Wrote created.txt");
       expect(await readFile(targetPath, "utf8")).toBe("secret\n");
-      expect(stderr).toHaveBeenCalledWith(
-        expect.stringContaining("write temp cleanup failed"),
-      );
-      const debugOutput = stderr.mock.calls
-        .map((call) => call.map(String).join(" "))
-        .join("\n");
+      expect(debugOutput).toContain("write temp cleanup failed");
       expect(debugOutput).toContain(`targetPath=${targetPath}`);
       expect(debugOutput).toContain(".keel-write-");
       expect(debugOutput).toContain("error=");

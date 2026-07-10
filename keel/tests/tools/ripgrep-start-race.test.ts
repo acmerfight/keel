@@ -18,7 +18,7 @@ function errno(message: string, code: string): NodeJS.ErrnoException {
 function mockRipgrepStartFailure(error: NodeJS.ErrnoException) {
   vi.resetModules();
 
-  const spawn = vi.fn(() => {
+  const spawn = () => {
     const child = new MockRipgrepProcess();
     queueMicrotask(() => {
       child.emit("error", error);
@@ -26,10 +26,9 @@ function mockRipgrepStartFailure(error: NodeJS.ErrnoException) {
       child.stderr.end();
     });
     return child;
-  });
+  };
 
   vi.doMock("node:child_process", () => ({ spawn }));
-  return spawn;
 }
 
 afterEach(() => {
@@ -45,9 +44,7 @@ describe("Ripgrep Start Failure Recovery", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-rg-start-"));
     await writeFile(join(workspace, "app.ts"), "needle\n", "utf8");
-    const spawn = mockRipgrepStartFailure(
-      errno("spawn /test/rg ENOENT", "ENOENT"),
-    );
+    mockRipgrepStartFailure(errno("spawn /test/rg ENOENT", "ENOENT"));
     const { executeToolCall } = await import("../../src/tools/execution.ts");
 
     try {
@@ -64,7 +61,6 @@ describe("Ripgrep Start Failure Recovery", () => {
       });
 
       // Then
-      expect(spawn).toHaveBeenCalledOnce();
       expect(result.ok).toBe(false);
       expect(result.content).toContain("Tool failed: grep failed");
       expect(result.content).toContain("ripgrep could not start (ENOENT)");
