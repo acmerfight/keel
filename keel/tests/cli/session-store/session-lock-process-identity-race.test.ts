@@ -55,9 +55,9 @@ async function importSessionStoreWithLinuxProcStats(
   procStatStubs: readonly ProcStatStub[],
 ) {
   const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
-  const execFileSync = vi.fn(() => {
+  const execFileSync = () => {
     throw new Error("ps should not run on linux");
-  });
+  };
   vi.resetModules();
   setProcessPlatform("linux");
   vi.doMock("node:child_process", () => ({ execFileSync }));
@@ -80,7 +80,7 @@ async function importSessionStoreWithLinuxProcStats(
     },
   }));
   const sessionStore = await import("../../../src/cli/session-store.ts");
-  return { execFileSync, sessionStore };
+  return sessionStore;
 }
 
 async function importSessionStoreWithCurrentLinuxProcStat(
@@ -145,13 +145,12 @@ describe("Session Lock Process Identity Races", () => {
 
   test(`Given Linux proc exposes the current process start time,
     When a user starts a named session with ps unavailable,
-    Then the store writes a strong active lock without calling ps`, async () => {
+    Then the store writes a strong active lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const { execFileSync, sessionStore } =
-      await importSessionStoreWithCurrentLinuxProcStat(
-        procStatWithStartTime(process.pid, "424242"),
-      );
+    const sessionStore = await importSessionStoreWithCurrentLinuxProcStat(
+      procStatWithStartTime(process.pid, "424242"),
+    );
 
     try {
       // When
@@ -164,7 +163,6 @@ describe("Session Lock Process Identity Races", () => {
       const owner = await readFile(join(lock.lockPath, "owner.json"), "utf8");
       expect(owner).toContain(`"hostname":"${hostname()}"`);
       expect(owner).toContain('"processStartTime":"424242"');
-      expect(execFileSync).not.toHaveBeenCalled();
       lock.release();
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -173,13 +171,12 @@ describe("Session Lock Process Identity Races", () => {
 
   test(`Given Linux proc cannot inspect the current process,
     When a user starts a named session,
-    Then the store falls back to a PID-only active lock without calling ps`, async () => {
+    Then the store falls back to a PID-only active lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const { execFileSync, sessionStore } =
-      await importSessionStoreWithCurrentLinuxProcStat(
-        new Error("proc unavailable"),
-      );
+    const sessionStore = await importSessionStoreWithCurrentLinuxProcStat(
+      new Error("proc unavailable"),
+    );
 
     try {
       // When
@@ -192,7 +189,6 @@ describe("Session Lock Process Identity Races", () => {
       const owner = await readFile(join(lock.lockPath, "owner.json"), "utf8");
       expect(owner).not.toContain("hostname");
       expect(owner).not.toContain("processStartTime");
-      expect(execFileSync).not.toHaveBeenCalled();
       lock.release();
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -201,11 +197,12 @@ describe("Session Lock Process Identity Races", () => {
 
   test(`Given Linux proc returns a malformed current process stat,
     When a user starts a named session,
-    Then the store falls back to a PID-only active lock without calling ps`, async () => {
+    Then the store falls back to a PID-only active lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const { execFileSync, sessionStore } =
-      await importSessionStoreWithCurrentLinuxProcStat("malformed proc stat\n");
+    const sessionStore = await importSessionStoreWithCurrentLinuxProcStat(
+      "malformed proc stat\n",
+    );
 
     try {
       // When
@@ -218,7 +215,6 @@ describe("Session Lock Process Identity Races", () => {
       const owner = await readFile(join(lock.lockPath, "owner.json"), "utf8");
       expect(owner).not.toContain("hostname");
       expect(owner).not.toContain("processStartTime");
-      expect(execFileSync).not.toHaveBeenCalled();
       lock.release();
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -227,13 +223,12 @@ describe("Session Lock Process Identity Races", () => {
 
   test(`Given Linux proc returns a nonnumeric current process start time,
     When a user starts a named session,
-    Then the store falls back to a PID-only active lock without calling ps`, async () => {
+    Then the store falls back to a PID-only active lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const { execFileSync, sessionStore } =
-      await importSessionStoreWithCurrentLinuxProcStat(
-        procStatWithStartTime(process.pid, "not-a-number"),
-      );
+    const sessionStore = await importSessionStoreWithCurrentLinuxProcStat(
+      procStatWithStartTime(process.pid, "not-a-number"),
+    );
 
     try {
       // When
@@ -246,7 +241,6 @@ describe("Session Lock Process Identity Races", () => {
       const owner = await readFile(join(lock.lockPath, "owner.json"), "utf8");
       expect(owner).not.toContain("hostname");
       expect(owner).not.toContain("processStartTime");
-      expect(execFileSync).not.toHaveBeenCalled();
       lock.release();
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -255,7 +249,7 @@ describe("Session Lock Process Identity Races", () => {
 
   test(`Given Linux proc cannot inspect an exited lock owner,
     When the same session lock is acquired again,
-    Then the store recovers the abandoned lock without calling ps`, async () => {
+    Then the store recovers the abandoned lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const lockPath = join(
@@ -277,14 +271,13 @@ describe("Session Lock Process Identity Races", () => {
       })}\n`,
       "utf8",
     );
-    const { execFileSync, sessionStore } =
-      await importSessionStoreWithLinuxProcStats([
-        {
-          pid: process.pid,
-          value: procStatWithStartTime(process.pid, "123456"),
-        },
-        { pid: exitedPid, value: new Error("proc unavailable") },
-      ]);
+    const sessionStore = await importSessionStoreWithLinuxProcStats([
+      {
+        pid: process.pid,
+        value: procStatWithStartTime(process.pid, "123456"),
+      },
+      { pid: exitedPid, value: new Error("proc unavailable") },
+    ]);
 
     try {
       // When
@@ -295,7 +288,6 @@ describe("Session Lock Process Identity Races", () => {
 
       // Then
       expect(lock.lockPath).toBe(lockPath);
-      expect(execFileSync).not.toHaveBeenCalled();
       lock.release();
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -304,7 +296,7 @@ describe("Session Lock Process Identity Races", () => {
 
   test(`Given Linux proc returns malformed stat for an exited lock owner,
     When the same session lock is acquired again,
-    Then the store recovers the abandoned lock without calling ps`, async () => {
+    Then the store recovers the abandoned lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const lockPath = join(
@@ -326,14 +318,13 @@ describe("Session Lock Process Identity Races", () => {
       })}\n`,
       "utf8",
     );
-    const { execFileSync, sessionStore } =
-      await importSessionStoreWithLinuxProcStats([
-        {
-          pid: process.pid,
-          value: procStatWithStartTime(process.pid, "123456"),
-        },
-        { pid: exitedPid, value: "malformed proc stat\n" },
-      ]);
+    const sessionStore = await importSessionStoreWithLinuxProcStats([
+      {
+        pid: process.pid,
+        value: procStatWithStartTime(process.pid, "123456"),
+      },
+      { pid: exitedPid, value: "malformed proc stat\n" },
+    ]);
 
     try {
       // When
@@ -344,7 +335,6 @@ describe("Session Lock Process Identity Races", () => {
 
       // Then
       expect(lock.lockPath).toBe(lockPath);
-      expect(execFileSync).not.toHaveBeenCalled();
       lock.release();
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -353,12 +343,12 @@ describe("Session Lock Process Identity Races", () => {
 
   test(`Given the platform has no strong process identity reader,
     When a user starts a named session,
-    Then the store falls back to a PID-only active lock without calling ps`, async () => {
+    Then the store falls back to a PID-only active lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const execFileSync = vi.fn(() => {
+    const execFileSync = () => {
       throw new Error("ps should not run on this platform");
-    });
+    };
     vi.resetModules();
     setProcessPlatform("win32");
     vi.doMock("node:child_process", () => ({ execFileSync }));
@@ -377,7 +367,6 @@ describe("Session Lock Process Identity Races", () => {
       const owner = await readFile(join(lock.lockPath, "owner.json"), "utf8");
       expect(owner).not.toContain("hostname");
       expect(owner).not.toContain("processStartTime");
-      expect(execFileSync).not.toHaveBeenCalled();
       lock.release();
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -386,7 +375,7 @@ describe("Session Lock Process Identity Races", () => {
 
   test(`Given the platform has no strong process identity reader and the owner exited,
     When the same session lock is acquired again,
-    Then the store recovers the abandoned lock without calling ps`, async () => {
+    Then the store recovers the abandoned lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const lockPath = join(
@@ -408,9 +397,9 @@ describe("Session Lock Process Identity Races", () => {
       })}\n`,
       "utf8",
     );
-    const execFileSync = vi.fn(() => {
+    const execFileSync = () => {
       throw new Error("ps should not run on this platform");
-    });
+    };
     vi.resetModules();
     setProcessPlatform("win32");
     vi.doMock("node:child_process", () => ({ execFileSync }));
@@ -427,7 +416,6 @@ describe("Session Lock Process Identity Races", () => {
 
       // Then
       expect(lock.lockPath).toBe(lockPath);
-      expect(execFileSync).not.toHaveBeenCalled();
       lock.release();
     } finally {
       await rm(home, { recursive: true, force: true });

@@ -2859,7 +2859,13 @@ describe("Git Checkpoints", () => {
     Then Keel skips it without failing`, async () => {
     // Given
     const workspace = await createGitWorkspace();
-    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    let debugOutput = "";
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        debugOutput += chunk.toString();
+        return true;
+      });
 
     try {
       // When
@@ -2878,7 +2884,7 @@ describe("Git Checkpoints", () => {
         message:
           "No earlier checkpoints. Ask me to undo more, or use git to reset.",
       });
-      expect(stderr).not.toHaveBeenCalled();
+      expect(debugOutput).toBe("");
     } finally {
       stderr.mockRestore();
       await rm(workspace, { recursive: true, force: true });
@@ -2893,7 +2899,13 @@ describe("Git Checkpoints", () => {
     const filePath = join(workspace, "missing.txt");
     const previousDebug = process.env[DEBUG_ENV_KEY];
     process.env[DEBUG_ENV_KEY] = "1";
-    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    let debugOutput = "";
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        debugOutput += chunk.toString();
+        return true;
+      });
 
     try {
       // When
@@ -2906,12 +2918,7 @@ describe("Git Checkpoints", () => {
 
       // Then
       expect(record).toEqual({ written: false });
-      expect(stderr).toHaveBeenCalledWith(
-        expect.stringContaining("undo checkpoint write skipped"),
-      );
-      const debugOutput = stderr.mock.calls
-        .map((call) => call.map(String).join(" "))
-        .join("\n");
+      expect(debugOutput).toContain("undo checkpoint write skipped");
       expect(debugOutput).toContain(`workspace=${workspace}`);
       expect(debugOutput).toContain(`filePath=${filePath}`);
       expect(debugOutput).toContain("error=");
@@ -2938,7 +2945,13 @@ describe("Git Checkpoints", () => {
     await writeFile(join(workspace, ".git", "keel"), "not a directory\n");
     const previousDebug = process.env[DEBUG_ENV_KEY];
     process.env[DEBUG_ENV_KEY] = "1";
-    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    let debugOutput = "";
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        debugOutput += chunk.toString();
+        return true;
+      });
 
     try {
       // When
@@ -2950,12 +2963,7 @@ describe("Git Checkpoints", () => {
 
       // Then
       expect(record).toEqual({ written: false });
-      expect(stderr).toHaveBeenCalledWith(
-        expect.stringContaining("undo checkpoint write skipped"),
-      );
-      const debugOutput = stderr.mock.calls
-        .map((call) => call.map(String).join(" "))
-        .join("\n");
+      expect(debugOutput).toContain("undo checkpoint write skipped");
       expect(debugOutput).toContain(`workspace=${workspace}`);
       expect(debugOutput).toContain(`filePath=${filePath}`);
       expect(debugOutput).toContain("error=");
