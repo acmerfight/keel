@@ -7,6 +7,7 @@ import {
   clearSessionGoalBlockedAudit,
   formatSessionGoalBlockedProposalToolResult,
   formatSessionGoalBlockedToolResult,
+  formatSessionGoalBudgetLimitReason,
   formatSessionGoalCompletedToolResult,
   formatSessionGoalSummary,
   sessionGoalSchema,
@@ -25,6 +26,79 @@ function freshSignal(): AbortSignal {
 }
 
 describe("Session Goal Tool", () => {
+  test(`Given a saved goal carries execution budgets and usage,
+    When the goal contract is validated,
+    Then Keel requires durable nonnegative accounting and positive limits`, () => {
+    expect(
+      sessionGoalSchema.parse({
+        objective: "Ship within budget",
+        status: "active",
+        budget: { turns: 4, tokens: 2_000, activeTimeMs: 60_000 },
+        usage: { turns: 2, tokens: 900, activeTimeMs: 12_000 },
+      }),
+    ).toEqual({
+      objective: "Ship within budget",
+      status: "active",
+      budget: { turns: 4, tokens: 2_000, activeTimeMs: 60_000 },
+      usage: { turns: 2, tokens: 900, activeTimeMs: 12_000 },
+    });
+    expect(
+      sessionGoalSchema.safeParse({
+        objective: "Old incomplete contract",
+        status: "active",
+      }).success,
+    ).toBe(false);
+    expect(
+      sessionGoalSchema.safeParse({
+        objective: "Invalid accounting",
+        status: "active",
+        budget: { turns: 0 },
+        usage: { turns: -1, tokens: 0, activeTimeMs: 0 },
+      }).success,
+    ).toBe(false);
+    expect(
+      sessionGoalSchema.safeParse({
+        objective: "Already exhausted active goal",
+        status: "active",
+        budget: { turns: 2 },
+        usage: { turns: 2, tokens: 0, activeTimeMs: 0 },
+      }).success,
+    ).toBe(false);
+  });
+
+  test(`Given goal accounting uses active-time-only budgets and readable durations,
+    When Keel formats enforcement, status, and provider context,
+    Then it reports reached time and formats minutes and hours without inventing turn limits`, () => {
+    expect(
+      formatSessionGoalBudgetLimitReason({
+        objective: "Reach active time",
+        status: "paused",
+        budget: { activeTimeMs: 1_000 },
+        usage: { turns: 1, tokens: 20, activeTimeMs: 1_500 },
+      }),
+    ).toBe("Session goal budget reached: active time 1.5s/1s.");
+    expect(
+      formatSessionGoalSummary({
+        objective: "Show readable time",
+        status: "budget_limited",
+        statusReason: "Paused after an earlier limit.",
+        budget: { activeTimeMs: 3_600_000 },
+        usage: { turns: 1, tokens: 20, activeTimeMs: 60_000 },
+      }),
+    ).toContain("usage: 1 turn, 20 tokens, 1m active; budget: 1h active");
+    expect(
+      activeSessionGoalSystemPrompt(
+        {
+          objective: "Use only a token limit",
+          status: "active",
+          budget: { tokens: 100 },
+          usage: { turns: 0, tokens: 20, activeTimeMs: 0 },
+        },
+        { bashToolVisible: false },
+      ),
+    ).toContain("Goal budget: 100 tokens.");
+  });
+
   test(`Given a saved session goal has a command completion criterion,
     When the goal schema parses it,
     Then Keel trims and preserves the explicit criterion contract`, () => {
@@ -32,12 +106,16 @@ describe("Session Goal Tool", () => {
       sessionGoalSchema.parse({
         objective: "Ship the checkout fix",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "command",
         completionCriterion: " pnpm test ",
       }),
     ).toEqual({
       objective: "Ship the checkout fix",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
     });
@@ -50,6 +128,8 @@ describe("Session Goal Tool", () => {
       sessionGoalSchema.parse({
         objective: "Ship the checkout fix",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         blockedAudit: {
           consecutiveCount: 1,
           reason: " Need credentials\nfrom the user. ",
@@ -58,6 +138,8 @@ describe("Session Goal Tool", () => {
     ).toEqual({
       objective: "Ship the checkout fix",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       blockedAudit: {
         consecutiveCount: 1,
         reason: "Need credentials from the user.",
@@ -67,6 +149,8 @@ describe("Session Goal Tool", () => {
       sessionGoalSchema.safeParse({
         objective: "Wait for credentials",
         status: "blocked",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Need credentials from the user.",
         blockedAudit: {
           consecutiveCount: 1,
@@ -83,6 +167,8 @@ describe("Session Goal Tool", () => {
       clearSessionGoalBlockedAudit({
         objective: "Continue active work",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         blockedAudit: {
           consecutiveCount: 1,
           reason: "Need credentials from the user.",
@@ -91,11 +177,15 @@ describe("Session Goal Tool", () => {
     ).toEqual({
       objective: "Continue active work",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
     });
     expect(
       clearSessionGoalBlockedAudit({
         objective: "Continue verified work",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "command",
         completionCriterion: "pnpm test",
         blockedAudit: {
@@ -106,6 +196,8 @@ describe("Session Goal Tool", () => {
     ).toEqual({
       objective: "Continue verified work",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
     });
@@ -113,12 +205,16 @@ describe("Session Goal Tool", () => {
       clearSessionGoalBlockedAudit({
         objective: "Continue active work",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       }),
     ).toBeNull();
     expect(
       clearSessionGoalBlockedAudit({
         objective: "Wait for credentials",
         status: "blocked",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Need credentials from the user.",
       }),
     ).toBeNull();
@@ -131,23 +227,31 @@ describe("Session Goal Tool", () => {
       sessionGoalSchema.parse({
         objective: "Wait for credentials",
         status: "blocked",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: " Need the API key\nfrom the user. ",
       }),
     ).toEqual({
       objective: "Wait for credentials",
       status: "blocked",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       statusReason: "Need the API key from the user.",
     });
     expect(
       sessionGoalSchema.safeParse({
         objective: "Wait for credentials",
         status: "blocked",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       }).success,
     ).toBe(false);
     expect(
       sessionGoalSchema.safeParse({
         objective: "Wait for credentials",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Need the API key from the user.",
       }).success,
     ).toBe(false);
@@ -160,6 +264,8 @@ describe("Session Goal Tool", () => {
       sessionGoalSchema.safeParse({
         objective: "Ship the checkout fix",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "command",
       }).success,
     ).toBe(false);
@@ -167,6 +273,8 @@ describe("Session Goal Tool", () => {
       sessionGoalSchema.safeParse({
         objective: "Ship the checkout fix",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         completionCriterion: "pnpm test",
       }).success,
     ).toBe(false);
@@ -179,6 +287,8 @@ describe("Session Goal Tool", () => {
       {
         objective: "Publish release notes",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "assertion",
         completionCriterion: "Release notes cover every changed command.",
       },
@@ -209,6 +319,8 @@ describe("Session Goal Tool", () => {
       {
         objective: "Ship the checkout fix",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         blockedAudit: {
           consecutiveCount: 2,
           reason: "Need credentials from the user.",
@@ -233,6 +345,8 @@ describe("Session Goal Tool", () => {
         {
           objective: "Paused objective",
           status: "paused",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         },
         { bashToolVisible: true },
       ),
@@ -242,6 +356,8 @@ describe("Session Goal Tool", () => {
         {
           objective: "Blocked objective",
           status: "blocked",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: "Need credentials from the user.",
         },
         { bashToolVisible: true },
@@ -252,6 +368,8 @@ describe("Session Goal Tool", () => {
         {
           objective: "Usage limited objective",
           status: "usage_limited",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: "Automatic continuation stopped.",
         },
         { bashToolVisible: true },
@@ -266,6 +384,8 @@ describe("Session Goal Tool", () => {
       formatSessionGoalCompletedToolResult({
         objective: "Finish the migration?",
         status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         completionEvidence: { kind: "user_override" },
       }),
     ).toBe(
@@ -280,6 +400,8 @@ describe("Session Goal Tool", () => {
       formatSessionGoalBlockedToolResult({
         objective: "Finish the migration?",
         status: "blocked",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Need production credentials.",
       }),
     ).toBe(
@@ -294,6 +416,8 @@ describe("Session Goal Tool", () => {
       formatSessionGoalBlockedProposalToolResult({
         objective: "Finish the migration?",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         blockedAudit: {
           consecutiveCount: 2,
           reason: "Need production credentials.",
@@ -311,12 +435,16 @@ describe("Session Goal Tool", () => {
       formatSessionGoalSummary({
         objective: "Continue active work",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       }),
     ).toBe("active - Continue active work; criterion: missing");
     expect(
       formatSessionGoalSummary({
         objective: "Wait for credentials",
         status: "blocked",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Need credentials.",
       }),
     ).toBe(
@@ -326,6 +454,8 @@ describe("Session Goal Tool", () => {
       formatSessionGoalSummary({
         objective: "Wait for user input",
         status: "usage_limited",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Automatic continuation stopped.",
       }),
     ).toBe(
@@ -335,6 +465,8 @@ describe("Session Goal Tool", () => {
       formatSessionGoalSummary({
         objective: "Continue active work",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         blockedAudit: {
           consecutiveCount: 2,
           reason: "Need credentials.",
@@ -352,6 +484,8 @@ describe("Session Goal Tool", () => {
       sessionGoalSchema.parse({
         objective: "Fix checkout tests",
         status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "command",
         completionCriterion: "pnpm test",
         completionEvidence: {
@@ -365,6 +499,8 @@ describe("Session Goal Tool", () => {
     ).toEqual({
       objective: "Fix checkout tests",
       status: "completed",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
       completionEvidence: {
@@ -379,6 +515,8 @@ describe("Session Goal Tool", () => {
       formatSessionGoalSummary({
         objective: "Fix checkout tests",
         status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "command",
         completionCriterion: "pnpm test",
         completionEvidence: {
@@ -397,6 +535,8 @@ describe("Session Goal Tool", () => {
         {
           objective: "Fix checkout tests",
           status: "completed",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           completionEvidence: {
@@ -414,6 +554,8 @@ describe("Session Goal Tool", () => {
       formatSessionGoalSummary({
         objective: "Publish release notes",
         status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "assertion",
         completionCriterion: "release notes explain command-a and command-b",
         completionEvidence: {
@@ -428,6 +570,8 @@ describe("Session Goal Tool", () => {
       sessionGoalSchema.parse({
         objective: "Publish release notes",
         status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         completionEvidence: {
           kind: "assertion_evaluator",
           reason: " Evaluator\napproved the evidence. ",
@@ -436,6 +580,8 @@ describe("Session Goal Tool", () => {
     ).toEqual({
       objective: "Publish release notes",
       status: "completed",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       completionEvidence: {
         kind: "assertion_evaluator",
         reason: "Evaluator approved the evidence.",
@@ -445,6 +591,8 @@ describe("Session Goal Tool", () => {
       formatSessionGoalSummary({
         objective: "Publish report",
         status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         completionEvidence: { kind: "user_override" },
       }),
     ).toBe(
@@ -454,12 +602,16 @@ describe("Session Goal Tool", () => {
       sessionGoalSchema.safeParse({
         objective: "Invisible completion",
         status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       }).success,
     ).toBe(false);
     expect(
       sessionGoalSchema.safeParse({
         objective: "Premature evidence",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         completionEvidence: { kind: "user_override" },
       }).success,
     ).toBe(false);
@@ -517,6 +669,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -530,6 +684,8 @@ describe("Session Goal Tool", () => {
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           blockedAudit: {
@@ -569,6 +725,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           blockedAudit: {
@@ -586,6 +744,8 @@ describe("Session Goal Tool", () => {
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "blocked",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: "Need an API key from the user.",
           criterionKind: "command",
           completionCriterion: "pnpm test",
@@ -623,6 +783,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           blockedAudit: {
@@ -640,6 +802,8 @@ describe("Session Goal Tool", () => {
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "blocked",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason:
             "Credentials are unavailable from the user, so checkout cannot proceed.",
           criterionKind: "command",
@@ -677,6 +841,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           blockedAudit: {
@@ -692,6 +858,8 @@ describe("Session Goal Tool", () => {
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           blockedAudit: {
@@ -727,6 +895,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -771,6 +941,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         },
       });
 
@@ -780,6 +952,8 @@ describe("Session Goal Tool", () => {
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           blockedAudit: {
             consecutiveCount: 1,
             reason: "Need user input.",
@@ -817,6 +991,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           blockedAudit: {
             consecutiveCount: 2,
             reason: "Need user input.",
@@ -830,6 +1006,8 @@ describe("Session Goal Tool", () => {
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "blocked",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: "Need user input.",
         },
       });
@@ -864,6 +1042,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -905,6 +1085,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         },
       });
 
@@ -946,6 +1128,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Publish the migration notes",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "assertion",
           completionCriterion:
             "The release notes explain every changed command.",
@@ -990,6 +1174,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -1008,6 +1194,8 @@ describe("Session Goal Tool", () => {
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "completed",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           completionEvidence: {
@@ -1082,6 +1270,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -1127,6 +1317,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -1171,6 +1363,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -1221,6 +1415,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -1271,6 +1467,8 @@ describe("Session Goal Tool", () => {
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },

@@ -43,6 +43,8 @@ describe("CLI Session Status Format", () => {
       goal: {
         objective: "Ship the release notes",
         status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         completionEvidence: { kind: "user_override" },
       },
       messages: [],
@@ -81,6 +83,8 @@ describe("CLI Session Status Format", () => {
       goal: {
         objective: longObjective,
         status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         completionEvidence: { kind: "user_override" },
       },
       messages: [],

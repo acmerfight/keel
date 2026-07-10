@@ -39,6 +39,70 @@ function unusedProvider(id: string): LLMProvider {
   };
 }
 
+async function runLocalGoalCommandScenario(options: {
+  readonly commands: readonly string[];
+  readonly initialGoal?: SessionGoal;
+  readonly persistence: "normal" | "missing" | "throw";
+}): Promise<{
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly persistedGoals: readonly SessionGoal[];
+}> {
+  const input = new PassThrough();
+  let stdout = "";
+  let stderr = "";
+  const persistedGoals: SessionGoal[] = [];
+  const session = runInteractiveSession({
+    cliArgs: { bashMode: "disabled" },
+    workspace: process.cwd(),
+    platform: process.platform,
+    ...(options.initialGoal !== undefined
+      ? { initialSessionGoal: options.initialGoal }
+      : {}),
+    input,
+    writeStdout: (text) => {
+      stdout += text;
+    },
+    writeStderr: (text) => {
+      stderr += text;
+    },
+    onSigint: () => {},
+    offSigint: () => {},
+    setExitCode: () => {},
+    forceExit: (code) => {
+      throw new ForcedExit(code);
+    },
+    ...(options.persistence === "missing"
+      ? {}
+      : {
+          persistSessionGoal: ({
+            goal,
+          }: {
+            readonly goal: SessionGoal | null;
+          }) => {
+            if (options.persistence === "throw") {
+              throw new Error("goal persistence failed");
+            }
+            if (goal === null) return undefined;
+            persistedGoals.push(goal);
+            return goal;
+          },
+        }),
+    resolveProvider: () => ({
+      provider: unusedProvider(""),
+      providerId: "fake",
+      model: "fake",
+      costModel: ZERO_COST_MODEL,
+    }),
+    requireKnownCostModel: () => ZERO_COST_MODEL,
+    printAgentEvents: async () => undefined,
+    formatCostReport: () => "",
+  });
+  input.end(`${options.commands.join("\n")}\n`);
+  await session;
+  return { stdout, stderr, persistedGoals };
+}
+
 const REDACTION_EXPANDING_SECRET = " sk-aaaa";
 const REDACTION_EXPANDING_SECRET_REPETITIONS = 40;
 
@@ -60,6 +124,8 @@ describe("Interactive Session - Goals", () => {
       formatInteractiveGoal({
         objective: "Continue checkout",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "command",
         completionCriterion: "pnpm test",
       }),
@@ -75,11 +141,29 @@ describe("Interactive Session - Goals", () => {
       formatInteractiveGoal({
         objective: "Ship checkout",
         status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         completionEvidence: { kind: "user_override" },
       }),
     ).toBe(
       "Session goal: completed - Ship checkout; criterion: missing\n" +
         "Session goal evidence: user explicitly completed the goal with /goal complete\n",
+    );
+  });
+
+  test(`Given a goal has a singular token budget and a punctuated limit reason,
+    When the interactive status is formatted with accounting,
+    Then Keel uses singular grammar and a clean reason separator`, () => {
+    expect(
+      formatInteractiveGoal({
+        objective: "Respect one token",
+        status: "budget_limited",
+        statusReason: "Session goal budget reached: tokens 2/1.",
+        budget: { tokens: 1 },
+        usage: { turns: 1, tokens: 2, activeTimeMs: 0 },
+      }),
+    ).toBe(
+      "Session goal: budget_limited - Respect one token; criterion: missing; reason: Session goal budget reached: tokens 2/1; usage: 1 turn, 2 tokens, 0ms active; budget: 1 token\n",
     );
   });
 
@@ -111,6 +195,67 @@ describe("Interactive Session - Goals", () => {
       kind: "goal",
       action: "resume",
     });
+    expect(parseInteractiveCommand("/goal budget")).toEqual({
+      kind: "goal",
+      action: "show_budget",
+    });
+    expect(
+      parseInteractiveCommand(
+        "/goal budget --turns 20 --tokens 50000 --time 30m",
+      ),
+    ).toEqual({
+      kind: "goal",
+      action: "budget",
+      budget: {
+        turns: 20,
+        tokens: 50_000,
+        activeTimeMs: 30 * 60 * 1000,
+      },
+    });
+    expect(parseInteractiveCommand("/goal budget clear")).toEqual({
+      kind: "goal",
+      action: "clear_budget",
+    });
+    expect(parseInteractiveCommand("/goal budget --turns 0")).toEqual({
+      kind: "invalid",
+      message: "Error: --turns must be a positive integer.",
+    });
+    expect(
+      parseInteractiveCommand("/goal budget --turns 999999999999999999999999"),
+    ).toEqual({
+      kind: "invalid",
+      message: "Error: --turns must be a positive integer.",
+    });
+    expect(parseInteractiveCommand("/goal budget --time nope")).toEqual({
+      kind: "invalid",
+      message:
+        "Error: --time must be a positive duration using ms, s, m, or h.",
+    });
+    expect(parseInteractiveCommand("/goal budget --time")).toEqual({
+      kind: "invalid",
+      message:
+        "Error: --time must be a positive duration using ms, s, m, or h.",
+    });
+    expect(
+      parseInteractiveCommand("/goal budget --time 999999999999999999999h"),
+    ).toEqual({
+      kind: "invalid",
+      message:
+        "Error: --time must be a positive duration using ms, s, m, or h.",
+    });
+    expect(
+      parseInteractiveCommand(
+        "/goal budget --time 5ms --time 6s --time 7m --time 8h",
+      ),
+    ).toEqual({
+      kind: "goal",
+      action: "budget",
+      budget: { activeTimeMs: 8 * 60 * 60 * 1000 },
+    });
+    expect(parseInteractiveCommand("/goal budget --wat 1")).toEqual({
+      kind: "invalid",
+      message: 'Error: unknown /goal budget option "--wat".',
+    });
     expect(parseInteractiveCommand("/goal verify pnpm test")).toEqual({
       kind: "goal",
       action: "verify",
@@ -136,6 +281,204 @@ describe("Interactive Session - Goals", () => {
       kind: "goal",
       action: "clear",
     });
+  });
+
+  test(`Given goal budget commands are used across unsupported local states,
+    When Keel handles them without running a provider turn,
+    Then every command reports a recoverable error and valid immediate limits preserve the goal contract`, async () => {
+    const missingPersistence = await runLocalGoalCommandScenario({
+      commands: [
+        "/goal budget",
+        "/goal budget --turns 2",
+        "/goal budget clear",
+      ],
+      persistence: "missing",
+    });
+    expect(missingPersistence.stdout).toContain("Session goal: none\n");
+    expect(missingPersistence.stderr).toBe(
+      "Error: /goal requires a saved session. Start without --ephemeral, or use --session or --resume.\n".repeat(
+        2,
+      ),
+    );
+
+    const missingAndCompletedGoals = await runLocalGoalCommandScenario({
+      commands: [
+        "/goal budget --turns 2",
+        "/goal budget clear",
+        "/goal Ship checkout",
+        "/goal complete",
+        "/goal budget --turns 2",
+        "/goal budget clear",
+      ],
+      persistence: "normal",
+    });
+    expect(missingAndCompletedGoals.stderr).toBe(
+      [
+        "Error: no session goal is set.\n",
+        "Error: no session goal is set.\n",
+        "Error: completed session goals cannot change budgets. Set a new goal first.\n",
+        "Error: completed session goals cannot change budgets. Set a new goal first.\n",
+      ].join(""),
+    );
+
+    const persistenceFailures = await runLocalGoalCommandScenario({
+      commands: ["/goal budget --turns 2", "/goal budget clear"],
+      initialGoal: {
+        objective: "Keep persisted accounting",
+        status: "paused",
+        budget: {},
+        usage: { turns: 1, tokens: 10, activeTimeMs: 100 },
+      },
+      persistence: "throw",
+    });
+    expect(persistenceFailures.stderr).toBe(
+      "goal persistence failed\n".repeat(2),
+    );
+
+    const belowBudget = await runLocalGoalCommandScenario({
+      commands: ["/goal budget --turns 2"],
+      initialGoal: {
+        objective: "Stay below budget",
+        status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      },
+      persistence: "normal",
+    });
+    expect(belowBudget.persistedGoals.at(-1)?.status).toBe("active");
+
+    const exhaustedWithCriterion = await runLocalGoalCommandScenario({
+      commands: ["/goal budget --turns 1"],
+      initialGoal: {
+        objective: "Limit immediately",
+        status: "active",
+        budget: {},
+        usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+      },
+      persistence: "normal",
+    });
+    expect(exhaustedWithCriterion.persistedGoals.at(-1)).toMatchObject({
+      status: "budget_limited",
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+    });
+
+    const exhaustedWithoutCriterion = await runLocalGoalCommandScenario({
+      commands: ["/goal budget --turns 1"],
+      initialGoal: {
+        objective: "Limit immediately without criterion",
+        status: "active",
+        budget: {},
+        usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
+      },
+      persistence: "normal",
+    });
+    expect(exhaustedWithoutCriterion.persistedGoals.at(-1)).toMatchObject({
+      status: "budget_limited",
+      budget: { turns: 1 },
+    });
+  });
+
+  test(`Given a saved goal is limited at its current budget,
+    When the user tries to resume, raises the budget, resumes, and clears it,
+    Then Keel enforces an explicit usable budget before preserving lifecycle state`, async () => {
+    // Given
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const persistedGoals: SessionGoal[] = [];
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      sessionId: "goal-budget-lifecycle",
+      initialSessionGoal: {
+        objective: "Finish the budgeted checkout goal",
+        status: "budget_limited",
+        statusReason: "Session goal budget reached: turns 2/2.",
+        budget: { turns: 2 },
+        usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
+      },
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      persistSessionGoal: ({ goal }) => {
+        if (goal === null) return undefined;
+        persistedGoals.push(goal);
+        return goal;
+      },
+      resolveProvider: () => ({
+        provider: unusedProvider(""),
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => undefined,
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end(
+      [
+        "/goal resume",
+        "/goal budget --turns 3 --tokens 1000 --time 5s",
+        "/goal resume",
+        "/goal budget clear",
+        "/goal",
+        "",
+      ].join("\n"),
+    );
+    await session;
+
+    // Then
+    expect(stderr).toBe(
+      "Error: Session goal budget reached: turns 2/2. Raise or clear the goal budget before resuming.\n",
+    );
+    expect(persistedGoals).toEqual([
+      {
+        objective: "Finish the budgeted checkout goal",
+        status: "budget_limited",
+        statusReason: "Session goal budget reached: turns 2/2.",
+        budget: { turns: 3, tokens: 1_000, activeTimeMs: 5_000 },
+        usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
+      },
+      {
+        objective: "Finish the budgeted checkout goal",
+        status: "active",
+        budget: { turns: 3, tokens: 1_000, activeTimeMs: 5_000 },
+        usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
+      },
+      {
+        objective: "Finish the budgeted checkout goal",
+        status: "active",
+        budget: {},
+        usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
+      },
+    ]);
+    expect(stdout).toContain("Goal budget updated.\n");
+    expect(stdout).toContain(
+      "Goal resumed: Finish the budgeted checkout goal\n",
+    );
+    expect(stdout).toContain("Goal budget cleared.\n");
+    expect(stdout).toContain(
+      "usage: 2 turns, 200 tokens, 1s active; budget: none\n",
+    );
+    expect(stdout).toContain(
+      "Session goal: active - Finish the budgeted checkout goal; criterion: missing\n",
+    );
   });
 
   test(`Given a saved interactive session has an active goal,
@@ -217,6 +560,8 @@ describe("Interactive Session - Goals", () => {
       expect(persistedGoal).toEqual({
         objective: "Fix every failing checkout test and run the checkout suite",
         status: "active",
+        budget: {},
+        usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
         criterionKind: "command",
         completionCriterion: "pnpm test",
       });
@@ -262,6 +607,8 @@ describe("Interactive Session - Goals", () => {
     let persistedGoal: SessionGoal | undefined = {
       objective: "Finish lifecycle states",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
     };
@@ -338,6 +685,8 @@ describe("Interactive Session - Goals", () => {
     expect(persistedGoal).toEqual({
       objective: "Finish lifecycle states",
       status: "active",
+      budget: {},
+      usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
       criterionKind: "command",
       completionCriterion: "pnpm test",
     });
@@ -376,6 +725,8 @@ describe("Interactive Session - Goals", () => {
     let persistedGoal: SessionGoal | undefined = {
       objective: "Finish lifecycle guard coverage",
       status: "completed",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       completionEvidence: { kind: "user_override" },
     };
     const provider = unusedProvider("unused-goal-lifecycle-guards-provider");
@@ -429,6 +780,8 @@ describe("Interactive Session - Goals", () => {
     expect(persistedGoal).toEqual({
       objective: "Blocked objective",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
     });
     expect(stderr).toBe(
       "Error: only active session goals can be paused.\n" +
@@ -450,6 +803,8 @@ describe("Interactive Session - Goals", () => {
       initialGoal: {
         objective: "Continue blocked goal",
         status: "blocked",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Need credentials.",
         criterionKind: "command",
         completionCriterion: "pnpm test",
@@ -460,6 +815,8 @@ describe("Interactive Session - Goals", () => {
       initialGoal: {
         objective: "Continue usage-limited goal",
         status: "usage_limited",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Automatic continuation stopped.",
         criterionKind: "command",
         completionCriterion: "pnpm test",
@@ -470,6 +827,8 @@ describe("Interactive Session - Goals", () => {
       initialGoal: {
         objective: "Continue budget-limited goal",
         status: "budget_limited",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Session budget stopped continuation.",
         criterionKind: "command",
         completionCriterion: "pnpm test",
@@ -533,6 +892,8 @@ describe("Interactive Session - Goals", () => {
     expect(persistedGoal).toEqual({
       objective: initialGoal.objective,
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
     });
@@ -553,6 +914,8 @@ describe("Interactive Session - Goals", () => {
     let persistedGoal: SessionGoal | undefined = {
       objective: "Publish release notes",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
     };
     const provider = unusedProvider("unused-assertion-criterion-provider");
     const session = runInteractiveSession({
@@ -598,6 +961,8 @@ describe("Interactive Session - Goals", () => {
     expect(persistedGoal).toEqual({
       objective: "Publish release notes",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "assertion",
       completionCriterion: "release notes cover every changed command",
     });
@@ -620,6 +985,8 @@ describe("Interactive Session - Goals", () => {
     let persistedGoal: SessionGoal | undefined = {
       objective: "Original",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
     };
     const provider = unusedProvider("unused-goal-subcommand-typo-provider");
     const session = runInteractiveSession({
@@ -673,6 +1040,8 @@ describe("Interactive Session - Goals", () => {
     expect(persistedGoal).toEqual({
       objective: "Original",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
     });
     expect(stdout).toContain("  goal: active - Original; criterion: missing\n");
     expect(stderr).toBe(
@@ -691,6 +1060,8 @@ describe("Interactive Session - Goals", () => {
     let persistedGoal: SessionGoal | undefined = {
       objective: "Ship the checkout fix",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
     };
     const provider = unusedProvider("unused-enabled-goal-provider");
     const session = runInteractiveSession({
@@ -736,6 +1107,8 @@ describe("Interactive Session - Goals", () => {
     expect(persistedGoal).toEqual({
       objective: "Ship the checkout fix",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: 'node  -e "process.exit(0)"',
     });
@@ -757,6 +1130,8 @@ describe("Interactive Session - Goals", () => {
     let persistedGoal: SessionGoal | undefined = {
       objective: "Refine status output",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
     };
     const provider = unusedProvider("unused-goal-provider");
     const session = runInteractiveSession({
@@ -921,6 +1296,8 @@ describe("Interactive Session - Goals", () => {
       initialSessionGoal: {
         objective: "Persist every goal state",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       },
       input,
       writeStdout: () => {},
@@ -975,6 +1352,8 @@ describe("Interactive Session - Goals", () => {
       initialSessionGoal: {
         objective: "Resume persistence failure",
         status: "paused",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       },
       input,
       writeStdout: () => {},
@@ -1019,6 +1398,8 @@ describe("Interactive Session - Goals", () => {
     let persistedGoal: SessionGoal | undefined = {
       objective: "Ship the release notes",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
     };
@@ -1088,6 +1469,8 @@ describe("Interactive Session - Goals", () => {
     expect(persistedGoal).toEqual({
       objective: "Ship the release notes",
       status: "completed",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
       completionEvidence: { kind: "user_override" },
@@ -1123,6 +1506,8 @@ describe("Interactive Session - Goals", () => {
     let persistedGoal: SessionGoal | undefined = {
       objective: "Finish the checkout goal",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: 'node -e "process.exit(0)"',
     };
@@ -1212,6 +1597,8 @@ describe("Interactive Session - Goals", () => {
       expect(persistedGoal).toEqual({
         objective: "Finish the checkout goal",
         status: "completed",
+        budget: {},
+        usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
         criterionKind: "command",
         completionCriterion: 'node -e "process.exit(0)"',
         completionEvidence: {
@@ -1259,6 +1646,8 @@ describe("Interactive Session - Goals", () => {
     const initialGoal: SessionGoal = {
       objective: "Publish the release notes",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "assertion",
       completionCriterion: "release notes explain every changed command",
     };
@@ -1402,6 +1791,8 @@ describe("Interactive Session - Goals", () => {
     const initialGoal: SessionGoal = {
       objective: "Finish the interrupted goal",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: 'node -e "process.exit(0)"',
     };
@@ -1558,6 +1949,8 @@ describe("Interactive Session - Goals", () => {
       initialSessionGoal: {
         objective: "Keep the goal after abort errors",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       },
       input,
       writeStdout: (text) => {

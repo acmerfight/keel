@@ -267,6 +267,8 @@ describe("CLI Main - Interactive Entrypoint", () => {
           goal: {
             objective: "Resume durable goal state",
             status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           },
         }),
       ],
@@ -558,6 +560,8 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(goalRecords.at(-1)?.goal).toEqual({
         objective: "Finish the durable session goal",
         status: "active",
+        budget: {},
+        usage: { turns: 1, tokens: 26, activeTimeMs: expect.any(Number) },
         criterionKind: "command",
         completionCriterion: "pnpm test",
         blockedAudit: {
@@ -703,6 +707,8 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(goals).toContainEqual({
         objective: "Finish the durable session goal",
         status: "active",
+        budget: {},
+        usage: { turns: 1, tokens: 26, activeTimeMs: expect.any(Number) },
         criterionKind: "command",
         completionCriterion: "pnpm test",
         blockedAudit: {
@@ -713,12 +719,16 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(goals).toContainEqual({
         objective: "Finish the durable session goal",
         status: "active",
+        budget: {},
+        usage: { turns: 2, tokens: 52, activeTimeMs: expect.any(Number) },
         criterionKind: "command",
         completionCriterion: "pnpm test",
       });
       expect(goals.at(-1)).toEqual({
         objective: "Finish the durable session goal",
         status: "active",
+        budget: {},
+        usage: { turns: 3, tokens: 78, activeTimeMs: expect.any(Number) },
         criterionKind: "command",
         completionCriterion: "pnpm test",
         blockedAudit: {
@@ -872,6 +882,8 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(sessionGoalLedgerRecords(ledger).at(-1)?.goal).toEqual({
         objective: "Finish the continuation goal",
         status: "completed",
+        budget: {},
+        usage: { turns: 2, tokens: 65, activeTimeMs: expect.any(Number) },
         criterionKind: "command",
         completionCriterion: "test -f done.txt",
         completionEvidence: {

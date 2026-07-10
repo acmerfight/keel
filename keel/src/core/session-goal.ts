@@ -26,6 +26,18 @@ export interface SessionGoalBlockedAudit {
   readonly consecutiveCount: SessionGoalBlockedAuditCount;
 }
 
+export interface SessionGoalBudget {
+  readonly turns?: number;
+  readonly tokens?: number;
+  readonly activeTimeMs?: number;
+}
+
+export interface SessionGoalUsage {
+  readonly turns: number;
+  readonly tokens: number;
+  readonly activeTimeMs: number;
+}
+
 interface CommandSessionGoalCompletionEvidence {
   readonly kind: "command";
   readonly command: string;
@@ -50,6 +62,8 @@ export type SessionGoalCompletionEvidence =
 
 interface SessionGoalContract {
   readonly objective: string;
+  readonly budget: SessionGoalBudget;
+  readonly usage: SessionGoalUsage;
   readonly criterionKind?: SessionGoalCriterionKind;
   readonly completionCriterion?: string;
 }
@@ -133,11 +147,27 @@ const sessionGoalCompletionEvidenceSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
+const sessionGoalBudgetSchema = z
+  .object({
+    turns: z.number().int().safe().positive().optional(),
+    tokens: z.number().int().safe().positive().optional(),
+    activeTimeMs: z.number().int().safe().positive().optional(),
+  })
+  .strict();
+const sessionGoalUsageSchema = z
+  .object({
+    turns: z.number().int().safe().nonnegative(),
+    tokens: z.number().int().safe().nonnegative(),
+    activeTimeMs: z.number().int().safe().nonnegative(),
+  })
+  .strict();
 
 const sessionGoalBaseSchema = z
   .object({
     objective: z.string().trim().min(1).max(SESSION_GOAL_OBJECTIVE_MAX_LENGTH),
     status: sessionGoalStatusSchema,
+    budget: sessionGoalBudgetSchema,
+    usage: sessionGoalUsageSchema,
     criterionKind: sessionGoalCriterionKindSchema.optional(),
     completionCriterion: z
       .string()
@@ -208,6 +238,21 @@ const sessionGoalBaseSchema = z
         message: "completionEvidence is only valid for completed session goals",
       });
     }
+    if (
+      goal.status === "active" &&
+      ((goal.budget.turns !== undefined &&
+        goal.usage.turns >= goal.budget.turns) ||
+        (goal.budget.tokens !== undefined &&
+          goal.usage.tokens >= goal.budget.tokens) ||
+        (goal.budget.activeTimeMs !== undefined &&
+          goal.usage.activeTimeMs >= goal.budget.activeTimeMs))
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["status"],
+        message: "active session goals must remain below every goal budget",
+      });
+    }
   });
 
 function sessionGoalStatusRequiresReason(
@@ -227,6 +272,20 @@ function sessionGoalStatusRequiresReason(
 
 export const sessionGoalSchema: z.ZodType<SessionGoal> =
   sessionGoalBaseSchema.transform((goal): SessionGoal => {
+    const accounting = {
+      budget: {
+        ...(goal.budget.turns !== undefined
+          ? { turns: goal.budget.turns }
+          : {}),
+        ...(goal.budget.tokens !== undefined
+          ? { tokens: goal.budget.tokens }
+          : {}),
+        ...(goal.budget.activeTimeMs !== undefined
+          ? { activeTimeMs: goal.budget.activeTimeMs }
+          : {}),
+      },
+      usage: copySessionGoalUsage(goal.usage),
+    };
     const criterion =
       goal.criterionKind !== undefined && goal.completionCriterion !== undefined
         ? {
@@ -239,6 +298,7 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
         return {
           objective: goal.objective,
           status: "active",
+          ...accounting,
           ...criterion,
           ...(goal.blockedAudit !== undefined
             ? {
@@ -255,6 +315,7 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
         return {
           objective: goal.objective,
           status: "blocked",
+          ...accounting,
           statusReason: normalizeSessionGoalStatusReason(
             z.string().parse(goal.statusReason),
           ),
@@ -264,6 +325,7 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
         return {
           objective: goal.objective,
           status: "budget_limited",
+          ...accounting,
           statusReason: normalizeSessionGoalStatusReason(
             z.string().parse(goal.statusReason),
           ),
@@ -273,6 +335,7 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
         return {
           objective: goal.objective,
           status: "usage_limited",
+          ...accounting,
           statusReason: normalizeSessionGoalStatusReason(
             z.string().parse(goal.statusReason),
           ),
@@ -282,12 +345,14 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
         return {
           objective: goal.objective,
           status: "paused",
+          ...accounting,
           ...criterion,
         };
       case "completed":
         return {
           objective: goal.objective,
           status: "completed",
+          ...accounting,
           ...criterion,
           completionEvidence: normalizeSessionGoalCompletionEvidence(
             sessionGoalCompletionEvidenceSchema.parse(goal.completionEvidence),
@@ -342,6 +407,79 @@ export function normalizeSessionGoalCompletionEvidence(
   }
 }
 
+export function emptySessionGoalBudget(): SessionGoalBudget {
+  return {};
+}
+
+export function emptySessionGoalUsage(): SessionGoalUsage {
+  return { turns: 0, tokens: 0, activeTimeMs: 0 };
+}
+
+function copySessionGoalBudget(budget: SessionGoalBudget): SessionGoalBudget {
+  return {
+    ...(budget.turns !== undefined ? { turns: budget.turns } : {}),
+    ...(budget.tokens !== undefined ? { tokens: budget.tokens } : {}),
+    ...(budget.activeTimeMs !== undefined
+      ? { activeTimeMs: budget.activeTimeMs }
+      : {}),
+  };
+}
+
+function copySessionGoalUsage(usage: SessionGoalUsage): SessionGoalUsage {
+  return {
+    turns: usage.turns,
+    tokens: usage.tokens,
+    activeTimeMs: usage.activeTimeMs,
+  };
+}
+
+export function sessionGoalAccounting(goal: SessionGoal): {
+  readonly budget: SessionGoalBudget;
+  readonly usage: SessionGoalUsage;
+} {
+  return {
+    budget: copySessionGoalBudget(goal.budget),
+    usage: copySessionGoalUsage(goal.usage),
+  };
+}
+
+export function accountSessionGoalTurn(
+  goal: SessionGoal,
+  usage: { readonly tokens: number; readonly activeTimeMs: number },
+): SessionGoal {
+  return {
+    ...copySessionGoal(goal),
+    usage: {
+      turns: goal.usage.turns + 1,
+      tokens: goal.usage.tokens + usage.tokens,
+      activeTimeMs: goal.usage.activeTimeMs + usage.activeTimeMs,
+    },
+  };
+}
+
+export function formatSessionGoalBudgetLimitReason(
+  goal: SessionGoal,
+): string | null {
+  const reached = [
+    ...(goal.budget.turns !== undefined && goal.usage.turns >= goal.budget.turns
+      ? [`turns ${goal.usage.turns}/${goal.budget.turns}`]
+      : []),
+    ...(goal.budget.tokens !== undefined &&
+    goal.usage.tokens >= goal.budget.tokens
+      ? [`tokens ${goal.usage.tokens}/${goal.budget.tokens}`]
+      : []),
+    ...(goal.budget.activeTimeMs !== undefined &&
+    goal.usage.activeTimeMs >= goal.budget.activeTimeMs
+      ? [
+          `active time ${formatSessionGoalDuration(goal.usage.activeTimeMs)}/${formatSessionGoalDuration(goal.budget.activeTimeMs)}`,
+        ]
+      : []),
+  ];
+  return reached.length === 0
+    ? null
+    : `Session goal budget reached: ${reached.join("; ")}.`;
+}
+
 function copySessionGoalCompletionEvidence(
   evidence: SessionGoalCompletionEvidence,
 ): SessionGoalCompletionEvidence {
@@ -373,6 +511,7 @@ export function sessionGoalCommandCriterion(
 }
 
 export function copySessionGoal(goal: SessionGoal): SessionGoal {
+  const accounting = sessionGoalAccounting(goal);
   const criterion =
     goal.criterionKind !== undefined && goal.completionCriterion !== undefined
       ? {
@@ -385,6 +524,7 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
       return {
         objective: goal.objective,
         status: "active",
+        ...accounting,
         ...criterion,
         ...(goal.blockedAudit !== undefined
           ? {
@@ -399,6 +539,7 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
       return {
         objective: goal.objective,
         status: "blocked",
+        ...accounting,
         statusReason: goal.statusReason,
         ...criterion,
       };
@@ -406,6 +547,7 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
       return {
         objective: goal.objective,
         status: "budget_limited",
+        ...accounting,
         statusReason: goal.statusReason,
         ...criterion,
       };
@@ -413,6 +555,7 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
       return {
         objective: goal.objective,
         status: "usage_limited",
+        ...accounting,
         statusReason: goal.statusReason,
         ...criterion,
       };
@@ -420,12 +563,14 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
       return {
         objective: goal.objective,
         status: "paused",
+        ...accounting,
         ...criterion,
       };
     case "completed":
       return {
         objective: goal.objective,
         status: "completed",
+        ...accounting,
         ...criterion,
         completionEvidence: copySessionGoalCompletionEvidence(
           goal.completionEvidence,
@@ -450,12 +595,36 @@ export function clearSessionGoalBlockedAudit(
   return {
     objective: goal.objective,
     status: "active",
+    ...sessionGoalAccounting(goal),
     ...criterion,
   };
 }
 
 interface SessionGoalSummaryOptions {
   readonly includeCompletionEvidence?: boolean;
+  readonly includeAccounting?: boolean;
+}
+
+function formatSessionGoalDuration(activeTimeMs: number): string {
+  if (activeTimeMs < 1000) {
+    return `${activeTimeMs}ms`;
+  }
+  if (activeTimeMs % 3_600_000 === 0) {
+    return `${activeTimeMs / 3_600_000}h`;
+  }
+  if (activeTimeMs % 60_000 === 0) {
+    return `${activeTimeMs / 60_000}m`;
+  }
+  const seconds = activeTimeMs / 1000;
+  return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)}s`;
+}
+
+function formatSessionGoalTurnCount(turns: number): string {
+  return `${turns} ${turns === 1 ? "turn" : "turns"}`;
+}
+
+function formatSessionGoalTokenCount(tokens: number): string {
+  return `${tokens} ${tokens === 1 ? "token" : "tokens"}`;
 }
 
 export function formatSessionGoalSummary(
@@ -466,12 +635,18 @@ export function formatSessionGoalSummary(
     return "none";
   }
   const includeCompletionEvidence = options.includeCompletionEvidence !== false;
+  const includesAccounting =
+    Object.keys(goal.budget).length > 0 || options.includeAccounting === true;
   const reason = (() => {
     switch (goal.status) {
       case "blocked":
       case "budget_limited":
       case "usage_limited":
-        return `; reason: ${goal.statusReason}`;
+        return `; reason: ${
+          includesAccounting
+            ? goal.statusReason.replace(/[.!?]+$/u, "")
+            : goal.statusReason
+        }`;
       case "active":
       case "paused":
       case "completed":
@@ -486,13 +661,29 @@ export function formatSessionGoalSummary(
     goal.status === "completed" && includeCompletionEvidence
       ? `; evidence: ${formatSessionGoalCompletionEvidence(goal.completionEvidence)}`
       : "";
+  const budgetParts = [
+    ...(goal.budget.turns !== undefined
+      ? [formatSessionGoalTurnCount(goal.budget.turns)]
+      : []),
+    ...(goal.budget.tokens !== undefined
+      ? [formatSessionGoalTokenCount(goal.budget.tokens)]
+      : []),
+    ...(goal.budget.activeTimeMs !== undefined
+      ? [`${formatSessionGoalDuration(goal.budget.activeTimeMs)} active`]
+      : []),
+  ];
+  const accounting = includesAccounting
+    ? `; usage: ${formatSessionGoalTurnCount(goal.usage.turns)}, ${formatSessionGoalTokenCount(goal.usage.tokens)}, ${formatSessionGoalDuration(goal.usage.activeTimeMs)} active; budget: ${
+        [...budgetParts].join(", ") || "none"
+      }`
+    : "";
   if (
     goal.criterionKind === undefined ||
     goal.completionCriterion === undefined
   ) {
-    return `${goal.status} - ${goal.objective}; criterion: missing${reason}${blockedAudit}${completionEvidence}`;
+    return `${goal.status} - ${goal.objective}; criterion: missing${reason}${blockedAudit}${completionEvidence}${accounting}`;
   }
-  return `${goal.status} - ${goal.objective}; criterion(${goal.criterionKind}): ${goal.completionCriterion}${reason}${blockedAudit}${completionEvidence}`;
+  return `${goal.status} - ${goal.objective}; criterion(${goal.criterionKind}): ${goal.completionCriterion}${reason}${blockedAudit}${completionEvidence}${accounting}`;
 }
 
 function withSentencePeriod(text: string): string {
@@ -567,6 +758,24 @@ export function activeSessionGoalSystemPrompt(
       ? []
       : [
           `- Pending blocked audit: ${goal.blockedAudit.consecutiveCount}/${SESSION_GOAL_BLOCKED_AUDIT_THRESHOLD} consecutive blocked agent turns. Most recent reason: ${goal.blockedAudit.reason}`,
+        ]),
+    ...(Object.keys(goal.budget).length === 0
+      ? []
+      : [
+          `- Goal usage: ${formatSessionGoalTurnCount(goal.usage.turns)}, ${formatSessionGoalTokenCount(goal.usage.tokens)}, ${formatSessionGoalDuration(goal.usage.activeTimeMs)} active.`,
+          `- Goal budget: ${[
+            ...(goal.budget.turns !== undefined
+              ? [formatSessionGoalTurnCount(goal.budget.turns)]
+              : []),
+            ...(goal.budget.tokens !== undefined
+              ? [formatSessionGoalTokenCount(goal.budget.tokens)]
+              : []),
+            ...(goal.budget.activeTimeMs !== undefined
+              ? [
+                  `${formatSessionGoalDuration(goal.budget.activeTimeMs)} active`,
+                ]
+              : []),
+          ].join(", ")}. The runtime enforces this at goal turn boundaries.`,
         ]),
   ];
   if (

@@ -7,6 +7,7 @@ import {
   normalizeSessionGoalCompletionCriterion,
   normalizeSessionGoalObjective,
   type SessionGoal,
+  type SessionGoalBudget,
   type SessionGoalCriterionKind,
 } from "../../core/session-goal.ts";
 import { sanitizeStatusLineText } from "../output.ts";
@@ -54,7 +55,14 @@ interface TitleCommand {
 type GoalCommand =
   | {
       readonly kind: "goal";
-      readonly action: "show" | "pause" | "resume" | "complete" | "clear";
+      readonly action:
+        | "show"
+        | "show_budget"
+        | "pause"
+        | "resume"
+        | "complete"
+        | "clear"
+        | "clear_budget";
     }
   | {
       readonly kind: "goal";
@@ -71,6 +79,11 @@ type GoalCommand =
       readonly action: "criterion";
       readonly criterionKind: SessionGoalCriterionKind;
       readonly criterion: string;
+    }
+  | {
+      readonly kind: "goal";
+      readonly action: "budget";
+      readonly budget: SessionGoalBudget;
     };
 
 interface TasksCommand {
@@ -152,6 +165,9 @@ export function formatInteractiveHelp(): string {
     "                     Set an assertion completion criterion.",
     "  /goal pause        Pause the current session goal.",
     "  /goal resume       Resume a paused, blocked, or limited session goal.",
+    "  /goal budget [--turns N] [--tokens N] [--time 30m]",
+    "                     Show or update goal execution budgets.",
+    "  /goal budget clear Clear goal budgets without resetting usage.",
     "  /goal complete     Mark the current session goal completed.",
     "  /goal clear        Clear the current session goal.",
     "  /tasks             Show current session tasks.",
@@ -403,6 +419,15 @@ function parseGoalCommandArgs(
   if (trimmedArgs === "resume") {
     return { kind: "goal", action: "resume" };
   }
+  if (trimmedArgs === "budget") {
+    return { kind: "goal", action: "show_budget" };
+  }
+  if (trimmedArgs === "budget clear") {
+    return { kind: "goal", action: "clear_budget" };
+  }
+  if (trimmedArgs.startsWith("budget ")) {
+    return parseGoalBudgetArgs(trimmedArgs.slice("budget ".length));
+  }
   if (trimmedArgs === "clear") {
     return { kind: "goal", action: "clear" };
   }
@@ -446,6 +471,81 @@ function parseGoalCommandArgs(
     action: "set",
     objective: normalizeSessionGoalObjective(trimmedArgs),
   };
+}
+
+function parsePositiveIntegerOption(
+  option: "--turns" | "--tokens",
+  raw: string | undefined,
+): ParseResult<number> {
+  if (raw === undefined || !/^[1-9][0-9]*$/u.test(raw)) {
+    return {
+      ok: false,
+      message: `Error: ${option} must be a positive integer.`,
+    };
+  }
+  const value = Number(raw);
+  return Number.isSafeInteger(value)
+    ? { ok: true, value }
+    : {
+        ok: false,
+        message: `Error: ${option} must be a positive integer.`,
+      };
+}
+
+function parseGoalDuration(raw: string | undefined): ParseResult<number> {
+  const match = /^([1-9][0-9]*)(ms|s|m|h)$/u.exec(raw ?? "");
+  if (match === null) {
+    return {
+      ok: false,
+      message:
+        "Error: --time must be a positive duration using ms, s, m, or h.",
+    };
+  }
+  const amount = Number(match[1]);
+  const unit = match[2];
+  const multiplier =
+    unit === "ms" ? 1 : unit === "s" ? 1000 : unit === "m" ? 60_000 : 3_600_000;
+  const activeTimeMs = amount * multiplier;
+  return Number.isSafeInteger(activeTimeMs)
+    ? { ok: true, value: activeTimeMs }
+    : {
+        ok: false,
+        message:
+          "Error: --time must be a positive duration using ms, s, m, or h.",
+      };
+}
+
+function parseGoalBudgetArgs(
+  rawArgs: string,
+): GoalCommand | InvalidInteractiveCommand {
+  const args = rawArgs.trim().split(/\s+/u);
+  const budget: {
+    turns?: number;
+    tokens?: number;
+    activeTimeMs?: number;
+  } = {};
+  for (let index = 0; index < args.length; index += 2) {
+    const option = args[index];
+    const rawValue = args[index + 1];
+    if (option === "--turns" || option === "--tokens") {
+      const parsed = parsePositiveIntegerOption(option, rawValue);
+      if (!parsed.ok) return { kind: "invalid", message: parsed.message };
+      if (option === "--turns") budget.turns = parsed.value;
+      else budget.tokens = parsed.value;
+      continue;
+    }
+    if (option === "--time") {
+      const parsed = parseGoalDuration(rawValue);
+      if (!parsed.ok) return { kind: "invalid", message: parsed.message };
+      budget.activeTimeMs = parsed.value;
+      continue;
+    }
+    return {
+      kind: "invalid",
+      message: `Error: unknown /goal budget option "${option}".`,
+    };
+  }
+  return { kind: "goal", action: "budget", budget };
 }
 
 function parseUnknownGoalSubcommand(
@@ -678,6 +778,20 @@ export function formatInteractiveGoal(goal: SessionGoal | undefined): string {
   ].join("\n");
 }
 
+export function formatInteractiveGoalBudget(
+  goal: SessionGoal | undefined,
+): string {
+  if (goal === undefined) {
+    return formatInteractiveGoal(goal);
+  }
+  return `Session goal: ${formatInteractiveGoalText(
+    formatSessionGoalSummary(goal, {
+      includeCompletionEvidence: false,
+      includeAccounting: true,
+    }),
+  )}\n`;
+}
+
 export function formatInteractiveGoalSet(goal: SessionGoal): string {
   return `Goal set: ${formatInteractiveGoalText(goal.status)}\n`;
 }
@@ -692,6 +806,14 @@ export function formatInteractiveGoalPaused(goal: SessionGoal): string {
 
 export function formatInteractiveGoalResumed(goal: SessionGoal): string {
   return `Goal resumed: ${formatInteractiveGoalText(goal.objective)}\n`;
+}
+
+export function formatInteractiveGoalBudgetUpdated(goal: SessionGoal): string {
+  return `Goal budget updated.\n${formatInteractiveGoalBudget(goal)}`;
+}
+
+export function formatInteractiveGoalBudgetCleared(goal: SessionGoal): string {
+  return `Goal budget cleared.\n${formatInteractiveGoalBudget(goal)}`;
 }
 
 export function formatInteractiveGoalVerificationSet(

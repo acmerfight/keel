@@ -113,6 +113,8 @@ describe("CLI Main - Sessions Command", () => {
           goal: {
             objective: "Fix the session resume flow",
             status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             criterionKind: "command",
             completionCriterion: 'node  -e "process.exit(0)"',
           },
@@ -133,6 +135,8 @@ describe("CLI Main - Sessions Command", () => {
           goal: {
             objective: "Ship the release notes",
             status: "completed",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             completionEvidence: { kind: "user_override" },
           },
         }),
@@ -196,6 +200,8 @@ describe("CLI Main - Sessions Command", () => {
           goal: {
             objective: "Remove stale goal from catalog",
             status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           },
         }),
         sessionGoalRecordLine({
@@ -332,6 +338,8 @@ describe("CLI Main - Sessions Command", () => {
             goal: {
               objective: "Finish snapshotted recovery state",
               status: "active",
+              budget: {},
+              usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             },
             taskProgressCheckpoints: [
               {
@@ -640,6 +648,8 @@ describe("CLI Main - Sessions Command", () => {
           goal: {
             objective: "Keep detail status goal visible",
             status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           },
         }),
         taskProgressRecordLine({
