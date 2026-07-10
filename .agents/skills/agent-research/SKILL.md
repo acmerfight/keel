@@ -36,7 +36,7 @@ Use the repo as primary evidence.
 
 - Keel implementation: `keel/`
 - Reference agents: `codex/`, `claude-code/`, `opencode/`, `kimi-code/`, `pi/`
-- Project guidance: root `AGENTS.md`, plus `keel/AGENTS.md`, `keel/CLAUDE.md`, `keel/DEVELOPMENT.md`, `keel/TESTING.md`, `keel/SLICING.md`, `keel/ROADMAP.md`, and `keel/EVALS.md` when they affect the recommendation
+- Project guidance: root `AGENTS.md`, plus `keel/CLAUDE.md`, `keel/DEVELOPMENT.md`, `keel/TESTING.md`, `keel/SLICING.md`, `keel/ROADMAP.md`, and `keel/EVALS.md` when they affect the recommendation
 
 Do not modify submodule contents. Treat reference agents as read-only evidence.
 

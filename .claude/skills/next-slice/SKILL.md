@@ -41,7 +41,7 @@ Use current state, not memory.
    - If not already on `main`, compare against `origin/main` and avoid treating branch-local work as landed unless the user asks for branch-specific analysis.
 2. Read project intent and process:
    - root `AGENTS.md`
-   - `keel/AGENTS.md` and `keel/CLAUDE.md`
+   - `keel/CLAUDE.md`
    - `keel/DEVELOPMENT.md`
    - `keel/ROADMAP.md`
    - `keel/SLICING.md`

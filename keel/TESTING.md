@@ -61,7 +61,9 @@ This directory is excluded from coverage reports.
 
 ## Verification
 
-Use `pnpm test:coverage` for final verification before pushing or merging. `pnpm test` is acceptable for fast local iteration, but PR-ready verification must run the coverage command so regressions in covered branches are visible.
+Use `pnpm test:coverage` for final verification before pushing or merging. For fast local iteration, use an explicit Vitest path, `pnpm test:changed`, `pnpm test:unit`, or `pnpm test:cli`; `pnpm test` remains available when the full non-coverage suite is useful. PR-ready verification must still run the coverage command so regressions in covered branches are visible.
+
+CI produces equivalent full-suite coverage by running shards and merging their reports before Codecov upload. The coverage shard and merge scripts are CI plumbing, not substitutes for the local final-verification command.
 
 Run `pnpm coverage:patch` after `pnpm test:coverage` before pushing PR branches that change coverable code. It compares `origin/main...HEAD` against `coverage/lcov.info`, fails on changed measured lines with zero hits, and fails on changed measured branch lines with untaken `BRDA` records. This is a local preflight check; Codecov remains the authoritative merge gate.
 

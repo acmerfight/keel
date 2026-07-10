@@ -7,10 +7,13 @@ AI coding agent. TypeScript 6, Node 24, pnpm.
 ```bash
 pnpm dev            # Run with --watch
 pnpm build          # tsc
-pnpm typecheck      # tsc --noEmit
+pnpm typecheck      # Typecheck src, tests, scripts, and config
 pnpm lint           # biome check --error-on-warnings
 pnpm lint:fix       # biome check --write --error-on-warnings
 pnpm test           # vitest run
+pnpm test:unit      # Run the non-CLI test project
+pnpm test:cli       # Run the CLI test project
+pnpm test:changed   # Run tests related to changes from origin/main
 pnpm test:watch     # vitest (watch mode)
 pnpm test:coverage  # Final verification: vitest run --coverage
 pnpm coverage:patch # Local PR patch coverage pre-check against origin/main
@@ -106,7 +109,7 @@ Never push directly to `main`.
 
 1. Create a feature branch.
 2. Push and open a PR.
-3. Wait for CI: typecheck, build, lint, test coverage, knip.
+3. Wait for the required `check` status (static verification plus merged coverage) and Codecov.
 4. Squash merge to `main`; it is the only allowed merge strategy.
 
 PR summary format, written in English against latest `main`:
