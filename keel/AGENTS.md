@@ -46,9 +46,9 @@ Build user-runnable vertical slices. After each PR, a user should be able to run
 
 Keel is pre-release. Implement only the latest product model. Do not add compatibility shims, migrations, fallback readers, old CLI aliases, legacy schema support, or compatibility tests for old internal data, draft schemas, or unfinished command shapes unless explicitly requested. Keep each slice runnable and preserve safety boundaries.
 
-Prioritize foundational usability before expansion. Interactive/provider/model/context/edit/session/approval gaps come before standalone eval-corpus work, marketplaces, MCP, IDE integration, or sub-agents. Add eval tasks when they are tied to a real product fix or preserved failure.
+Prioritize unresolved daily-use roadmap gaps before expansion work. Add eval tasks when they are tied to a product fix or preserved failure.
 
-Test observable behavior before implementation. Start with a failing GWTE test that proves the user-visible slice result, then add narrower provider, tool, or invariant tests for the boundary contracts that own the risk. Do not test implementation details.
+Behavior changes start with a failing GWTE test that proves the user-visible slice result, followed by narrower tests for boundary-owned risks. Pure documentation or mechanical refactors with no behavior change need no new test. Do not test implementation details.
 
 Keep safety boundaries explicit. Preserve every representation that can carry authorization meaning, validate both requested and resolved paths before acting, and parse external data through schemas before business logic.
 
@@ -61,7 +61,7 @@ Prefer concrete code. Keep control flow local and linear; add abstraction only f
 ## Topic Docs
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) - contribution rules, including the PR title protocol.
-- [DEVELOPMENT.md](DEVELOPMENT.md) - code style, type precision, safety boundaries, shell/provider visibility semantics, and abstraction discipline.
+- [DEVELOPMENT.md](DEVELOPMENT.md) - code style, type precision, safety and trust boundaries, ownership, and abstraction discipline.
 - [TESTING.md](TESTING.md) - BDD style, test boundaries, coverage triage, and verification expectations.
 - [SLICING.md](SLICING.md) - vertical slicing rules and how to choose a runnable slice boundary.
 - [ROADMAP.md](ROADMAP.md) - north-star goals and priority-ordered capability gaps.
@@ -75,18 +75,6 @@ When a workflow skill is triggered, follow that skill's description and `SKILL.m
 - All interface properties are `readonly`; use function property syntax for interface functions.
 - No `as` type assertions. Use type guards, `satisfies`, or schema validation. `as const` is allowed.
 - Parse external data through explicit Zod schemas before business logic.
-- Preserve security-relevant path representations until policy checks are complete.
-- Bash is trusted shell mode, not a sandbox. Approved or trusted shell output can be sent to the provider unredacted.
-- Transcript/session redaction is best-effort at-rest hygiene. Live provider requests are not a secret boundary.
-- Keep implementations concrete. Add abstraction only for current proven duplication or a real boundary.
-
-## Development
-
-BDD first. Every feature starts with a failing GWTE test for observable behavior unless the change is pure mechanical docs/refactor and cannot change behavior.
-
-Every deliverable is a vertical slice: after the PR, a user can run a command or exercise an agent workflow and observe the result. See [SLICING.md](SLICING.md).
-
-Pick the highest-priority roadmap gap that can ship as a bounded vertical slice. Re-check the current product entrypoint before choosing work.
 
 ## Pull Requests
 
@@ -118,13 +106,3 @@ PR summary format, written in English against latest `main`:
 - **Solution:** what this PR changes
 - **Why:** why this approach solves the problem
 - **Effect:** what improves after merge
-
-## Testing
-
-See [TESTING.md](TESTING.md). Short version:
-
-1. Only mock the LLM through the `fake` provider; everything else is real.
-2. BDD with GWTE titles.
-3. Test observable behavior, not implementation details.
-4. PR-ready verification uses `pnpm test:coverage`, then `pnpm coverage:patch` when coverable code changed.
-5. The slice acceptance test proves the user-visible result. Add narrower tests at the risk boundary: agent for loop outcomes, provider for protocol, tools for tool contracts, invariants for architecture.

@@ -6,12 +6,9 @@ Detailed engineering guidance for Keel. `AGENTS.md` and `CLAUDE.md` stay short b
 
 - Biome handles formatting and linting. Do not use ESLint or Prettier.
 - No comments unless the reason is non-obvious.
-- All interface properties are `readonly`.
-- Use function property syntax for interface functions, such as `readonly fn: (x: T) => R`, not method syntax like `fn(x: T): R`. Method syntax bypasses `strictFunctionTypes`.
+- All interface properties are `readonly`; use function property syntax such as `readonly fn: (x: T) => R` because method syntax bypasses `strictFunctionTypes`.
 - No `as` type assertions. Use type guards, `satisfies`, or schema validation to prove types. `as const` is allowed.
-- External data boundaries must parse `unknown` through an explicit schema before business logic. Use Zod for JSON from HTTP/SSE, LLM/tool arguments, child process stdout, config files, disk JSON, and environment-derived structured data.
-- Do not use `Record<string, unknown>` property-access helpers for known external protocols. Model the protocol shape with a schema and access typed data only after `safeParse` or `parse`.
-- In review, any `JSON.parse`, process output parsing, HTTP response parsing, or LLM argument parsing must show the schema boundary in the same module.
+- Parse external data as `unknown` through an explicit Zod schema before business logic. Keep the schema at the JSON, process, network, LLM/tool, disk, config, or environment boundary; do not replace it with `Record<string, unknown>` property-access helpers.
 - The pre-commit hook auto-formats staged files.
 
 ## Pre-Release Compatibility
@@ -46,46 +43,29 @@ When code normalizes, resolves, parses, or transforms untrusted input before enf
 
 Validate both the requested representation and the resolved representation before acting. A helper must not collapse policy-relevant context into one clean value before access checks.
 
-Edit fuzzy matching is only a locator. Replacement must splice the original file content by the matched source span; never rewrite a file from normalized matching text.
+Normalization or fuzzy matching may locate a target, but side effects must apply to the original source representation. Never reconstruct protected data from a lossy normalized view.
 
-For safety boundaries, prefer one authoritative execution path. Parallel allow/deny paths drift over time and can leave dead code that only looks protective.
+Give each safety policy one authoritative decision path. Adapters may translate its result or error contract, but must not reimplement the decision.
 
-## Anti-Drift Patterns
+## Ownership And Anti-Drift
 
-Use a paired table when two decisions must stay coupled. `EDIT_MATCH_STRATEGIES` is the model: each locate strategy owns its matching source-preserving reconstruct strategy in the same object literal. Consumers must derive from the table instead of maintaining parallel locate/reconstruct lists.
+Give shared policies, transformations, and structured state one named owner. Consumers derive from that owner and may adapt presentation or errors; they do not maintain parallel decisions.
 
-Use an authoritative resolver when callers need different error contracts but the policy decision is the same. `resolveWorkspaceCreateTargetCore` owns create-target path resolution and returns a non-throwing result; executor paths can throw the returned `KeelError`, while scheduling paths can fail closed without duplicating path policy.
+Keep decisions that must stay coupled in the same typed registry or table, including any inverse or reconstruction operation. Do not synchronize parallel lists by convention.
 
-Use a shared helper when two tools perform the same safety-sensitive transformation. `edit-match.ts` owns CRLF normalization, source span reprojection, and source-line-ending replacement for both `edit` and `apply_patch`; neither tool should reimplement that source-preserving path locally.
+Hand-written projections of structured state are lossy until proven otherwise. Every semantic field must be preserved, derived, or intentionally dropped. Preserved and derived fields need roundtrip or invariant coverage; dropped fields need a named boundary reason.
 
-Use curated invariants for declared registries and mechanical completeness, not broad structural similarity scans. The shared invariant AST helpers in `tests/invariants/_ast.ts` are for focused checks such as builtin tool metadata, limited-output registrations, and edit matching single sources. Prefer behavioral tests when the risk is runtime semantics rather than source ownership.
+An architecture invariant must name the relationship it owns and fail only when that relationship breaks. Prefer forbidden dependency directions, required facades or owners, and completeness checks for declared registries. Do not snapshot complete import, export, or file inventories unless that exact inventory is itself the contract. Use the shared AST helpers in `tests/invariants/_ast.ts` for focused, parser-aware checks, and prefer behavioral tests when the risk is runtime semantics rather than source ownership.
 
-Hand-written projections of structured state are lossy until proven otherwise. Redaction, persistence, snapshots, provider serialization, reports, and display code must preserve, derive, or intentionally drop each semantic field. Preserved or derived fields need roundtrip or invariant coverage; intentionally dropped fields need a named boundary reason.
+Automate stable repository-wide mechanical rules with a focused lint or invariant. Keep semantic decisions such as boundary ownership, behavioral equivalence, and test value in review; a broad source-shape scan is not a substitute for that judgment.
 
-## Shell And Provider Visibility
+## Trust Boundaries
 
-Keel's project ignore policy is enforced by the built-in file tools: `read`, `ls`, `glob`, `grep`, `edit`, and `write`.
-
-`bash` is disabled by default. When enabled with `--allow-bash` or `--bash-policy trusted`, it is trusted shell mode: commands run with the current OS user's permissions and may read or modify gitignored files.
-
-`--bash-policy ask` adds per-command user approval in interactive sessions and can reuse saved project approvals for conservative command families, but it is still approval, not an OS sandbox. Do not describe bash approval as preserving the file-tool ignore boundary unless a real permission or sandbox layer exists.
-
-Live provider requests are not a secret boundary. User text, tool results, and approved or trusted bash output can be sent to the selected provider unredacted because exact code, fixtures, diffs, and command output are required for reliable coding.
-
-Transcript, eval transcript, and session-ledger redaction is best-effort at-rest hygiene. It reduces accidental durable storage of common secret-like values, but it is not complete secret detection and does not change live provider serialization.
-
-Tool output artifacts are a full-fidelity recovery store for oversized tool results. They are intentionally written as raw, unredacted tool output under `KEEL_HOME` with 0700/0600 filesystem modes, retained for 30 days by default or until manual removal, and callers must treat `KEEL_HOME` as sensitive at-rest data.
-
-Provider setup uses two user-level files under `KEEL_HOME`. `config.json`
-stores non-secret provider defaults such as provider id, model, and base URL;
-`auth.json` stores provider API keys with 0600 file mode. Do not write API keys
-to project-local files, PR summaries, doctor output, reports, transcripts, or
-`config.json`. Provider resolution order is CLI flags, then environment, then
-user config/auth, then built-in defaults. Keep this order shared by actual
-provider resolution and diagnostics so `keel --doctor` describes what a real
-run will use.
-
-Do not add generic live regex redaction of tool output without a separate design decision. It can corrupt valid coding context and will miss transformed secrets.
+- File-tool access policy does not constrain shell execution. Shell approval is user consent, not sandboxing; do not claim an enforced filesystem boundary without OS-level enforcement.
+- Live provider requests may contain user text, tool results, and approved shell output. At-rest redaction does not change live visibility, and generic live regex redaction is neither complete nor semantics-preserving.
+- Tool-output artifacts contain raw, unredacted data under `KEEL_HOME`, use `0700` directories and `0600` files, and default to 30-day retention. Treat them as sensitive full-fidelity recovery state.
+- Persist credentials only in designated secret state with `0600` file permissions. Never deliberately copy them to project files, logs, reports, transcripts, diagnostics, or non-secret configuration.
+- Diagnostics must use the same authoritative resolver as the execution setting they report.
 
 ## Abstraction Discipline
 
@@ -97,50 +77,20 @@ Prefer concrete, linear code. Add abstraction only when it makes current code si
 - Use indirection only when it names a real domain concept or protects a real boundary.
 - Remove extension points that are not exercised by current behavior.
 - Extract when inline detail obscures the calling function's control flow.
-- Do not extract when the detail is the function's primary job, such as process lifecycle wiring in a spawn wrapper or accumulator state transitions in a parser.
+- Do not extract when the detail is the function's primary job.
 
 ## Type Precision
 
-Default to required fields. Only use `?` or `| undefined` when you can name the semantic reason.
+Default to required fields. Model the runtime meaning directly:
 
-Decision:
+| Meaning | Type |
+| --- | --- |
+| Value always exists | Required field |
+| Absence is meaningful | Optional field (`?`) |
+| Field is present but may explicitly contain no value | `null` |
 
-1. Does this field always exist at runtime? Use a required field.
-2. Is absence meaningful, not the same as a default value? Use `?`.
-3. Must the field be present, but the value can explicitly be nothing? Use `| null`.
-4. Never use `| undefined` on data types. With `exactOptionalPropertyTypes`, use `?` for absence or redesign to avoid it.
+Do not use `| undefined` on data properties. Put defaults in constructors or factories instead of making stable state optional, and remember that zero and empty strings are values. Reserve `Partial<T>` for update or override boundaries, not stored domain state. Check sentinels explicitly rather than with broad truthiness.
 
-Common mistakes:
+Function parameter types are contracts, not caller conveniences. Put conditional absence at the call site where it is visible.
 
-- Do not use `?` because the caller might not pass it. Put defaults in a factory function.
-- Do not use `?` because the value might be zero or an empty string. Zero and empty string are values, not absence.
-- Do not use `Partial<T>` as the data type. Use it only at call boundaries such as function params and spread overrides.
-- Do not use broad truthy/falsy checks for sentinel values. Use `value === null`, `value !== undefined`, `value === ""`, or `value === 0` to name the exact state.
-
-Pattern:
-
-```typescript
-interface Response {
-  readonly text: string;
-  readonly tokenize: boolean;
-  readonly usage: Usage;
-}
-
-function response(text: string, tokenize = false, usage = DEFAULT_USAGE): Response {
-  return { text, tokenize, usage };
-}
-```
-
-Use `?` for:
-
-- Config the user may omit, where absence means use the system default.
-- External API fields that may be absent.
-- PATCH DTOs where only changed fields are sent.
-
-Litmus test: if you would write `?? defaultValue` every time you read a field, make the field required and put the default in a factory.
-
-Signature honesty: a function's parameter type is its contract, not a convenience wrapper for the caller. If the function's job is appending a message, accept `Message`, not `Message | null`. Put the null guard at the call site where the conditional is visible.
-
-Trust correct internal types. Do not guard against states an already-trusted internal type excludes. Runtime checks that enforce domain predicates the type system cannot encode, such as workspace safety, range constraints, or protocol validity, are not redundant.
-
-Decision: does the type permit this state? If no, delete the check. If yes, either narrow the type or keep the guard when the predicate is beyond the type system's reach.
+Trust correct internal types. Delete guards for states the type excludes; narrow the type or keep a named runtime guard only when the predicate cannot be encoded.

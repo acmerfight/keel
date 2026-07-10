@@ -72,4 +72,7 @@ Use `--offline` to store configuration without probing the provider:
 printf '%s\n' "$DEEPSEEK_API_KEY" | keel setup deepseek --with-api-key --offline
 ```
 
-Per-run CLI flags and environment variables still override stored defaults.
+For new runs, provider/model resolution order is per-run CLI flags, environment
+variables, stored config, then built-in defaults; API keys use environment then
+stored auth. Resumed sessions restore their active provider/model unless
+per-run flags override it.
