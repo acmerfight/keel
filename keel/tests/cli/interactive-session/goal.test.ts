@@ -6,6 +6,7 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import {
   formatInteractiveGoal,
+  formatInteractiveHelp,
   parseInteractiveCommand,
 } from "../../../src/cli/interactive-session/commands.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
@@ -117,6 +118,14 @@ function redactionExpandingText(maxLength: number): string {
 }
 
 describe("Interactive Session - Goals", () => {
+  test(`Given the user opens interactive help,
+    When Keel documents atomic goal launch,
+    Then every supported timeout and budget option is visible`, () => {
+    expect(formatInteractiveHelp()).toContain(
+      '  /goal --objective "<condition>" --verify "<cmd>"\n                     [--timeout 30s] [--turns N] [--tokens N] [--time 30m]\n',
+    );
+  });
+
   test(`Given a goal has no completion evidence,
     When the interactive goal status is formatted,
     Then Keel does not print an empty evidence line`, () => {
@@ -226,6 +235,124 @@ describe("Interactive Session - Goals", () => {
       verificationTimeoutMs: 45_000,
     });
     expect(
+      parseInteractiveCommand(
+        '/goal --objective "Fix checkout" --verify "pnpm test -- --runInBand" --turns 30 --tokens 120000 --time 45m --timeout 45s',
+      ),
+    ).toEqual({
+      kind: "goal",
+      action: "launch",
+      objective: "Fix checkout",
+      budget: {
+        turns: 30,
+        tokens: 120_000,
+        activeTimeMs: 45 * 60 * 1000,
+      },
+      command: "pnpm test -- --runInBand",
+      verificationTimeoutMs: 45_000,
+    });
+    expect(
+      parseInteractiveCommand('/goal --verify "pnpm test -- --runInBand"'),
+    ).toEqual({
+      kind: "invalid",
+      message: 'Error: an atomic goal requires --objective "<objective>".',
+      scope: "goal",
+    });
+    expect(
+      parseInteractiveCommand(
+        '/goal --objective "Release notes ; touch marker -- v2" --verify "printf ok"',
+      ),
+    ).toEqual({
+      kind: "goal",
+      action: "launch",
+      objective: "Release notes ; touch marker -- v2",
+      budget: {},
+      command: "printf ok",
+    });
+    expect(
+      parseInteractiveCommand('/goal --objective "Missing verifier" --turns 3'),
+    ).toEqual({
+      kind: "invalid",
+      message: 'Error: an atomic goal requires --verify "<command>".',
+      scope: "goal",
+    });
+    expect(
+      parseInteractiveCommand(
+        '/goal --objective "" --verify "pnpm test" --turns 3',
+      ),
+    ).toEqual({
+      kind: "invalid",
+      message: "Error: --objective requires a non-empty double-quoted value.",
+      scope: "goal",
+    });
+    expect(
+      parseInteractiveCommand(
+        '/goal --objective "Invalid budget" --verify "pnpm test" --turns nope',
+      ),
+    ).toEqual({
+      kind: "invalid",
+      message: "Error: --turns must be a positive integer.",
+      scope: "goal",
+    });
+    expect(
+      parseInteractiveCommand(
+        '/goal --objective "Invalid timeout" --verify "pnpm test" --timeout 61s',
+      ),
+    ).toEqual({
+      kind: "invalid",
+      message:
+        "Error: --timeout must be a positive duration up to 1m using ms, s, or m.",
+      scope: "goal",
+    });
+    expect(
+      parseInteractiveCommand(
+        '/goal --objective "Invalid time budget" --verify "pnpm test" --time nope',
+      ),
+    ).toEqual({
+      kind: "invalid",
+      message:
+        "Error: --time must be a positive duration using ms, s, m, or h.",
+      scope: "goal",
+    });
+    expect(
+      parseInteractiveCommand(
+        '/goal --objective Unquoted --verify "pnpm test"',
+      ),
+    ).toEqual({
+      kind: "invalid",
+      message: "Error: --objective requires a non-empty double-quoted value.",
+      scope: "goal",
+    });
+    for (const malformed of [
+      '/goal --objective "unterminated',
+      '/goal --objective "bad\\q" --verify "pnpm test"',
+      '/goal --objective "joined"x --verify "pnpm test"',
+    ]) {
+      expect(parseInteractiveCommand(malformed)).toEqual({
+        kind: "invalid",
+        message:
+          "Error: atomic goal options require valid JSON-style double-quoted strings.",
+        scope: "goal",
+      });
+    }
+    expect(
+      parseInteractiveCommand(
+        '/goal --objective "One" --verify "pnpm test" --objective "Two"',
+      ),
+    ).toEqual({
+      kind: "invalid",
+      message: 'Error: duplicate atomic goal option "--objective".',
+      scope: "goal",
+    });
+    expect(
+      parseInteractiveCommand(
+        '/goal --objective "Unknown option" --verify "pnpm test" --wat 1',
+      ),
+    ).toEqual({
+      kind: "invalid",
+      message: 'Error: unknown atomic goal option "--wat".',
+      scope: "goal",
+    });
+    expect(
       parseInteractiveCommand("/goal verify --timeout 61s pnpm test"),
     ).toEqual({
       kind: "invalid",
@@ -333,6 +460,48 @@ describe("Interactive Session - Goals", () => {
       kind: "goal",
       action: "clear",
     });
+  });
+
+  test(`Given an atomic goal omits optional budgets and verifier timeout,
+    When a queued user command pauses it before provider activation,
+    Then Keel persists the default contract once and real user input wins`, async () => {
+    // Given / When
+    const result = await runLocalGoalCommandScenario({
+      commands: [
+        '/goal --objective "Ship the default atomic goal" --verify "pnpm test"',
+        "/goal pause",
+        "/goal",
+      ],
+      persistence: "normal",
+    });
+
+    // Then
+    expect(result.stderr).toBe("");
+    expect(result.persistedGoals).toEqual([
+      {
+        objective: "Ship the default atomic goal",
+        status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+      },
+      {
+        objective: "Ship the default atomic goal",
+        status: "paused",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+      },
+    ]);
+    expect(result.stdout).toContain(
+      "Session goal: active - Ship the default atomic goal; criterion(command): pnpm test; usage: 0 turns, 0 tokens, 0ms active; budget: none\n",
+    );
+    expect(result.stdout).toContain(
+      "Session goal: paused - Ship the default atomic goal; criterion(command): pnpm test\n",
+    );
+    expect(result.stdout).not.toContain("goal_activation");
   });
 
   test(`Given goal budget commands are used across unsupported local states,

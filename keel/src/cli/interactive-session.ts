@@ -1218,26 +1218,46 @@ export async function runInteractiveSession(
             options.writeStdout(formatInteractiveGoalBudget(sessionGoal));
             consumeQueuedInputLines([rawInput]);
             break;
-          case "set": {
+          case "set":
+          case "launch": {
             if (options.persistSessionGoal === undefined) {
               options.writeStderr(formatGoalRequiresSavedSession());
               consumeQueuedInputLines([rawInput]);
               break;
             }
             try {
-              const nextGoal: SessionGoal = {
-                objective: goalCommand.objective,
-                status: "active",
-                budget: emptySessionGoalBudget(),
-                usage: emptySessionGoalUsage(),
-                criterionKind: "assertion",
-                completionCriterion: goalCommand.objective,
-              };
+              const nextGoal: SessionGoal =
+                goalCommand.action === "launch"
+                  ? {
+                      objective: goalCommand.objective,
+                      status: "active",
+                      budget: goalCommand.budget,
+                      usage: emptySessionGoalUsage(),
+                      criterionKind: "command",
+                      completionCriterion: goalCommand.command,
+                      ...(goalCommand.verificationTimeoutMs !== undefined
+                        ? {
+                            verificationTimeoutMs:
+                              goalCommand.verificationTimeoutMs,
+                          }
+                        : {}),
+                    }
+                  : {
+                      objective: goalCommand.objective,
+                      status: "active",
+                      budget: emptySessionGoalBudget(),
+                      usage: emptySessionGoalUsage(),
+                      criterionKind: "assertion",
+                      completionCriterion: goalCommand.objective,
+                    };
               sessionGoal = options.persistSessionGoal({
                 goal: nextGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
               });
               options.writeStdout(formatInteractiveGoalSet(nextGoal));
+              if (goalCommand.action === "launch") {
+                options.writeStdout(formatInteractiveGoalBudget(nextGoal));
+              }
               pendingGoalDriveMessage = GOAL_ACTIVATION_MESSAGE;
             } catch (error) {
               handleGoalPersistenceFailure(error, [rawInput]);
