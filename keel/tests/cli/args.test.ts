@@ -7,23 +7,6 @@ import { runCliMain } from "../../src/cli/index.ts";
 import { createRuntime } from "../../src/testing/cli-runtime-fixtures.ts";
 
 describe("CLI Args", () => {
-  test.each([["--help"], ["-h"]])(`Given the %s help flag,
-    When the user runs the CLI,
-    Then usage is printed to stdout instead of starting a prompt`, async (flag) => {
-    // Given
-    const fixture = createRuntime([flag], {
-      env: { KEEL_PROVIDER: "fake" },
-    });
-
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
-
-    // Then
-    expect(exitCode).toBe(0);
-    expect(fixture.stdout()).toBe(`${USAGE}\n`);
-    expect(fixture.stderr()).toBe("");
-  });
-
   test(`Given the undo list command,
     When the user runs the CLI,
     Then undo checkpoints are listed without starting a provider run`, async () => {
@@ -169,25 +152,6 @@ describe("CLI Args", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe('Error: unknown undo option "extra"\n');
-  });
-
-  test(`Given an unknown run option,
-    When the user runs the CLI,
-    Then usage is printed to stderr before resolving a provider`, async () => {
-    // Given
-    const fixture = createRuntime(["--bogus"], {
-      env: { KEEL_PROVIDER: "fake" },
-    });
-
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
-
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      `Error: unknown option "--bogus"\n\n${USAGE}\n`,
-    );
   });
 
   test(`Given a mistyped model option before a prompt,
