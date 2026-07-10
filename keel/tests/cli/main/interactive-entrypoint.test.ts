@@ -333,6 +333,87 @@ describe("CLI Main - Interactive Entrypoint", () => {
     }
   });
 
+  test(`Given a restored active command goal has a custom verifier timeout,
+    When session resume parks it before any provider turn,
+    Then the pause and zero-turn report preserve the complete command contract`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-timeout-restore-"),
+    );
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-timeout-restore-home-"),
+    );
+    const reportPath = join(workspace, "report.json");
+    await writeSessionLedger({
+      home,
+      id: "goal-timeout-restore",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-03-05T00:00:00.000Z",
+      records: [
+        sessionGoalRecordLine({
+          timestamp: "2026-03-05T00:00:01.000Z",
+          goal: {
+            objective: "Preserve the restored verifier timeout",
+            status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+            criterionKind: "command",
+            completionCriterion: "pnpm test",
+            verificationTimeoutMs: 350,
+          },
+        }),
+      ],
+    });
+    const input = new PassThrough();
+    input.end("/goal\n");
+    const fixture = createRuntime(
+      [
+        "--resume",
+        "goal-timeout-restore",
+        "--provider=fake",
+        `--report=${reportPath}`,
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+          KEEL_PROVIDER: "fake",
+        },
+        input,
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain(
+        "Goal paused after session resume. Run /goal resume to continue.\n",
+      );
+      expect(fixture.stdout()).toContain(
+        "Session goal: paused - Preserve the restored verifier timeout; criterion(command): pnpm test; verifier timeout: 350ms\n",
+      );
+      const ledger = await readFile(
+        join(home, "sessions", "goal-timeout-restore", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(ledger).toContain('"status":"paused"');
+      expect(ledger).toContain('"verificationTimeoutMs":350');
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        turns: 0,
+        stopReason: "completed",
+        costUsd: 0,
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a saved interactive session receives a goal command first,
     When the user checks status,
     Then the CLI entrypoint persists, displays, and starts the goal`, async () => {
@@ -394,7 +475,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     );
     const firstInput = new PassThrough();
     firstInput.write("/goal Track verified goal from entrypoint\n");
-    firstInput.write("/goal verify pnpm test\n");
+    firstInput.write("/goal verify --timeout 45s pnpm test\n");
     firstInput.write("/goal budget --turns 1\n");
     firstInput.end("/status\n");
     const firstRun = createRuntime(
@@ -440,8 +521,9 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(firstRun.stdout()).toContain(
         "Goal verification command set: pnpm test\n",
       );
+      expect(firstRun.stdout()).toContain("Goal verification timeout: 45s\n");
       expect(firstRun.stdout()).toContain(
-        "  goal: active - Track verified goal from entrypoint; criterion(command): pnpm test; usage: 0 turns, 0 tokens, 0ms active; budget: 1 turn\n",
+        "  goal: active - Track verified goal from entrypoint; criterion(command): pnpm test; verifier timeout: 45s; usage: 0 turns, 0 tokens, 0ms active; budget: 1 turn\n",
       );
       const ledger = await readFile(
         join(home, "sessions", "goal-verify-command", "ledger.jsonl"),
@@ -449,15 +531,92 @@ describe("CLI Main - Interactive Entrypoint", () => {
       );
       expect(ledger).toContain('"criterionKind":"command"');
       expect(ledger).toContain('"completionCriterion":"pnpm test"');
+      expect(ledger).toContain('"verificationTimeoutMs":45000');
       expect(resumeExitCode).toBe(0);
       expect(resumeRun.stdout()).toContain(
-        "  goal: budget_limited - Track verified goal from entrypoint; criterion(command): pnpm test; reason: Session goal budget reached: turns 1/1",
+        "  goal: budget_limited - Track verified goal from entrypoint; criterion(command): pnpm test; verifier timeout: 45s; reason: Session goal budget reached: turns 1/1",
       );
       expect(firstRun.stderr()).toContain(
         "Session goal budget reached: turns 1/1",
       );
       expect(resumeRun.stderr()).toBe("");
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a command goal configures a short verification timeout,
+    When the model proposes completion and the verifier exceeds that timeout,
+    Then the CLI rejects completion at the configured boundary and preserves the contract`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-verifier-timeout-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-verifier-timeout-home-"),
+    );
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.write(
+          sseToolCall("complete_goal", "update_goal", {
+            status: "completed",
+          }),
+        );
+        res.write(sseToolFinish());
+        res.end("data: [DONE]\n\n");
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.write("/goal Verify a deliberately slow command\n");
+    input.write(
+      '/goal verify --timeout 20ms node -e "setTimeout(() => {}, 200)"\n',
+    );
+    input.end("/goal budget --turns 1\n");
+    const fixture = createRuntime(
+      ["--session", "goal-verifier-timeout", "--bash-policy=trusted"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input,
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain(
+        'Goal verification command set: node -e "setTimeout(() => {}, 200)"\n',
+      );
+      const ledger = await readFile(
+        join(home, "sessions", "goal-verifier-timeout", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(ledger).toContain('"verificationTimeoutMs":20');
+      expect(ledger).toContain("Command timed out after 20ms");
+      expect(ledger).toContain('"status":"budget_limited"');
+    } finally {
+      await close(server);
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }

@@ -1,5 +1,9 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import type { Readable } from "node:stream";
+import {
+  DEFAULT_COMMAND_TIMEOUT_MS,
+  MAX_COMMAND_TIMEOUT_MS,
+} from "../core/command-timeout.ts";
 import { KeelError } from "../core/error.ts";
 import {
   type CapturedByteOutput,
@@ -8,8 +12,6 @@ import {
 } from "./output-limit.ts";
 import type { ToolResult } from "./types.ts";
 
-const DEFAULT_TIMEOUT_MS = 10_000;
-const MAX_TIMEOUT_MS = 60_000;
 const OUTPUT_MAX_BYTES = 20_000;
 const ARTIFACT_OUTPUT_MAX_BYTES = 10_000_000;
 const EXIT_STDIO_QUIET_DRAIN_MS = 25;
@@ -36,16 +38,16 @@ export interface BashToolResult extends ToolResult {
 }
 
 function normalizeTimeout(timeoutMs: number | undefined): number {
-  if (timeoutMs === undefined) return DEFAULT_TIMEOUT_MS;
+  if (timeoutMs === undefined) return DEFAULT_COMMAND_TIMEOUT_MS;
   if (
     !Number.isInteger(timeoutMs) ||
     timeoutMs <= 0 ||
-    timeoutMs > MAX_TIMEOUT_MS
+    timeoutMs > MAX_COMMAND_TIMEOUT_MS
   ) {
     throw new KeelError(
       "tool_invalid_bash_timeout",
-      `bash failed: timeout must be an integer between 1 and ${MAX_TIMEOUT_MS}ms`,
-      `Set timeoutMs to an integer between 1 and ${MAX_TIMEOUT_MS}.`,
+      `bash failed: timeout must be an integer between 1 and ${MAX_COMMAND_TIMEOUT_MS}ms`,
+      `Set timeoutMs to an integer between 1 and ${MAX_COMMAND_TIMEOUT_MS}.`,
     );
   }
   return timeoutMs;

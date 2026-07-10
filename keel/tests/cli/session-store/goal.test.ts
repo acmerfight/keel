@@ -9,6 +9,7 @@ import {
   persistSessionQueuedInput,
   resumeSessionStore,
 } from "../../../src/cli/session-store.ts";
+import { MAX_COMMAND_TIMEOUT_MS } from "../../../src/core/command-timeout.ts";
 import {
   SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
   SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
@@ -1083,6 +1084,62 @@ describe("Session Store Goal", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerRecords).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a verification timeout does not belong to an executable command contract,
+    When the session store validates the current goal schema,
+    Then it rejects the goal before appending unreadable state`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+
+    try {
+      const session = createSessionStore({
+        sessionId: "session-goal-invalid-verification-timeout",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When / Then
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: {
+            objective: "Verify an assertion",
+            status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+            criterionKind: "assertion",
+            completionCriterion: "The report exists",
+            verificationTimeoutMs: 1000,
+          },
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow("Error: session goal is invalid after persistence redaction.");
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: {
+            objective: "Verify a command",
+            status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+            criterionKind: "command",
+            completionCriterion: "pnpm test",
+            verificationTimeoutMs: MAX_COMMAND_TIMEOUT_MS + 1,
+          },
+          runtime: runtime(home, 2),
+        }),
+      ).toThrow("Error: session goal is invalid after persistence redaction.");
+      const records = (await readFile(session.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(records).toHaveLength(1);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

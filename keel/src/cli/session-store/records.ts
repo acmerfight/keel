@@ -982,6 +982,9 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       ? {
           criterionKind: goal.criterionKind,
           completionCriterion,
+          ...(goal.verificationTimeoutMs !== undefined
+            ? { verificationTimeoutMs: goal.verificationTimeoutMs }
+            : {}),
         }
       : {};
   switch (goal.status) {

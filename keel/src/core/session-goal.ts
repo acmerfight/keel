@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_COMMAND_TIMEOUT_MS } from "./command-timeout.ts";
 
 export const SESSION_GOAL_OBJECTIVE_MAX_LENGTH = 4000;
 export const SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH = 1000;
@@ -86,7 +87,14 @@ interface SessionGoalContract {
   readonly usage: SessionGoalUsage;
   readonly criterionKind?: SessionGoalCriterionKind;
   readonly completionCriterion?: string;
+  readonly verificationTimeoutMs?: number;
   readonly latestRuntimeOutcome?: SessionGoalRuntimeOutcome;
+}
+
+interface SessionGoalCompletionContractSource {
+  readonly criterionKind?: SessionGoalCriterionKind;
+  readonly completionCriterion?: string;
+  readonly verificationTimeoutMs?: number;
 }
 
 interface ActiveSessionGoal extends SessionGoalContract {
@@ -214,6 +222,13 @@ const sessionGoalBaseSchema = z
       .min(1)
       .max(SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH)
       .optional(),
+    verificationTimeoutMs: z
+      .number()
+      .int()
+      .safe()
+      .positive()
+      .max(MAX_COMMAND_TIMEOUT_MS)
+      .optional(),
     statusReason: z
       .string()
       .trim()
@@ -234,6 +249,17 @@ const sessionGoalBaseSchema = z
         code: "custom",
         message:
           "criterionKind and completionCriterion must be provided together",
+      });
+    }
+    if (
+      goal.verificationTimeoutMs !== undefined &&
+      goal.criterionKind !== "command"
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["verificationTimeoutMs"],
+        message:
+          "verificationTimeoutMs is only valid for command completion criteria",
       });
     }
     if (
@@ -331,6 +357,10 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
         ? {
             criterionKind: goal.criterionKind,
             completionCriterion: goal.completionCriterion,
+            ...(goal.criterionKind === "command" &&
+            goal.verificationTimeoutMs !== undefined
+              ? { verificationTimeoutMs: goal.verificationTimeoutMs }
+              : {}),
           }
         : {};
     const runtimeOutcome =
@@ -437,6 +467,29 @@ export function normalizeSessionGoalCompletionCommand(command: string): string {
   return command.trim();
 }
 
+export function sessionGoalCompletionContract(
+  source: SessionGoalCompletionContractSource,
+): {
+  readonly criterionKind?: SessionGoalCriterionKind;
+  readonly completionCriterion?: string;
+  readonly verificationTimeoutMs?: number;
+} {
+  if (
+    source.criterionKind === undefined ||
+    source.completionCriterion === undefined
+  ) {
+    return {};
+  }
+  return {
+    criterionKind: source.criterionKind,
+    completionCriterion: source.completionCriterion,
+    ...(source.criterionKind === "command" &&
+    source.verificationTimeoutMs !== undefined
+      ? { verificationTimeoutMs: source.verificationTimeoutMs }
+      : {}),
+  };
+}
+
 export function normalizeSessionGoalStatusReason(reason: string): string {
   return reason.replace(/\s+/gu, " ").trim();
 }
@@ -534,13 +587,7 @@ export function pauseActiveSessionGoal(
     objective: goal.objective,
     status: "paused",
     ...sessionGoalAccounting(goal),
-    ...(goal.criterionKind !== undefined &&
-    goal.completionCriterion !== undefined
-      ? {
-          criterionKind: goal.criterionKind,
-          completionCriterion: goal.completionCriterion,
-        }
-      : {}),
+    ...sessionGoalCompletionContract(goal),
     ...sessionGoalRuntimeOutcome(goal),
   };
 }
@@ -655,13 +702,7 @@ export function sessionGoalCommandMatchesCriterion(
 export function copySessionGoal(goal: SessionGoal): SessionGoal {
   const accounting = sessionGoalAccounting(goal);
   const runtimeOutcome = sessionGoalRuntimeOutcome(goal);
-  const criterion =
-    goal.criterionKind !== undefined && goal.completionCriterion !== undefined
-      ? {
-          criterionKind: goal.criterionKind,
-          completionCriterion: goal.completionCriterion,
-        }
-      : {};
+  const criterion = sessionGoalCompletionContract(goal);
   switch (goal.status) {
     case "active":
       return {
@@ -780,13 +821,7 @@ export function clearSessionGoalBlockedAudit(
   if (goal.status !== "active" || goal.blockedAudit === undefined) {
     return null;
   }
-  const criterion =
-    goal.criterionKind !== undefined && goal.completionCriterion !== undefined
-      ? {
-          criterionKind: goal.criterionKind,
-          completionCriterion: goal.completionCriterion,
-        }
-      : {};
+  const criterion = sessionGoalCompletionContract(goal);
   const clearedGoal: Extract<SessionGoal, { readonly status: "active" }> = {
     objective: goal.objective,
     status: "active",
@@ -805,7 +840,7 @@ interface SessionGoalSummaryOptions {
   readonly includeAccounting?: boolean;
 }
 
-function formatSessionGoalDuration(activeTimeMs: number): string {
+export function formatSessionGoalDuration(activeTimeMs: number): string {
   if (activeTimeMs < 1000) {
     return `${activeTimeMs}ms`;
   }
@@ -877,13 +912,17 @@ export function formatSessionGoalSummary(
         [...budgetParts].join(", ") || "none"
       }`
     : "";
+  const verificationTimeout =
+    goal.criterionKind === "command" && goal.verificationTimeoutMs !== undefined
+      ? `; verifier timeout: ${formatSessionGoalDuration(goal.verificationTimeoutMs)}`
+      : "";
   if (
     goal.criterionKind === undefined ||
     goal.completionCriterion === undefined
   ) {
     return `${goal.status} - ${goal.objective}; criterion: missing${reason}${blockedAudit}${completionEvidence}${accounting}`;
   }
-  return `${goal.status} - ${goal.objective}; criterion(${goal.criterionKind}): ${goal.completionCriterion}${reason}${blockedAudit}${completionEvidence}${accounting}`;
+  return `${goal.status} - ${goal.objective}; criterion(${goal.criterionKind}): ${goal.completionCriterion}${verificationTimeout}${reason}${blockedAudit}${completionEvidence}${accounting}`;
 }
 
 function withSentencePeriod(text: string): string {
@@ -979,6 +1018,12 @@ export function activeSessionGoalSystemPrompt(
           `- Completion criterion (${goal.criterionKind}): ${goal.completionCriterion}`,
         ]
       : ["- Completion criterion: missing"]),
+    ...(goal.criterionKind === "command" &&
+    goal.verificationTimeoutMs !== undefined
+      ? [
+          `- Completion command timeout: ${formatSessionGoalDuration(goal.verificationTimeoutMs)}.`,
+        ]
+      : []),
     ...(goal.latestRuntimeOutcome === undefined
       ? []
       : [

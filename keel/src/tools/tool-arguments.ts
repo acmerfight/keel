@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  DEFAULT_COMMAND_TIMEOUT_MS,
+  MAX_COMMAND_TIMEOUT_MS,
+} from "../core/command-timeout.ts";
 import { SESSION_GOAL_STATUS_REASON_MAX_LENGTH } from "../core/session-goal.ts";
 import { sessionTaskPlanSchema } from "../core/task-progress.ts";
 import { optionalToolArgument } from "./tool-schema.ts";
@@ -198,9 +202,9 @@ export const bashToolArgumentsSchema = z
         .number()
         .int()
         .min(1)
-        .max(60_000)
+        .max(MAX_COMMAND_TIMEOUT_MS)
         .describe(
-          "Optional command timeout in milliseconds. Defaults to 10000ms.",
+          `Optional command timeout in milliseconds. Defaults to ${DEFAULT_COMMAND_TIMEOUT_MS}ms.`,
         ),
     ),
   })
