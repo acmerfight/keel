@@ -89,6 +89,7 @@ import { readForkPointPickerSelection } from "./interactive-session/fork-picker.
 import {
   type GoalContinuationToolExecution,
   goalContinuationStagnationFingerprint,
+  repeatedGoalContinuationPatternKey,
 } from "./interactive-session/goal-stagnation.ts";
 import {
   createLineReader,
@@ -170,12 +171,13 @@ const GOAL_CONTINUATION_MESSAGE = [
 ].join("\n");
 
 const GOAL_STAGNATION_RECOVERY_MATCH_LIMIT = 3;
+const GOAL_STAGNATION_MAX_PATTERN_LENGTH = 2;
 const DEFAULT_GOAL_AUTOMATIC_CONTINUATION_TURN_LIMIT = 100;
 
 const GOAL_STAGNATION_RECOVERY_MESSAGE = [
   '<keel_runtime_context source="goal_stagnation_recovery">',
   "Keel runtime goal continuation recovery.",
-  "The recent automatic goal continuations repeated the same tool calls and results.",
+  "The recent automatic goal continuations repeated the same response or tool-use pattern.",
   "No workspace checkpoint, task progress, or goal state change was observed.",
   "Reassess the blocker and choose a materially different next action.",
   "This is runtime-generated recovery context, not a new user request.",
@@ -931,10 +933,9 @@ export async function runInteractiveSession(
         options.goalAutomaticContinuationTurnLimit,
       );
     let continuationTurns = 0;
-    let previousStagnationFingerprint: string | null = null;
-    let matchingStagnationFingerprints = 0;
+    const recentStagnationFingerprints: string[] = [];
     let nextContinuationMessage = GOAL_CONTINUATION_MESSAGE;
-    const recoveryHintedFingerprints = new Set<string>();
+    const recoveryHintedPatterns = new Set<string>();
     while (
       sessionGoal?.status === "active" &&
       lineReader.pendingInputCount() === 0
@@ -963,23 +964,29 @@ export async function runInteractiveSession(
         return false;
       }
       if (result.stagnationFingerprint === null) {
-        previousStagnationFingerprint = null;
-        matchingStagnationFingerprints = 0;
-      } else if (
-        result.stagnationFingerprint === previousStagnationFingerprint
-      ) {
-        matchingStagnationFingerprints++;
+        recentStagnationFingerprints.length = 0;
       } else {
-        previousStagnationFingerprint = result.stagnationFingerprint;
-        matchingStagnationFingerprints = 1;
+        recentStagnationFingerprints.push(result.stagnationFingerprint);
+        recentStagnationFingerprints.splice(
+          0,
+          Math.max(
+            0,
+            recentStagnationFingerprints.length -
+              GOAL_STAGNATION_RECOVERY_MATCH_LIMIT *
+                GOAL_STAGNATION_MAX_PATTERN_LENGTH,
+          ),
+        );
       }
+      const repeatedPatternKey = repeatedGoalContinuationPatternKey({
+        fingerprints: recentStagnationFingerprints,
+        repetitionLimit: GOAL_STAGNATION_RECOVERY_MATCH_LIMIT,
+        maxPatternLength: GOAL_STAGNATION_MAX_PATTERN_LENGTH,
+      });
       if (
-        result.stagnationFingerprint !== null &&
-        matchingStagnationFingerprints >=
-          GOAL_STAGNATION_RECOVERY_MATCH_LIMIT &&
-        !recoveryHintedFingerprints.has(result.stagnationFingerprint)
+        repeatedPatternKey !== null &&
+        !recoveryHintedPatterns.has(repeatedPatternKey)
       ) {
-        recoveryHintedFingerprints.add(result.stagnationFingerprint);
+        recoveryHintedPatterns.add(repeatedPatternKey);
         nextContinuationMessage = GOAL_STAGNATION_RECOVERY_MESSAGE;
       }
     }

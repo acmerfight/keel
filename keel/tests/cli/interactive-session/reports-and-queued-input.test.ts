@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -14,6 +14,7 @@ import {
   resumeSessionStore,
   type SessionQueuedInput,
 } from "../../../src/cli/session-store.ts";
+import { KeelError } from "../../../src/core/error.ts";
 import type { SessionGoal } from "../../../src/core/session-goal.ts";
 import type { LLMProvider, Message, Usage } from "../../../src/llm/types.ts";
 import {
@@ -296,9 +297,9 @@ describe("Interactive Session - Reports And Queued Input", () => {
     expect(sigintHandlers.size).toBe(0);
   });
 
-  test(`Given automatic goal continuation has no repeated tool evidence,
+  test(`Given automatic goal continuations emit different prose without tools,
     When the hard continuation turn cap is reached,
-    Then only the hard cap stops the goal`, async () => {
+    Then Keel does not send a stagnation recovery hint`, async () => {
     // Given
     const initialGoal: SessionGoal = {
       objective: "Finish the continuation goal",
@@ -309,6 +310,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       completionCriterion: "The final report exists.",
     };
     const observedUserContexts: string[][] = [];
+    let persistedMessages: readonly Message[] = [];
     const persistedGoals: SessionGoal[] = [];
     let providerCalls = 0;
     const provider: LLMProvider = {
@@ -371,6 +373,9 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
+      persistSessionMessages: (messages) => {
+        persistedMessages = [...messages];
+      },
       persistSessionGoal: (update) => {
         if (update.goal !== null) {
           persistedGoals.push(update.goal);
@@ -403,6 +408,13 @@ describe("Interactive Session - Reports And Queued Input", () => {
     expect(observedUserContexts[2]?.at(-1)).toContain(
       "Keel runtime goal continuation",
     );
+    expect(
+      persistedMessages.filter(
+        (message) =>
+          message.role === "user" &&
+          message.content.includes('source="goal_stagnation_recovery"'),
+      ),
+    ).toHaveLength(0);
     expect(persistedGoals.at(-1)).toEqual({
       objective: "Finish the continuation goal",
       status: "usage_limited",
@@ -413,6 +425,240 @@ describe("Interactive Session - Reports And Queued Input", () => {
       criterionKind: "assertion",
       completionCriterion: "The final report exists.",
     });
+  });
+
+  test(`Given automatic goal continuations repeat identical prose without tools,
+    When the same response is observed three consecutive times,
+    Then Keel sends one recovery hint without stopping the goal`, async () => {
+    // Given
+    const initialGoal: SessionGoal = {
+      objective: "Finish the prose-only continuation goal",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "assertion",
+      completionCriterion: "The final report exists.",
+    };
+    let persistedMessages: readonly Message[] = [];
+    const automaticContinuationTurnLimit = 4;
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        providerCalls++;
+        yield {
+          type: "text",
+          text:
+            providerCalls === 1
+              ? "Initial turn left the goal active."
+              : "The work is done.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: initialGoal,
+      goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionMessages: (messages) => {
+        persistedMessages = [...messages];
+      },
+    });
+    input.end("start the goal\n");
+
+    // When
+    await withTimeout(session, 5000, "goal continuation did not hit turn cap");
+
+    // Then
+    expect(providerCalls).toBe(1 + automaticContinuationTurnLimit);
+    expect(
+      persistedMessages.filter(
+        (message) =>
+          message.role === "user" &&
+          message.content.includes('source="goal_stagnation_recovery"'),
+      ),
+    ).toHaveLength(1);
+    expect(stderr).toContain(
+      `Automatic goal continuation stopped after ${automaticContinuationTurnLimit} continuation turns without completing the active goal.`,
+    );
+  });
+
+  test(`Given automatic goal continuations restore changing read evidence after compaction,
+    When the assistant repeats the same prose without ordinary tool executions,
+    Then Keel does not send a prose stagnation recovery hint`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-goal-compaction-"));
+    try {
+      const statusPath = join(workspace, "status.txt");
+      await writeFile(statusPath, "initial evidence\n", "utf8");
+      const initialGoal: SessionGoal = {
+        objective: "Track changing evidence through compaction",
+        status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "assertion",
+        completionCriterion: "The external status is complete.",
+      };
+      let persistedMessages: readonly Message[] = [];
+      const restoredEvidence: string[] = [];
+      const automaticContinuationTurnLimit = 4;
+      let mainRequests = 0;
+      let summaryRequests = 0;
+      let compactionEvents = 0;
+      const provider: LLMProvider = {
+        id: "fake",
+        async *stream(options) {
+          if (options.toolChoice === "none") {
+            summaryRequests++;
+            yield {
+              type: "text",
+              text: `Compaction summary ${summaryRequests}.`,
+            };
+            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+            return;
+          }
+          mainRequests++;
+          if (mainRequests === 1) {
+            yield {
+              type: "tool_call",
+              id: "read_status_before_compaction",
+              tool: "read",
+              path: "status.txt",
+            };
+            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+            return;
+          }
+          if (mainRequests >= 3 && mainRequests % 2 === 1) {
+            await writeFile(
+              statusPath,
+              `restored evidence ${mainRequests}\n`,
+              "utf8",
+            );
+            throw new KeelError(
+              "provider_context_overflow",
+              "Force post-compaction read restoration",
+            );
+          }
+          if (mainRequests >= 4) {
+            const restoredRead = options.messages.findLast(
+              (message) =>
+                message.role === "tool" &&
+                message.toolCallId.startsWith("post_compaction_read_"),
+            );
+            if (restoredRead?.role === "tool") {
+              restoredEvidence.push(restoredRead.content);
+            }
+          }
+          yield { type: "text", text: "Still working." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        },
+      };
+      const input = new PassThrough();
+      let stderr = "";
+      const session = runInteractiveSession({
+        cliArgs: { bashMode: "disabled" },
+        workspace,
+        platform: process.platform,
+        initialSessionGoal: initialGoal,
+        goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
+        input,
+        writeStdout: () => {},
+        writeStderr: (text) => {
+          stderr += text;
+        },
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => ({
+          provider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+          contextCompaction: {
+            keepRecentTokens: 1,
+            summaryInputMaxChars: 4_000,
+          },
+        }),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async (stream) => {
+          let finalEnd:
+            | Extract<AgentEvent, { readonly type: "end" }>
+            | undefined;
+          for await (const event of stream) {
+            if (event.type === "context_compacted") {
+              compactionEvents++;
+            } else if (event.type === "end") {
+              finalEnd = event;
+            }
+          }
+          return finalEnd;
+        },
+        formatCostReport: () => "",
+        persistSessionMessages: (messages) => {
+          persistedMessages = [...messages];
+        },
+      });
+      input.end("start the goal\n");
+
+      // When
+      await withTimeout(session, 5000, "compacted goal did not hit turn cap");
+
+      // Then
+      expect(mainRequests).toBe(2 + automaticContinuationTurnLimit * 2);
+      expect(summaryRequests).toBe(automaticContinuationTurnLimit);
+      expect(compactionEvents).toBe(automaticContinuationTurnLimit);
+      expect(restoredEvidence).toHaveLength(automaticContinuationTurnLimit);
+      expect(new Set(restoredEvidence)).toHaveLength(
+        automaticContinuationTurnLimit,
+      );
+      expect(
+        persistedMessages.filter(
+          (message) =>
+            message.role === "user" &&
+            message.content.includes('source="goal_stagnation_recovery"'),
+        ),
+      ).toHaveLength(0);
+      expect(stderr).toContain(
+        `Automatic goal continuation stopped after ${automaticContinuationTurnLimit} continuation turns without completing the active goal.`,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test(`Given automatic goal continuation reaches the cost budget,
@@ -981,7 +1227,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     );
     expect(recoveryMessages).toHaveLength(1);
     expect(recoveryMessages[0]?.content).toContain(
-      "repeated the same tool calls and results",
+      "repeated the same response or tool-use pattern",
     );
     expect(recoveryMessages[0]?.content).toContain(
       "Reassess the blocker and choose a materially different next action",
@@ -1122,7 +1368,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     }
   });
 
-  test(`Given automatic goal continuations gather distinct tool evidence,
+  test(`Given automatic goal continuations alternate tool evidence for only two cycles,
     When the hard continuation turn cap is reached,
     Then Keel does not send a stagnation recovery hint`, async () => {
     // Given
@@ -1213,6 +1459,103 @@ describe("Interactive Session - Reports And Queued Input", () => {
           message.content.includes('source="goal_stagnation_recovery"'),
       ),
     ).toHaveLength(0);
+    expect(stderr).toContain(
+      `Automatic goal continuation stopped after ${automaticContinuationTurnLimit} continuation turns without completing the active goal.`,
+    );
+  });
+
+  test(`Given automatic goal continuations repeat an exact two-step tool cycle,
+    When the same cycle is observed three consecutive times,
+    Then Keel sends one recovery hint without stopping the goal`, async () => {
+    // Given
+    const initialGoal: SessionGoal = {
+      objective: "Inspect cycling project evidence",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "assertion",
+      completionCriterion: "Every relevant project file has been inspected.",
+    };
+    let persistedMessages: readonly Message[] = [];
+    const automaticContinuationTurnLimit = 8;
+    const readPaths = ["package.json", "tsconfig.json"] as const;
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        providerCalls++;
+        if (providerCalls > 1 && providerCalls % 2 === 0) {
+          const continuationIndex = providerCalls / 2 - 1;
+          yield {
+            type: "tool_call",
+            id: `read_cycle_${providerCalls}`,
+            tool: "read",
+            path:
+              continuationIndex % readPaths.length === 0
+                ? readPaths[0]
+                : readPaths[1],
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: `Turn ${providerCalls} remained active.` };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: initialGoal,
+      goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionMessages: (messages) => {
+        persistedMessages = [...messages];
+      },
+    });
+    input.end("start the goal\n");
+
+    // When
+    await withTimeout(session, 5000, "goal continuation did not hit turn cap");
+
+    // Then
+    expect(providerCalls).toBe(1 + automaticContinuationTurnLimit * 2);
+    expect(
+      persistedMessages.filter(
+        (message) =>
+          message.role === "user" &&
+          message.content.includes('source="goal_stagnation_recovery"'),
+      ),
+    ).toHaveLength(1);
     expect(stderr).toContain(
       `Automatic goal continuation stopped after ${automaticContinuationTurnLimit} continuation turns without completing the active goal.`,
     );

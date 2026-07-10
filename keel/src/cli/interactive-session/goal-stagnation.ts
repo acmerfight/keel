@@ -38,6 +38,13 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function currentTurnMessages(messages: readonly Message[]): readonly Message[] {
+  const lastUserIndex = messages.findLastIndex(
+    (message) => message.role === "user",
+  );
+  return messages.slice(lastUserIndex + 1);
+}
+
 export function goalContinuationStagnationFingerprint(options: {
   readonly messages: readonly Message[];
   readonly toolExecutions: readonly GoalContinuationToolExecution[];
@@ -52,12 +59,26 @@ export function goalContinuationStagnationFingerprint(options: {
       execution.toolCall.tool === "bash" &&
       !execution.failedGoalVerification,
   );
-  if (
-    options.stateChanged ||
-    options.toolExecutions.length === 0 ||
-    opaqueWorkspaceMutationPossible
-  ) {
+  if (options.stateChanged || opaqueWorkspaceMutationPossible) {
     return null;
+  }
+  if (options.toolExecutions.length === 0) {
+    const turnMessages = currentTurnMessages(options.messages);
+    const toolEvidencePresent = turnMessages.some(
+      (message) =>
+        message.role === "tool" ||
+        (message.role === "assistant" && message.toolCalls.length > 0),
+    );
+    if (toolEvidencePresent) {
+      return null;
+    }
+    return `text:${sha256(
+      JSON.stringify(
+        turnMessages
+          .filter((message) => message.role === "assistant")
+          .map((message) => message.content),
+      ),
+    )}`;
   }
   const signature: string[] = [];
   for (const execution of options.toolExecutions) {
@@ -77,5 +98,39 @@ export function goalContinuationStagnationFingerprint(options: {
       ]),
     );
   }
-  return sha256(JSON.stringify(signature));
+  return `tools:${sha256(JSON.stringify(signature))}`;
+}
+
+export function repeatedGoalContinuationPatternKey(options: {
+  readonly fingerprints: readonly string[];
+  readonly repetitionLimit: number;
+  readonly maxPatternLength: number;
+}): string | null {
+  for (
+    let patternLength = 1;
+    patternLength <= options.maxPatternLength;
+    patternLength++
+  ) {
+    const requiredFingerprints = patternLength * options.repetitionLimit;
+    if (options.fingerprints.length < requiredFingerprints) {
+      continue;
+    }
+    const repeatedSuffix = options.fingerprints.slice(-requiredFingerprints);
+    if (
+      repeatedSuffix.every(
+        (fingerprint, index) =>
+          fingerprint === repeatedSuffix[index % patternLength],
+      )
+    ) {
+      const pattern = repeatedSuffix.slice(0, patternLength);
+      return pattern
+        .map((_, index) =>
+          JSON.stringify([...pattern.slice(index), ...pattern.slice(0, index)]),
+        )
+        .reduce((left, right) =>
+          compareKeys(left, right) <= 0 ? left : right,
+        );
+    }
+  }
+  return null;
 }
