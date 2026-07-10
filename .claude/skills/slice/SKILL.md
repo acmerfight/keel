@@ -54,7 +54,7 @@ If the user later asks to merge, use `/merge-pr <target>` for merge and cleanup.
 1. Update from latest `main` before implementation.
 2. Read the active project guidance before choosing or changing code:
    - root `AGENTS.md`
-   - `keel/AGENTS.md` and `keel/CLAUDE.md`
+   - `keel/CLAUDE.md`
    - `keel/DEVELOPMENT.md`
    - `keel/TESTING.md`
    - `keel/SLICING.md`
@@ -105,9 +105,9 @@ Fix all valid blocking/high/medium findings. For low/nit findings, apply only ch
 Run professional QA before opening or updating the PR.
 
 - Run Keel commands from `keel/` unless the slice is explicitly repo-level documentation or agent configuration.
-- Run targeted tests for iteration.
+- Use the narrowest relevant iteration command: an explicit Vitest path, `pnpm test:changed`, `pnpm test:unit`, or `pnpm test:cli`.
 - After file edits and formatting are complete, run independent local checks in parallel when practical: targeted tests, `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm eval:check`, and `pnpm knip`.
-- Run `pnpm test:coverage` for PR-ready verification. Use `pnpm test` only for fast local iteration.
+- Run `pnpm test:coverage` for PR-ready verification; iteration commands do not replace it.
 - Run `pnpm coverage:patch` after coverage and after commit, before push, when the slice changes coverable code.
 - For pure docs/skill-only changes, run the relevant metadata or Markdown validators and explain why the Keel test suite was not run.
 - Before opening or updating the PR, search changed files for `legacy`, `old schema`, `migration`, `fallback`, `backward compatibility`, `compatibility shim`, `compatibility test`, and `old CLI alias`; remove unrequested compatibility code or note why the hit is only current-schema recovery or documentation.

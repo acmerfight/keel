@@ -11,6 +11,7 @@ const result = spawnSync(
   [
     "run",
     "--coverage",
+    "--reporter=default",
     "--reporter=blob",
     "--coverage.reporter=json",
     "--coverage.thresholds.statements=0",
