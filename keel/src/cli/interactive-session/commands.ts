@@ -119,6 +119,7 @@ interface ForkPointsCommand {
 interface InvalidInteractiveCommand {
   readonly kind: "invalid";
   readonly message: string;
+  readonly scope?: "goal";
 }
 
 export type InteractiveCommand =
@@ -597,7 +598,10 @@ export function parseInteractiveCommand(
 
   const goalMatch = /^\/goal(?:\s+(.*))?$/u.exec(trimmed);
   if (goalMatch !== null) {
-    return parseGoalCommandArgs(goalMatch[1]);
+    const goalCommand = parseGoalCommandArgs(goalMatch[1]);
+    return goalCommand.kind === "invalid"
+      ? { ...goalCommand, scope: "goal" }
+      : goalCommand;
   }
 
   const tasksMatch = /^\/tasks(?:\s+(.*))?$/u.exec(trimmed);

@@ -1553,6 +1553,9 @@ export async function runInteractiveSession(
         continue;
       }
       if (interactiveCommand?.kind === "invalid") {
+        if (interactiveCommand.scope === "goal") {
+          pendingGoalDriveMessage = null;
+        }
         options.writeStderr(`${interactiveCommand.message}\n`);
         consumeQueuedInputLines([rawInput]);
         continue;
