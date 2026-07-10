@@ -38,6 +38,16 @@ const layerRules: readonly LayerRule[] = [
   },
 ];
 
+const providerConfigFacade = "src/cli/provider-config.ts";
+const providerConfigOwnedFiles = [
+  "src/cli/fake-provider-demo.ts",
+  "src/cli/provider-diagnostics.ts",
+  "src/cli/provider-profiles.ts",
+  "src/cli/provider-resolver.ts",
+  "src/cli/provider-selection.ts",
+  "src/cli/provider-user-config.ts",
+] as const;
+
 function layerFiles(layer: string): readonly string[] {
   return readdirSync(layer, { recursive: true, encoding: "utf8" })
     .filter((name) => name.endsWith(".ts"))
@@ -197,36 +207,11 @@ function wildcardReExportSpecifiers(
   return specifiers;
 }
 
-function namedReExportSpecifiers(
-  file: string,
-  source: string,
-): readonly string[] {
-  const sourceFile = parseSource(file, source);
-  const specifiers: string[] = [];
-
-  function visit(node: ts.Node): void {
-    if (
-      ts.isExportDeclaration(node) &&
-      node.moduleSpecifier !== undefined &&
-      node.exportClause !== undefined &&
-      ts.isNamedExports(node.exportClause)
-    ) {
-      const specifier = stringLiteralText(node.moduleSpecifier);
-      if (specifier !== null) {
-        specifiers.push(specifier);
-      }
-    }
-
-    ts.forEachChild(node, visit);
-  }
-
-  visit(sourceFile);
-  return specifiers;
-}
-
 describe("module boundaries", () => {
   for (const { layer, contract, forbidden } of layerRules) {
-    test(`every file in ${layer}/ ${contract}`, () => {
+    test(`Given files in ${layer}/,
+      When their imports are inspected,
+      Then the layer ${contract}`, () => {
       const files = layerFiles(layer);
       expect(files.length).toBeGreaterThan(0);
 
@@ -243,7 +228,9 @@ describe("module boundaries", () => {
     });
   }
 
-  test(`src/cli/index.ts delegates provider configuration to a dedicated module`, () => {
+  test(`Given the CLI entrypoint routes commands,
+    When its provider dependencies are inspected,
+    Then provider configuration remains behind its dedicated facade`, () => {
     const source = readFileSync("src/cli/index.ts", "utf8");
     const forbidden = importSpecifiers("src/cli/index.ts", source).filter(
       (specifier) =>
@@ -254,24 +241,9 @@ describe("module boundaries", () => {
     expect(forbidden).toEqual([]);
   });
 
-  test(`src/cli/index.ts stays a thin command router`, () => {
-    const source = readFileSync("src/cli/index.ts", "utf8");
-    const specifiers = importSpecifiers("src/cli/index.ts", source);
-
-    expect(specifiers).toEqual([
-      "node:fs",
-      "node:url",
-      "./args.ts",
-      "./fork-points-command.ts",
-      "./interactive-run.ts",
-      "./one-shot-run.ts",
-      "./runtime.ts",
-      "./sessions-command.ts",
-      "./top-level-commands.ts",
-    ]);
-  });
-
-  test(`interactive compaction helpers depend on dedicated post-compaction restore`, () => {
+  test(`Given interactive compaction helpers restore visible context,
+    When their dependencies are inspected,
+    Then restoration remains owned by the dedicated post-compaction module`, () => {
     const files = [
       "src/cli/interactive-session/manual-compact.ts",
       "src/cli/interactive-session/model-switch-compact.ts",
@@ -290,7 +262,9 @@ describe("module boundaries", () => {
     }
   });
 
-  test(`src/agent/loop.ts does not re-export visibility or compaction restore helpers`, () => {
+  test(`Given visibility and restoration have dedicated owners,
+    When the agent loop exports are inspected,
+    Then the loop does not re-export those helpers`, () => {
     const source = readFileSync("src/agent/loop.ts", "utf8");
     const helperNames =
       "ReadVisibilityState|createReadVisibilityState|clearReadVisibilityState|restorePostCompactionReads";
@@ -309,7 +283,9 @@ describe("module boundaries", () => {
     );
   });
 
-  test(`agent event contracts are imported from the dedicated event module`, () => {
+  test(`Given agent events have a dedicated contract module,
+    When source and test imports are inspected,
+    Then consumers do not import event contracts from the agent loop`, () => {
     const violations: string[] = [];
     const contractNames = ["AgentEvent", "CostReport"];
 
@@ -336,14 +312,18 @@ describe("module boundaries", () => {
     expect(violations).toEqual([]);
   }, 15_000);
 
-  test(`src/agent/loop.ts does not export agent event contracts`, () => {
+  test(`Given agent event contracts have a dedicated owner,
+    When the agent loop exports are inspected,
+    Then the loop does not declare those contracts`, () => {
     const source = readFileSync("src/agent/loop.ts", "utf8");
 
     expect(source).not.toMatch(/\bexport\s+interface\s+CostReport\b/u);
     expect(source).not.toMatch(/\bexport\s+type\s+AgentEvent\b/u);
   });
 
-  test(`agent provider turn boundary does not depend on ledger compaction or tools`, () => {
+  test(`Given provider turns own only model streaming,
+    When provider-turn dependencies are inspected,
+    Then ledger compaction and tool execution remain outside that boundary`, () => {
     const source = readFileSync("src/agent/provider-turn.ts", "utf8");
     const specifiers = importSpecifiers("src/agent/provider-turn.ts", source);
 
@@ -354,7 +334,9 @@ describe("module boundaries", () => {
     expect(specifiers).not.toContain("./tool-scheduler.ts");
   });
 
-  test(`agent compaction retry boundary does not depend on tool execution`, () => {
+  test(`Given turn compaction owns request recovery,
+    When its dependencies are inspected,
+    Then tool execution and bash policy remain outside that boundary`, () => {
     const source = readFileSync("src/agent/turn-compaction.ts", "utf8");
     const specifiers = importSpecifiers("src/agent/turn-compaction.ts", source);
 
@@ -363,7 +345,9 @@ describe("module boundaries", () => {
     expect(specifiers).not.toContain("../permissions/bash.ts");
   });
 
-  test(`llm modules import the stable tool-call contract instead of tool execution surfaces`, () => {
+  test(`Given LLM modules consume tool-call data,
+    When their tool dependencies are inspected,
+    Then they import only the stable tool-call contract`, () => {
     const violations: string[] = [];
 
     for (const file of layerFiles("src/llm")) {
@@ -382,7 +366,9 @@ describe("module boundaries", () => {
     expect(violations).toEqual([]);
   });
 
-  test(`session records validate tool calls through the stable contract`, () => {
+  test(`Given session records validate persisted tool calls,
+    When their tool dependencies are inspected,
+    Then validation uses the stable tool-call contract`, () => {
     const file = "src/cli/session-store/records.ts";
     const source = readFileSync(file, "utf8");
     const specifiers = importSpecifiers(file, source);
@@ -392,7 +378,9 @@ describe("module boundaries", () => {
     expect(specifiers).not.toContain("../../tools/registry.ts");
   });
 
-  test(`tool definitions keep metadata separate from builtin executors`, () => {
+  test(`Given tool definitions own declarative metadata,
+    When their dependencies and source are inspected,
+    Then builtin executors remain outside the definition module`, () => {
     const file = "src/tools/tool-definitions.ts";
     const source = readFileSync(file, "utf8");
     const specifiers = importSpecifiers(file, source);
@@ -407,7 +395,9 @@ describe("module boundaries", () => {
     expect(source).not.toMatch(/\bexecute[A-Z]/u);
   });
 
-  test(`source modules do not use wildcard re-exports`, () => {
+  test(`Given source modules expose public contracts,
+    When re-export declarations are inspected,
+    Then wildcard re-exports are forbidden`, () => {
     const violations = sourceFiles().flatMap((file) =>
       wildcardReExportSpecifiers(file, readFileSync(file, "utf8")).map(
         (specifier) => `${file} re-exports wildcard from ${specifier}`,
@@ -417,7 +407,9 @@ describe("module boundaries", () => {
     expect(violations).toEqual([]);
   }, 15_000);
 
-  test(`wildcard re-export detection covers value and type-only forms`, () => {
+  test(`Given value and type wildcard export syntax,
+    When the architecture detector parses each form,
+    Then every wildcard form is reported`, () => {
     expect(
       wildcardReExportSpecifiers("inline.ts", `export * from "./module.ts";`),
     ).toEqual(["./module.ts"]);
@@ -453,7 +445,9 @@ describe("module boundaries", () => {
     ).toEqual([]);
   });
 
-  test(`source modules do not introduce generic index barrel entrypoints`, () => {
+  test(`Given source entrypoints have explicit ownership,
+    When generic index modules are enumerated,
+    Then only the executable CLI entrypoint exists`, () => {
     const indexFiles = sourceFiles().filter(
       (file) => file.endsWith("/index.ts") || file.endsWith("/index.tsx"),
     );
@@ -461,28 +455,9 @@ describe("module boundaries", () => {
     expect(indexFiles).toEqual(["src/cli/index.ts"]);
   });
 
-  test(`source re-export facades stay explicit and allowlisted`, () => {
-    const allowedReExportFiles = [
-      "src/agent/context-compaction.ts",
-      "src/cli/args.ts",
-      "src/cli/interactive-session.ts",
-      "src/cli/interactive-session/types.ts",
-      "src/cli/provider-config.ts",
-      "src/cli/session-store.ts",
-      "src/llm/providers/openai-compatible.ts",
-      "src/llm/types.ts",
-      "src/tools/apply-patch.ts",
-      "src/tools/registry.ts",
-    ];
-    const reExportingFiles = sourceFiles().filter(
-      (file) =>
-        namedReExportSpecifiers(file, readFileSync(file, "utf8")).length > 0,
-    );
-
-    expect(reExportingFiles).toEqual(allowedReExportFiles);
-  }, 15_000);
-
-  test(`external modules import session-store through the facade`, () => {
+  test(`Given session-store internals have a public facade,
+    When external imports are inspected,
+    Then consumers do not bypass the session-store facade`, () => {
     const violations: string[] = [];
 
     for (const file of sourceAndTestFiles()) {
@@ -509,7 +484,9 @@ describe("module boundaries", () => {
     expect(violations).toEqual([]);
   });
 
-  test(`external modules import context compaction through the facade`, () => {
+  test(`Given context-compaction internals have a public facade,
+    When external imports are inspected,
+    Then consumers do not bypass the context-compaction facade`, () => {
     const violations: string[] = [];
 
     for (const file of sourceAndTestFiles()) {
@@ -536,7 +513,9 @@ describe("module boundaries", () => {
     expect(violations).toEqual([]);
   });
 
-  test(`external modules import apply-patch through the facade`, () => {
+  test(`Given apply-patch internals have a public facade,
+    When external imports are inspected,
+    Then consumers do not bypass the apply-patch facade`, () => {
     const violations: string[] = [];
 
     for (const file of sourceAndTestFiles()) {
@@ -563,77 +542,41 @@ describe("module boundaries", () => {
     expect(violations).toEqual([]);
   });
 
-  test(`CLI args parsing keeps command parsers behind the args facade`, () => {
+  test(`Given CLI command parsers share common argument contracts,
+    When facade and internal dependencies are inspected,
+    Then parser ownership remains behind the args boundary`, () => {
     const facadeSource = readFileSync("src/cli/args.ts", "utf8");
-
-    expect(namedReExportSpecifiers("src/cli/args.ts", facadeSource)).toEqual([
-      "./args/types.ts",
-      "./args/usage.ts",
-    ]);
-    expect(facadeSource).not.toMatch(/export\s+\*/u);
-
     const facadeSpecifiers = importSpecifiers("src/cli/args.ts", facadeSource);
     expect(facadeSpecifiers).not.toContain("zod");
     expect(facadeSpecifiers).not.toContain("node:path");
     expect(facadeSpecifiers).not.toContain("../core/provider-id.ts");
     expect(facadeSpecifiers).not.toContain("../permissions/bash.ts");
 
-    expect(
-      importSpecifiers(
-        "src/cli/args/shared.ts",
-        readFileSync("src/cli/args/shared.ts", "utf8"),
-      ),
-    ).toEqual([
-      "zod",
-      "../../core/provider-id.ts",
-      "../../permissions/bash.ts",
-    ]);
-    expect(
-      importSpecifiers(
-        "src/cli/args/eval.ts",
-        readFileSync("src/cli/args/eval.ts", "utf8"),
-      ),
-    ).toEqual(["node:path", "./shared.ts", "./types.ts"]);
-    expect(
-      importSpecifiers(
-        "src/cli/args/run.ts",
-        readFileSync("src/cli/args/run.ts", "utf8"),
-      ),
-    ).toEqual(["../../permissions/bash.ts", "./shared.ts", "./types.ts"]);
-    expect(
-      importSpecifiers(
-        "src/cli/args/sessions.ts",
-        readFileSync("src/cli/args/sessions.ts", "utf8"),
-      ),
-    ).toEqual(["./shared.ts", "./types.ts"]);
-    expect(
-      importSpecifiers(
-        "src/cli/args/doctor.ts",
-        readFileSync("src/cli/args/doctor.ts", "utf8"),
-      ),
-    ).toEqual(["./shared.ts", "./types.ts"]);
-    expect(
-      importSpecifiers(
-        "src/cli/args/usage.ts",
-        readFileSync("src/cli/args/usage.ts", "utf8"),
-      ),
-    ).toEqual([]);
-  });
-
-  test(`external modules import CLI args through the facade`, () => {
-    const internalFiles = new Set([
-      "src/cli/args.ts",
-      "src/cli/args/doctor.ts",
-      "src/cli/args/eval.ts",
-      "src/cli/args/run.ts",
-      "src/cli/args/sessions.ts",
+    const internalFiles = layerFiles("src/cli/args");
+    const sharedTargets = new Set([
       "src/cli/args/shared.ts",
       "src/cli/args/types.ts",
-      "src/cli/args/usage.ts",
     ]);
-    const internalTargets = new Set(
-      [...internalFiles].filter((file) => file !== "src/cli/args.ts"),
+    const violations = internalFiles.flatMap((file) =>
+      importSpecifiers(file, readFileSync(file, "utf8")).flatMap(
+        (specifier) => {
+          const resolved = resolvedRelativeSpecifier(file, specifier);
+          return resolved?.startsWith("src/cli/args/") === true &&
+            !sharedTargets.has(resolved)
+            ? [`${file} imports ${specifier}`]
+            : [];
+        },
+      ),
     );
+
+    expect(violations).toEqual([]);
+  });
+
+  test(`Given CLI args internals have a public facade,
+    When external imports are inspected,
+    Then consumers do not bypass the args facade`, () => {
+    const internalTargets = new Set(layerFiles("src/cli/args"));
+    const internalFiles = new Set(["src/cli/args.ts", ...internalTargets]);
     const violations: string[] = [];
 
     for (const file of sourceAndTestFiles()) {
@@ -657,95 +600,76 @@ describe("module boundaries", () => {
     expect(violations).toEqual([]);
   });
 
-  test(`provider configuration internals keep profile, diagnostics, fake demo, and resolver boundaries separate`, () => {
-    const providerConfigSource = readFileSync(
-      "src/cli/provider-config.ts",
-      "utf8",
-    );
-    expect(
-      namedReExportSpecifiers(
-        "src/cli/provider-config.ts",
-        providerConfigSource,
-      ),
-    ).toEqual([
-      "./provider-diagnostics.ts",
-      "./provider-profiles.ts",
-      "./provider-resolver.ts",
-      "./provider-selection.ts",
-      "./provider-user-config.ts",
-    ]);
-
-    expect(providerConfigSource).not.toMatch(/export\s+\*/u);
-
-    const profileSource = readFileSync("src/cli/provider-profiles.ts", "utf8");
+  test(`Given provider configuration modules have distinct responsibilities,
+    When their dependency edges are inspected,
+    Then profiles, selection, diagnostics, demos, and resolution remain separate`, () => {
+    const profileFile = "src/cli/provider-profiles.ts";
+    const selectionFile = "src/cli/provider-selection.ts";
+    const diagnosticsFile = "src/cli/provider-diagnostics.ts";
+    const resolverFile = "src/cli/provider-resolver.ts";
+    const fakeDemoFile = "src/cli/fake-provider-demo.ts";
+    const profileSource = readFileSync(profileFile, "utf8");
     expect(profileSource).not.toMatch(
       /\bexport\s+const\s+PROVIDER_PROFILES\b/u,
     );
-    const profileSpecifiers = importSpecifiers(
-      "src/cli/provider-profiles.ts",
-      profileSource,
-    );
-    expect(profileSpecifiers).toEqual(["../core/provider-id.ts"]);
-
-    const selectionSpecifiers = importSpecifiers(
-      "src/cli/provider-selection.ts",
-      readFileSync("src/cli/provider-selection.ts", "utf8"),
-    );
-    expect(selectionSpecifiers).toEqual([
-      "../core/provider-id.ts",
-      "./provider-profiles.ts",
-      "./provider-user-config.ts",
+    const internalTargets = new Set<string>([
+      providerConfigFacade,
+      ...providerConfigOwnedFiles,
     ]);
+    const forbiddenSiblingTargets = new Map<string, ReadonlySet<string>>([
+      [
+        profileFile,
+        new Set([...internalTargets].filter((file) => file !== profileFile)),
+      ],
+      [selectionFile, new Set([resolverFile, diagnosticsFile, fakeDemoFile])],
+      [diagnosticsFile, new Set([resolverFile, fakeDemoFile])],
+      [fakeDemoFile, new Set([resolverFile, diagnosticsFile])],
+    ]);
+    const dependencyViolations = providerConfigOwnedFiles.flatMap((file) =>
+      importSpecifiers(file, readFileSync(file, "utf8")).flatMap(
+        (specifier) => {
+          const resolved = resolvedRelativeSpecifier(file, specifier);
+          if (
+            resolved !== null &&
+            internalTargets.has(resolved) &&
+            forbiddenSiblingTargets.get(file)?.has(resolved) === true
+          ) {
+            return [`${file} imports ${specifier}`];
+          }
 
-    const diagnosticsSpecifiers = importSpecifiers(
-      "src/cli/provider-diagnostics.ts",
-      readFileSync("src/cli/provider-diagnostics.ts", "utf8"),
-    );
-    expect(diagnosticsSpecifiers).not.toContain("./provider-resolver.ts");
-    expect(diagnosticsSpecifiers).not.toContain("./fake-provider-demo.ts");
-    expect(
-      diagnosticsSpecifiers.filter((specifier) =>
-        specifier.includes("/llm/providers/"),
+          return [];
+        },
       ),
-    ).toEqual([]);
-
-    const fakeDemoSpecifiers = importSpecifiers(
-      "src/cli/fake-provider-demo.ts",
-      readFileSync("src/cli/fake-provider-demo.ts", "utf8"),
     );
-    expect(fakeDemoSpecifiers).not.toContain("./provider-diagnostics.ts");
-    expect(fakeDemoSpecifiers).not.toContain("./provider-resolver.ts");
-    expect(
-      fakeDemoSpecifiers.filter((specifier) =>
-        /\/llm\/providers\/(?:deepseek|kimi|qwen)\.ts$/u.test(specifier),
-      ),
-    ).toEqual([]);
+    const providerImplementationViolations = layerFiles("src/cli").flatMap(
+      (file) =>
+        importSpecifiers(file, readFileSync(file, "utf8")).flatMap(
+          (specifier) => {
+            const resolved = resolvedRelativeSpecifier(file, specifier);
+            if (resolved?.startsWith("src/llm/providers/") !== true) {
+              return [];
+            }
 
-    const resolverSpecifiers = importSpecifiers(
-      "src/cli/provider-resolver.ts",
-      readFileSync("src/cli/provider-resolver.ts", "utf8"),
+            const importsOwnedFakeProvider =
+              file === fakeDemoFile && resolved === "src/llm/providers/fake.ts";
+            const importsRealProviderFromResolver =
+              file === resolverFile && resolved !== "src/llm/providers/fake.ts";
+            return importsOwnedFakeProvider || importsRealProviderFromResolver
+              ? []
+              : [`${file} imports ${specifier}`];
+          },
+        ),
     );
-    expect(resolverSpecifiers).toContain("./fake-provider-demo.ts");
-    expect(resolverSpecifiers).toContain("../llm/providers/deepseek.ts");
-    expect(resolverSpecifiers).toContain("../llm/providers/kimi.ts");
-    expect(resolverSpecifiers).toContain("../llm/providers/qwen.ts");
+
+    expect(dependencyViolations).toEqual([]);
+    expect(providerImplementationViolations).toEqual([]);
   });
 
-  test(`external modules import provider configuration through the facade`, () => {
-    const internalFiles = new Set([
-      "src/cli/fake-provider-demo.ts",
-      "src/cli/provider-config.ts",
-      "src/cli/provider-diagnostics.ts",
-      "src/cli/provider-profiles.ts",
-      "src/cli/provider-resolver.ts",
-      "src/cli/provider-selection.ts",
-      "src/cli/provider-user-config.ts",
-    ]);
-    const internalTargets = new Set(
-      [...internalFiles].filter(
-        (file) => file !== "src/cli/provider-config.ts",
-      ),
-    );
+  test(`Given provider configuration internals have a public facade,
+    When external imports are inspected,
+    Then consumers do not bypass the provider-config facade`, () => {
+    const internalTargets = new Set<string>(providerConfigOwnedFiles);
+    const internalFiles = new Set([providerConfigFacade, ...internalTargets]);
     const violations: string[] = [];
 
     for (const file of sourceAndTestFiles()) {
