@@ -180,6 +180,9 @@ describe("File Editing Post-Compaction Read Restore", () => {
           role: "tool",
           toolCallId: "post_compaction_read_0",
           content: "visible note\n",
+          resourceObservation: expect.objectContaining({
+            kind: "read_projection",
+          }),
         },
       ]);
       expect(readVisibility.hasRead(noteTargetPath)).toBe(true);
@@ -841,6 +844,9 @@ describe("File Editing Post-Compaction Read Restore", () => {
           role: "tool",
           toolCallId: "post_compaction_read_1",
           content: "keep current\n",
+          resourceObservation: expect.objectContaining({
+            kind: "read_projection",
+          }),
         },
       ]);
       expect(readVisibility.hasRead(keepTargetPath)).toBe(true);

@@ -633,7 +633,7 @@ describe("Interactive Session - Goals", () => {
         "Bash is disabled in this run, so you cannot run the command completion criterion yourself.",
       );
       expect(providerPrompts[0]).not.toContain(
-        "Before proposing completion, run the command completion criterion with bash",
+        "Runtime will run the exact configured command at the completion boundary",
       );
       expect(providerMessages).toEqual([
         [{ role: "user", content: "continue with the next fix" }],
@@ -2097,12 +2097,12 @@ describe("Interactive Session - Goals", () => {
           command: 'node -e "process.exit(0)"',
           cwd: workspace,
           exitCode: 0,
-          freshness: "after_latest_workspace_mutation",
+          freshness: "at_completion",
         },
         latestRuntimeOutcome: {
           kind: "completed",
           reason:
-            'Completion command "node -e \\"process.exit(0)\\"" exited 0 after the latest workspace mutation.',
+            'Completion command "node -e \\"process.exit(0)\\"" exited 0 at the completion boundary.',
         },
       });
       expect(stdout).toContain("Goal finished.\n");
@@ -2110,10 +2110,10 @@ describe("Interactive Session - Goals", () => {
         '  goal: completed - Finish the checkout goal; criterion(command): node -e "process.exit(0)"\n',
       );
       expect(stdout).toContain(
-        '  goal outcome: completed - Completion command "node -e \\"process.exit(0)\\"" exited 0 after the latest workspace mutation.',
+        '  goal outcome: completed - Completion command "node -e \\"process.exit(0)\\"" exited 0 at the completion boundary.',
       );
       expect(stdout).toContain(
-        `  goal evidence: node -e "process.exit(0)" exited 0 after the latest workspace mutation in ${workspace}`,
+        `  goal evidence: node -e "process.exit(0)" exited 0 at the completion boundary in ${workspace}`,
       );
       expect(stderr).toBe("");
     } finally {

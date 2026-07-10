@@ -94,7 +94,11 @@ describe("CLI File Editing", () => {
       expect(transcript).not.toContain("env-secret-213");
       expect(transcript).not.toContain(githubToken);
       expect(transcript).not.toContain(googleApiKey);
+      expect(transcript).not.toContain("read_projection");
       expect(transcript).toContain("[REDACTED_SECRET]");
+      expect(JSON.stringify(capturedBodies[1])).not.toContain(
+        "read_projection",
+      );
       const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
       const liveToolMessage = secondRequest.messages?.find(
         (message) =>

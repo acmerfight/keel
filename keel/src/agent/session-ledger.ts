@@ -1,3 +1,4 @@
+import { copyReadResourceObservation } from "../core/resource-observation.ts";
 import type { Message } from "../llm/types.ts";
 
 interface SessionMessageEntry {
@@ -49,16 +50,58 @@ export function appendSessionLedgerMessages(
 export function projectSessionLedgerToProviderMessages(
   ledger: SessionLedger,
 ): readonly Message[] {
+  return ledger.entries.map((entry) =>
+    projectSessionMessageToProvider(entry.message),
+  );
+}
+
+export function projectSessionMessageToProvider(message: Message): Message {
+  if (message.role !== "tool" || message.resourceObservation === undefined) {
+    return message;
+  }
+  return {
+    role: "tool",
+    toolCallId: message.toolCallId,
+    content: message.content,
+    ...(message.sourceTruncated !== undefined
+      ? { sourceTruncated: message.sourceTruncated }
+      : {}),
+  };
+}
+
+export function sessionLedgerMessages(
+  ledger: SessionLedger,
+): readonly Message[] {
   return ledger.entries.map((entry) => entry.message);
+}
+
+export function restoreSessionResourceObservations(
+  targetMessages: Message[],
+  sourceMessages: readonly Message[],
+): void {
+  const observations = new Map(
+    sourceMessages.flatMap((message) =>
+      message.role === "tool" && message.resourceObservation !== undefined
+        ? [[message.toolCallId, message.resourceObservation] as const]
+        : [],
+    ),
+  );
+  for (const [index, message] of targetMessages.entries()) {
+    if (message.role !== "tool" || message.resourceObservation !== undefined) {
+      continue;
+    }
+    const observation = observations.get(message.toolCallId);
+    if (observation === undefined) continue;
+    targetMessages[index] = {
+      ...message,
+      resourceObservation: copyReadResourceObservation(observation),
+    };
+  }
 }
 
 export function syncMessagesFromSessionLedger(
   target: Message[],
   ledger: SessionLedger,
 ): void {
-  target.splice(
-    0,
-    target.length,
-    ...projectSessionLedgerToProviderMessages(ledger),
-  );
+  target.splice(0, target.length, ...sessionLedgerMessages(ledger));
 }

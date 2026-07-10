@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { projectSessionMessageToProvider } from "../agent/session-ledger.ts";
 import type { Message } from "../llm/types.ts";
 import {
   redactMessageForPersistence,
@@ -43,7 +44,9 @@ export function writeRunTranscript(
     },
     ...input.messages.map((message) => ({
       type: "message" as const,
-      message: redactMessageForPersistence(message),
+      message: redactMessageForPersistence(
+        projectSessionMessageToProvider(message),
+      ),
     })),
   ];
   writeFileSync(

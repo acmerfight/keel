@@ -1,3 +1,4 @@
+import { copyReadResourceObservation } from "../core/resource-observation.ts";
 import type {
   AssistantProviderMetadata,
   Message,
@@ -136,6 +137,13 @@ export function redactMessageForPersistence(message: Message): Message {
         content: redactTextForPersistence(message.content),
         ...(message.sourceTruncated !== undefined
           ? { sourceTruncated: message.sourceTruncated }
+          : {}),
+        ...(message.resourceObservation !== undefined
+          ? {
+              resourceObservation: copyReadResourceObservation(
+                message.resourceObservation,
+              ),
+            }
           : {}),
       };
   }
