@@ -139,6 +139,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
     };
     const provider: LLMProvider = {
       id: "goal-progress-provider",
@@ -225,6 +227,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
     };
@@ -282,6 +286,8 @@ describe("Task Progress", () => {
         goal: {
           objective: "Finish the durable session goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           blockedAudit: {
@@ -296,6 +302,8 @@ describe("Task Progress", () => {
         goal: {
           objective: "Finish the durable session goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           blockedAudit: {
@@ -310,6 +318,8 @@ describe("Task Progress", () => {
         goal: {
           objective: "Finish the durable session goal",
           status: "blocked",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: "The user still has not provided credentials.",
           criterionKind: "command",
           completionCriterion: "pnpm test",
@@ -356,6 +366,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
     };
@@ -422,6 +434,8 @@ describe("Task Progress", () => {
           goal: {
             objective: "Finish the durable session goal",
             status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             criterionKind: "command",
             completionCriterion: "pnpm test",
             blockedAudit: {
@@ -541,6 +555,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
       blockedAudit: {
@@ -603,6 +619,8 @@ describe("Task Progress", () => {
         goal: {
           objective: "Finish the durable session goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -613,6 +631,8 @@ describe("Task Progress", () => {
         goal: {
           objective: "Finish the durable session goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           blockedAudit: {
@@ -645,6 +665,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
       blockedAudit: {
@@ -685,6 +707,8 @@ describe("Task Progress", () => {
         goal: {
           objective: "Finish the durable session goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -712,6 +736,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
       blockedAudit: {
@@ -755,6 +781,8 @@ describe("Task Progress", () => {
         goal: {
           objective: "Finish the durable session goal",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -784,6 +812,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: 'node -e "process.exit(0)"',
     };
@@ -838,6 +868,8 @@ describe("Task Progress", () => {
         goal: {
           objective: "Finish the durable session goal",
           status: "completed",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: 'node -e "process.exit(0)"',
           completionEvidence: {
@@ -909,6 +941,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: 'node -e "process.exit(0)"',
     };
@@ -1011,6 +1045,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Publish the migration notes",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "assertion",
       completionCriterion: "The release notes explain every changed command.",
     };
@@ -1134,6 +1170,8 @@ describe("Task Progress", () => {
         goal: {
           objective: "Publish the migration notes",
           status: "completed",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "assertion",
           completionCriterion:
             "The release notes explain every changed command.",
@@ -1213,6 +1251,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Publish the migration notes",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "assertion",
       completionCriterion: "The release notes explain every changed command.",
     };
@@ -1330,6 +1370,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Publish the migration notes",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "assertion",
       completionCriterion: "The release notes explain every changed command.",
     };
@@ -1446,6 +1488,8 @@ describe("Task Progress", () => {
     const sessionGoal: SessionGoal = {
       objective: "Publish the migration notes",
       status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "assertion",
       completionCriterion: "The release notes explain command-a and command-b.",
     };

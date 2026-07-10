@@ -32,7 +32,7 @@ function redactionExpandingText(maxLength: number): string {
 }
 
 describe("Session Store Goal", () => {
-  test(`Given a session goal is persisted with queued input,
+  test(`Given a budgeted session goal is persisted with queued input and usage,
     When the session is resumed,
     Then the goal is restored and the command input is consumed`, async () => {
     // Given
@@ -58,6 +58,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Fix checkout tests",
           status: "active",
+          budget: { turns: 12, tokens: 50_000, activeTimeMs: 600_000 },
+          usage: { turns: 3, tokens: 8_200, activeTimeMs: 91_000 },
           criterionKind: "command",
           completionCriterion: " pnpm   test ",
         },
@@ -74,6 +76,8 @@ describe("Session Store Goal", () => {
       expect(resumed.goal).toEqual({
         objective: "Fix checkout tests",
         status: "active",
+        budget: { turns: 12, tokens: 50_000, activeTimeMs: 600_000 },
+        usage: { turns: 3, tokens: 8_200, activeTimeMs: 91_000 },
         criterionKind: "command",
         completionCriterion: "pnpm   test",
       });
@@ -89,6 +93,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Fix checkout tests",
           status: "active",
+          budget: { turns: 12, tokens: 50_000, activeTimeMs: 600_000 },
+          usage: { turns: 3, tokens: 8_200, activeTimeMs: 91_000 },
           criterionKind: "command",
           completionCriterion: "pnpm   test",
         },
@@ -120,6 +126,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Publish release notes",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "assertion",
           completionCriterion: " release   notes\ncover every changed command ",
         },
@@ -135,6 +143,8 @@ describe("Session Store Goal", () => {
       expect(resumed.goal).toEqual({
         objective: "Publish release notes",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "assertion",
         completionCriterion: "release notes cover every changed command",
       });
@@ -164,6 +174,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Fix checkout tests",
           status: "completed",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           completionEvidence: {
@@ -186,6 +198,8 @@ describe("Session Store Goal", () => {
       expect(resumed.goal).toEqual({
         objective: "Fix checkout tests",
         status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "command",
         completionCriterion: "pnpm test",
         completionEvidence: {
@@ -207,6 +221,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Fix checkout tests",
           status: "completed",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           completionEvidence: {
@@ -244,6 +260,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Publish release notes",
           status: "completed",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "assertion",
           completionCriterion: "release notes explain the command",
           completionEvidence: {
@@ -263,6 +281,8 @@ describe("Session Store Goal", () => {
       expect(resumed.goal).toEqual({
         objective: "Publish release notes",
         status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "assertion",
         completionCriterion: "release notes explain the command",
         completionEvidence: {
@@ -299,6 +319,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Publish release notes",
           status: "completed",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "assertion",
           completionCriterion: "release notes explain the command",
           completionEvidence: {
@@ -360,6 +382,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Finish lifecycle states",
           status: "paused",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -370,6 +394,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Finish lifecycle states",
           status: "blocked",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: " Need credentials\nfrom the user. ",
           criterionKind: "command",
           completionCriterion: "pnpm test",
@@ -381,6 +407,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Finish lifecycle states",
           status: "usage_limited",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: " Automatic continuation stopped. ",
           criterionKind: "command",
           completionCriterion: "pnpm test",
@@ -392,6 +420,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Finish lifecycle states",
           status: "budget_limited",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: " Session budget stopped continuation. ",
           criterionKind: "command",
           completionCriterion: "pnpm test",
@@ -408,6 +438,8 @@ describe("Session Store Goal", () => {
       expect(resumed.goal).toEqual({
         objective: "Finish lifecycle states",
         status: "budget_limited",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Session budget stopped continuation.",
         criterionKind: "command",
         completionCriterion: "pnpm test",
@@ -421,6 +453,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Finish lifecycle states",
           status: "paused",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -430,6 +464,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Finish lifecycle states",
           status: "blocked",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: "Need credentials from the user.",
           criterionKind: "command",
           completionCriterion: "pnpm test",
@@ -440,6 +476,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Finish lifecycle states",
           status: "usage_limited",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: "Automatic continuation stopped.",
           criterionKind: "command",
           completionCriterion: "pnpm test",
@@ -450,6 +488,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Finish lifecycle states",
           status: "budget_limited",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: "Session budget stopped continuation.",
           criterionKind: "command",
           completionCriterion: "pnpm test",
@@ -481,6 +521,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Finish blocked audit",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           blockedAudit: {
@@ -500,6 +542,8 @@ describe("Session Store Goal", () => {
       expect(resumed.goal).toEqual({
         objective: "Finish blocked audit",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "command",
         completionCriterion: "pnpm test",
         blockedAudit: {
@@ -516,6 +560,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Finish blocked audit",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
           blockedAudit: {
@@ -551,6 +597,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Keep the checkout suite green",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test:coverage",
         },
@@ -575,6 +623,8 @@ describe("Session Store Goal", () => {
       expect(resumed.goal).toEqual({
         objective: "Keep the checkout suite green",
         status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "command",
         completionCriterion: "pnpm test:coverage",
       });
@@ -587,6 +637,8 @@ describe("Session Store Goal", () => {
         goal: {
           objective: "Keep the checkout suite green",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test:coverage",
         },
@@ -612,7 +664,12 @@ describe("Session Store Goal", () => {
       });
       persistSessionGoal({
         session,
-        goal: { objective: "Remove stale goal", status: "active" },
+        goal: {
+          objective: "Remove stale goal",
+          status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        },
         runtime: runtime(home, 1),
       });
 
@@ -663,7 +720,12 @@ describe("Session Store Goal", () => {
       expect(() =>
         persistSessionGoal({
           session,
-          goal: { objective: "   ", status: "active" },
+          goal: {
+            objective: "   ",
+            status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+          },
           runtime: runtime(home, 1),
         }),
       ).toThrow("Error: /goal requires non-empty text.");
@@ -673,6 +735,8 @@ describe("Session Store Goal", () => {
           goal: {
             objective: "x".repeat(SESSION_GOAL_OBJECTIVE_MAX_LENGTH + 1),
             status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           },
           runtime: runtime(home, 2),
         }),
@@ -685,6 +749,8 @@ describe("Session Store Goal", () => {
           goal: {
             objective: "Verify command",
             status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             criterionKind: "command",
             completionCriterion: "   ",
           },
@@ -697,6 +763,8 @@ describe("Session Store Goal", () => {
           goal: {
             objective: "Verify command",
             status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             criterionKind: "assertion",
             completionCriterion: "x".repeat(
               SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH + 1,
@@ -713,6 +781,8 @@ describe("Session Store Goal", () => {
           goal: {
             objective: "Blocked command",
             status: "blocked",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             statusReason: "   ",
           },
           runtime: runtime(home, 5),
@@ -724,6 +794,8 @@ describe("Session Store Goal", () => {
           goal: {
             objective: "Blocked command",
             status: "blocked",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             statusReason: "x".repeat(SESSION_GOAL_STATUS_REASON_MAX_LENGTH + 1),
           },
           runtime: runtime(home, 6),
@@ -737,6 +809,8 @@ describe("Session Store Goal", () => {
           goal: {
             objective: "Blocked audit",
             status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             blockedAudit: {
               consecutiveCount: 1,
               reason: "   ",
@@ -751,6 +825,8 @@ describe("Session Store Goal", () => {
           goal: {
             objective: "Blocked audit",
             status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             blockedAudit: {
               consecutiveCount: 1,
               reason: "x".repeat(SESSION_GOAL_STATUS_REASON_MAX_LENGTH + 1),
@@ -768,6 +844,8 @@ describe("Session Store Goal", () => {
             JSON.stringify({
               objective: "Completed without evidence",
               status: "completed",
+              budget: {},
+              usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             }),
           ),
           runtime: runtime(home, 9),
@@ -780,6 +858,8 @@ describe("Session Store Goal", () => {
             JSON.stringify({
               objective: "Completed with blank evidence command",
               status: "completed",
+              budget: {},
+              usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
               completionEvidence: {
                 kind: "command",
                 command: "   ",
@@ -799,6 +879,8 @@ describe("Session Store Goal", () => {
             JSON.stringify({
               objective: "Completed with long evidence command",
               status: "completed",
+              budget: {},
+              usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
               completionEvidence: {
                 kind: "command",
                 command: "x".repeat(
@@ -822,6 +904,8 @@ describe("Session Store Goal", () => {
             JSON.stringify({
               objective: "Completed with blank evidence cwd",
               status: "completed",
+              budget: {},
+              usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
               completionEvidence: {
                 kind: "command",
                 command: "pnpm test",
@@ -841,6 +925,8 @@ describe("Session Store Goal", () => {
             JSON.stringify({
               objective: "Completed with long evidence cwd",
               status: "completed",
+              budget: {},
+              usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
               completionEvidence: {
                 kind: "command",
                 command: "pnpm test",
@@ -862,6 +948,8 @@ describe("Session Store Goal", () => {
             JSON.stringify({
               objective: "Completed with blank evaluator reason",
               status: "completed",
+              budget: {},
+              usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
               completionEvidence: {
                 kind: "assertion_evaluator",
                 reason: "   ",
@@ -878,6 +966,8 @@ describe("Session Store Goal", () => {
             JSON.stringify({
               objective: "Completed with long evaluator reason",
               status: "completed",
+              budget: {},
+              usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
               completionEvidence: {
                 kind: "assertion_evaluator",
                 reason: "x".repeat(

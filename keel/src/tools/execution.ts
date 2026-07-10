@@ -16,6 +16,7 @@ import {
   normalizeSessionGoalStatusReason,
   type SessionGoal,
   type SessionGoalBlockedAuditCount,
+  sessionGoalAccounting,
 } from "../core/session-goal.ts";
 import {
   formatSessionTaskProgressToolResult,
@@ -237,6 +238,7 @@ async function executeUpdateGoalTool(
         objective: sessionGoal.objective,
         status: "blocked",
         statusReason: blockedReason,
+        ...sessionGoalAccounting(sessionGoal),
         ...(sessionGoal.criterionKind !== undefined &&
         sessionGoal.completionCriterion !== undefined
           ? {
@@ -256,6 +258,7 @@ async function executeUpdateGoalTool(
     const blockedProposalGoal = {
       objective: sessionGoal.objective,
       status: "active",
+      ...sessionGoalAccounting(sessionGoal),
       blockedAudit: {
         consecutiveCount,
         reason: blockedReason,
@@ -312,6 +315,7 @@ async function executeUpdateGoalTool(
     const completedGoal: SessionGoal = {
       objective: sessionGoal.objective,
       status: "completed",
+      ...sessionGoalAccounting(sessionGoal),
       criterionKind: sessionGoal.criterionKind,
       completionCriterion: sessionGoal.completionCriterion,
       completionEvidence: {
@@ -373,6 +377,7 @@ async function executeUpdateGoalTool(
   const completedGoal: SessionGoal = {
     objective: sessionGoal.objective,
     status: "completed",
+    ...sessionGoalAccounting(sessionGoal),
     criterionKind: sessionGoal.criterionKind,
     completionCriterion: sessionGoal.completionCriterion,
     completionEvidence: {

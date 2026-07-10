@@ -17,10 +17,15 @@ import {
   restoreUndoCheckpointsThrough,
 } from "../core/git.ts";
 import {
+  accountSessionGoalTurn,
   activeSessionGoalSystemPrompt,
   copySessionGoal,
+  emptySessionGoalBudget,
+  emptySessionGoalUsage,
+  formatSessionGoalBudgetLimitReason,
   formatSessionGoalSummary,
   type SessionGoal,
+  sessionGoalAccounting,
 } from "../core/session-goal.ts";
 import {
   copySessionTaskProgress,
@@ -54,6 +59,9 @@ import {
   formatGoalRequiresSavedSession,
   formatInteractiveCommandFailure,
   formatInteractiveGoal,
+  formatInteractiveGoalBudget,
+  formatInteractiveGoalBudgetCleared,
+  formatInteractiveGoalBudgetUpdated,
   formatInteractiveGoalCleared,
   formatInteractiveGoalCompleted,
   formatInteractiveGoalCriterionSet,
@@ -279,6 +287,7 @@ function resolveSelectedProvider(
 export async function runInteractiveSession(
   options: InteractiveSessionOptions,
 ): Promise<InteractiveSessionResult> {
+  const now = options.now ?? Date.now;
   const systemPrompt = buildAgentSystemPrompt({
     workspace: options.workspace,
     platform: options.platform,
@@ -597,12 +606,14 @@ export async function runInteractiveSession(
             objective: activeGoal.objective,
             status: "budget_limited",
             statusReason: reason,
+            ...sessionGoalAccounting(activeGoal),
             ...criterion,
           }
         : {
             objective: activeGoal.objective,
             status: "usage_limited",
             statusReason: reason,
+            ...sessionGoalAccounting(activeGoal),
             ...criterion,
           };
     updateSessionGoal(limitedGoal);
@@ -622,6 +633,7 @@ export async function runInteractiveSession(
   const runPromptTurn = async (
     request: PromptTurnRequest,
   ): Promise<PromptTurnResult> => {
+    const goalTurnStartedAt = sessionGoal?.status === "active" ? now() : null;
     resolved = resolveActiveProvider(request.userMessage);
     const messagesBeforeTurn = messages.slice();
     const taskProgressBeforeTurn = copySessionTaskProgress(taskProgress);
@@ -781,6 +793,30 @@ export async function runInteractiveSession(
         }
       }
       options.writeStdout("\n");
+      if (goalTurnStartedAt !== null && sessionGoal !== undefined) {
+        const accountedGoal = accountSessionGoalTurn(sessionGoal, {
+          tokens:
+            (finalEnd?.usage.inputTokens ?? 0) +
+            (finalEnd?.usage.outputTokens ?? 0),
+          activeTimeMs: Math.max(0, Math.floor(now() - goalTurnStartedAt)),
+        });
+        updateSessionGoal(accountedGoal);
+        const budgetLimitReason =
+          accountedGoal.status === "active"
+            ? formatSessionGoalBudgetLimitReason(accountedGoal)
+            : null;
+        if (budgetLimitReason !== null) {
+          limitActiveGoal("budget_limited", budgetLimitReason);
+        } else {
+          const persistedAccountedGoal = options.persistSessionGoal?.({
+            goal: accountedGoal,
+            consumedInputIds: [],
+          });
+          if (persistedAccountedGoal !== undefined) {
+            updateSessionGoal(persistedAccountedGoal);
+          }
+        }
+      }
       const cumulativeCost =
         finalEnd === undefined ? undefined : recordTurnEnd(finalEnd);
       if (
@@ -968,6 +1004,10 @@ export async function runInteractiveSession(
             options.writeStdout(formatInteractiveGoal(sessionGoal));
             consumeQueuedInputLines([rawInput]);
             break;
+          case "show_budget":
+            options.writeStdout(formatInteractiveGoalBudget(sessionGoal));
+            consumeQueuedInputLines([rawInput]);
+            break;
           case "set": {
             if (options.persistSessionGoal === undefined) {
               options.writeStderr(formatGoalRequiresSavedSession());
@@ -978,6 +1018,8 @@ export async function runInteractiveSession(
               const nextGoal: SessionGoal = {
                 objective: goalCommand.objective,
                 status: "active",
+                budget: emptySessionGoalBudget(),
+                usage: emptySessionGoalUsage(),
               };
               sessionGoal = options.persistSessionGoal({
                 goal: nextGoal,
@@ -1012,6 +1054,7 @@ export async function runInteractiveSession(
               const pausedGoal: SessionGoal = {
                 objective: sessionGoal.objective,
                 status: "paused",
+                ...sessionGoalAccounting(sessionGoal),
                 ...(sessionGoal.criterionKind !== undefined &&
                 sessionGoal.completionCriterion !== undefined
                   ? {
@@ -1054,10 +1097,20 @@ export async function runInteractiveSession(
               consumeQueuedInputLines([rawInput]);
               break;
             }
+            const budgetLimitReason =
+              formatSessionGoalBudgetLimitReason(sessionGoal);
+            if (budgetLimitReason !== null) {
+              options.writeStderr(
+                `Error: ${budgetLimitReason} Raise or clear the goal budget before resuming.\n`,
+              );
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
             try {
               const resumedGoal: SessionGoal = {
                 objective: sessionGoal.objective,
                 status: "active",
+                ...sessionGoalAccounting(sessionGoal),
                 ...(sessionGoal.criterionKind !== undefined &&
                 sessionGoal.completionCriterion !== undefined
                   ? {
@@ -1071,6 +1124,101 @@ export async function runInteractiveSession(
                 consumedInputIds: queuedInputIds([rawInput]),
               });
               options.writeStdout(formatInteractiveGoalResumed(resumedGoal));
+            } catch (error) {
+              options.writeStderr(formatInteractiveCommandFailure(error));
+              consumeQueuedInputLines([rawInput]);
+            }
+            break;
+          }
+          case "budget": {
+            if (options.persistSessionGoal === undefined) {
+              options.writeStderr(formatGoalRequiresSavedSession());
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (sessionGoal === undefined) {
+              options.writeStderr("Error: no session goal is set.\n");
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (sessionGoal.status === "completed") {
+              options.writeStderr(
+                "Error: completed session goals cannot change budgets. Set a new goal first.\n",
+              );
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            try {
+              let budgetedGoal: SessionGoal = {
+                ...copySessionGoal(sessionGoal),
+                budget: {
+                  ...sessionGoal.budget,
+                  ...goalCommand.budget,
+                },
+              };
+              if (budgetedGoal.status === "active") {
+                const reason = formatSessionGoalBudgetLimitReason(budgetedGoal);
+                if (reason !== null) {
+                  const criterion =
+                    budgetedGoal.criterionKind !== undefined &&
+                    budgetedGoal.completionCriterion !== undefined
+                      ? {
+                          criterionKind: budgetedGoal.criterionKind,
+                          completionCriterion: budgetedGoal.completionCriterion,
+                        }
+                      : {};
+                  budgetedGoal = {
+                    objective: budgetedGoal.objective,
+                    status: "budget_limited",
+                    statusReason: reason,
+                    ...sessionGoalAccounting(budgetedGoal),
+                    ...criterion,
+                  };
+                }
+              }
+              sessionGoal = options.persistSessionGoal({
+                goal: budgetedGoal,
+                consumedInputIds: queuedInputIds([rawInput]),
+              });
+              options.writeStdout(
+                formatInteractiveGoalBudgetUpdated(budgetedGoal),
+              );
+            } catch (error) {
+              options.writeStderr(formatInteractiveCommandFailure(error));
+              consumeQueuedInputLines([rawInput]);
+            }
+            break;
+          }
+          case "clear_budget": {
+            if (options.persistSessionGoal === undefined) {
+              options.writeStderr(formatGoalRequiresSavedSession());
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (sessionGoal === undefined) {
+              options.writeStderr("Error: no session goal is set.\n");
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            if (sessionGoal.status === "completed") {
+              options.writeStderr(
+                "Error: completed session goals cannot change budgets. Set a new goal first.\n",
+              );
+              consumeQueuedInputLines([rawInput]);
+              break;
+            }
+            try {
+              const clearedGoal: SessionGoal = {
+                ...copySessionGoal(sessionGoal),
+                budget: emptySessionGoalBudget(),
+              };
+              sessionGoal = options.persistSessionGoal({
+                goal: clearedGoal,
+                consumedInputIds: queuedInputIds([rawInput]),
+              });
+              options.writeStdout(
+                formatInteractiveGoalBudgetCleared(clearedGoal),
+              );
             } catch (error) {
               options.writeStderr(formatInteractiveCommandFailure(error));
               consumeQueuedInputLines([rawInput]);
@@ -1093,6 +1241,7 @@ export async function runInteractiveSession(
                 objective: sessionGoal.objective,
                 status: "completed",
                 completionEvidence: { kind: "user_override" },
+                ...sessionGoalAccounting(sessionGoal),
                 ...(sessionGoal.criterionKind !== undefined &&
                 sessionGoal.completionCriterion !== undefined
                   ? {
@@ -1136,6 +1285,7 @@ export async function runInteractiveSession(
               const verifiedGoal = {
                 objective: sessionGoal.objective,
                 status: "active",
+                ...sessionGoalAccounting(sessionGoal),
                 criterionKind: "command",
                 completionCriterion: goalCommand.command,
               } satisfies SessionGoal & {
@@ -1181,6 +1331,7 @@ export async function runInteractiveSession(
               const goalWithCriterion = {
                 objective: sessionGoal.objective,
                 status: "active",
+                ...sessionGoalAccounting(sessionGoal),
                 criterionKind: goalCommand.criterionKind,
                 completionCriterion: goalCommand.criterion,
               } satisfies SessionGoal;

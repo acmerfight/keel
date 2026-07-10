@@ -245,6 +245,8 @@ describe("CLI Tool Progress", () => {
         goal: {
           objective: "Finish checkout",
           status: "completed",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           completionEvidence: { kind: "user_override" },
         },
       };
@@ -277,6 +279,8 @@ describe("CLI Tool Progress", () => {
         goal: {
           objective: "Continue checkout",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
@@ -309,6 +313,8 @@ describe("CLI Tool Progress", () => {
         goal: {
           objective: "Finish checkout",
           status: "completed",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           completionEvidence: { kind: "user_override" },
         },
       };
@@ -342,6 +348,8 @@ describe("CLI Tool Progress", () => {
         goal: {
           objective: "Continue checkout",
           status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },

@@ -13,6 +13,7 @@ import {
   SESSION_GOAL_STATUS_REASON_MAX_LENGTH,
   type SessionGoal,
   type SessionGoalCompletionEvidence,
+  sessionGoalAccounting,
   sessionGoalSchema,
 } from "../../core/session-goal.ts";
 import {
@@ -839,6 +840,7 @@ function requireSessionGoalCompletionEvidenceForPersistence(
 }
 
 function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
+  const accounting = sessionGoalAccounting(goal);
   const objective = redactBoundedGoalTextForPersistence({
     value: goal.objective,
     normalize: normalizeSessionGoalObjective,
@@ -907,6 +909,7 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       return {
         objective,
         status: "active",
+        ...accounting,
         ...criterion,
         ...(goal.blockedAudit !== undefined && blockedAuditReason !== undefined
           ? {
@@ -921,6 +924,7 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       return {
         objective,
         status: "blocked",
+        ...accounting,
         statusReason: z.string().parse(statusReason),
         ...criterion,
       };
@@ -928,6 +932,7 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       return {
         objective,
         status: "budget_limited",
+        ...accounting,
         statusReason: z.string().parse(statusReason),
         ...criterion,
       };
@@ -935,6 +940,7 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       return {
         objective,
         status: "usage_limited",
+        ...accounting,
         statusReason: z.string().parse(statusReason),
         ...criterion,
       };
@@ -942,12 +948,14 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
       return {
         objective,
         status: "paused",
+        ...accounting,
         ...criterion,
       };
     case "completed":
       return {
         objective,
         status: "completed",
+        ...accounting,
         ...criterion,
         completionEvidence:
           requireSessionGoalCompletionEvidenceForPersistence(
