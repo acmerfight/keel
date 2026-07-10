@@ -48,8 +48,7 @@ type MessageFingerprintCache =
 
 export interface ContextCompactionAccountingSnapshot {
   readonly systemPrompt: string;
-  readonly messageFingerprints: readonly string[];
-  readonly messageFingerprintCache?: readonly MessageFingerprintCache[];
+  readonly messageFingerprintCache: readonly MessageFingerprintCache[];
   readonly requestMetadata: ResolvedContextCompactionRequestMetadata;
   readonly inputTokens: number;
 }
@@ -296,12 +295,8 @@ function captureMessageFingerprintCache(
 
 function cachedMessageFingerprint(
   message: Message,
-  cache: MessageFingerprintCache | undefined,
+  cache: MessageFingerprintCache,
 ): string {
-  if (cache === undefined) {
-    return messageFingerprint(message);
-  }
-
   switch (message.role) {
     case "user":
       return cache.role === "user" && cache.content === message.content
@@ -387,22 +382,16 @@ function estimateRequestTokensFromAccounting(
     accounting.systemPrompt !== systemPrompt ||
     accounting.requestMetadata.toolChoice !== currentMetadata.toolChoice ||
     accounting.requestMetadata.allowBash !== currentMetadata.allowBash ||
-    accounting.messageFingerprints.length > messages.length
+    accounting.messageFingerprintCache.length > messages.length
   ) {
     return null;
   }
 
-  for (const [
-    index,
-    accountedFingerprint,
-  ] of accounting.messageFingerprints.entries()) {
+  for (const [index, cache] of accounting.messageFingerprintCache.entries()) {
     const message = messages[index];
     if (
       message === undefined ||
-      cachedMessageFingerprint(
-        message,
-        accounting.messageFingerprintCache?.[index],
-      ) !== accountedFingerprint
+      cachedMessageFingerprint(message, cache) !== cache.fingerprint
     ) {
       return null;
     }
@@ -411,7 +400,7 @@ function estimateRequestTokensFromAccounting(
   return (
     accounting.inputTokens +
     estimateMessagesTokens(
-      messages.slice(accounting.messageFingerprints.length),
+      messages.slice(accounting.messageFingerprintCache.length),
     )
   );
 }
@@ -435,11 +424,8 @@ export function captureContextCompactionAccountingSnapshot(options: {
   return {
     systemPrompt: options.systemPrompt,
     // Provider usage only maps clearly to the exact completed request shape.
-    // Store stable fingerprints and field-level cache metadata so later checks
-    // detect mutations without rebuilding unchanged historical fingerprints.
-    messageFingerprints: messageFingerprintCache.map(
-      (cache) => cache.fingerprint,
-    ),
+    // Store field-level cache metadata so later checks can validate the prefix
+    // without rebuilding unchanged historical fingerprints.
     messageFingerprintCache,
     requestMetadata: resolvedRequestMetadata(options.requestMetadata),
     inputTokens: options.usage.inputTokens,
