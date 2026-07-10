@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { showToolOutputArtifact } from "../../../src/cli/tool-output-artifacts.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   artifactPaths,
@@ -10,7 +11,6 @@ import {
   mkdtemp,
   readdir,
   rm,
-  runCli,
   stat,
   tmpdir,
   writeFile,
@@ -184,11 +184,17 @@ describe("CLI Tool Output Artifacts", () => {
       expect(compactedToolOutput).toContain(`keel artifacts show ${saved.ref}`);
       expect(compactedToolOutput).toContain(`sha256: ${saved.contentSha256}`);
       expect(compactedToolOutput).not.toContain("REUSABLE_REPORT_PREVIEW_END");
-      const shown = await runCli(["artifacts", "show", saved.ref], {
-        env: { KEEL_HOME: home },
+      const shown = await showToolOutputArtifact({
+        runtime: {
+          env: (key) => (key === "KEEL_HOME" ? home : undefined),
+          now: () => 0,
+        },
+        ref: saved.ref,
       });
-      expect(shown.exitCode).toBe(0);
-      expect(shown.stdout).toContain("savedAt: 1970-01-01T00:00:00.000Z");
+      expect(shown.ok).toBe(true);
+      if (shown.ok) {
+        expect(shown.content).toContain("savedAt: 1970-01-01T00:00:00.000Z");
+      }
     } finally {
       await rm(home, { recursive: true, force: true });
     }
@@ -419,13 +425,19 @@ describe("CLI Tool Output Artifacts", () => {
         omittedChars: expect.any(Number),
       });
 
-      const shown = await runCli(["artifacts", "show", newRef], {
-        env: { KEEL_HOME: home },
+      const shown = await showToolOutputArtifact({
+        runtime: {
+          env: (key) => (key === "KEEL_HOME" ? home : undefined),
+          now: () => 0,
+        },
+        ref: newRef,
       });
-      expect(shown.exitCode).toBe(0);
-      expect(shown.stdout).toContain("toolCallId: read_current_report");
-      expect(shown.stdout).toContain("CURRENT_REPORT_START");
-      expect(shown.stdout).toContain(forgedMarker);
+      expect(shown.ok).toBe(true);
+      if (shown.ok) {
+        expect(shown.content).toContain("toolCallId: read_current_report");
+        expect(shown.content).toContain("CURRENT_REPORT_START");
+        expect(shown.content).toContain(forgedMarker);
+      }
     } finally {
       await rm(home, { recursive: true, force: true });
     }

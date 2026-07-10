@@ -88,31 +88,3 @@ export function oversizedReadFixture(options: {
     "tail beyond the read tool byte budget ".repeat(200),
   ].join("\n");
 }
-
-export function sseData(payload: unknown): string {
-  return `data: ${JSON.stringify(payload)}\n\n`;
-}
-
-export function sseReadToolCalls(
-  calls: readonly { readonly id: string; readonly path: string }[],
-): string {
-  return sseData({
-    choices: [
-      {
-        delta: {
-          tool_calls: calls.map((call, index) => ({
-            index,
-            id: call.id,
-            type: "function",
-            function: {
-              name: "read",
-              arguments: JSON.stringify({ path: call.path }),
-            },
-          })),
-        },
-        finish_reason: null,
-      },
-    ],
-    usage: null,
-  });
-}
