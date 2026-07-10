@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type {
   ProviderConfigRuntime,
@@ -28,6 +31,31 @@ function runtime(env: Record<string, string>): ProviderConfigRuntime {
 }
 
 describe("Provider Config", () => {
+  test(`Given optional provider config lives below a non-directory KEEL_HOME,
+    When provider selection falls back to environment credentials,
+    Then the missing optional config does not block the default provider`, async () => {
+    // Given
+    const parent = await mkdtemp(join(tmpdir(), "keel-provider-config-"));
+    const blockedHome = join(parent, "blocked-home");
+    await writeFile(blockedHome, "not a directory", "utf8");
+
+    try {
+      // When
+      const resolved = resolveProvider(
+        "hello",
+        runtime({
+          KEEL_HOME: blockedHome,
+          DEEPSEEK_API_KEY: "test-key",
+        }),
+      );
+
+      // Then
+      expect(resolved.providerId).toBe("deepseek");
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the fake provider receives the apply patch demo prompt,
     When it streams through the read and patch turns,
     Then it requests apply_patch and reports the final patch reply`, async () => {
