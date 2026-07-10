@@ -3,6 +3,7 @@ import type { AgentEvent, CostReport } from "../agent/events.ts";
 import type { ToolOutputArtifactNotice } from "../agent/tool-output-artifacts.ts";
 import {
   formatSessionGoalCompletionEvidenceSummary,
+  formatSessionGoalRuntimeOutcomeSummary,
   formatSessionGoalSummary,
 } from "../core/session-goal.ts";
 import { formatSessionTaskProgressSummary } from "../core/task-progress.ts";
@@ -239,9 +240,15 @@ export async function printAgentEvents(
       );
     } else if (event.type === "session_goal_updated") {
       const evidence = formatSessionGoalCompletionEvidenceSummary(event.goal);
+      const outcome = formatSessionGoalRuntimeOutcomeSummary(event.goal);
       runtime.writeStderr(
         `Session goal: ${sanitizeStatusLineText(formatSessionGoalSummary(event.goal, { includeCompletionEvidence: false }))}\n`,
       );
+      if (outcome !== null) {
+        runtime.writeStderr(
+          `Session goal outcome: ${sanitizeStatusLineText(outcome)}\n`,
+        );
+      }
       if (evidence !== null) {
         runtime.writeStderr(
           `Session goal evidence: ${sanitizeStatusLineText(evidence)}\n`,
@@ -305,9 +312,15 @@ export async function printStableInteractiveAgentEvents(
         break;
       case "session_goal_updated": {
         const evidence = formatSessionGoalCompletionEvidenceSummary(event.goal);
+        const outcome = formatSessionGoalRuntimeOutcomeSummary(event.goal);
         runtime.writeStatusLine(
           `Session goal: ${sanitizeStatusLineText(formatSessionGoalSummary(event.goal, { includeCompletionEvidence: false }))}`,
         );
+        if (outcome !== null) {
+          runtime.writeStatusLine(
+            `Session goal outcome: ${sanitizeStatusLineText(outcome)}`,
+          );
+        }
         if (evidence !== null) {
           runtime.writeStatusLine(
             `Session goal evidence: ${sanitizeStatusLineText(evidence)}`,

@@ -575,6 +575,10 @@ describe("CLI Main - Interactive Entrypoint", () => {
           consecutiveCount: 1,
           reason: "Need credentials from the user.",
         },
+        latestRuntimeOutcome: {
+          kind: "blocker_audit",
+          reason: "Blocked audit 1/3 recorded: Need credentials from the user.",
+        },
       });
       expect(goalRecords).not.toContainEqual(
         expect.objectContaining({
@@ -585,6 +589,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
         [
           "Tool: update_goal\n",
           "Session goal: active - Finish the durable session goal; criterion(command): pnpm test; blocked audit: 1/3 - Need credentials from the user.\n",
+          "Session goal outcome: blocker audit - Blocked audit 1/3 recorded: Need credentials from the user.\n",
           "Tool: update_goal\n",
           "Tool failed: update_goal\n",
           "Tool: update_goal\n",
@@ -722,6 +727,10 @@ describe("CLI Main - Interactive Entrypoint", () => {
           consecutiveCount: 1,
           reason: "Need credentials from the user.",
         },
+        latestRuntimeOutcome: {
+          kind: "blocker_audit",
+          reason: "Blocked audit 1/3 recorded: Need credentials from the user.",
+        },
       });
       expect(goals).toContainEqual({
         objective: "Finish the durable session goal",
@@ -730,6 +739,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
         usage: { turns: 2, tokens: 52, activeTimeMs: expect.any(Number) },
         criterionKind: "command",
         completionCriterion: "pnpm test",
+        latestRuntimeOutcome: {
+          kind: "progress_observed",
+          reason:
+            "The pending blocker audit cleared after a turn continued without another blocked proposal.",
+        },
       });
       expect(goals.at(-1)).toEqual({
         objective: "Finish the durable session goal",
@@ -742,6 +756,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
           consecutiveCount: 1,
           reason: "Credentials are unavailable again.",
         },
+        latestRuntimeOutcome: {
+          kind: "blocker_audit",
+          reason:
+            "Blocked audit 1/3 recorded: Credentials are unavailable again.",
+        },
       });
       expect(goals).not.toContainEqual(
         expect.objectContaining({ status: "blocked" }),
@@ -750,10 +769,13 @@ describe("CLI Main - Interactive Entrypoint", () => {
         [
           "Tool: update_goal\n",
           "Session goal: active - Finish the durable session goal; criterion(command): pnpm test; blocked audit: 1/3 - Need credentials from the user.\n",
+          "Session goal outcome: blocker audit - Blocked audit 1/3 recorded: Need credentials from the user.\n",
           "Tool: read note.txt\n",
           "Session goal: active - Finish the durable session goal; criterion(command): pnpm test\n",
+          "Session goal outcome: progress observed - The pending blocker audit cleared after a turn continued without another blocked proposal.\n",
           "Tool: update_goal\n",
           "Session goal: active - Finish the durable session goal; criterion(command): pnpm test; blocked audit: 1/3 - Credentials are unavailable again.\n",
+          "Session goal outcome: blocker audit - Blocked audit 1/3 recorded: Credentials are unavailable again.\n",
         ].join(""),
       );
     } finally {
@@ -899,6 +921,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
           cwd: workspace,
           exitCode: 0,
           freshness: "after_latest_workspace_mutation",
+        },
+        latestRuntimeOutcome: {
+          kind: "completed",
+          reason:
+            'Completion command "test -f done.txt" exited 0 after the latest workspace mutation.',
         },
       });
       await expect(readFile(join(workspace, "done.txt"), "utf8")).resolves.toBe(

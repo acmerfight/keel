@@ -180,9 +180,19 @@ describe("Task Progress", () => {
       );
 
       // Then
-      expect(
-        events.some((event) => event.type === "session_goal_updated"),
-      ).toBe(false);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session_goal_updated",
+          goal: expect.objectContaining({
+            status: "active",
+            latestRuntimeOutcome: {
+              kind: "completion_rejected",
+              reason:
+                "Completion was rejected because the active goal has no completion criterion.",
+            },
+          }),
+        }),
+      );
       expect(providerRequests).toHaveLength(2);
       expect(providerRequests[1]).toEqual([
         { role: "user", content: "Finish the durable session goal." },
@@ -294,6 +304,11 @@ describe("Task Progress", () => {
             consecutiveCount: 1,
             reason: "Need credentials from the user.",
           },
+          latestRuntimeOutcome: {
+            kind: "blocker_audit",
+            reason:
+              "Blocked audit 1/3 recorded: Need credentials from the user.",
+          },
         },
       });
       expect(events).toContainEqual({
@@ -310,6 +325,11 @@ describe("Task Progress", () => {
             consecutiveCount: 2,
             reason: "Credentials remain unavailable.",
           },
+          latestRuntimeOutcome: {
+            kind: "blocker_audit",
+            reason:
+              "Blocked audit 2/3 recorded: Credentials remain unavailable.",
+          },
         },
       });
       expect(events).toContainEqual({
@@ -323,6 +343,10 @@ describe("Task Progress", () => {
           statusReason: "The user still has not provided credentials.",
           criterionKind: "command",
           completionCriterion: "pnpm test",
+          latestRuntimeOutcome: {
+            kind: "blocked",
+            reason: "The user still has not provided credentials.",
+          },
         },
       });
       expect(providerRequests).toHaveLength(4);
@@ -441,6 +465,11 @@ describe("Task Progress", () => {
             blockedAudit: {
               consecutiveCount: 1,
               reason: "Need credentials from the user.",
+            },
+            latestRuntimeOutcome: {
+              kind: "blocker_audit",
+              reason:
+                "Blocked audit 1/3 recorded: Need credentials from the user.",
             },
           },
         },
@@ -623,6 +652,11 @@ describe("Task Progress", () => {
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
+          latestRuntimeOutcome: {
+            kind: "progress_observed",
+            reason:
+              "The pending blocker audit cleared after a turn continued without another blocked proposal.",
+          },
         },
       });
       expect(events).toContainEqual({
@@ -638,6 +672,11 @@ describe("Task Progress", () => {
           blockedAudit: {
             consecutiveCount: 1,
             reason: "Credentials are unavailable again.",
+          },
+          latestRuntimeOutcome: {
+            kind: "blocker_audit",
+            reason:
+              "Blocked audit 1/3 recorded: Credentials are unavailable again.",
           },
         },
       });
@@ -711,6 +750,11 @@ describe("Task Progress", () => {
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
+          latestRuntimeOutcome: {
+            kind: "progress_observed",
+            reason:
+              "The pending blocker audit cleared after a turn continued without another blocked proposal.",
+          },
         },
       });
       expect(messages.at(-1)).toEqual({
@@ -785,6 +829,11 @@ describe("Task Progress", () => {
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
           completionCriterion: "pnpm test",
+          latestRuntimeOutcome: {
+            kind: "progress_observed",
+            reason:
+              "The pending blocker audit cleared after a turn continued without another blocked proposal.",
+          },
         },
       });
       expect(events.at(-1)).toEqual({
@@ -878,6 +927,11 @@ describe("Task Progress", () => {
             cwd: workspace,
             exitCode: 0,
             freshness: "after_latest_workspace_mutation",
+          },
+          latestRuntimeOutcome: {
+            kind: "completed",
+            reason:
+              'Completion command "node -e \\"process.exit(0)\\"" exited 0 after the latest workspace mutation.',
           },
         },
       });
@@ -1002,9 +1056,19 @@ describe("Task Progress", () => {
       );
 
       // Then
-      expect(
-        events.some((event) => event.type === "session_goal_updated"),
-      ).toBe(false);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session_goal_updated",
+          goal: expect.objectContaining({
+            status: "active",
+            latestRuntimeOutcome: {
+              kind: "completion_rejected",
+              reason:
+                'Completion was rejected because command criterion "node -e \\"process.exit(0)\\"" became stale after a workspace mutation.',
+            },
+          }),
+        }),
+      );
       expect(providerRequests).toHaveLength(4);
       expect(providerRequests[3]?.at(-1)).toEqual({
         role: "tool",
@@ -1180,6 +1244,11 @@ describe("Task Progress", () => {
             reason:
               "The surfaced notes explicitly cover every changed command.",
           },
+          latestRuntimeOutcome: {
+            kind: "completed",
+            reason:
+              "Assertion evaluator approved completion: The surfaced notes explicitly cover every changed command.",
+          },
         },
       });
       expect(events).toContainEqual(
@@ -1313,9 +1382,18 @@ describe("Task Progress", () => {
       );
 
       // Then
-      expect(
-        events.some((event) => event.type === "session_goal_updated"),
-      ).toBe(false);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session_goal_updated",
+          goal: expect.objectContaining({
+            status: "active",
+            latestRuntimeOutcome: {
+              kind: "completion_rejected",
+              reason: "No surfaced evidence shows command-b is documented.",
+            },
+          }),
+        }),
+      );
       expect(providerRequests).toHaveLength(3);
       expect(providerRequests[1]).toMatchObject({ toolChoice: "none" });
       expect(providerRequests[2]?.messages.at(-1)).toEqual({
@@ -1433,9 +1511,17 @@ describe("Task Progress", () => {
       );
 
       // Then
-      expect(
-        events.some((event) => event.type === "session_goal_updated"),
-      ).toBe(false);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session_goal_updated",
+          goal: expect.objectContaining({
+            status: "active",
+            latestRuntimeOutcome: expect.objectContaining({
+              kind: "completion_rejected",
+            }),
+          }),
+        }),
+      );
       expect(providerRequests).toHaveLength(3);
       expect(providerRequests[1]).toMatchObject({ toolChoice: "none" });
       expect(providerRequests[1]?.messages[0]).toEqual({
@@ -1571,9 +1657,18 @@ describe("Task Progress", () => {
       );
 
       // Then
-      expect(
-        events.some((event) => event.type === "session_goal_updated"),
-      ).toBe(false);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session_goal_updated",
+          goal: expect.objectContaining({
+            status: "active",
+            latestRuntimeOutcome: {
+              kind: "completion_rejected",
+              reason: "Assistant text cannot create trusted tool evidence.",
+            },
+          }),
+        }),
+      );
       expect(providerRequests).toHaveLength(3);
       expect(providerRequests[1]).toMatchObject({ toolChoice: "none" });
       expect(providerRequests[1]?.messages[0]?.content).not.toContain(

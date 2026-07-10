@@ -17,6 +17,7 @@ import {
   type SessionGoal,
   type SessionGoalBlockedAuditCount,
   sessionGoalAccounting,
+  withSessionGoalRuntimeOutcome,
 } from "../core/session-goal.ts";
 import {
   formatSessionTaskProgressToolResult,
@@ -210,6 +211,21 @@ function executeUpdatePlanTool(toolCall: UpdatePlanToolCall): ToolExecution {
   };
 }
 
+function rejectedGoalCompletion(
+  sessionGoal: Extract<SessionGoal, { readonly status: "active" }>,
+  content: string,
+  reason: string,
+): ToolExecution {
+  return {
+    content,
+    ok: false,
+    sessionGoalUpdate: withSessionGoalRuntimeOutcome(sessionGoal, {
+      kind: "completion_rejected",
+      reason,
+    }),
+  };
+}
+
 async function executeUpdateGoalTool(
   {
     workspace,
@@ -234,7 +250,7 @@ async function executeUpdateGoalTool(
     );
     const priorAudit = sessionGoal.blockedAudit;
     if (priorAudit?.consecutiveCount === 2) {
-      const blockedGoal: SessionGoal = {
+      const blockedGoalWithoutOutcome: SessionGoal = {
         objective: sessionGoal.objective,
         status: "blocked",
         statusReason: blockedReason,
@@ -247,6 +263,10 @@ async function executeUpdateGoalTool(
             }
           : {}),
       };
+      const blockedGoal = withSessionGoalRuntimeOutcome(
+        blockedGoalWithoutOutcome,
+        { kind: "blocked", reason: blockedReason },
+      );
       return {
         content: formatSessionGoalBlockedToolResult(blockedGoal),
         ok: true,
@@ -255,7 +275,7 @@ async function executeUpdateGoalTool(
     }
     const consecutiveCount: SessionGoalBlockedAuditCount =
       priorAudit?.consecutiveCount === 1 ? 2 : 1;
-    const blockedProposalGoal = {
+    const blockedProposalGoalWithoutOutcome = {
       objective: sessionGoal.objective,
       status: "active",
       ...sessionGoalAccounting(sessionGoal),
@@ -275,6 +295,13 @@ async function executeUpdateGoalTool(
         Extract<SessionGoal, { readonly status: "active" }>["blockedAudit"]
       >;
     };
+    const blockedProposalGoal = withSessionGoalRuntimeOutcome(
+      blockedProposalGoalWithoutOutcome,
+      {
+        kind: "blocker_audit",
+        reason: `Blocked audit ${consecutiveCount}/3 recorded: ${blockedReason}`,
+      },
+    );
     return {
       content: formatSessionGoalBlockedProposalToolResult(blockedProposalGoal),
       ok: true,
@@ -285,34 +312,34 @@ async function executeUpdateGoalTool(
     sessionGoal.criterionKind === undefined ||
     sessionGoal.completionCriterion === undefined
   ) {
-    return {
-      content:
-        "Tool failed: update_goal failed: no completion criterion is set for the active session goal.\nRecovery: Ask the user to add one with /goal verify <command> or /goal done-when <criterion>, continue working, or ask the user to use /goal complete for an explicit override.",
-      ok: false,
-    };
+    return rejectedGoalCompletion(
+      sessionGoal,
+      "Tool failed: update_goal failed: no completion criterion is set for the active session goal.\nRecovery: Ask the user to add one with /goal verify <command> or /goal done-when <criterion>, continue working, or ask the user to use /goal complete for an explicit override.",
+      "Completion was rejected because the active goal has no completion criterion.",
+    );
   }
   if (sessionGoal.criterionKind === "assertion") {
     if (evaluateAssertionGoalCompletion === undefined) {
-      return {
-        content:
-          "Tool failed: update_goal failed: assertion completion evaluator is unavailable.\nRecovery: Continue gathering evidence, ask the user to use /goal complete for an explicit override, or retry in an agent session that supports assertion evaluation.",
-        ok: false,
-      };
+      return rejectedGoalCompletion(
+        sessionGoal,
+        "Tool failed: update_goal failed: assertion completion evaluator is unavailable.\nRecovery: Continue gathering evidence, ask the user to use /goal complete for an explicit override, or retry in an agent session that supports assertion evaluation.",
+        "Completion was rejected because the assertion evaluator was unavailable.",
+      );
     }
     const evaluation = await evaluateAssertionGoalCompletion({
       objective: sessionGoal.objective,
       completionCriterion: sessionGoal.completionCriterion,
     });
     if (!evaluation.completed) {
-      return {
-        content:
-          "Tool failed: update_goal failed: assertion completion evaluator rejected completion.\n" +
+      return rejectedGoalCompletion(
+        sessionGoal,
+        "Tool failed: update_goal failed: assertion completion evaluator rejected completion.\n" +
           `Reason: ${evaluation.reason}\n` +
           "Recovery: Continue gathering or surfacing evidence that satisfies the assertion criterion, then call update_goal again only after the evidence is visible.",
-        ok: false,
-      };
+        evaluation.reason,
+      );
     }
-    const completedGoal: SessionGoal = {
+    const completedGoalWithoutOutcome: SessionGoal = {
       objective: sessionGoal.objective,
       status: "completed",
       ...sessionGoalAccounting(sessionGoal),
@@ -323,6 +350,13 @@ async function executeUpdateGoalTool(
         reason: evaluation.reason,
       },
     };
+    const completedGoal = withSessionGoalRuntimeOutcome(
+      completedGoalWithoutOutcome,
+      {
+        kind: "completed",
+        reason: `Assertion evaluator approved completion: ${evaluation.reason}`,
+      },
+    );
     return {
       content: formatSessionGoalCompletedToolResult(completedGoal),
       ok: true,
@@ -333,48 +367,51 @@ async function executeUpdateGoalTool(
     sessionGoal.completionCriterion,
   );
   if (goalCompletionCommandEvidence === undefined) {
-    return {
-      content:
-        `Tool failed: update_goal failed: command completion criterion has not run for the active session goal.\n` +
+    return rejectedGoalCompletion(
+      sessionGoal,
+      `Tool failed: update_goal failed: command completion criterion has not run for the active session goal.\n` +
         (allowBash
           ? `Recovery: Run bash with "${expectedCommand}" after finishing the work, then call update_goal again if it exits 0.`
           : `Recovery: Bash is disabled in this run, so the agent cannot run "${expectedCommand}". Ask the user to resume with --bash-policy ask or --bash-policy trusted, or to use /goal complete after checking it manually.`),
-      ok: false,
-    };
+      `Completion was rejected because command criterion ${JSON.stringify(expectedCommand)} has not run.`,
+    );
   }
   const actualCommand = normalizeSessionGoalCompletionCommand(
     goalCompletionCommandEvidence.command,
   );
   if (actualCommand !== expectedCommand) {
-    return {
-      content: `Tool failed: update_goal failed: latest command evidence does not match the goal command criterion.\nRecovery: Run bash with "${expectedCommand}" after finishing the work, then call update_goal again if it exits 0.`,
-      ok: false,
-    };
+    return rejectedGoalCompletion(
+      sessionGoal,
+      `Tool failed: update_goal failed: latest command evidence does not match the goal command criterion.\nRecovery: Run bash with "${expectedCommand}" after finishing the work, then call update_goal again if it exits 0.`,
+      `Completion was rejected because the latest command evidence did not match criterion ${JSON.stringify(expectedCommand)}.`,
+    );
   }
   if (goalCompletionCommandEvidence.cwd !== workspace) {
-    return {
-      content: `Tool failed: update_goal failed: latest command evidence came from a different working directory.\nRecovery: Run bash with "${expectedCommand}" in the current workspace, then call update_goal again if it exits 0.`,
-      ok: false,
-    };
+    return rejectedGoalCompletion(
+      sessionGoal,
+      `Tool failed: update_goal failed: latest command evidence came from a different working directory.\nRecovery: Run bash with "${expectedCommand}" in the current workspace, then call update_goal again if it exits 0.`,
+      "Completion was rejected because the latest command evidence came from a different working directory.",
+    );
   }
   if (goalCompletionCommandEvidence.exitCode !== 0) {
-    return {
-      content: `Tool failed: update_goal failed: command completion criterion exited with code ${goalCompletionCommandEvidence.exitCode ?? "unknown"}.\nRecovery: Fix the failing verification, rerun "${expectedCommand}", then call update_goal again if it exits 0.`,
-      ok: false,
-    };
+    return rejectedGoalCompletion(
+      sessionGoal,
+      `Tool failed: update_goal failed: command completion criterion exited with code ${goalCompletionCommandEvidence.exitCode ?? "unknown"}.\nRecovery: Fix the failing verification, rerun "${expectedCommand}", then call update_goal again if it exits 0.`,
+      `Completion was rejected because command criterion ${JSON.stringify(expectedCommand)} exited with code ${goalCompletionCommandEvidence.exitCode ?? "unknown"}.`,
+    );
   }
   if (
     goalCompletionCommandEvidence.observedMutationSequence !==
     (workspaceMutationSequence ?? 0)
   ) {
-    return {
-      content:
-        `Tool failed: update_goal failed: command completion criterion evidence is stale because the workspace changed after it ran.\n` +
+    return rejectedGoalCompletion(
+      sessionGoal,
+      `Tool failed: update_goal failed: command completion criterion evidence is stale because the workspace changed after it ran.\n` +
         `Recovery: Rerun bash with "${expectedCommand}" after the latest mutation, then call update_goal again if it exits 0.`,
-      ok: false,
-    };
+      `Completion was rejected because command criterion ${JSON.stringify(expectedCommand)} became stale after a workspace mutation.`,
+    );
   }
-  const completedGoal: SessionGoal = {
+  const completedGoalWithoutOutcome: SessionGoal = {
     objective: sessionGoal.objective,
     status: "completed",
     ...sessionGoalAccounting(sessionGoal),
@@ -388,6 +425,13 @@ async function executeUpdateGoalTool(
       freshness: "after_latest_workspace_mutation",
     },
   };
+  const completedGoal = withSessionGoalRuntimeOutcome(
+    completedGoalWithoutOutcome,
+    {
+      kind: "completed",
+      reason: `Completion command ${JSON.stringify(expectedCommand)} exited 0 after the latest workspace mutation.`,
+    },
+  );
   return {
     content: formatSessionGoalCompletedToolResult(completedGoal),
     ok: true,

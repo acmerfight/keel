@@ -6,13 +6,17 @@ import {
   normalizeSessionGoalCompletionEvidence,
   normalizeSessionGoalCompletionEvidenceReason,
   normalizeSessionGoalObjective,
+  normalizeSessionGoalRuntimeOutcome,
+  normalizeSessionGoalRuntimeOutcomeReason,
   normalizeSessionGoalStatusReason,
   SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
   SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
   SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
+  SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH,
   SESSION_GOAL_STATUS_REASON_MAX_LENGTH,
   type SessionGoal,
   type SessionGoalCompletionEvidence,
+  type SessionGoalRuntimeOutcome,
   sessionGoalAccounting,
   sessionGoalSchema,
 } from "../../core/session-goal.ts";
@@ -839,6 +843,28 @@ function requireSessionGoalCompletionEvidenceForPersistence(
   return evidence;
 }
 
+function redactSessionGoalRuntimeOutcomeForPersistence(
+  outcome: SessionGoalRuntimeOutcome,
+): SessionGoalRuntimeOutcome {
+  return normalizeSessionGoalRuntimeOutcome({
+    kind: outcome.kind,
+    reason: redactBoundedGoalTextForPersistence({
+      value: outcome.reason,
+      normalize: normalizeSessionGoalRuntimeOutcomeReason,
+      maxLength: SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH,
+      emptyError: "Error: /goal runtime outcome requires a reason.",
+      lengthError: `Error: /goal runtime outcome reason must be ${SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH} characters or fewer.`,
+    }),
+    ...(outcome.observedEvidenceFingerprints === undefined
+      ? {}
+      : {
+          observedEvidenceFingerprints: [
+            ...outcome.observedEvidenceFingerprints,
+          ],
+        }),
+  });
+}
+
 function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
   const accounting = sessionGoalAccounting(goal);
   const objective = redactBoundedGoalTextForPersistence({
@@ -897,6 +923,14 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
           ),
         )
       : undefined;
+  const runtimeOutcome =
+    goal.latestRuntimeOutcome === undefined
+      ? {}
+      : {
+          latestRuntimeOutcome: redactSessionGoalRuntimeOutcomeForPersistence(
+            goal.latestRuntimeOutcome,
+          ),
+        };
   const criterion =
     goal.criterionKind !== undefined && completionCriterion !== undefined
       ? {
@@ -911,6 +945,7 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
         status: "active",
         ...accounting,
         ...criterion,
+        ...runtimeOutcome,
         ...(goal.blockedAudit !== undefined && blockedAuditReason !== undefined
           ? {
               blockedAudit: {
@@ -927,6 +962,7 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
         ...accounting,
         statusReason: z.string().parse(statusReason),
         ...criterion,
+        ...runtimeOutcome,
       };
     case "budget_limited":
       return {
@@ -935,6 +971,7 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
         ...accounting,
         statusReason: z.string().parse(statusReason),
         ...criterion,
+        ...runtimeOutcome,
       };
     case "usage_limited":
       return {
@@ -943,6 +980,7 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
         ...accounting,
         statusReason: z.string().parse(statusReason),
         ...criterion,
+        ...runtimeOutcome,
       };
     case "paused":
       return {
@@ -950,6 +988,7 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
         status: "paused",
         ...accounting,
         ...criterion,
+        ...runtimeOutcome,
       };
     case "completed":
       return {
@@ -957,6 +996,7 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
         status: "completed",
         ...accounting,
         ...criterion,
+        ...runtimeOutcome,
         completionEvidence:
           requireSessionGoalCompletionEvidenceForPersistence(
             completionEvidence,

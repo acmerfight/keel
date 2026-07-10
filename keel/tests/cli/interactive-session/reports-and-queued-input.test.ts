@@ -9,6 +9,7 @@ import type { ProviderSelection } from "../../../src/cli/interactive-session/typ
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
   createSessionStore,
+  persistSessionGoal,
   persistSessionMessages,
   persistSessionQueuedInput,
   resumeSessionStore,
@@ -422,6 +423,11 @@ describe("Interactive Session - Reports And Queued Input", () => {
       usage: { turns: 3, tokens: 0, activeTimeMs: expect.any(Number) },
       statusReason:
         "Automatic goal continuation stopped after 2 continuation turns without completing the active goal.",
+      latestRuntimeOutcome: {
+        kind: "limit_reached",
+        reason:
+          "Automatic goal continuation stopped after 2 continuation turns without completing the active goal.",
+      },
       criterionKind: "assertion",
       completionCriterion: "The final report exists.",
     });
@@ -513,6 +519,661 @@ describe("Interactive Session - Reports And Queued Input", () => {
     expect(stderr).toContain(
       `Automatic goal continuation stopped after ${automaticContinuationTurnLimit} continuation turns without completing the active goal.`,
     );
+  });
+
+  test(`Given a saved goal receives a stagnation recovery hint,
+    When the user pauses, resumes the session, and runs /goal,
+    Then Keel shows the durable latest runtime outcome`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-goal-outcome-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    try {
+      let clock = 0;
+      const runtime = {
+        env: (key: string) => (key === "KEEL_HOME" ? home : undefined),
+        now: () => ++clock,
+      };
+      const storedSession = createSessionStore({
+        sessionId: "durable-goal-outcome",
+        workspace,
+        runtime,
+      });
+      const initialGoal: SessionGoal = {
+        objective: "Recover from repeated prose",
+        status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "assertion",
+        completionCriterion: "The final report exists.",
+      };
+      const persistedInitialGoal = persistSessionGoal({
+        session: storedSession,
+        goal: initialGoal,
+        runtime,
+      });
+      let persistedMessages: readonly Message[] = storedSession.messages;
+      const firstInput = new PassThrough();
+      let providerCalls = 0;
+      const provider: LLMProvider = {
+        id: "fake",
+        async *stream(options) {
+          providerCalls++;
+          if (
+            options.messages.some(
+              (message) =>
+                message.role === "user" &&
+                message.content.includes('source="goal_stagnation_recovery"'),
+            )
+          ) {
+            firstInput.end("/goal pause\n");
+            await setImmediate();
+          }
+          yield {
+            type: "text",
+            text:
+              providerCalls === 1
+                ? "The initial turn left the goal active."
+                : "The work is done.",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        },
+      };
+      const firstRun = runInteractiveSession({
+        cliArgs: { bashMode: "disabled" },
+        workspace,
+        platform: process.platform,
+        ...(persistedInitialGoal !== undefined
+          ? { initialSessionGoal: persistedInitialGoal }
+          : {}),
+        input: firstInput,
+        writeStdout: () => {},
+        writeStderr: () => {},
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => ({
+          provider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        }),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async (stream) => {
+          let finalEnd:
+            | Extract<AgentEvent, { readonly type: "end" }>
+            | undefined;
+          for await (const event of stream) {
+            if (event.type === "end") {
+              finalEnd = event;
+            }
+          }
+          return finalEnd;
+        },
+        formatCostReport: () => "",
+        persistSessionMessages: (messages, reason, consumedInputIds) => {
+          persistedMessages = persistSessionMessages({
+            session: storedSession,
+            previousMessages: persistedMessages,
+            currentMessages: messages,
+            runtime,
+            reason,
+            consumedInputIds,
+          });
+        },
+        persistSessionGoal: ({ goal, consumedInputIds }) =>
+          persistSessionGoal({
+            session: storedSession,
+            goal,
+            runtime,
+            consumedInputIds,
+          }),
+      });
+      firstInput.write("start the goal\n");
+      await withTimeout(firstRun, 5000, "goal recovery did not pause");
+
+      const resumed = resumeSessionStore({
+        sessionId: "durable-goal-outcome",
+        workspace,
+        runtime,
+      });
+      const secondInput = new PassThrough();
+      let resumedStdout = "";
+      let resumedProviderCalls = 0;
+      const secondRun = runInteractiveSession({
+        cliArgs: { bashMode: "disabled" },
+        workspace,
+        platform: process.platform,
+        ...(resumed.goal !== undefined
+          ? { initialSessionGoal: resumed.goal }
+          : {}),
+        input: secondInput,
+        writeStdout: (text) => {
+          resumedStdout += text;
+        },
+        writeStderr: () => {},
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => ({
+          provider: {
+            id: "fake",
+            async *stream() {
+              resumedProviderCalls++;
+              yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+            },
+          },
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        }),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async () => undefined,
+        formatCostReport: () => "",
+      });
+
+      // When
+      secondInput.end("/goal\n");
+      await secondRun;
+
+      // Then
+      expect(providerCalls).toBe(5);
+      expect(resumedProviderCalls).toBe(0);
+      expect(resumed.goal).toMatchObject({
+        status: "paused",
+        latestRuntimeOutcome: {
+          kind: "recovery_requested",
+          reason:
+            "Repeated automatic goal continuations showed the same response or tool-use pattern without an observed workspace, task, or goal state change.",
+        },
+      });
+      expect(resumedStdout).toContain(
+        "Session goal outcome: recovery requested - Repeated automatic goal continuations showed the same response or tool-use pattern without an observed workspace, task, or goal state change.",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an active goal has an older recovery outcome,
+    When a later goal turn changes durable task progress,
+    Then the progress fact replaces the older outcome`, async () => {
+    // Given
+    const input = new PassThrough();
+    const persistedGoals: SessionGoal[] = [];
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        providerCalls++;
+        if (providerCalls === 1) {
+          yield {
+            type: "tool_call",
+            id: "record_progress",
+            tool: "update_plan",
+            plan: [{ step: "Write the final report", status: "in_progress" }],
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        input.end("/goal pause\n");
+        await setImmediate();
+        yield { type: "text", text: "Progress recorded." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: {
+        objective: "Replace stale recovery metadata",
+        status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "assertion",
+        completionCriterion: "The final report exists.",
+        latestRuntimeOutcome: {
+          kind: "recovery_requested",
+          reason: "An earlier continuation repeated.",
+        },
+      },
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionGoal: ({ goal }) => {
+        if (goal !== null) {
+          persistedGoals.push(goal);
+          return goal;
+        }
+        return undefined;
+      },
+    });
+    input.write("continue the goal\n");
+
+    // When
+    await withTimeout(session, 5000, "progress outcome was not persisted");
+
+    // Then
+    expect(providerCalls).toBe(2);
+    expect(persistedGoals.at(-1)).toMatchObject({
+      status: "paused",
+      latestRuntimeOutcome: {
+        kind: "progress_observed",
+        reason: "The latest goal turn changed task progress.",
+      },
+    });
+  });
+
+  test.each([
+    {
+      name: "a workspace mutation",
+      kind: "workspace" as const,
+      bashMode: "disabled" as const,
+      criterionKind: "assertion" as const,
+      completionCriterion: "The final report exists.",
+      expectedReason: "The latest goal turn changed the workspace.",
+    },
+    {
+      name: "an exact successful completion command",
+      kind: "verification" as const,
+      bashMode: "trusted" as const,
+      criterionKind: "command" as const,
+      completionCriterion: 'node -e "process.exit(0)"',
+      expectedReason:
+        'Completion command "node -e \\"process.exit(0)\\"" exited 0 after the latest workspace mutation.',
+    },
+  ])(`Given an active goal has an older recovery outcome,
+    When a later goal turn produces $name,
+    Then the observed fact replaces the older outcome`, async ({
+    kind,
+    bashMode,
+    criterionKind,
+    completionCriterion,
+    expectedReason,
+  }) => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-goal-observation-"));
+    try {
+      const input = new PassThrough();
+      let persistedGoal: SessionGoal | undefined = {
+        objective: "Replace stale recovery with an observed fact",
+        status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        criterionKind,
+        completionCriterion,
+        latestRuntimeOutcome: {
+          kind: "recovery_requested",
+          reason: "An earlier continuation repeated.",
+        },
+      };
+      let providerCalls = 0;
+      const provider: LLMProvider = {
+        id: "fake",
+        async *stream() {
+          providerCalls++;
+          if (providerCalls === 1) {
+            if (kind === "workspace") {
+              yield {
+                type: "tool_call",
+                id: "write_observed_progress",
+                tool: "write",
+                path: "report.txt",
+                content: "done\n",
+              };
+            } else {
+              yield {
+                type: "tool_call",
+                id: "verify_observed_progress",
+                tool: "bash",
+                command: completionCriterion,
+              };
+            }
+            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+            return;
+          }
+          input.end("/goal pause\n");
+          await setImmediate();
+          yield { type: "text", text: "Observed fact recorded." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        },
+      };
+      const session = runInteractiveSession({
+        cliArgs: { bashMode },
+        workspace,
+        platform: process.platform,
+        initialSessionGoal: persistedGoal,
+        input,
+        writeStdout: () => {},
+        writeStderr: () => {},
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => ({
+          provider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        }),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async (stream) => {
+          let finalEnd:
+            | Extract<AgentEvent, { readonly type: "end" }>
+            | undefined;
+          for await (const event of stream) {
+            if (event.type === "end") {
+              finalEnd = event;
+            }
+          }
+          return finalEnd;
+        },
+        formatCostReport: () => "",
+        persistSessionGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      });
+      input.write("continue the goal\n");
+
+      // When
+      await withTimeout(session, 5000, "observed outcome was not persisted");
+
+      // Then
+      expect(providerCalls).toBe(2);
+      expect(persistedGoal).toMatchObject({
+        status: "paused",
+        latestRuntimeOutcome: {
+          kind: "progress_observed",
+          reason: expectedReason,
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given repeated completion rejections only update runtime outcome metadata,
+    When automatic continuations repeat the same failed proposal three times,
+    Then the metadata does not masquerade as progress and suppress recovery`, async () => {
+    // Given
+    const input = new PassThrough();
+    let persistedMessages: readonly Message[] = [];
+    let persistedGoal: SessionGoal | undefined = {
+      objective: "Verify before completing",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+    };
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        providerCalls++;
+        if (
+          options.messages.some(
+            (message) =>
+              message.role === "user" &&
+              message.content.includes('source="goal_stagnation_recovery"'),
+          )
+        ) {
+          input.end("/goal pause\n");
+          await setImmediate();
+          yield { type: "text", text: "I will change strategy." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if ([2, 4, 6].includes(providerCalls)) {
+          yield {
+            type: "tool_call",
+            id: `rejected_completion_${providerCalls}`,
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield {
+          type: "text",
+          text:
+            providerCalls === 1
+              ? "The initial turn left the goal active."
+              : "Completion was proposed.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: persistedGoal,
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionMessages: (messages) => {
+        persistedMessages = [...messages];
+      },
+      persistSessionGoal: ({ goal }) => {
+        persistedGoal = goal ?? undefined;
+        return persistedGoal;
+      },
+    });
+    input.write("start the goal\n");
+
+    // When
+    await withTimeout(session, 5000, "completion rejection did not recover");
+
+    // Then
+    expect(providerCalls).toBe(8);
+    expect(
+      persistedMessages.filter(
+        (message) =>
+          message.role === "user" &&
+          message.content.includes('source="goal_stagnation_recovery"'),
+      ),
+    ).toHaveLength(1);
+    expect(persistedGoal).toMatchObject({
+      status: "paused",
+      latestRuntimeOutcome: {
+        kind: "recovery_requested",
+      },
+    });
+  });
+
+  test.each([
+    {
+      name: "the same read result",
+      recoveryReadPath: "package.json",
+      injectSteering: false,
+      expectedOutcome: {
+        kind: "recovery_requested",
+        reason:
+          "Repeated automatic goal continuations showed the same response or tool-use pattern without an observed workspace, task, or goal state change.",
+      },
+    },
+    {
+      name: "a different read result",
+      recoveryReadPath: "tsconfig.json",
+      injectSteering: false,
+      expectedOutcome: {
+        kind: "progress_observed",
+        reason: "The latest goal turn produced new tool-result evidence.",
+      },
+    },
+    {
+      name: "a different read result after injected user steering",
+      recoveryReadPath: "tsconfig.json",
+      injectSteering: true,
+      expectedOutcome: {
+        kind: "progress_observed",
+        reason: "The latest goal turn produced new tool-result evidence.",
+      },
+    },
+  ])(`Given repeated reads produced an older recovery outcome,
+    When the recovery turn produces $name,
+    Then only fresh tool evidence replaces the recovery outcome`, async ({
+    recoveryReadPath,
+    injectSteering,
+    expectedOutcome,
+  }) => {
+    // Given
+    const input = new PassThrough();
+    let persistedGoal: SessionGoal | undefined = {
+      objective: "Observe evidence after recovery",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "assertion",
+      completionCriterion: "The user confirms the evidence is sufficient.",
+    };
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        providerCalls++;
+        if ([2, 4, 6].includes(providerCalls)) {
+          yield {
+            type: "tool_call",
+            id: `repeated_evidence_${providerCalls}`,
+            tool: "read",
+            path: "package.json",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (providerCalls === 8) {
+          if (injectSteering) {
+            input.write("Use the newly observed evidence.\n");
+            await setImmediate();
+          }
+          yield {
+            type: "tool_call",
+            id: "evidence_after_recovery",
+            tool: "read",
+            path: recoveryReadPath,
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (providerCalls === 9) {
+          input.end("/goal pause\n");
+          await setImmediate();
+        }
+        yield {
+          type: "text",
+          text:
+            providerCalls === 1
+              ? "The initial turn left the goal active."
+              : "Evidence observed.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: persistedGoal,
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionGoal: ({ goal }) => {
+        persistedGoal = goal ?? undefined;
+        return persistedGoal;
+      },
+    });
+    input.write("start the goal\n");
+
+    // When
+    await withTimeout(session, 5000, "post-recovery evidence did not finish");
+
+    // Then
+    expect(providerCalls).toBe(9);
+    expect(persistedGoal).toMatchObject({
+      status: "paused",
+      latestRuntimeOutcome: expectedOutcome,
+    });
   });
 
   test(`Given automatic goal continuations restore changing read evidence after compaction,
@@ -755,6 +1416,11 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
       statusReason:
         "Session cost budget was reached before the active goal completed.",
+      latestRuntimeOutcome: {
+        kind: "limit_reached",
+        reason:
+          "Session cost budget was reached before the active goal completed.",
+      },
     });
   });
 
@@ -847,6 +1513,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       objective: "Finish checkout within its goal budget",
       status: "budget_limited",
       statusReason: "Session goal budget reached: turns 2/2; tokens 110/100.",
+      latestRuntimeOutcome: {
+        kind: "limit_reached",
+        reason: "Session goal budget reached: turns 2/2; tokens 110/100.",
+      },
       budget: { turns: 2, tokens: 100, activeTimeMs: 5_000 },
       usage: { turns: 2, tokens: 110, activeTimeMs: 2_500 },
     });
@@ -907,6 +1577,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       objective: "Account a missing final end event",
       status: "budget_limited",
       statusReason: "Session goal budget reached: turns 1/1.",
+      latestRuntimeOutcome: {
+        kind: "limit_reached",
+        reason: "Session goal budget reached: turns 1/1.",
+      },
       budget: { turns: 1 },
       usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
     });
@@ -1121,6 +1795,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
       criterionKind: "assertion",
       completionCriterion: "The session remains interactive",
+      latestRuntimeOutcome: {
+        kind: "limit_reached",
+        reason: "Session goal budget reached: turns 1/1.",
+      },
     });
     expect(stderr).toContain(
       "Session goal: budget_limited - Remain interactive after goal budget exhaustion",
@@ -1243,6 +1921,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       budget: {},
       usage: { turns: 6, tokens: 0, activeTimeMs: expect.any(Number) },
       statusReason: `Automatic goal continuation stopped after ${automaticContinuationTurnLimit} continuation turns without completing the active goal.`,
+      latestRuntimeOutcome: {
+        kind: "limit_reached",
+        reason: `Automatic goal continuation stopped after ${automaticContinuationTurnLimit} continuation turns without completing the active goal.`,
+      },
       criterionKind: "assertion",
       completionCriterion: "The goal is explicitly marked complete.",
     });
@@ -2056,13 +2738,17 @@ describe("Interactive Session - Reports And Queued Input", () => {
 
     // Then
     expect(providerCalls).toBe(7);
-    expect(persistedGoals.at(-1)).toEqual({
+    expect(persistedGoals.at(-1)).toMatchObject({
       objective: "Abort continuation safely",
       status: "active",
       budget: {},
       usage: { turns: 3, tokens: 0, activeTimeMs: expect.any(Number) },
       criterionKind: "assertion",
       completionCriterion: "The goal is explicitly marked complete.",
+      latestRuntimeOutcome: {
+        kind: "progress_observed",
+        reason: "The latest goal turn produced new tool-result evidence.",
+      },
     });
     expect(
       persistedMessages.filter(
@@ -2078,6 +2764,102 @@ describe("Interactive Session - Reports And Queued Input", () => {
           message.content.includes('source="goal_continuation"'),
       ),
     ).toHaveLength(2);
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given a goal turn records a newer runtime outcome before it finishes,
+    When SIGINT aborts that turn,
+    Then the pending outcome rolls back to the prior durable value`, async () => {
+    // Given
+    const initialGoal: SessionGoal = {
+      objective: "Keep the durable outcome on abort",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "command",
+      completionCriterion: "pnpm test",
+      latestRuntimeOutcome: {
+        kind: "progress_observed",
+        reason: "A prior turn changed task progress.",
+      },
+    };
+    const sigintHandlers = new Set<() => void>();
+    let persistedGoal: SessionGoal | undefined = initialGoal;
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        providerCalls++;
+        if (providerCalls === 1) {
+          yield {
+            type: "tool_call",
+            id: "rejected_before_abort",
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        for (const handler of [...sigintHandlers]) {
+          handler();
+        }
+        if (!options.signal.aborted) {
+          await new Promise<void>((resolve) => {
+            options.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: initialGoal,
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        for await (const _event of stream) {
+          // Drain the event stream so the pending outcome is observed before
+          // the second provider request aborts the enclosing goal turn.
+        }
+        return undefined;
+      },
+      formatCostReport: () => "",
+      persistSessionGoal: ({ goal }) => {
+        persistedGoal = goal ?? undefined;
+        return persistedGoal;
+      },
+    });
+    input.end("start the goal\n");
+
+    // When
+    await withTimeout(session, 5000, "goal outcome abort did not finish");
+
+    // Then
+    expect(providerCalls).toBe(2);
+    expect(persistedGoal).toEqual(initialGoal);
     expect(sigintHandlers.size).toBe(0);
   });
 
