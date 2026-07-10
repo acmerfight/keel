@@ -724,6 +724,9 @@ describe("Tool Scheduling", () => {
         content: expect.stringContaining(
           "keel artifacts show tool-output:test/1",
         ),
+        resourceObservation: expect.objectContaining({
+          kind: "read_projection",
+        }),
       });
       expect(
         messages.some(
@@ -815,6 +818,9 @@ describe("Tool Scheduling", () => {
         content: expect.stringContaining(
           "keel artifacts show tool-output:test/1",
         ),
+        resourceObservation: expect.objectContaining({
+          kind: "read_projection",
+        }),
       });
       expect(
         messages.some(

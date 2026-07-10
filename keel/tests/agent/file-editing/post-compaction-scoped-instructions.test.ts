@@ -664,6 +664,9 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
             "export const route = 'current';",
             "",
           ].join("\n"),
+          resourceObservation: expect.objectContaining({
+            kind: "read_projection",
+          }),
         },
       ]);
       expect(

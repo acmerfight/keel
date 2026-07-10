@@ -7,6 +7,7 @@ import {
   type RecoverableToolErrorCode,
 } from "../core/error.ts";
 import type { RecordLastBatchCheckpointOperation } from "../core/git.ts";
+import type { ReadResourceObservation } from "../core/resource-observation.ts";
 import {
   copySessionGoal,
   formatSessionGoalBlockedProposalToolResult,
@@ -34,6 +35,7 @@ import { executeGlob } from "./glob.ts";
 import { executeGrep } from "./grep.ts";
 import { executeLs } from "./ls.ts";
 import { executeRead } from "./read.ts";
+import { observeReadResource } from "./read-resource-observation.ts";
 import type { ProjectInstructionVisibilityState } from "./scoped-project-instructions.ts";
 import { ScopedProjectInstructionsNotVisibleError } from "./scoped-project-instructions.ts";
 import {
@@ -87,8 +89,7 @@ interface BuiltinToolExecutionContext {
   };
   readonly projectInstructions?: ProjectInstructionVisibilityState;
   readonly sessionGoal?: SessionGoal;
-  readonly goalCompletionCommandEvidence?: GoalCompletionCommandEvidence;
-  readonly workspaceMutationSequence?: number;
+  readonly completionProposalHasFollowingToolCalls?: boolean;
   readonly evaluateAssertionGoalCompletion?: (
     goal: AssertionGoalCompletionContract,
   ) => Promise<AssertionGoalCompletionEvaluation>;
@@ -98,13 +99,6 @@ interface BashCommandEvidence {
   readonly command: string;
   readonly cwd: string;
   readonly exitCode: number | null;
-}
-
-export interface GoalCompletionCommandEvidence {
-  readonly command: string;
-  readonly cwd: string;
-  readonly exitCode: number | null;
-  readonly observedMutationSequence: number;
 }
 
 interface AssertionGoalCompletionContract {
@@ -126,6 +120,7 @@ export interface ToolExecution {
   readonly readTargetPath?: string;
   readonly readTargetOffset?: number;
   readonly readTargetLimit?: number;
+  readonly resourceObservation?: ReadResourceObservation;
   readonly mutatedTargetPath?: string;
   readonly mutatedTargetPaths?: readonly string[];
   readonly visibleProjectInstructionPaths?: readonly string[];
@@ -226,13 +221,22 @@ function rejectedGoalCompletion(
   };
 }
 
+function commandVerificationFailureContent(
+  command: string,
+  exitCode: number | null,
+  verificationOutput: string,
+): string {
+  return `Tool failed: update_goal failed: completion command ${JSON.stringify(command)} exited with code ${exitCode ?? "unknown"} at the completion boundary.\nVerification output:\n${verificationOutput}\nRecovery: Fix the failing verification, then propose completion again.`;
+}
+
 async function executeUpdateGoalTool(
   {
     workspace,
     allowBash,
+    signal,
+    bashPermission,
     sessionGoal,
-    goalCompletionCommandEvidence,
-    workspaceMutationSequence,
+    completionProposalHasFollowingToolCalls,
     evaluateAssertionGoalCompletion,
   }: BuiltinToolExecutionContext,
   toolCall: UpdateGoalToolCall,
@@ -318,6 +322,13 @@ async function executeUpdateGoalTool(
       "Completion was rejected because the active goal has no completion criterion.",
     );
   }
+  if (completionProposalHasFollowingToolCalls === true) {
+    return rejectedGoalCompletion(
+      sessionGoal,
+      "Tool failed: update_goal failed: completed must be the final tool call in an agent turn.\nRecovery: Finish the remaining actions, inspect their results, then propose completion in a later turn.",
+      "Completion was rejected because update_goal(completed) was not the final tool call in its agent turn.",
+    );
+  }
   if (sessionGoal.criterionKind === "assertion") {
     if (evaluateAssertionGoalCompletion === undefined) {
       return rejectedGoalCompletion(
@@ -366,50 +377,54 @@ async function executeUpdateGoalTool(
   const expectedCommand = normalizeSessionGoalCompletionCommand(
     sessionGoal.completionCriterion,
   );
-  if (goalCompletionCommandEvidence === undefined) {
+  if (!allowBash) {
     return rejectedGoalCompletion(
       sessionGoal,
-      `Tool failed: update_goal failed: command completion criterion has not run for the active session goal.\n` +
-        (allowBash
-          ? `Recovery: Run bash with "${expectedCommand}" after finishing the work, then call update_goal again if it exits 0.`
-          : `Recovery: Bash is disabled in this run, so the agent cannot run "${expectedCommand}". Ask the user to resume with --bash-policy ask or --bash-policy trusted, or to use /goal complete after checking it manually.`),
-      `Completion was rejected because command criterion ${JSON.stringify(expectedCommand)} has not run.`,
+      `Tool failed: update_goal failed: Runtime cannot run command completion criterion ${JSON.stringify(expectedCommand)} because Bash is disabled.\nRecovery: Ask the user to resume with --bash-policy ask or --bash-policy trusted, or to use /goal complete after checking it manually.`,
+      `Completion was rejected because Runtime could not run command criterion ${JSON.stringify(expectedCommand)} while Bash was disabled.`,
     );
   }
-  const actualCommand = normalizeSessionGoalCompletionCommand(
-    goalCompletionCommandEvidence.command,
-  );
-  if (actualCommand !== expectedCommand) {
-    return rejectedGoalCompletion(
-      sessionGoal,
-      `Tool failed: update_goal failed: latest command evidence does not match the goal command criterion.\nRecovery: Run bash with "${expectedCommand}" after finishing the work, then call update_goal again if it exits 0.`,
-      `Completion was rejected because the latest command evidence did not match criterion ${JSON.stringify(expectedCommand)}.`,
-    );
+  if (bashPermission !== undefined) {
+    const decision = await bashPermission.review({
+      command: expectedCommand,
+      cwd: workspace,
+      signal,
+    });
+    if (decision.type === "deny") {
+      return rejectedGoalCompletion(
+        sessionGoal,
+        `Tool failed: update_goal failed: command completion verification was denied: ${decision.message}\nRecovery: Ask the user for permission or use /goal complete after checking it manually.`,
+        `Completion was rejected because permission to run command criterion ${JSON.stringify(expectedCommand)} was denied.`,
+      );
+    }
   }
-  if (goalCompletionCommandEvidence.cwd !== workspace) {
-    return rejectedGoalCompletion(
+  const verification = await executeBash(workspace, expectedCommand, {
+    signal,
+  });
+  if (verification.exitCode !== 0) {
+    const rejection = rejectedGoalCompletion(
       sessionGoal,
-      `Tool failed: update_goal failed: latest command evidence came from a different working directory.\nRecovery: Run bash with "${expectedCommand}" in the current workspace, then call update_goal again if it exits 0.`,
-      "Completion was rejected because the latest command evidence came from a different working directory.",
+      commandVerificationFailureContent(
+        expectedCommand,
+        verification.exitCode,
+        verification.content,
+      ),
+      `Completion was rejected because command criterion ${JSON.stringify(expectedCommand)} exited with code ${verification.exitCode ?? "unknown"} at the completion boundary.`,
     );
-  }
-  if (goalCompletionCommandEvidence.exitCode !== 0) {
-    return rejectedGoalCompletion(
-      sessionGoal,
-      `Tool failed: update_goal failed: command completion criterion exited with code ${goalCompletionCommandEvidence.exitCode ?? "unknown"}.\nRecovery: Fix the failing verification, rerun "${expectedCommand}", then call update_goal again if it exits 0.`,
-      `Completion was rejected because command criterion ${JSON.stringify(expectedCommand)} exited with code ${goalCompletionCommandEvidence.exitCode ?? "unknown"}.`,
-    );
-  }
-  if (
-    goalCompletionCommandEvidence.observedMutationSequence !==
-    (workspaceMutationSequence ?? 0)
-  ) {
-    return rejectedGoalCompletion(
-      sessionGoal,
-      `Tool failed: update_goal failed: command completion criterion evidence is stale because the workspace changed after it ran.\n` +
-        `Recovery: Rerun bash with "${expectedCommand}" after the latest mutation, then call update_goal again if it exits 0.`,
-      `Completion was rejected because command criterion ${JSON.stringify(expectedCommand)} became stale after a workspace mutation.`,
-    );
+    const truncation = sourceTruncation(verification);
+    return {
+      ...rejection,
+      ...truncation,
+      ...(truncation.artifactContent !== undefined
+        ? {
+            artifactContent: commandVerificationFailureContent(
+              expectedCommand,
+              verification.exitCode,
+              truncation.artifactContent,
+            ),
+          }
+        : {}),
+    };
   }
   const completedGoalWithoutOutcome: SessionGoal = {
     objective: sessionGoal.objective,
@@ -422,14 +437,14 @@ async function executeUpdateGoalTool(
       command: expectedCommand,
       cwd: workspace,
       exitCode: 0,
-      freshness: "after_latest_workspace_mutation",
+      freshness: "at_completion",
     },
   };
   const completedGoal = withSessionGoalRuntimeOutcome(
     completedGoalWithoutOutcome,
     {
       kind: "completed",
-      reason: `Completion command ${JSON.stringify(expectedCommand)} exited 0 after the latest workspace mutation.`,
+      reason: `Completion command ${JSON.stringify(expectedCommand)} exited 0 at the completion boundary.`,
     },
   );
   return {
@@ -456,6 +471,11 @@ function executeReadTool(
     ok: true,
     ...sourceTruncation(result),
     readTargetPath: result.targetPath,
+    resourceObservation: observeReadResource({
+      workspace,
+      targetPath: result.targetPath,
+      content: result.content,
+    }),
     ...(scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0
       ? { visibleProjectInstructionPaths: scopedOutput.instructionPaths }
       : {}),

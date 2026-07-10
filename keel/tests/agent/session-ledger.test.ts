@@ -231,6 +231,11 @@ describe("Conversation History", () => {
         role: "tool",
         toolCallId: "call_read_package",
         content: expect.stringContaining('"name": "keel"'),
+        resourceObservation: {
+          kind: "read_projection",
+          targetPathSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          contentSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        },
       },
       { role: "user", content: "Also explain the scripts." },
       {

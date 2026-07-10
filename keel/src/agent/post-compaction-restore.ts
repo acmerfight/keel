@@ -1,4 +1,5 @@
 import { isRecoverableToolErrorCode, KeelError } from "../core/error.ts";
+import type { ReadResourceObservation } from "../core/resource-observation.ts";
 import type { Message, ToolCall } from "../llm/types.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
 import type { ProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
@@ -20,6 +21,7 @@ const POST_COMPACTION_MAX_TOTAL_CHARS = 50_000;
 interface RestoredPostCompactionRead {
   readonly toolCall: ToolCall;
   readonly execution: ToolExecution;
+  readonly resourceObservation: ReadResourceObservation;
   readonly content: string;
   readonly complete: boolean;
 }
@@ -235,7 +237,11 @@ export async function restorePostCompactionReads(options: {
       allowBash: false,
       projectInstructions: options.projectInstructionVisibility,
     });
-    if (!execution.ok || execution.readTargetPath === undefined) {
+    if (
+      !execution.ok ||
+      execution.readTargetPath === undefined ||
+      execution.resourceObservation === undefined
+    ) {
       continue;
     }
     const fittedContent = fitPostCompactionReadContent(
@@ -246,6 +252,7 @@ export async function restorePostCompactionReads(options: {
     restored.push({
       toolCall,
       execution,
+      resourceObservation: execution.resourceObservation,
       content: fittedContent.content,
       complete: fittedContent.complete,
     });
@@ -284,6 +291,7 @@ export async function restorePostCompactionReads(options: {
         sourceTruncated:
           read.execution.sourceTruncated === true || !read.complete,
       }),
+      resourceObservation: read.resourceObservation,
     });
   }
   options.readVisibility.applyVisibleToolExecutions(

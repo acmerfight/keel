@@ -130,7 +130,11 @@ function messagesEqual(left: Message, right: Message): boolean {
         right.role === "tool" &&
         left.toolCallId === right.toolCallId &&
         left.content === right.content &&
-        left.sourceTruncated === right.sourceTruncated
+        left.sourceTruncated === right.sourceTruncated &&
+        stableValuesEqual(
+          left.resourceObservation ?? null,
+          right.resourceObservation ?? null,
+        )
       );
   }
 }

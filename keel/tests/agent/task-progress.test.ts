@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -8,6 +8,7 @@ import {
   type AgentStopPolicy,
   defaultStopPolicy,
 } from "../../src/agent/stop-policy.ts";
+import type { ToolOutputArtifactSaveInput } from "../../src/agent/tool-output-artifacts.ts";
 import type { SessionGoal } from "../../src/core/session-goal.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 
@@ -926,12 +927,12 @@ describe("Task Progress", () => {
             command: 'node -e "process.exit(0)"',
             cwd: workspace,
             exitCode: 0,
-            freshness: "after_latest_workspace_mutation",
+            freshness: "at_completion",
           },
           latestRuntimeOutcome: {
             kind: "completed",
             reason:
-              'Completion command "node -e \\"process.exit(0)\\"" exited 0 after the latest workspace mutation.',
+              'Completion command "node -e \\"process.exit(0)\\"" exited 0 at the completion boundary.',
           },
         },
       });
@@ -968,7 +969,7 @@ describe("Task Progress", () => {
         {
           role: "tool",
           toolCallId: "goal_1",
-          content: `Session goal completed: Finish the durable session goal. Evidence: node -e "process.exit(0)" exited 0 after the latest workspace mutation in ${workspace}.`,
+          content: `Session goal completed: Finish the durable session goal. Evidence: node -e "process.exit(0)" exited 0 at the completion boundary in ${workspace}.`,
         },
       ]);
       expect(messages.at(-1)).toEqual({
@@ -981,12 +982,16 @@ describe("Task Progress", () => {
     }
   });
 
-  test(`Given a model mutates the workspace after running the command completion criterion,
-    When the model proposes completion from stale command evidence,
-    Then Keel keeps the goal active and asks for fresh evidence`, async () => {
+  test(`Given an active command goal is ready for final verification,
+    When the model proposes completion without running the verifier itself,
+    Then Keel runs the configured verifier at completion and persists its result`, async () => {
     // Given
     const workspace = await mkdtemp(
-      join(tmpdir(), "keel-goal-stale-command-evidence-"),
+      join(tmpdir(), "keel-goal-runtime-command-verifier-"),
+    );
+    await writeFile(
+      join(workspace, "verify.mjs"),
+      'console.log("verified at completion"); process.exit(0);\n',
     );
     const messages: Message[] = [
       { role: "user", content: "Finish the durable session goal." },
@@ -998,7 +1003,102 @@ describe("Task Progress", () => {
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
-      completionCriterion: 'node -e "process.exit(0)"',
+      completionCriterion: "node verify.mjs",
+    };
+    const provider: LLMProvider = {
+      id: "goal-runtime-command-verifier-provider",
+      async *stream(options) {
+        providerRequests.push(structuredClone([...options.messages]));
+        if (providerRequests.length === 1) {
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "The session goal is complete." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+          stopPolicy: defaultStopPolicy(),
+          sessionGoal,
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "session_goal_updated",
+        messageOrdinal: 3,
+        goal: {
+          objective: "Finish the durable session goal",
+          status: "completed",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+          criterionKind: "command",
+          completionCriterion: "node verify.mjs",
+          completionEvidence: {
+            kind: "command",
+            command: "node verify.mjs",
+            cwd: workspace,
+            exitCode: 0,
+            freshness: "at_completion",
+          },
+          latestRuntimeOutcome: {
+            kind: "completed",
+            reason:
+              'Completion command "node verify.mjs" exited 0 at the completion boundary.',
+          },
+        },
+      });
+      expect(providerRequests).toHaveLength(2);
+      expect(providerRequests[1]?.at(-1)).toEqual({
+        role: "tool",
+        toolCallId: "goal_1",
+        content: `Session goal completed: Finish the durable session goal. Evidence: node verify.mjs exited 0 at the completion boundary in ${workspace}.`,
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an earlier command pass is followed by an external workspace change,
+    When the model proposes completion,
+    Then Keel reruns the verifier and keeps the failing goal active`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-goal-stale-command-evidence-"),
+    );
+    const messages: Message[] = [
+      { role: "user", content: "Finish the durable session goal." },
+    ];
+    const statePath = join(workspace, "state.txt");
+    await writeFile(statePath, "status=READY\n");
+    await writeFile(
+      join(workspace, "verify.mjs"),
+      "import { readFileSync } from 'node:fs'; process.exit(readFileSync('state.txt', 'utf8') === 'status=READY\\n' ? 0 : 1);\n",
+    );
+    const providerRequests: (readonly Message[])[] = [];
+    const sessionGoal: SessionGoal = {
+      objective: "Finish the durable session goal",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "command",
+      completionCriterion: "node verify.mjs",
     };
     const provider: LLMProvider = {
       id: "goal-stale-command-evidence-provider",
@@ -1009,23 +1109,13 @@ describe("Task Progress", () => {
             type: "tool_call",
             id: "verify_1",
             tool: "bash",
-            command: 'node -e "process.exit(0)"',
+            command: "node verify.mjs",
           };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
         if (providerRequests.length === 2) {
-          yield {
-            type: "tool_call",
-            id: "write_1",
-            tool: "write",
-            path: "note.txt",
-            content: "changed after verification\n",
-          };
-          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-          return;
-        }
-        if (providerRequests.length === 3) {
+          await writeFile(statePath, "status=BROKEN\n");
           yield {
             type: "tool_call",
             id: "goal_1",
@@ -1064,17 +1154,17 @@ describe("Task Progress", () => {
             latestRuntimeOutcome: {
               kind: "completion_rejected",
               reason:
-                'Completion was rejected because command criterion "node -e \\"process.exit(0)\\"" became stale after a workspace mutation.',
+                'Completion was rejected because command criterion "node verify.mjs" exited with code 1 at the completion boundary.',
             },
           }),
         }),
       );
-      expect(providerRequests).toHaveLength(4);
-      expect(providerRequests[3]?.at(-1)).toEqual({
+      expect(providerRequests).toHaveLength(3);
+      expect(providerRequests[2]?.at(-1)).toEqual({
         role: "tool",
         toolCallId: "goal_1",
         content: expect.stringContaining(
-          "Tool failed: update_goal failed: command completion criterion evidence is stale",
+          'completion command "node verify.mjs" exited with code 1 at the completion boundary',
         ),
       });
       expect(messages.at(-1)).toEqual({
@@ -1082,6 +1172,110 @@ describe("Task Progress", () => {
         content: "I need to rerun verification.",
         toolCalls: [],
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a command completion proposal has a later workspace mutation in the same turn,
+    When Runtime reaches update_goal before that mutation,
+    Then it rejects the non-terminal proposal without spending the verifier`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-goal-non-terminal-command-completion-"),
+    );
+    const statePath = join(workspace, "state.txt");
+    const verifierMarkerPath = join(workspace, "verifier-ran.txt");
+    await writeFile(statePath, "status=READY\n");
+    await writeFile(
+      join(workspace, "verify.mjs"),
+      [
+        "import { appendFileSync, readFileSync } from 'node:fs';",
+        "appendFileSync('verifier-ran.txt', 'run\\n');",
+        "process.exit(readFileSync('state.txt', 'utf8') === 'status=READY\\n' ? 0 : 1);",
+      ].join("\n"),
+    );
+    const messages: Message[] = [
+      { role: "user", content: "Finish the durable session goal." },
+    ];
+    let actingRequests = 0;
+    const sessionGoal: SessionGoal = {
+      objective: "Finish the durable session goal",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "command",
+      completionCriterion: "node verify.mjs",
+    };
+    const provider: LLMProvider = {
+      id: "goal-non-terminal-command-completion-provider",
+      async *stream() {
+        actingRequests++;
+        if (actingRequests === 1) {
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield {
+            type: "tool_call",
+            id: "break_state",
+            tool: "bash",
+            command: "printf 'status=BROKEN\\n' > state.txt",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield {
+          type: "text",
+          text: "I must propose completion only after all other actions.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+          stopPolicy: defaultStopPolicy(),
+          sessionGoal,
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session_goal_updated",
+          goal: expect.objectContaining({
+            status: "active",
+            latestRuntimeOutcome: {
+              kind: "completion_rejected",
+              reason:
+                "Completion was rejected because update_goal(completed) was not the final tool call in its agent turn.",
+            },
+          }),
+        }),
+      );
+      expect(events).not.toContainEqual(
+        expect.objectContaining({
+          type: "session_goal_updated",
+          goal: expect.objectContaining({ status: "completed" }),
+        }),
+      );
+      await expect(readFile(verifierMarkerPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(readFile(statePath, "utf8")).resolves.toBe(
+        "status=BROKEN\n",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1296,6 +1490,364 @@ describe("Task Progress", () => {
       expect(messages.at(-1)).toEqual({
         role: "assistant",
         content: "The migration notes are complete.",
+        toolCalls: [],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a read and assertion completion proposal share one agent turn,
+    When update_goal evaluates the just-finished read,
+    Then the evaluator receives its settled matching resource evidence`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-goal-same-turn-read-completion-"),
+    );
+    await writeFile(
+      join(workspace, "state.txt"),
+      `status=READY\n${"x".repeat(1_000)}\n`,
+    );
+    const savedArtifacts: ToolOutputArtifactSaveInput[] = [];
+    const messages: Message[] = [
+      { role: "user", content: "Verify the current state." },
+    ];
+    let actingRequests = 0;
+    const sessionGoal: SessionGoal = {
+      objective: "Verify the current state",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "assertion",
+      completionCriterion:
+        "The current contents of state.txt begin with status=READY followed by a newline.",
+    };
+    const provider: LLMProvider = {
+      id: "goal-same-turn-read-completion-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          const prompt = options.messages[0]?.content ?? "";
+          const hasFreshRead =
+            prompt.includes("status=READY") &&
+            prompt.includes('"resourceFreshness"') &&
+            prompt.includes('"status": "matches"');
+          yield {
+            type: "text",
+            text: JSON.stringify({
+              completed: hasFreshRead,
+              reason: hasFreshRead
+                ? "The just-finished read matches the current file projection."
+                : "The just-finished read was missing from the evidence ledger.",
+            }),
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        actingRequests++;
+        if (actingRequests === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_1",
+            tool: "read",
+            path: "state.txt",
+          };
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "The current state is verified." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          sessionGoal,
+          toolOutputArtifacts: {
+            maxInlineChars: 64,
+            store: {
+              verifyReusable: async () => ({ status: "not_reusable" }),
+              save: async (input) => {
+                savedArtifacts.push(input);
+                return {
+                  status: "stored",
+                  ref: "tool-output:test/same-turn-read",
+                  contentSha256: "0".repeat(64),
+                };
+              },
+              discard: async () => {
+                savedArtifacts.pop();
+              },
+            },
+          },
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session_goal_updated",
+          goal: expect.objectContaining({
+            status: "completed",
+            completionEvidence: {
+              kind: "assertion_evaluator",
+              reason:
+                "The just-finished read matches the current file projection.",
+            },
+          }),
+        }),
+      );
+      expect(events).toContainEqual({
+        type: "tool_output_artifact",
+        status: "stored",
+        ref: "tool-output:test/same-turn-read",
+        toolCallId: "read_1",
+        toolName: "read",
+        sourceStatus: "complete",
+        omittedChars: expect.any(Number),
+      });
+      expect(savedArtifacts).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an assertion completion proposal has a later mutation in the same turn,
+    When Runtime reaches update_goal before that mutation,
+    Then it rejects completion before calling the evaluator`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-goal-non-terminal-assertion-completion-"),
+    );
+    const statePath = join(workspace, "state.txt");
+    await writeFile(statePath, "status=READY\n");
+    const messages: Message[] = [
+      { role: "user", content: "Verify the current state." },
+    ];
+    let actingRequests = 0;
+    let evaluatorRequests = 0;
+    const sessionGoal: SessionGoal = {
+      objective: "Verify the current state",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "assertion",
+      completionCriterion:
+        "The current complete contents of state.txt are status=READY followed by a newline.",
+    };
+    const provider: LLMProvider = {
+      id: "goal-non-terminal-assertion-completion-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          evaluatorRequests++;
+          yield {
+            type: "text",
+            text: JSON.stringify({
+              completed: true,
+              reason: "This evaluator must not run before the later mutation.",
+            }),
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        actingRequests++;
+        if (actingRequests === 1) {
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield {
+            type: "tool_call",
+            id: "break_state",
+            tool: "bash",
+            command: "printf 'status=BROKEN\\n' > state.txt",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield {
+          type: "text",
+          text: "I must re-observe and propose completion in a later turn.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: true,
+          stopPolicy: defaultStopPolicy(),
+          sessionGoal,
+        }),
+      );
+
+      // Then
+      expect(evaluatorRequests).toBe(0);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session_goal_updated",
+          goal: expect.objectContaining({
+            status: "active",
+            latestRuntimeOutcome: {
+              kind: "completion_rejected",
+              reason:
+                "Completion was rejected because update_goal(completed) was not the final tool call in its agent turn.",
+            },
+          }),
+        }),
+      );
+      await expect(readFile(statePath, "utf8")).resolves.toBe(
+        "status=BROKEN\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an assertion goal read a file that changed outside Keel,
+    When the model proposes completion from the old read,
+    Then Keel surfaces the changed resource fact and keeps the goal active`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-goal-external-read-change-"),
+    );
+    const statePath = join(workspace, "state.txt");
+    await writeFile(statePath, "status=READY\n");
+    const messages: Message[] = [
+      { role: "user", content: "Verify the current state." },
+    ];
+    const providerRequests: {
+      readonly messages: readonly Message[];
+      readonly toolChoice?: "none";
+    }[] = [];
+    let actingRequests = 0;
+    const sessionGoal: SessionGoal = {
+      objective: "Verify the current state",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "assertion",
+      completionCriterion:
+        "The current complete contents of state.txt are status=READY followed by a newline.",
+    };
+    const provider: LLMProvider = {
+      id: "goal-external-read-change-provider",
+      async *stream(options) {
+        providerRequests.push({
+          messages: structuredClone([...options.messages]),
+          ...(options.toolChoice !== undefined
+            ? { toolChoice: options.toolChoice }
+            : {}),
+        });
+        if (options.toolChoice === "none") {
+          const prompt = options.messages[0]?.content ?? "";
+          const changed =
+            prompt.includes('"resourceFreshness"') &&
+            prompt.includes('"status": "changed"');
+          yield {
+            type: "text",
+            text: JSON.stringify({
+              completed: !changed,
+              reason: changed
+                ? "Runtime reports that the supporting state.txt observation changed."
+                : "The old read appears to prove the current state.",
+            }),
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        actingRequests++;
+        if (actingRequests === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_1",
+            tool: "read",
+            path: "state.txt",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (actingRequests === 2) {
+          await writeFile(statePath, "status=BROKEN\n");
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield {
+          type: "text",
+          text: "I need to read the current file before completing the goal.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          sessionGoal,
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session_goal_updated",
+          goal: expect.objectContaining({
+            status: "active",
+            latestRuntimeOutcome: {
+              kind: "completion_rejected",
+              reason:
+                "Runtime reports that the supporting state.txt observation changed.",
+            },
+          }),
+        }),
+      );
+      const evaluatorRequest = providerRequests.find(
+        (request) => request.toolChoice === "none",
+      );
+      expect(evaluatorRequest?.messages[0]).toEqual({
+        role: "user",
+        content: expect.stringContaining('"status": "changed"'),
+      });
+      expect(messages.at(-1)).toEqual({
+        role: "assistant",
+        content: "I need to read the current file before completing the goal.",
         toolCalls: [],
       });
     } finally {

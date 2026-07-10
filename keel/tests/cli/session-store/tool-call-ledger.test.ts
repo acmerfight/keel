@@ -17,9 +17,9 @@ import {
 } from "../../../src/testing/session-store-fixtures.ts";
 
 describe("Session Store Tool Call Ledger", () => {
-  test(`Given a persisted transcript contains every tool-call shape,
+  test(`Given a persisted transcript contains tool-call shapes and a read observation,
     When the session is resumed,
-    Then optional tool-call fields survive the disk boundary`, async () => {
+    Then optional tool-call fields and resource evidence survive the disk boundary`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
@@ -78,6 +78,11 @@ describe("Session Store Tool Call Ledger", () => {
         toolCallId: "read_with_range",
         content: "read result",
         sourceTruncated: false,
+        resourceObservation: {
+          kind: "read_projection",
+          targetPathSha256: "a".repeat(64),
+          contentSha256: "b".repeat(64),
+        },
       },
       { role: "tool", toolCallId: "ls_with_options", content: "ls result" },
       { role: "tool", toolCallId: "glob_with_path", content: "glob result" },

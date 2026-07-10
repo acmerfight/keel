@@ -6,7 +6,6 @@ import {
   clearSessionGoalBlockedAudit,
   copySessionGoal,
   type SessionGoal,
-  sessionGoalCommandMatchesCriterion,
 } from "../core/session-goal.ts";
 import {
   copySessionTaskProgress,
@@ -20,11 +19,7 @@ import type {
   ToolCall,
 } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
-import {
-  executeToolCall,
-  type GoalCompletionCommandEvidence,
-  type ToolExecution,
-} from "../tools/execution.ts";
+import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
 import {
   createProjectInstructionVisibilityState,
   type ProjectInstructionVisibilityState,
@@ -36,6 +31,7 @@ import {
   type CostTrackingOptions,
   emptyRunAccounting,
 } from "./accounting.ts";
+import { assertionEvidenceResourceFreshness } from "./assertion-evidence-freshness.ts";
 import { evaluateAssertionGoalCompletionWithProvider } from "./assertion-goal-evaluator.ts";
 import {
   type ContextCompactionOptions,
@@ -55,6 +51,7 @@ import {
   projectSessionLedgerToProviderMessages,
   type SessionLedger,
   sessionLedgerFromMessages,
+  sessionLedgerMessages,
   syncMessagesFromSessionLedger,
 } from "./session-ledger.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
@@ -143,13 +140,6 @@ function mutatedTargetPathsFromExecution(
     targetPaths.push(...execution.mutatedTargetPaths);
   }
   return targetPaths;
-}
-
-function bashCommandEvidenceMatchesGoal(
-  goal: SessionGoal | undefined,
-  evidence: NonNullable<ToolExecution["bashCommandEvidence"]>,
-): boolean {
-  return sessionGoalCommandMatchesCriterion(goal, evidence.command);
 }
 
 function toolEndEvent(
@@ -545,8 +535,6 @@ export async function* runAgentTurn(
       messageOrdinal,
     };
   };
-  let workspaceMutationSequence = 0;
-  let goalCompletionCommandEvidence: GoalCompletionCommandEvidence | undefined;
   let postCompactionReadSequence = 0;
   const config: CompactionConfig = {
     provider,
@@ -751,14 +739,17 @@ export async function* runAgentTurn(
           hasRead: readVisibility.hasRead,
         },
         projectInstructions: projectInstructionVisibility,
-        workspaceMutationSequence,
         evaluateAssertionGoalCompletion: async (goal) => {
+          const evidenceMessages = sessionLedgerMessages(sessionLedger);
           const evaluation = await evaluateAssertionGoalCompletionWithProvider({
             provider,
             signal,
             goal,
-            evidenceMessages:
-              projectSessionLedgerToProviderMessages(sessionLedger),
+            evidenceMessages,
+            resourceFreshness: assertionEvidenceResourceFreshness({
+              workspace,
+              messages: evidenceMessages,
+            }),
           });
           state.accounting = addRequestAccounting(
             state.accounting,
@@ -773,9 +764,11 @@ export async function* runAgentTurn(
         ...(toolSessionGoal !== undefined
           ? { sessionGoal: toolSessionGoal }
           : {}),
-        ...(goalCompletionCommandEvidence !== undefined
-          ? { goalCompletionCommandEvidence }
-          : {}),
+        completionProposalHasFollowingToolCalls:
+          toolCall.tool === "update_goal" &&
+          "status" in toolCall &&
+          toolCall.status === "completed" &&
+          toolCall !== turnResult.toolCalls.at(-1),
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       });
     };
@@ -816,6 +809,11 @@ export async function* runAgentTurn(
               content: settled.content,
               sourceTruncated: settled.sourceTruncated,
             }),
+            ...(settled.execution.resourceObservation !== undefined
+              ? {
+                  resourceObservation: settled.execution.resourceObservation,
+                }
+              : {}),
           }),
         );
         if (settled.notice !== undefined) {
@@ -832,27 +830,6 @@ export async function* runAgentTurn(
       projectInstructionVisibility.applyMutationTargetPaths(
         mutatedTargetPathsFromExecution(completed.execution),
       );
-      if (completed.execution.ok) {
-        if (completed.execution.bashCommandEvidence !== undefined) {
-          if (
-            bashCommandEvidenceMatchesGoal(
-              sessionGoal,
-              completed.execution.bashCommandEvidence,
-            )
-          ) {
-            goalCompletionCommandEvidence = {
-              ...completed.execution.bashCommandEvidence,
-              observedMutationSequence: workspaceMutationSequence,
-            };
-          } else {
-            workspaceMutationSequence++;
-          }
-        } else if (
-          mutatedTargetPathsFromExecution(completed.execution).length > 0
-        ) {
-          workspaceMutationSequence++;
-        }
-      }
       completedToolExecutions.push(completed);
       pendingToolExecutions.push(completed);
     };
@@ -923,6 +900,11 @@ export async function* runAgentTurn(
         }
       } else {
         const { toolCall } = segment.toolCall;
+        if (toolCall.tool === "update_goal") {
+          for (const notice of await settlePendingToolExecutions()) {
+            yield { type: "tool_output_artifact", ...notice };
+          }
+        }
         yield { type: "tool_start", toolCall };
         let execution: ToolExecution;
         try {

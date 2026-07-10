@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { providerIds } from "../../core/provider-id.ts";
+import { copyReadResourceObservation } from "../../core/resource-observation.ts";
 import {
   normalizeSessionGoalCompletionCommand,
   normalizeSessionGoalCompletionCriterion,
@@ -119,12 +120,22 @@ const assistantMessageSchema = z
   })
   .strict();
 
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+const readResourceObservationSchema = z
+  .object({
+    kind: z.literal("read_projection"),
+    targetPathSha256: sha256Schema,
+    contentSha256: sha256Schema,
+  })
+  .strict();
+
 const toolMessageSchema = z
   .object({
     role: z.literal("tool"),
     toolCallId: z.string(),
     content: z.string(),
     sourceTruncated: z.boolean().optional(),
+    resourceObservation: readResourceObservationSchema.optional(),
   })
   .strict();
 
@@ -507,6 +518,13 @@ function toMessage(message: RawMessage): Message {
         ...(message.sourceTruncated !== undefined
           ? { sourceTruncated: message.sourceTruncated }
           : {}),
+        ...(message.resourceObservation !== undefined
+          ? {
+              resourceObservation: copyReadResourceObservation(
+                message.resourceObservation,
+              ),
+            }
+          : {}),
       };
   }
 }
@@ -541,6 +559,13 @@ function copyMessage(message: Message): Message {
         content: message.content,
         ...(message.sourceTruncated !== undefined
           ? { sourceTruncated: message.sourceTruncated }
+          : {}),
+        ...(message.resourceObservation !== undefined
+          ? {
+              resourceObservation: copyReadResourceObservation(
+                message.resourceObservation,
+              ),
+            }
           : {}),
       };
   }
@@ -828,7 +853,7 @@ function redactSessionGoalCompletionEvidenceForPersistence(
             lengthError: `Error: /goal completion evidence cwd must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
           }),
           exitCode: 0,
-          freshness: "after_latest_workspace_mutation",
+          freshness: "at_completion",
         };
       case "assertion_evaluator":
         return {

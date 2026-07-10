@@ -16,10 +16,7 @@ import {
   sessionGoalStatesEqual,
   sessionGoalsEqual,
 } from "../../src/core/session-goal.ts";
-import {
-  executeToolCall,
-  type GoalCompletionCommandEvidence,
-} from "../../src/tools/execution.ts";
+import { executeToolCall } from "../../src/tools/execution.ts";
 import {
   openAICompatibleTools,
   toolCallFromParsedArguments,
@@ -409,7 +406,7 @@ describe("Session Goal Tool", () => {
       "Runtime will complete the goal only if a fresh-context evaluator approves the evidence.",
     );
     expect(prompt).not.toContain(
-      "Before proposing completion, run the command completion criterion",
+      "Runtime will run the exact configured command at the completion boundary",
     );
   });
 
@@ -594,7 +591,7 @@ describe("Session Goal Tool", () => {
           command: "pnpm test",
           cwd: "/repo",
           exitCode: 0,
-          freshness: "after_latest_workspace_mutation",
+          freshness: "at_completion",
         },
       }),
     ).toEqual({
@@ -609,7 +606,7 @@ describe("Session Goal Tool", () => {
         command: "pnpm test",
         cwd: "/repo",
         exitCode: 0,
-        freshness: "after_latest_workspace_mutation",
+        freshness: "at_completion",
       },
     });
     expect(
@@ -625,11 +622,11 @@ describe("Session Goal Tool", () => {
           command: "pnpm test",
           cwd: "/repo",
           exitCode: 0,
-          freshness: "after_latest_workspace_mutation",
+          freshness: "at_completion",
         },
       }),
     ).toBe(
-      "completed - Fix checkout tests; criterion(command): pnpm test; evidence: pnpm test exited 0 after the latest workspace mutation in /repo",
+      "completed - Fix checkout tests; criterion(command): pnpm test; evidence: pnpm test exited 0 at the completion boundary in /repo",
     );
     expect(
       formatSessionGoalSummary(
@@ -645,7 +642,7 @@ describe("Session Goal Tool", () => {
             command: "pnpm test",
             cwd: "/repo",
             exitCode: 0,
-            freshness: "after_latest_workspace_mutation",
+            freshness: "at_completion",
           },
         },
         { includeCompletionEvidence: false },
@@ -1326,8 +1323,8 @@ describe("Session Goal Tool", () => {
     }
   });
 
-  test(`Given update_goal receives completed with fresh successful command evidence,
-    When the builtin tool executes,
+  test(`Given update_goal receives completed for a command goal with Bash enabled,
+    When the Runtime-owned verifier exits zero,
     Then it returns the completed deterministic goal state`, async () => {
     // Given
     const workspace = await mkdtemp(
@@ -1347,45 +1344,42 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        allowBash: true,
+        bashPermission: {
+          review: () => ({ type: "allow", scope: "once" }),
+        },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
-          completionCriterion: "pnpm test",
-        },
-        goalCompletionCommandEvidence: {
-          command: "pnpm test",
-          cwd: workspace,
-          exitCode: 0,
-          observedMutationSequence: 0,
+          completionCriterion: 'node -e "process.exit(0)"',
         },
       });
 
       // Then
       expect(execution).toMatchObject({
         ok: true,
-        content: `Session goal completed: Finish the durable checkout goal. Evidence: pnpm test exited 0 after the latest workspace mutation in ${workspace}.`,
+        content: `Session goal completed: Finish the durable checkout goal. Evidence: node -e "process.exit(0)" exited 0 at the completion boundary in ${workspace}.`,
         sessionGoalUpdate: {
           objective: "Finish the durable checkout goal",
           status: "completed",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completionCriterion: 'node -e "process.exit(0)"',
           completionEvidence: {
             kind: "command",
-            command: "pnpm test",
+            command: 'node -e "process.exit(0)"',
             cwd: workspace,
             exitCode: 0,
-            freshness: "after_latest_workspace_mutation",
+            freshness: "at_completion",
           },
           latestRuntimeOutcome: {
             kind: "completed",
             reason:
-              'Completion command "pnpm test" exited 0 after the latest workspace mutation.',
+              'Completion command "node -e \\"process.exit(0)\\"" exited 0 at the completion boundary.',
           },
         },
       });
@@ -1394,93 +1388,7 @@ describe("Session Goal Tool", () => {
     }
   });
 
-  test.each([
-    {
-      name: "no command evidence",
-      evidence: () => undefined,
-      expected:
-        "Tool failed: update_goal failed: command completion criterion has not run",
-    },
-    {
-      name: "different command evidence",
-      evidence: (workspace: string): GoalCompletionCommandEvidence => ({
-        command: "pnpm lint",
-        cwd: workspace,
-        exitCode: 0,
-        observedMutationSequence: 0,
-      }),
-      expected:
-        "Tool failed: update_goal failed: latest command evidence does not match",
-    },
-    {
-      name: "different cwd evidence",
-      evidence: (workspace: string): GoalCompletionCommandEvidence => ({
-        command: "pnpm test",
-        cwd: join(workspace, "other"),
-        exitCode: 0,
-        observedMutationSequence: 0,
-      }),
-      expected:
-        "Tool failed: update_goal failed: latest command evidence came from a different working directory",
-    },
-  ])(`Given update_goal receives completed with $name,
-    When the builtin tool executes,
-    Then it keeps the goal active and returns the evidence gate reason`, async ({
-    evidence,
-    expected,
-  }) => {
-    // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-update-goal-rejected-evidence-"),
-    );
-    const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
-      status: "completed",
-    });
-    const goalCompletionCommandEvidence = evidence(workspace);
-
-    try {
-      if (toolCall === null) {
-        throw new Error("expected valid update_goal call");
-      }
-
-      // When
-      const execution = await executeToolCall({
-        workspace,
-        toolCall,
-        signal: freshSignal(),
-        allowBash: goalCompletionCommandEvidence === undefined,
-        sessionGoal: {
-          objective: "Finish the durable checkout goal",
-          status: "active",
-          budget: {},
-          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
-        },
-        ...(goalCompletionCommandEvidence !== undefined
-          ? { goalCompletionCommandEvidence }
-          : {}),
-        workspaceMutationSequence: 0,
-      });
-
-      // Then
-      expect(execution).toMatchObject({
-        ok: false,
-        content: expect.stringContaining(expected),
-      });
-      expect(execution.sessionGoalUpdate).toMatchObject({
-        status: "active",
-        latestRuntimeOutcome: {
-          kind: "completion_rejected",
-          reason: expect.any(String),
-        },
-      });
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given update_goal receives completed without evidence while bash is disabled,
+  test(`Given update_goal receives completed while Bash is disabled,
     When the builtin tool executes,
     Then it tells the model that automatic verification is unavailable`, async () => {
     // Given
@@ -1510,14 +1418,13 @@ describe("Session Goal Tool", () => {
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
-        workspaceMutationSequence: 0,
       });
 
       // Then
       expect(execution).toMatchObject({
         ok: false,
         content: expect.stringContaining(
-          'Recovery: Bash is disabled in this run, so the agent cannot run "pnpm test". Ask the user to resume with --bash-policy ask or --bash-policy trusted, or to use /goal complete after checking it manually.',
+          'Runtime cannot run command completion criterion "pnpm test" because Bash is disabled.',
         ),
       });
       expect(execution.sessionGoalUpdate).toMatchObject({
@@ -1525,7 +1432,7 @@ describe("Session Goal Tool", () => {
         latestRuntimeOutcome: {
           kind: "completion_rejected",
           reason:
-            'Completion was rejected because command criterion "pnpm test" has not run.',
+            'Completion was rejected because Runtime could not run command criterion "pnpm test" while Bash was disabled.',
         },
       });
     } finally {
@@ -1533,9 +1440,9 @@ describe("Session Goal Tool", () => {
     }
   });
 
-  test(`Given update_goal receives completed with failed command evidence,
-    When the builtin tool executes,
-    Then it keeps the goal active and returns the failed evidence reason`, async () => {
+  test(`Given update_goal receives completed for a failing command goal,
+    When the Runtime-owned verifier exits nonzero,
+    Then it keeps the goal active and returns the verifier output`, async () => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-update-goal-failed-evidence-"),
@@ -1554,37 +1461,32 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        allowBash: true,
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completionCriterion:
+            "node -e \"console.log('still failing'); process.exit(1)\"",
         },
-        goalCompletionCommandEvidence: {
-          command: "pnpm test",
-          cwd: workspace,
-          exitCode: 1,
-          observedMutationSequence: 0,
-        },
-        workspaceMutationSequence: 0,
       });
 
       // Then
       expect(execution).toMatchObject({
         ok: false,
         content: expect.stringContaining(
-          "Tool failed: update_goal failed: command completion criterion exited with code 1.",
+          "exited with code 1 at the completion boundary",
         ),
       });
+      expect(execution.content).toContain("still failing");
       expect(execution.sessionGoalUpdate).toMatchObject({
         status: "active",
         latestRuntimeOutcome: {
           kind: "completion_rejected",
           reason:
-            'Completion was rejected because command criterion "pnpm test" exited with code 1.',
+            'Completion was rejected because command criterion "node -e \\"console.log(\'still failing\'); process.exit(1)\\"" exited with code 1 at the completion boundary.',
         },
       });
     } finally {
@@ -1592,12 +1494,61 @@ describe("Session Goal Tool", () => {
     }
   });
 
-  test(`Given update_goal receives completed with unknown command exit code,
-    When the builtin tool executes,
-    Then it keeps the goal active and returns the unknown exit reason`, async () => {
+  test(`Given a failing Runtime-owned verifier exceeds the inline output limit,
+    When update_goal returns the failure,
+    Then it preserves the full verifier result for the normal artifact path`, async () => {
     // Given
     const workspace = await mkdtemp(
-      join(tmpdir(), "keel-update-goal-unknown-exit-evidence-"),
+      join(tmpdir(), "keel-update-goal-large-verifier-output-"),
+    );
+    const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
+      status: "completed",
+    });
+    const command =
+      "node -e \"process.stdout.write('x'.repeat(25000)); process.exit(1)\"";
+
+    try {
+      if (toolCall === null) {
+        throw new Error("expected valid update_goal call");
+      }
+
+      // When
+      const execution = await executeToolCall({
+        workspace,
+        toolCall,
+        signal: freshSignal(),
+        allowBash: true,
+        sessionGoal: {
+          objective: "Finish the durable checkout goal",
+          status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+          criterionKind: "command",
+          completionCriterion: command,
+        },
+      });
+
+      // Then
+      expect(execution).toMatchObject({
+        ok: false,
+        sourceTruncated: true,
+        artifactSourceTruncated: false,
+        sessionGoalUpdate: { status: "active" },
+      });
+      expect(execution.content.length).toBeLessThan(23_000);
+      expect(execution.artifactContent?.length).toBeGreaterThan(25_000);
+      expect(execution.artifactContent).toContain("Recovery:");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given update_goal completion verification is denied,
+    When the Runtime asks the Bash permission policy,
+    Then it keeps the goal active without executing the command`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-update-goal-command-denied-"),
     );
     const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
       status: "completed",
@@ -1613,7 +1564,13 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        allowBash: true,
+        bashPermission: {
+          review: () => ({
+            type: "deny",
+            message: "The user declined this verifier.",
+          }),
+        },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -1622,20 +1579,13 @@ describe("Session Goal Tool", () => {
           criterionKind: "command",
           completionCriterion: "pnpm test",
         },
-        goalCompletionCommandEvidence: {
-          command: "pnpm test",
-          cwd: workspace,
-          exitCode: null,
-          observedMutationSequence: 0,
-        },
-        workspaceMutationSequence: 0,
       });
 
       // Then
       expect(execution).toMatchObject({
         ok: false,
         content: expect.stringContaining(
-          "Tool failed: update_goal failed: command completion criterion exited with code unknown.",
+          "command completion verification was denied: The user declined this verifier.",
         ),
       });
       expect(execution.sessionGoalUpdate).toMatchObject({
@@ -1643,7 +1593,7 @@ describe("Session Goal Tool", () => {
         latestRuntimeOutcome: {
           kind: "completion_rejected",
           reason:
-            'Completion was rejected because command criterion "pnpm test" exited with code unknown.',
+            'Completion was rejected because permission to run command criterion "pnpm test" was denied.',
         },
       });
     } finally {
@@ -1651,12 +1601,12 @@ describe("Session Goal Tool", () => {
     }
   });
 
-  test(`Given update_goal receives completed with stale command evidence,
-    When the builtin tool executes,
-    Then it keeps the goal active and asks for a fresh command run`, async () => {
+  test(`Given the Runtime-owned completion verifier is terminated by a signal,
+    When update_goal receives its unknown exit code,
+    Then it keeps the goal active with the execution failure`, async () => {
     // Given
     const workspace = await mkdtemp(
-      join(tmpdir(), "keel-update-goal-stale-evidence-"),
+      join(tmpdir(), "keel-update-goal-command-signal-"),
     );
     const toolCall = toolCallFromParsedArguments("goal_1", "update_goal", {
       status: "completed",
@@ -1672,37 +1622,30 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        allowBash: true,
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completionCriterion: "kill -TERM $$",
         },
-        goalCompletionCommandEvidence: {
-          command: "pnpm test",
-          cwd: workspace,
-          exitCode: 0,
-          observedMutationSequence: 0,
-        },
-        workspaceMutationSequence: 1,
       });
 
       // Then
       expect(execution).toMatchObject({
         ok: false,
         content: expect.stringContaining(
-          "Tool failed: update_goal failed: command completion criterion evidence is stale",
+          "exited with code unknown at the completion boundary",
         ),
-      });
-      expect(execution.sessionGoalUpdate).toMatchObject({
-        status: "active",
-        latestRuntimeOutcome: {
-          kind: "completion_rejected",
-          reason:
-            'Completion was rejected because command criterion "pnpm test" became stale after a workspace mutation.',
+        sessionGoalUpdate: {
+          status: "active",
+          latestRuntimeOutcome: {
+            kind: "completion_rejected",
+            reason:
+              'Completion was rejected because command criterion "kill -TERM $$" exited with code unknown at the completion boundary.',
+          },
         },
       });
     } finally {

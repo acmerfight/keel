@@ -920,12 +920,12 @@ describe("CLI Main - Interactive Entrypoint", () => {
           command: "test -f done.txt",
           cwd: workspace,
           exitCode: 0,
-          freshness: "after_latest_workspace_mutation",
+          freshness: "at_completion",
         },
         latestRuntimeOutcome: {
           kind: "completed",
           reason:
-            'Completion command "test -f done.txt" exited 0 after the latest workspace mutation.',
+            'Completion command "test -f done.txt" exited 0 at the completion boundary.',
         },
       });
       await expect(readFile(join(workspace, "done.txt"), "utf8")).resolves.toBe(

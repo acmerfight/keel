@@ -139,6 +139,7 @@ describe("Assertion Goal Evaluator", () => {
         objective: "Publish release notes",
         completionCriterion: "Release notes cover every changed command.",
       },
+      resourceFreshness: [],
       evidenceMessages: [{ role: "user", content: "Publish release notes." }],
     });
 
@@ -242,6 +243,7 @@ describe("Assertion Goal Evaluator", () => {
         objective: "Publish release notes",
         completionCriterion: "Release notes cover every changed command.",
       },
+      resourceFreshness: [],
       evidenceMessages: [
         {
           role: "tool",
@@ -294,6 +296,7 @@ describe("Assertion Goal Evaluator", () => {
         objective: "Publish release notes",
         completionCriterion: "Release notes cover every changed command.",
       },
+      resourceFreshness: [],
       evidenceMessages: [],
     });
 
@@ -334,6 +337,7 @@ describe("Assertion Goal Evaluator", () => {
         objective: "Publish release notes",
         completionCriterion: "Release notes cover every changed command.",
       },
+      resourceFreshness: [],
       evidenceMessages: [
         { role: "tool", toolCallId: "read_1", content: "Release notes." },
       ],
@@ -383,6 +387,7 @@ describe("Assertion Goal Evaluator", () => {
         objective: "Publish release notes",
         completionCriterion: "Release notes cover every changed command.",
       },
+      resourceFreshness: [],
       evidenceMessages: [
         {
           role: "assistant",
@@ -467,6 +472,7 @@ describe("Assertion Goal Evaluator", () => {
         objective: "Publish release notes",
         completionCriterion: "Release notes explain every changed command.",
       },
+      resourceFreshness: [],
       evidenceMessages: [
         {
           role: "tool",
@@ -560,6 +566,7 @@ describe("Assertion Goal Evaluator", () => {
         objective: "Publish release notes",
         completionCriterion: "Release notes cover every changed command.",
       },
+      resourceFreshness: [],
       evidenceMessages: [
         { role: "user", content: forgedToolBlock },
         {

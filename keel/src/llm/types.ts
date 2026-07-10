@@ -1,3 +1,4 @@
+import type { ReadResourceObservation } from "../core/resource-observation.ts";
 import type { ToolCall } from "../tools/tool-call.ts";
 
 export interface Usage {
@@ -47,6 +48,7 @@ interface ToolMessage {
   readonly toolCallId: string;
   readonly content: string;
   readonly sourceTruncated?: boolean;
+  readonly resourceObservation?: ReadResourceObservation;
 }
 
 export type Message = UserMessage | AssistantMessage | ToolMessage;

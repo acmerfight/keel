@@ -864,6 +864,22 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       expect(
         contextCompactedEvents(events).map((event) => event.reason),
       ).toEqual(["preflight"]);
+      const durableRead = messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "read_new",
+      );
+      expect(durableRead).toMatchObject({
+        resourceObservation: {
+          kind: "read_projection",
+          targetPathSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          contentSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        },
+      });
+      const providerRead = acceptedNewReadMessages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "read_new",
+      );
+      expect(providerRead).not.toHaveProperty("resourceObservation");
     } finally {
       await rm(workspaceDir, { recursive: true, force: true });
     }

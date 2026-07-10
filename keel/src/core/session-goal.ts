@@ -63,7 +63,7 @@ interface CommandSessionGoalCompletionEvidence {
   readonly command: string;
   readonly cwd: string;
   readonly exitCode: 0;
-  readonly freshness: "after_latest_workspace_mutation";
+  readonly freshness: "at_completion";
 }
 
 interface AssertionEvaluatorSessionGoalCompletionEvidence {
@@ -167,7 +167,7 @@ const sessionGoalCompletionEvidenceSchema = z.discriminatedUnion("kind", [
         .max(SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH),
       cwd: z.string().trim().min(1).max(SESSION_GOAL_OBJECTIVE_MAX_LENGTH),
       exitCode: z.literal(0),
-      freshness: z.literal("after_latest_workspace_mutation"),
+      freshness: z.literal("at_completion"),
     })
     .strict(),
   z
@@ -479,7 +479,7 @@ export function normalizeSessionGoalCompletionEvidence(
         command: normalizeSessionGoalCompletionCommand(evidence.command),
         cwd: evidence.cwd.trim(),
         exitCode: 0,
-        freshness: "after_latest_workspace_mutation",
+        freshness: "at_completion",
       };
     case "assertion_evaluator":
       return {
@@ -574,7 +574,7 @@ function copySessionGoalCompletionEvidence(
         command: evidence.command,
         cwd: evidence.cwd,
         exitCode: 0,
-        freshness: "after_latest_workspace_mutation",
+        freshness: "at_completion",
       };
     case "assertion_evaluator":
       return {
@@ -915,7 +915,7 @@ function formatSessionGoalCompletionEvidence(
 ): string {
   switch (evidence.kind) {
     case "command":
-      return `${evidence.command} exited 0 after the latest workspace mutation in ${evidence.cwd}`;
+      return `${evidence.command} exited 0 at the completion boundary in ${evidence.cwd}`;
     case "assertion_evaluator":
       return `evaluator approved: ${evidence.reason}`;
     case "user_override":
@@ -1009,8 +1009,8 @@ export function activeSessionGoalSystemPrompt(
     );
   } else if (commandCriterion !== undefined && options.bashToolVisible) {
     lines.push(
-      "- Before proposing completion, run the command completion criterion with bash after the last workspace mutation and inspect its output.",
-      "- When the objective is achieved and no required work remains, call update_goal with status completed. Runtime will complete the goal only if the latest matching command evidence succeeded and is still fresh.",
+      "- After the work is complete, do not run the configured command merely to establish final evidence; call update_goal directly because Runtime owns that final execution. Run it earlier only when unfinished work needs its output for diagnosis or guidance.",
+      "- When the objective is achieved and no required work remains, call update_goal with status completed. Runtime will run the exact configured command at the completion boundary and complete the goal only if it exits 0.",
     );
   } else {
     lines.push(
