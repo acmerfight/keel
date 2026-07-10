@@ -151,6 +151,22 @@ describe("Interactive Session - Goals", () => {
     );
   });
 
+  test(`Given a goal has a singular token budget and a punctuated limit reason,
+    When the interactive status is formatted with accounting,
+    Then Keel uses singular grammar and a clean reason separator`, () => {
+    expect(
+      formatInteractiveGoal({
+        objective: "Respect one token",
+        status: "budget_limited",
+        statusReason: "Session goal budget reached: tokens 2/1.",
+        budget: { tokens: 1 },
+        usage: { turns: 1, tokens: 2, activeTimeMs: 0 },
+      }),
+    ).toBe(
+      "Session goal: budget_limited - Respect one token; criterion: missing; reason: Session goal budget reached: tokens 2/1; usage: 1 turn, 2 tokens, 0ms active; budget: 1 token\n",
+    );
+  });
+
   test(`Given the goal command receives an objective,
     When the interactive command is parsed,
     Then Keel treats it as a local goal command instead of a prompt`, () => {

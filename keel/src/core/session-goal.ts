@@ -623,6 +623,10 @@ function formatSessionGoalTurnCount(turns: number): string {
   return `${turns} ${turns === 1 ? "turn" : "turns"}`;
 }
 
+function formatSessionGoalTokenCount(tokens: number): string {
+  return `${tokens} ${tokens === 1 ? "token" : "tokens"}`;
+}
+
 export function formatSessionGoalSummary(
   goal: SessionGoal | undefined,
   options: SessionGoalSummaryOptions = {},
@@ -631,12 +635,18 @@ export function formatSessionGoalSummary(
     return "none";
   }
   const includeCompletionEvidence = options.includeCompletionEvidence !== false;
+  const includesAccounting =
+    Object.keys(goal.budget).length > 0 || options.includeAccounting === true;
   const reason = (() => {
     switch (goal.status) {
       case "blocked":
       case "budget_limited":
       case "usage_limited":
-        return `; reason: ${goal.statusReason}`;
+        return `; reason: ${
+          includesAccounting
+            ? goal.statusReason.replace(/[.!?]+$/u, "")
+            : goal.statusReason
+        }`;
       case "active":
       case "paused":
       case "completed":
@@ -656,18 +666,17 @@ export function formatSessionGoalSummary(
       ? [formatSessionGoalTurnCount(goal.budget.turns)]
       : []),
     ...(goal.budget.tokens !== undefined
-      ? [`${goal.budget.tokens} tokens`]
+      ? [formatSessionGoalTokenCount(goal.budget.tokens)]
       : []),
     ...(goal.budget.activeTimeMs !== undefined
       ? [`${formatSessionGoalDuration(goal.budget.activeTimeMs)} active`]
       : []),
   ];
-  const accounting =
-    budgetParts.length > 0 || options.includeAccounting === true
-      ? `; usage: ${formatSessionGoalTurnCount(goal.usage.turns)}, ${goal.usage.tokens} tokens, ${formatSessionGoalDuration(goal.usage.activeTimeMs)} active; budget: ${
-          [...budgetParts].join(", ") || "none"
-        }`
-      : "";
+  const accounting = includesAccounting
+    ? `; usage: ${formatSessionGoalTurnCount(goal.usage.turns)}, ${formatSessionGoalTokenCount(goal.usage.tokens)}, ${formatSessionGoalDuration(goal.usage.activeTimeMs)} active; budget: ${
+        [...budgetParts].join(", ") || "none"
+      }`
+    : "";
   if (
     goal.criterionKind === undefined ||
     goal.completionCriterion === undefined
@@ -753,13 +762,13 @@ export function activeSessionGoalSystemPrompt(
     ...(Object.keys(goal.budget).length === 0
       ? []
       : [
-          `- Goal usage: ${formatSessionGoalTurnCount(goal.usage.turns)}, ${goal.usage.tokens} tokens, ${formatSessionGoalDuration(goal.usage.activeTimeMs)} active.`,
+          `- Goal usage: ${formatSessionGoalTurnCount(goal.usage.turns)}, ${formatSessionGoalTokenCount(goal.usage.tokens)}, ${formatSessionGoalDuration(goal.usage.activeTimeMs)} active.`,
           `- Goal budget: ${[
             ...(goal.budget.turns !== undefined
               ? [formatSessionGoalTurnCount(goal.budget.turns)]
               : []),
             ...(goal.budget.tokens !== undefined
-              ? [`${goal.budget.tokens} tokens`]
+              ? [formatSessionGoalTokenCount(goal.budget.tokens)]
               : []),
             ...(goal.budget.activeTimeMs !== undefined
               ? [

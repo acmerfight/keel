@@ -604,7 +604,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       usage: { turns: 2, tokens: 110, activeTimeMs: 2_500 },
     });
     expect(stderr).toBe(
-      "Session goal: budget_limited - Finish checkout within its goal budget; criterion: missing; reason: Session goal budget reached: turns 2/2; tokens 110/100.; usage: 2 turns, 110 tokens, 2.5s active; budget: 2 turns, 100 tokens, 5s active\n",
+      "Session goal: budget_limited - Finish checkout within its goal budget; criterion: missing; reason: Session goal budget reached: turns 2/2; tokens 110/100; usage: 2 turns, 110 tokens, 2.5s active; budget: 2 turns, 100 tokens, 5s active\n",
     );
   });
 
@@ -663,6 +663,133 @@ describe("Interactive Session - Reports And Queued Input", () => {
       budget: { turns: 1 },
       usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
     });
+  });
+
+  test(`Given an interactive report ends while the durable goal is budget-limited,
+    When the provider turn itself completed normally,
+    Then the report exposes the goal budget stop instead of false completion`, async () => {
+    const input = new PassThrough();
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        yield { type: "text", text: "Reached token budget." };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 2,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 2,
+            outputTokens: 1,
+          },
+        };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: {
+        bashMode: "disabled",
+        maxCostUsd: 1,
+        reportFile: "report.json",
+      },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: {
+        objective: "Report goal budget exhaustion",
+        status: "active",
+        budget: { tokens: 1 },
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      },
+      now: () => 0,
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ONE_DOLLAR_PER_MILLION_INPUT,
+      }),
+      requireKnownCostModel: () => ONE_DOLLAR_PER_MILLION_INPUT,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") finalEnd = event;
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionGoal: ({ goal }) => goal ?? undefined,
+    });
+    input.end("start goal\n");
+
+    const result = await session;
+
+    expect(result.report?.end.stopReason).toBe("goal_budget");
+  });
+
+  test(`Given goal and session cost budgets are exhausted by the same turn,
+    When Keel builds the interactive report,
+    Then the terminal session cost reason takes precedence`, async () => {
+    const input = new PassThrough();
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        yield { type: "text", text: "Reached both budgets." };
+        yield { type: "stop", reason: "stop", usage: EXPENSIVE_USAGE };
+      },
+    };
+    const session = runInteractiveSession({
+      cliArgs: {
+        bashMode: "disabled",
+        maxCostUsd: 1,
+        reportFile: "report.json",
+      },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: {
+        objective: "Report session cost precedence",
+        status: "active",
+        budget: { tokens: 1 },
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      },
+      now: () => 0,
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ONE_DOLLAR_PER_MILLION_INPUT,
+      }),
+      requireKnownCostModel: () => ONE_DOLLAR_PER_MILLION_INPUT,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") finalEnd = event;
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionGoal: ({ goal }) => goal ?? undefined,
+    });
+    input.end("start goal\n");
+
+    const result = await session;
+
+    expect(result.report?.end.stopReason).toBe("cost_budget");
   });
 
   test(`Given a goal reaches its own budget while remediation commands are queued,

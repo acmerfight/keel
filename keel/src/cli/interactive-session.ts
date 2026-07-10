@@ -503,7 +503,12 @@ export async function runInteractiveSession(
       type: "end",
       usage: sessionUsage,
       turns: sessionTurns,
-      stopReason: sessionStopReason,
+      stopReason:
+        sessionStopReason === "cost_budget"
+          ? "cost_budget"
+          : sessionGoal?.status === "budget_limited"
+            ? "goal_budget"
+            : sessionStopReason,
       cost: currentSessionCostReport(),
     };
   };
@@ -828,6 +833,7 @@ export async function runInteractiveSession(
         );
       }
       if (cumulativeCost?.budgetExceeded === true) {
+        sessionStopReason = "cost_budget";
         limitActiveGoal("budget_limited", GOAL_BUDGET_LIMIT_REASON);
         return {
           aborted: false,
