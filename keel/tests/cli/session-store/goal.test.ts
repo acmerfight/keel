@@ -13,6 +13,7 @@ import {
   SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
   SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
   SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
+  SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH,
   SESSION_GOAL_STATUS_REASON_MAX_LENGTH,
 } from "../../../src/core/session-goal.ts";
 import type { Message } from "../../../src/llm/types.ts";
@@ -356,6 +357,66 @@ describe("Session Store Goal", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(JSON.stringify(ledgerRecords.at(-1))).not.toContain("sk-aaaa");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a latest runtime outcome expands during persistence redaction,
+    When the saved session is resumed,
+    Then the bounded redacted outcome survives without leaking the source secret`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const reason = redactionExpandingText(
+      SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH,
+    );
+
+    try {
+      const session = createSessionStore({
+        sessionId: "session-goal-outcome-redaction",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When
+      persistSessionGoal({
+        session,
+        goal: {
+          objective: "Recover the saved goal",
+          status: "active",
+          budget: {},
+          usage: { turns: 1, tokens: 20, activeTimeMs: 30 },
+          criterionKind: "assertion",
+          completionCriterion: "The report exists.",
+          latestRuntimeOutcome: {
+            kind: "completion_rejected",
+            reason,
+            observedEvidenceFingerprints: [`tools:${"a".repeat(64)}`],
+          },
+        },
+        runtime: runtime(home, 1),
+      });
+      const resumed = resumeSessionStore({
+        sessionId: "session-goal-outcome-redaction",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(resumed.goal?.latestRuntimeOutcome).toMatchObject({
+        kind: "completion_rejected",
+        reason: expect.stringContaining("[REDACTED_SECRET]"),
+        observedEvidenceFingerprints: [`tools:${"a".repeat(64)}`],
+      });
+      expect(
+        resumed.goal?.latestRuntimeOutcome?.reason.length,
+      ).toBeLessThanOrEqual(SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH);
+      expect(resumed.goal?.latestRuntimeOutcome?.reason).not.toContain(
+        "sk-aaaa",
+      );
+      expect(await readFile(session.filePath, "utf8")).not.toContain("sk-aaaa");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -840,6 +901,42 @@ describe("Session Store Goal", () => {
       expect(() =>
         persistSessionGoal({
           session,
+          goal: {
+            objective: "Blank runtime outcome",
+            status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+            latestRuntimeOutcome: {
+              kind: "recovery_requested",
+              reason: "   ",
+            },
+          },
+          runtime: runtime(home, 9),
+        }),
+      ).toThrow("Error: /goal runtime outcome requires a reason.");
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: {
+            objective: "Long runtime outcome",
+            status: "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+            latestRuntimeOutcome: {
+              kind: "recovery_requested",
+              reason: "x".repeat(
+                SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH + 1,
+              ),
+            },
+          },
+          runtime: runtime(home, 10),
+        }),
+      ).toThrow(
+        `Error: /goal runtime outcome reason must be ${SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH} characters or fewer.`,
+      );
+      expect(() =>
+        persistSessionGoal({
+          session,
           goal: JSON.parse(
             JSON.stringify({
               objective: "Completed without evidence",
@@ -848,7 +945,7 @@ describe("Session Store Goal", () => {
               usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             }),
           ),
-          runtime: runtime(home, 9),
+          runtime: runtime(home, 11),
         }),
       ).toThrow("Error: /goal completed status requires evidence.");
       expect(() =>
@@ -986,6 +1083,49 @@ describe("Session Store Goal", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerRecords).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a runtime outcome violates the current goal schema,
+    When persistence redaction leaves the invalid field unchanged,
+    Then the store fails before appending an unreadable goal record`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+
+    try {
+      const session = createSessionStore({
+        sessionId: "session-goal-invalid-outcome-schema",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // When / Then
+      expect(() =>
+        persistSessionGoal({
+          session,
+          goal: JSON.parse(
+            JSON.stringify({
+              objective: "Reject an invalid runtime outcome",
+              status: "active",
+              budget: {},
+              usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+              latestRuntimeOutcome: {
+                kind: "progress_observed",
+                reason: "Observed evidence.",
+                observedEvidenceFingerprints: ["tools:not-a-sha256"],
+              },
+            }),
+          ),
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow("Error: session goal is invalid after persistence redaction.");
+      expect(
+        (await readFile(session.filePath, "utf8")).trimEnd().split("\n"),
+      ).toHaveLength(1);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

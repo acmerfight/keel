@@ -25,9 +25,11 @@ import {
   formatSessionGoalBudgetLimitReason,
   formatSessionGoalSummary,
   type SessionGoal,
+  type SessionGoalRuntimeOutcome,
   sessionGoalAccounting,
   sessionGoalCommandMatchesCriterion,
-  sessionGoalsEqual,
+  sessionGoalStatesEqual,
+  withSessionGoalRuntimeOutcome,
 } from "../core/session-goal.ts";
 import {
   copySessionTaskProgress,
@@ -89,7 +91,7 @@ import { readForkPointPickerSelection } from "./interactive-session/fork-picker.
 import {
   type GoalContinuationToolExecution,
   goalContinuationStagnationFingerprint,
-  repeatedGoalContinuationPatternKey,
+  repeatedGoalContinuationPattern,
 } from "./interactive-session/goal-stagnation.ts";
 import {
   createLineReader,
@@ -161,6 +163,15 @@ function systemPromptWithSessionGoal(
   return `${systemPrompt}\n\n${goalPrompt}`;
 }
 
+function preserveLatestSessionGoalRuntimeOutcome<Target extends SessionGoal>(
+  source: SessionGoal,
+  target: Target,
+): Target {
+  return source.latestRuntimeOutcome === undefined
+    ? target
+    : withSessionGoalRuntimeOutcome(target, source.latestRuntimeOutcome);
+}
+
 const GOAL_CONTINUATION_MESSAGE = [
   '<keel_runtime_context source="goal_continuation">',
   "Keel runtime goal continuation.",
@@ -203,6 +214,12 @@ const GOAL_STAGNATION_RECOVERY_MESSAGE = [
   "</keel_runtime_context>",
 ].join("\n");
 
+const GOAL_STAGNATION_RECOVERY_OUTCOME: SessionGoalRuntimeOutcome = {
+  kind: "recovery_requested",
+  reason:
+    "Repeated automatic goal continuations showed the same response or tool-use pattern without an observed workspace, task, or goal state change.",
+};
+
 const GOAL_BUDGET_LIMIT_REASON =
   "Session cost budget was reached before the active goal completed.";
 
@@ -230,6 +247,7 @@ const NON_GIT_DIFF_MESSAGE =
 interface PromptTurnRequest {
   readonly userMessage: string;
   readonly consumedInputLines: readonly QueuedLine[];
+  readonly runtimeOutcome?: SessionGoalRuntimeOutcome;
 }
 
 interface PromptTurnResult {
@@ -664,7 +682,7 @@ export async function runInteractiveSession(
             completionCriterion: activeGoal.completionCriterion,
           }
         : {};
-    const limitedGoal: SessionGoal =
+    const limitedGoalWithoutOutcome: SessionGoal =
       status === "budget_limited"
         ? {
             objective: activeGoal.objective,
@@ -680,6 +698,10 @@ export async function runInteractiveSession(
             ...sessionGoalAccounting(activeGoal),
             ...criterion,
           };
+    const limitedGoal = withSessionGoalRuntimeOutcome(
+      limitedGoalWithoutOutcome,
+      { kind: "limit_reached", reason },
+    );
     updateSessionGoal(limitedGoal);
     const persistedGoal = options.persistSessionGoal?.({
       goal: limitedGoal,
@@ -723,7 +745,8 @@ export async function runInteractiveSession(
     messages.push({ role: "user", content: request.userMessage });
     let deferRemainingInjectedInput = false;
     let taskProgressChanged = false;
-    let sessionGoalChanged = false;
+    let sessionGoalStateChanged = false;
+    let sessionGoalUpdateReportedDuringTurn = false;
 
     try {
       const remainingCostUsd = remainingMaxCostUsd();
@@ -802,12 +825,13 @@ export async function runInteractiveSession(
         },
         (next) => {
           /* v8 ignore next -- session_goal_updated requires an existing active goal; keep the closure fail-safe if that event contract changes. */
-          if (
+          const goalStateChanged =
             sessionGoal === undefined ||
-            !sessionGoalsEqual(next, sessionGoal)
-          ) {
-            sessionGoalChanged = true;
+            !sessionGoalStatesEqual(next, sessionGoal);
+          if (goalStateChanged) {
+            sessionGoalStateChanged = true;
           }
+          sessionGoalUpdateReportedDuringTurn = true;
           updateSessionGoal(next);
           sessionGoalUpdatesDuringTurn.push(copySessionGoal(next));
         },
@@ -865,6 +889,78 @@ export async function runInteractiveSession(
         }
       }
       options.writeStdout("\n");
+      const observedEvidenceFingerprint = goalContinuationStagnationFingerprint(
+        {
+          messages,
+          toolExecutions: toolExecutionsDuringTurn,
+          stateChanged:
+            taskProgressChanged ||
+            sessionGoalStateChanged ||
+            checkpointOperations.length > 0,
+        },
+      );
+      const stagnationFingerprint =
+        drainedInjectedLines.length > 0 ? null : observedEvidenceFingerprint;
+      const runtimeOutcomeChangedDuringTurn =
+        JSON.stringify(sessionGoal?.latestRuntimeOutcome) !==
+        JSON.stringify(sessionGoalBeforeTurn?.latestRuntimeOutcome);
+      if (
+        sessionGoal !== undefined &&
+        !runtimeOutcomeChangedDuringTurn &&
+        !sessionGoalUpdateReportedDuringTurn
+      ) {
+        const observedChanges = [
+          ...(checkpointOperations.length > 0 ? ["the workspace"] : []),
+          ...(taskProgressChanged ? ["task progress"] : []),
+        ];
+        const successfulVerification = toolExecutionsDuringTurn.find(
+          (execution) =>
+            execution.toolCall.tool === "bash" &&
+            execution.bashExitCode === 0 &&
+            sessionGoalCommandMatchesCriterion(
+              sessionGoalBeforeTurn,
+              execution.toolCall.command,
+            ),
+        );
+        const priorEvidenceFingerprints = new Set([
+          ...(sessionGoal.latestRuntimeOutcome?.observedEvidenceFingerprints ??
+            []),
+          ...(request.runtimeOutcome?.observedEvidenceFingerprints ?? []),
+        ]);
+        const freshToolEvidenceFingerprint =
+          observedEvidenceFingerprint?.startsWith("tools:") === true &&
+          !priorEvidenceFingerprints.has(observedEvidenceFingerprint)
+            ? observedEvidenceFingerprint
+            : undefined;
+        const observedOutcome: SessionGoalRuntimeOutcome | undefined =
+          observedChanges.length > 0
+            ? {
+                kind: "progress_observed",
+                reason: `The latest goal turn changed ${observedChanges.join(
+                  ", ",
+                )}.`,
+              }
+            : successfulVerification?.toolCall.tool === "bash"
+              ? {
+                  kind: "progress_observed",
+                  reason: `Completion command ${JSON.stringify(successfulVerification.toolCall.command)} exited 0 after the latest workspace mutation.`,
+                }
+              : freshToolEvidenceFingerprint !== undefined
+                ? {
+                    kind: "progress_observed",
+                    reason:
+                      "The latest goal turn produced new tool-result evidence.",
+                    observedEvidenceFingerprints: [
+                      freshToolEvidenceFingerprint,
+                    ],
+                  }
+                : request.runtimeOutcome;
+        if (observedOutcome !== undefined) {
+          updateSessionGoal(
+            withSessionGoalRuntimeOutcome(sessionGoal, observedOutcome),
+          );
+        }
+      }
       if (goalTurnStartedAt !== null && sessionGoal !== undefined) {
         const accountedGoal = accountSessionGoalTurn(sessionGoal, {
           tokens:
@@ -911,15 +1007,7 @@ export async function runInteractiveSession(
       return {
         aborted: false,
         budgetExceeded: false,
-        stagnationFingerprint: goalContinuationStagnationFingerprint({
-          messages,
-          toolExecutions: toolExecutionsDuringTurn,
-          stateChanged:
-            taskProgressChanged ||
-            sessionGoalChanged ||
-            checkpointOperations.length > 0 ||
-            drainedInjectedLines.length > 0,
-        }),
+        stagnationFingerprint,
       };
     } catch (error) {
       if (!turnAbortController.signal.aborted) {
@@ -964,6 +1052,7 @@ export async function runInteractiveSession(
     let continuationTurns = 0;
     const recentStagnationFingerprints: string[] = [];
     let nextContinuationMessage = initialContinuationMessage;
+    let nextContinuationRuntimeOutcome: SessionGoalRuntimeOutcome | undefined;
     const recoveryHintedPatterns = new Set<string>();
     while (
       sessionGoal?.status === "active" &&
@@ -977,10 +1066,13 @@ export async function runInteractiveSession(
         return false;
       }
       const userMessage = nextContinuationMessage;
+      const runtimeOutcome = nextContinuationRuntimeOutcome;
       nextContinuationMessage = GOAL_CONTINUATION_MESSAGE;
+      nextContinuationRuntimeOutcome = undefined;
       const result = await runPromptTurn({
         userMessage,
         consumedInputLines: [],
+        ...(runtimeOutcome !== undefined ? { runtimeOutcome } : {}),
       });
       if (result.aborted) {
         return false;
@@ -1006,17 +1098,26 @@ export async function runInteractiveSession(
           ),
         );
       }
-      const repeatedPatternKey = repeatedGoalContinuationPatternKey({
+      const repeatedPattern = repeatedGoalContinuationPattern({
         fingerprints: recentStagnationFingerprints,
         repetitionLimit: GOAL_STAGNATION_RECOVERY_MATCH_LIMIT,
         maxPatternLength: GOAL_STAGNATION_MAX_PATTERN_LENGTH,
       });
       if (
-        repeatedPatternKey !== null &&
-        !recoveryHintedPatterns.has(repeatedPatternKey)
+        repeatedPattern !== null &&
+        !recoveryHintedPatterns.has(repeatedPattern.key)
       ) {
-        recoveryHintedPatterns.add(repeatedPatternKey);
+        recoveryHintedPatterns.add(repeatedPattern.key);
         nextContinuationMessage = GOAL_STAGNATION_RECOVERY_MESSAGE;
+        const evidenceFingerprints = repeatedPattern.fingerprints.filter(
+          (fingerprint) => fingerprint.startsWith("tools:"),
+        );
+        nextContinuationRuntimeOutcome = {
+          ...GOAL_STAGNATION_RECOVERY_OUTCOME,
+          ...(evidenceFingerprints.length > 0
+            ? { observedEvidenceFingerprints: evidenceFingerprints }
+            : {}),
+        };
       }
     }
     return false;
@@ -1165,18 +1266,21 @@ export async function runInteractiveSession(
               break;
             }
             try {
-              const pausedGoal: SessionGoal = {
-                objective: sessionGoal.objective,
-                status: "paused",
-                ...sessionGoalAccounting(sessionGoal),
-                ...(sessionGoal.criterionKind !== undefined &&
-                sessionGoal.completionCriterion !== undefined
-                  ? {
-                      criterionKind: sessionGoal.criterionKind,
-                      completionCriterion: sessionGoal.completionCriterion,
-                    }
-                  : {}),
-              };
+              const pausedGoal = preserveLatestSessionGoalRuntimeOutcome(
+                sessionGoal,
+                {
+                  objective: sessionGoal.objective,
+                  status: "paused",
+                  ...sessionGoalAccounting(sessionGoal),
+                  ...(sessionGoal.criterionKind !== undefined &&
+                  sessionGoal.completionCriterion !== undefined
+                    ? {
+                        criterionKind: sessionGoal.criterionKind,
+                        completionCriterion: sessionGoal.completionCriterion,
+                      }
+                    : {}),
+                },
+              );
               sessionGoal = options.persistSessionGoal({
                 goal: pausedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
@@ -1230,13 +1334,16 @@ export async function runInteractiveSession(
               break;
             }
             try {
-              const resumedGoal: SessionGoal = {
-                objective: sessionGoal.objective,
-                status: "active",
-                ...sessionGoalAccounting(sessionGoal),
-                criterionKind: sessionGoal.criterionKind,
-                completionCriterion: sessionGoal.completionCriterion,
-              };
+              const resumedGoal = preserveLatestSessionGoalRuntimeOutcome(
+                sessionGoal,
+                {
+                  objective: sessionGoal.objective,
+                  status: "active",
+                  ...sessionGoalAccounting(sessionGoal),
+                  criterionKind: sessionGoal.criterionKind,
+                  completionCriterion: sessionGoal.completionCriterion,
+                },
+              );
               sessionGoal = options.persistSessionGoal({
                 goal: resumedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
@@ -1285,13 +1392,16 @@ export async function runInteractiveSession(
                           completionCriterion: budgetedGoal.completionCriterion,
                         }
                       : {};
-                  budgetedGoal = {
-                    objective: budgetedGoal.objective,
-                    status: "budget_limited",
-                    statusReason: reason,
-                    ...sessionGoalAccounting(budgetedGoal),
-                    ...criterion,
-                  };
+                  budgetedGoal = withSessionGoalRuntimeOutcome(
+                    {
+                      objective: budgetedGoal.objective,
+                      status: "budget_limited",
+                      statusReason: reason,
+                      ...sessionGoalAccounting(budgetedGoal),
+                      ...criterion,
+                    },
+                    { kind: "limit_reached", reason },
+                  );
                 }
               }
               sessionGoal = options.persistSessionGoal({
@@ -1353,7 +1463,7 @@ export async function runInteractiveSession(
               break;
             }
             try {
-              const completedGoal: SessionGoal = {
+              const completedGoalWithoutOutcome: SessionGoal = {
                 objective: sessionGoal.objective,
                 status: "completed",
                 completionEvidence: { kind: "user_override" },
@@ -1366,6 +1476,14 @@ export async function runInteractiveSession(
                     }
                   : {}),
               };
+              const completedGoal = withSessionGoalRuntimeOutcome(
+                completedGoalWithoutOutcome,
+                {
+                  kind: "completed",
+                  reason:
+                    "The user explicitly completed the goal with /goal complete.",
+                },
+              );
               sessionGoal = options.persistSessionGoal({
                 goal: completedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
@@ -1397,7 +1515,7 @@ export async function runInteractiveSession(
               break;
             }
             try {
-              const verifiedGoal = {
+              const verifiedGoalWithoutOutcome = {
                 objective: sessionGoal.objective,
                 status: "active",
                 ...sessionGoalAccounting(sessionGoal),
@@ -1407,6 +1525,10 @@ export async function runInteractiveSession(
                 readonly criterionKind: "command";
                 readonly completionCriterion: string;
               };
+              const verifiedGoal = preserveLatestSessionGoalRuntimeOutcome(
+                sessionGoal,
+                verifiedGoalWithoutOutcome,
+              );
               sessionGoal = options.persistSessionGoal({
                 goal: verifiedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
@@ -1442,13 +1564,17 @@ export async function runInteractiveSession(
               break;
             }
             try {
-              const goalWithCriterion = {
+              const goalWithCriterionWithoutOutcome = {
                 objective: sessionGoal.objective,
                 status: "active",
                 ...sessionGoalAccounting(sessionGoal),
                 criterionKind: goalCommand.criterionKind,
                 completionCriterion: goalCommand.criterion,
               } satisfies SessionGoal;
+              const goalWithCriterion = preserveLatestSessionGoalRuntimeOutcome(
+                sessionGoal,
+                goalWithCriterionWithoutOutcome,
+              );
               sessionGoal = options.persistSessionGoal({
                 goal: goalWithCriterion,
                 consumedInputIds: queuedInputIds([rawInput]),

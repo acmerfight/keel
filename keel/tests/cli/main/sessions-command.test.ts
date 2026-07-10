@@ -138,6 +138,10 @@ describe("CLI Main - Sessions Command", () => {
             budget: {},
             usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
             completionEvidence: { kind: "user_override" },
+            latestRuntimeOutcome: {
+              kind: "completed",
+              reason: "The user explicitly completed the goal.",
+            },
           },
         }),
       ],
@@ -161,6 +165,9 @@ describe("CLI Main - Sessions Command", () => {
       );
       expect(stdout).toContain(
         "   goal: completed - Ship the release notes; criterion: missing\n",
+      );
+      expect(stdout).toContain(
+        "   goal outcome: completed - The user explicitly completed the goal.\n",
       );
       expect(stdout).toContain(
         "   goal evidence: user explicitly completed the goal with /goal complete\n",

@@ -101,11 +101,16 @@ export function goalContinuationStagnationFingerprint(options: {
   return `tools:${sha256(JSON.stringify(signature))}`;
 }
 
-export function repeatedGoalContinuationPatternKey(options: {
+export interface RepeatedGoalContinuationPattern {
+  readonly key: string;
+  readonly fingerprints: readonly string[];
+}
+
+export function repeatedGoalContinuationPattern(options: {
   readonly fingerprints: readonly string[];
   readonly repetitionLimit: number;
   readonly maxPatternLength: number;
-}): string | null {
+}): RepeatedGoalContinuationPattern | null {
   for (
     let patternLength = 1;
     patternLength <= options.maxPatternLength;
@@ -123,13 +128,20 @@ export function repeatedGoalContinuationPatternKey(options: {
       )
     ) {
       const pattern = repeatedSuffix.slice(0, patternLength);
-      return pattern
-        .map((_, index) =>
-          JSON.stringify([...pattern.slice(index), ...pattern.slice(0, index)]),
-        )
+      const canonicalFingerprints = pattern
+        .map((_, index) => [
+          ...pattern.slice(index),
+          ...pattern.slice(0, index),
+        ])
         .reduce((left, right) =>
-          compareKeys(left, right) <= 0 ? left : right,
+          compareKeys(JSON.stringify(left), JSON.stringify(right)) <= 0
+            ? left
+            : right,
         );
+      return {
+        key: JSON.stringify(canonicalFingerprints),
+        fingerprints: canonicalFingerprints,
+      };
     }
   }
   return null;

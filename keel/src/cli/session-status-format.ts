@@ -1,6 +1,7 @@
 import { conversationCheckpointSummaryFromMessage } from "../agent/context-compaction.ts";
 import {
   formatSessionGoalCompletionEvidenceSummary,
+  formatSessionGoalRuntimeOutcomeSummary,
   formatSessionGoalSummary,
   type SessionGoal,
 } from "../core/session-goal.ts";
@@ -57,8 +58,12 @@ function formatStatusGoalLines(
     includeCompletionEvidence: false,
   });
   const evidence = formatSessionGoalCompletionEvidenceSummary(goal);
+  const outcome = formatSessionGoalRuntimeOutcomeSummary(goal);
   return [
     `  goal: ${formatStatusGoalText(summary)}`,
+    ...(outcome === null
+      ? []
+      : [`  goal outcome: ${formatStatusGoalText(outcome)}`]),
     ...(evidence === null
       ? []
       : [`  goal evidence: ${formatStatusGoalText(evidence)}`]),

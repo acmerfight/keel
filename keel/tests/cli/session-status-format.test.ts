@@ -46,6 +46,10 @@ describe("CLI Session Status Format", () => {
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         completionEvidence: { kind: "user_override" },
+        latestRuntimeOutcome: {
+          kind: "completed",
+          reason: "The user explicitly completed the goal.",
+        },
       },
       messages: [],
       messageCount: 0,
@@ -60,6 +64,9 @@ describe("CLI Session Status Format", () => {
     // Then
     expect(formatted).toContain(
       "  goal: completed - Ship the release notes; criterion: missing\n",
+    );
+    expect(formatted).toContain(
+      "  goal outcome: completed - The user explicitly completed the goal.\n",
     );
     expect(formatted).toContain(
       "  goal evidence: user explicitly completed the goal with /goal complete\n",

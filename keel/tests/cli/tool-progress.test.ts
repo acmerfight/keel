@@ -248,6 +248,10 @@ describe("CLI Tool Progress", () => {
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           completionEvidence: { kind: "user_override" },
+          latestRuntimeOutcome: {
+            kind: "completed",
+            reason: "The user explicitly completed the goal.",
+          },
         },
       };
     }
@@ -264,6 +268,7 @@ describe("CLI Tool Progress", () => {
     // Then
     expect(stderr).toBe(
       "Session goal: completed - Finish checkout; criterion: missing\n" +
+        "Session goal outcome: completed - The user explicitly completed the goal.\n" +
         "Session goal evidence: user explicitly completed the goal with /goal complete\n",
     );
   });
@@ -316,6 +321,10 @@ describe("CLI Tool Progress", () => {
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           completionEvidence: { kind: "user_override" },
+          latestRuntimeOutcome: {
+            kind: "completed",
+            reason: "The user explicitly completed the goal.",
+          },
         },
       };
     }
@@ -333,6 +342,7 @@ describe("CLI Tool Progress", () => {
     // Then
     expect(statusLines).toEqual([
       "Session goal: completed - Finish checkout; criterion: missing",
+      "Session goal outcome: completed - The user explicitly completed the goal.",
       "Session goal evidence: user explicitly completed the goal with /goal complete",
     ]);
   });

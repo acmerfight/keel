@@ -1,5 +1,6 @@
 import {
   formatSessionGoalCompletionEvidenceSummary,
+  formatSessionGoalRuntimeOutcomeSummary,
   formatSessionGoalSummary,
   type SessionGoal,
 } from "../core/session-goal.ts";
@@ -75,8 +76,12 @@ function sessionGoalRecoveryStateLines(
     includeCompletionEvidence: false,
   });
   const evidence = formatSessionGoalCompletionEvidenceSummary(goal);
+  const outcome = formatSessionGoalRuntimeOutcomeSummary(goal);
   return [
     `${indent}goal: ${formatSessionGoalDetailText(summary)}`,
+    ...(outcome === null
+      ? []
+      : [`${indent}goal outcome: ${formatSessionGoalDetailText(outcome)}`]),
     ...(evidence === null
       ? []
       : [`${indent}goal evidence: ${formatSessionGoalDetailText(evidence)}`]),

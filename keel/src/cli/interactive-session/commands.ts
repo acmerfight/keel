@@ -2,6 +2,7 @@ import { errorMessage } from "../../core/error.ts";
 import { isProviderId } from "../../core/provider-id.ts";
 import {
   formatSessionGoalCompletionEvidenceSummary,
+  formatSessionGoalRuntimeOutcomeSummary,
   formatSessionGoalSummary,
   normalizeSessionGoalCompletionCommand,
   normalizeSessionGoalCompletionCriterion,
@@ -773,8 +774,12 @@ export function formatTitleRequiresSavedSession(): string {
 
 export function formatInteractiveGoal(goal: SessionGoal | undefined): string {
   const evidence = formatSessionGoalCompletionEvidenceSummary(goal);
+  const outcome = formatSessionGoalRuntimeOutcomeSummary(goal);
   return [
     `Session goal: ${formatInteractiveGoalText(formatSessionGoalSummary(goal, { includeCompletionEvidence: false }))}`,
+    ...(outcome === null
+      ? []
+      : [`Session goal outcome: ${formatInteractiveGoalText(outcome)}`]),
     ...(evidence === null
       ? []
       : [`Session goal evidence: ${formatInteractiveGoalText(evidence)}`]),

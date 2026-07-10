@@ -151,6 +151,28 @@ describe("Interactive Session - Goals", () => {
     );
   });
 
+  test(`Given a goal has a latest runtime outcome,
+    When the interactive goal status is formatted,
+    Then Keel prints the bounded reason on its own line`, () => {
+    expect(
+      formatInteractiveGoal({
+        objective: "Recover checkout",
+        status: "active",
+        budget: {},
+        usage: { turns: 2, tokens: 30, activeTimeMs: 40 },
+        criterionKind: "assertion",
+        completionCriterion: "Checkout passes.",
+        latestRuntimeOutcome: {
+          kind: "recovery_requested",
+          reason: "The last three continuations repeated.",
+        },
+      }),
+    ).toBe(
+      "Session goal: active - Recover checkout; criterion(assertion): Checkout passes.\n" +
+        "Session goal outcome: recovery requested - The last three continuations repeated.\n",
+    );
+  });
+
   test(`Given a goal has a singular token budget and a punctuated limit reason,
     When the interactive status is formatted with accounting,
     Then Keel uses singular grammar and a clean reason separator`, () => {
@@ -1287,6 +1309,11 @@ describe("Interactive Session - Goals", () => {
       status: "usage_limited",
       statusReason:
         "Automatic goal continuation stopped after 1 continuation turns without completing the active goal.",
+      latestRuntimeOutcome: {
+        kind: "limit_reached",
+        reason:
+          "Automatic goal continuation stopped after 1 continuation turns without completing the active goal.",
+      },
       budget: {},
       usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
       criterionKind: "command",
@@ -1931,10 +1958,17 @@ describe("Interactive Session - Goals", () => {
       criterionKind: "command",
       completionCriterion: "pnpm test",
       completionEvidence: { kind: "user_override" },
+      latestRuntimeOutcome: {
+        kind: "completed",
+        reason: "The user explicitly completed the goal with /goal complete.",
+      },
     });
     expect(stdout).toContain("Goal completed: Ship the release notes\n");
     expect(stdout).toContain(
       "  goal: completed - Ship the release notes; criterion(command): pnpm test\n",
+    );
+    expect(stdout).toContain(
+      "  goal outcome: completed - The user explicitly completed the goal with /goal complete.\n",
     );
     expect(stdout).toContain(
       "  goal evidence: user explicitly completed the goal with /goal complete\n",
@@ -2065,10 +2099,18 @@ describe("Interactive Session - Goals", () => {
           exitCode: 0,
           freshness: "after_latest_workspace_mutation",
         },
+        latestRuntimeOutcome: {
+          kind: "completed",
+          reason:
+            'Completion command "node -e \\"process.exit(0)\\"" exited 0 after the latest workspace mutation.',
+        },
       });
       expect(stdout).toContain("Goal finished.\n");
       expect(stdout).toContain(
         '  goal: completed - Finish the checkout goal; criterion(command): node -e "process.exit(0)"\n',
+      );
+      expect(stdout).toContain(
+        '  goal outcome: completed - Completion command "node -e \\"process.exit(0)\\"" exited 0 after the latest workspace mutation.',
       );
       expect(stdout).toContain(
         `  goal evidence: node -e "process.exit(0)" exited 0 after the latest workspace mutation in ${workspace}`,
