@@ -579,6 +579,16 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
   }
 }
 
+export function sessionGoalsEqual(
+  left: SessionGoal,
+  right: SessionGoal,
+): boolean {
+  return (
+    JSON.stringify(copySessionGoal(left)) ===
+    JSON.stringify(copySessionGoal(right))
+  );
+}
+
 export function clearSessionGoalBlockedAudit(
   goal: SessionGoal,
 ): Extract<SessionGoal, { readonly status: "active" }> | null {

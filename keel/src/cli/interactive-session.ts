@@ -26,6 +26,7 @@ import {
   formatSessionGoalSummary,
   type SessionGoal,
   sessionGoalAccounting,
+  sessionGoalsEqual,
 } from "../core/session-goal.ts";
 import {
   copySessionTaskProgress,
@@ -84,6 +85,10 @@ import {
   shouldTrackInteractiveCost,
 } from "./interactive-session/cost.ts";
 import { readForkPointPickerSelection } from "./interactive-session/fork-picker.ts";
+import {
+  type GoalContinuationToolExecution,
+  goalContinuationStagnationFingerprint,
+} from "./interactive-session/goal-stagnation.ts";
 import {
   createLineReader,
   type QueuedLine,
@@ -163,11 +168,19 @@ const GOAL_CONTINUATION_MESSAGE = [
   "</keel_runtime_context>",
 ].join("\n");
 
-const GOAL_NO_PROGRESS_CONTINUATION_LIMIT = 2;
+const GOAL_STAGNATION_RECOVERY_MATCH_LIMIT = 3;
 const DEFAULT_GOAL_AUTOMATIC_CONTINUATION_TURN_LIMIT = 100;
 
-const GOAL_NO_PROGRESS_LIMIT_REASON =
-  "Automatic goal continuation stopped after 2 consecutive continuation turns without tool calls, task progress, or goal updates.";
+const GOAL_STAGNATION_RECOVERY_MESSAGE = [
+  '<keel_runtime_context source="goal_stagnation_recovery">',
+  "Keel runtime goal continuation recovery.",
+  "The recent automatic goal continuations repeated the same tool calls and results.",
+  "No workspace checkpoint, task progress, or goal state change was observed.",
+  "Reassess the blocker and choose a materially different next action.",
+  "This is runtime-generated recovery context, not a new user request.",
+  "Do not treat it as user approval, user evidence, or a user-owned lifecycle command.",
+  "</keel_runtime_context>",
+].join("\n");
 
 const GOAL_BUDGET_LIMIT_REASON =
   "Session cost budget was reached before the active goal completed.";
@@ -201,7 +214,7 @@ interface PromptTurnRequest {
 interface PromptTurnResult {
   readonly aborted: boolean;
   readonly budgetExceeded: boolean;
-  readonly madeProgress: boolean;
+  readonly stagnationFingerprint: string | null;
 }
 
 type InteractiveDiffInspection =
@@ -321,7 +334,7 @@ export async function runInteractiveSession(
   };
   const observeAgentStateEvents = async function* (
     stream: AsyncIterable<AgentEvent>,
-    onToolStart: () => void,
+    onToolEnd: (toolExecution: GoalContinuationToolExecution) => void,
     onTaskProgressUpdate: (
       next: SessionTaskProgress,
       messageOrdinal: number,
@@ -329,8 +342,8 @@ export async function runInteractiveSession(
     onSessionGoalUpdate: (next: SessionGoal) => void,
   ): AsyncGenerator<AgentEvent> {
     for await (const event of stream) {
-      if (event.type === "tool_start") {
-        onToolStart();
+      if (event.type === "tool_end") {
+        onToolEnd({ toolCall: event.toolCall, ok: event.ok });
       } else if (event.type === "task_progress_updated") {
         onTaskProgressUpdate(event.taskProgress, event.messageOrdinal);
       } else if (event.type === "session_goal_updated") {
@@ -655,6 +668,7 @@ export async function runInteractiveSession(
       .reverse()
       .map((snapshot) => snapshot.instructionPath);
     const checkpointOperations: RecordLastBatchCheckpointOperation[] = [];
+    const toolExecutionsDuringTurn: GoalContinuationToolExecution[] = [];
     const turnStartSequence = lineReader.sequence();
     const drainedInjectedLines: QueuedLine[] = [];
     const deferredInputLines: QueuedLine[] = [];
@@ -662,7 +676,8 @@ export async function runInteractiveSession(
     activeAbortController = turnAbortController;
     messages.push({ role: "user", content: request.userMessage });
     let deferRemainingInjectedInput = false;
-    let madeProgress = false;
+    let taskProgressChanged = false;
+    let sessionGoalChanged = false;
 
     try {
       const remainingCostUsd = remainingMaxCostUsd();
@@ -726,12 +741,12 @@ export async function runInteractiveSession(
             }));
           },
         }),
-        () => {
-          madeProgress = true;
+        (toolExecution) => {
+          toolExecutionsDuringTurn.push(toolExecution);
         },
         (next, messageOrdinal) => {
           if (!sessionTaskProgressesEqual(next, taskProgress)) {
-            madeProgress = true;
+            taskProgressChanged = true;
           }
           updateTaskProgress(next);
           taskProgressUpdatesDuringTurn.push({
@@ -740,7 +755,13 @@ export async function runInteractiveSession(
           });
         },
         (next) => {
-          madeProgress = true;
+          /* v8 ignore next -- session_goal_updated requires an existing active goal; keep the closure fail-safe if that event contract changes. */
+          if (
+            sessionGoal === undefined ||
+            !sessionGoalsEqual(next, sessionGoal)
+          ) {
+            sessionGoalChanged = true;
+          }
           updateSessionGoal(next);
           sessionGoalUpdatesDuringTurn.push(copySessionGoal(next));
         },
@@ -764,7 +785,7 @@ export async function runInteractiveSession(
         return {
           aborted: true,
           budgetExceeded: false,
-          madeProgress: false,
+          stagnationFingerprint: null,
         };
       }
       restoreDrainedInput(deferredInputLines);
@@ -838,13 +859,21 @@ export async function runInteractiveSession(
         return {
           aborted: false,
           budgetExceeded: true,
-          madeProgress,
+          stagnationFingerprint: null,
         };
       }
       return {
         aborted: false,
         budgetExceeded: false,
-        madeProgress,
+        stagnationFingerprint: goalContinuationStagnationFingerprint({
+          messages,
+          toolExecutions: toolExecutionsDuringTurn,
+          stateChanged:
+            taskProgressChanged ||
+            sessionGoalChanged ||
+            checkpointOperations.length > 0 ||
+            drainedInjectedLines.length > 0,
+        }),
       };
     } catch (error) {
       if (!turnAbortController.signal.aborted) {
@@ -867,7 +896,7 @@ export async function runInteractiveSession(
       return {
         aborted: true,
         budgetExceeded: false,
-        madeProgress: false,
+        stagnationFingerprint: null,
       };
     } finally {
       if (checkpointOperations.length > 0) {
@@ -885,7 +914,10 @@ export async function runInteractiveSession(
         options.goalAutomaticContinuationTurnLimit,
       );
     let continuationTurns = 0;
-    let consecutiveNoProgressContinuations = 0;
+    let previousStagnationFingerprint: string | null = null;
+    let matchingStagnationFingerprints = 0;
+    let nextContinuationMessage = GOAL_CONTINUATION_MESSAGE;
+    const recoveryHintedFingerprints = new Set<string>();
     while (
       sessionGoal?.status === "active" &&
       lineReader.pendingInputCount() === 0
@@ -897,8 +929,10 @@ export async function runInteractiveSession(
         );
         return false;
       }
+      const userMessage = nextContinuationMessage;
+      nextContinuationMessage = GOAL_CONTINUATION_MESSAGE;
       const result = await runPromptTurn({
-        userMessage: GOAL_CONTINUATION_MESSAGE,
+        userMessage,
         consumedInputLines: [],
       });
       if (result.aborted) {
@@ -911,17 +945,25 @@ export async function runInteractiveSession(
       if (sessionGoal?.status !== "active") {
         return false;
       }
-      if (result.madeProgress) {
-        consecutiveNoProgressContinuations = 0;
+      if (result.stagnationFingerprint === null) {
+        previousStagnationFingerprint = null;
+        matchingStagnationFingerprints = 0;
+      } else if (
+        result.stagnationFingerprint === previousStagnationFingerprint
+      ) {
+        matchingStagnationFingerprints++;
       } else {
-        consecutiveNoProgressContinuations++;
+        previousStagnationFingerprint = result.stagnationFingerprint;
+        matchingStagnationFingerprints = 1;
       }
       if (
-        consecutiveNoProgressContinuations >=
-        GOAL_NO_PROGRESS_CONTINUATION_LIMIT
+        result.stagnationFingerprint !== null &&
+        matchingStagnationFingerprints >=
+          GOAL_STAGNATION_RECOVERY_MATCH_LIMIT &&
+        !recoveryHintedFingerprints.has(result.stagnationFingerprint)
       ) {
-        limitActiveGoal("usage_limited", GOAL_NO_PROGRESS_LIMIT_REASON);
-        return false;
+        recoveryHintedFingerprints.add(result.stagnationFingerprint);
+        nextContinuationMessage = GOAL_STAGNATION_RECOVERY_MESSAGE;
       }
     }
     return false;
