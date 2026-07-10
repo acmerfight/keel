@@ -198,6 +198,16 @@ describe("Bash Commands", () => {
         type: "text",
         text: "The command failed.",
       });
+      expect(events).toContainEqual({
+        type: "tool_end",
+        toolCall: {
+          id: "failed_command",
+          tool: "bash",
+          command: `node -e "console.error('missing dependency'); process.exit(3)"`,
+        },
+        ok: true,
+        bashExitCode: 3,
+      });
       expect(secondTurnMessages).toContainEqual({
         role: "tool",
         toolCallId: "failed_command",

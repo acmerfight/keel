@@ -40,6 +40,7 @@ export type AgentEvent =
       readonly type: "tool_end";
       readonly toolCall: ToolCall;
       readonly ok: boolean;
+      readonly bashExitCode?: number | null;
     }
   | {
       readonly type: "task_progress_updated";

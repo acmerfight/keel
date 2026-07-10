@@ -502,12 +502,24 @@ function copySessionGoalCompletionEvidence(
   }
 }
 
-export function sessionGoalCommandCriterion(
+function sessionGoalCommandCriterion(
   goal: SessionGoal | undefined,
 ): string | undefined {
   return goal?.criterionKind === "command"
     ? goal.completionCriterion
     : undefined;
+}
+
+export function sessionGoalCommandMatchesCriterion(
+  goal: SessionGoal | undefined,
+  command: string,
+): boolean {
+  const criterion = sessionGoalCommandCriterion(goal);
+  return (
+    criterion !== undefined &&
+    normalizeSessionGoalCompletionCommand(command) ===
+      normalizeSessionGoalCompletionCommand(criterion)
+  );
 }
 
 export function copySessionGoal(goal: SessionGoal): SessionGoal {
@@ -577,6 +589,16 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
         ),
       };
   }
+}
+
+export function sessionGoalsEqual(
+  left: SessionGoal,
+  right: SessionGoal,
+): boolean {
+  return (
+    JSON.stringify(copySessionGoal(left)) ===
+    JSON.stringify(copySessionGoal(right))
+  );
 }
 
 export function clearSessionGoalBlockedAudit(
