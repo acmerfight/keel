@@ -24,6 +24,7 @@ import {
   emptySessionGoalUsage,
   formatSessionGoalBudgetLimitReason,
   formatSessionGoalSummary,
+  pauseActiveSessionGoal,
   type SessionGoal,
   type SessionGoalRuntimeOutcome,
   sessionGoalAccounting,
@@ -486,6 +487,7 @@ export async function runInteractiveSession(
   let activeAbortController: AbortController | null = null;
   let sessionUsage = EMPTY_USAGE;
   let sessionTurns = 0;
+  let sessionPromptTurnAttempted = false;
   let sessionCostUsd = 0;
   let sessionStopReason = "completed";
   let modelSwitchCount = options.initialModelSwitchCount ?? 0;
@@ -573,7 +575,7 @@ export async function runInteractiveSession(
   const currentSessionCostReport = (): CostReport =>
     buildSessionCostReport(sessionCostUsd, options.cliArgs.maxCostUsd);
   const currentReportEnd = (): EndEventWithCost | undefined => {
-    if (sessionTurns === 0) {
+    if (sessionTurns === 0 && sessionPromptTurnAttempted) {
       return undefined;
     }
     return {
@@ -719,6 +721,7 @@ export async function runInteractiveSession(
   const runPromptTurn = async (
     request: PromptTurnRequest,
   ): Promise<PromptTurnResult> => {
+    sessionPromptTurnAttempted = true;
     const goalTurnStartedAt = sessionGoal?.status === "active" ? now() : null;
     resolved = resolveActiveProvider(request.userMessage);
     const messagesBeforeTurn = messages.slice();
@@ -1266,21 +1269,7 @@ export async function runInteractiveSession(
               break;
             }
             try {
-              const pausedGoal = preserveLatestSessionGoalRuntimeOutcome(
-                sessionGoal,
-                {
-                  objective: sessionGoal.objective,
-                  status: "paused",
-                  ...sessionGoalAccounting(sessionGoal),
-                  ...(sessionGoal.criterionKind !== undefined &&
-                  sessionGoal.completionCriterion !== undefined
-                    ? {
-                        criterionKind: sessionGoal.criterionKind,
-                        completionCriterion: sessionGoal.completionCriterion,
-                      }
-                    : {}),
-                },
-              );
+              const pausedGoal = pauseActiveSessionGoal(sessionGoal);
               sessionGoal = options.persistSessionGoal({
                 goal: pausedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
@@ -1993,8 +1982,11 @@ export async function runInteractiveSession(
     options.offSigint(abortActiveTurn);
     input.close();
   }
-  const reportEnd = currentReportEnd();
-  if (options.cliArgs.reportFile !== undefined && reportEnd !== undefined) {
+  if (options.cliArgs.reportFile !== undefined) {
+    const reportEnd = currentReportEnd();
+    if (reportEnd === undefined) {
+      return {};
+    }
     return {
       report: {
         modelsUsed: [...reportUsageByModel.values()].map((entry) => ({

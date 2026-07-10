@@ -20,7 +20,7 @@ export {
 };
 export const runReportSchema = z.object({
   schemaVersion: z.literal(3),
-  turns: z.number().int().positive(),
+  turns: z.number().int().nonnegative(),
   stopReason: z.string(),
   usage: z.object({
     inputTokens: z.number().int().nonnegative(),

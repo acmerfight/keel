@@ -16,6 +16,51 @@ import {
 } from "./fixtures.ts";
 
 describe("CLI Run Report", () => {
+  test(`Given an interactive run only handles local commands,
+    When it exits with --report before any provider turn,
+    Then Keel still writes a zero-usage machine-readable report`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-zero-turn-report-"),
+    );
+    const reportPath = join(workspace, "session-report.json");
+    const { child, result } = runCliProcess(["--report", reportPath], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "fake", KEEL_FORCE_INTERACTIVE: "1" },
+      stdin: "pipe",
+    });
+
+    try {
+      // When
+      child.stdin?.end("/status\n");
+      const exit = await withTimeout(
+        result,
+        5000,
+        "zero-turn interactive CLI did not finish after stdin closed",
+      );
+
+      // Then
+      expect(exit.exitCode).toBe(0);
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.modelsUsed).toEqual([]);
+      expect(report.usageByModel).toEqual([]);
+      expect(report.turns).toBe(0);
+      expect(report.stopReason).toBe("completed");
+      expect(report.usage).toEqual({
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 0,
+        outputTokens: 0,
+      });
+      expect(report.costUsd).toBe(0);
+    } finally {
+      child.kill("SIGKILL");
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a user wants machine-readable interactive session metrics,
     When the interactive CLI finishes multiple prompts with --report,
     Then a structured report file records the whole session`, async () => {

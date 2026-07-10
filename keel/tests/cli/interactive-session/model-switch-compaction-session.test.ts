@@ -363,7 +363,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
 
   test(`Given report-only cost tracking is active before any reported turn,
     When model-switch compaction succeeds,
-    Then Keel records compaction cost without printing a budget report`, async () => {
+    Then Keel writes the zero-turn compaction cost without printing a budget report`, async () => {
     // Given
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
@@ -438,7 +438,25 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
 
     // Then
     const result = await session;
-    expect(result).toEqual({});
+    expect(result.report).toEqual({
+      modelsUsed: [{ provider: "fake", model: "fake" }],
+      usageByModel: [
+        {
+          provider: "fake",
+          model: "fake",
+          turns: 0,
+          usage: EXPENSIVE_USAGE,
+          costUsd: 2,
+        },
+      ],
+      end: {
+        type: "end",
+        usage: EXPENSIVE_USAGE,
+        turns: 0,
+        stopReason: "completed",
+        cost: { spentUsd: 2, budgetExceeded: false },
+      },
+    });
     expect(stdout).toContain("Model switched to qwen/tiny");
     expect(stderr).toContain("Context compacted: model switch");
     expect(stderr).not.toContain("unexpected cost report");
