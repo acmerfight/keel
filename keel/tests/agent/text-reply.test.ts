@@ -584,6 +584,7 @@ describe("Text Reply", () => {
     let secondTurnMessages: readonly Message[] = [];
     const provider: LLMProvider = {
       id: "budgeted-session",
+      estimateInputTokens: () => 1,
       async *stream(options) {
         turn++;
         if (turn === 2) {

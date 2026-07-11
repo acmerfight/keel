@@ -24,6 +24,19 @@ export type KnownModelMetadata = Extract<
   { readonly status: "known" }
 >;
 
+export function modelMetadataMaxOutputTokens(
+  metadata: ModelMetadata | undefined,
+): number | undefined {
+  if (
+    metadata === undefined ||
+    metadata.status === "unknown" ||
+    metadata.maxOutputTokens === null
+  ) {
+    return undefined;
+  }
+  return metadata.maxOutputTokens;
+}
+
 export interface KnownModelMetadataEntry {
   readonly providerId: ProviderId;
   readonly model: string;

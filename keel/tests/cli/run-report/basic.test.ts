@@ -112,6 +112,8 @@ describe("CLI Run Report", () => {
         JSON.parse(await readFile(reportPath, "utf8")),
       );
       expect(report.costUsd).toBe(0);
+      expect(report.costBudgetUsd).toBe(1);
+      expect(report.costOvershootUsd).toBe(0);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

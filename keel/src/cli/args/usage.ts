@@ -24,6 +24,7 @@ export const USAGE = [
   "",
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
   "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Approved or trusted command output may be sent to the provider unredacted. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
+  "--max-cost sets a best-effort session cost budget. Keel conservatively rejects requests that cannot fit, bounds provider output when possible, and reports any remaining post-response overshoot; it is not a guaranteed provider billing ceiling.",
   "--report writes a machine-readable JSON run report (turns, stop reason, token usage, cost) to the given file; ordinary one-shot and interactive graceful stops still exit normally, while headless Goal runs also expose stable outcome exit codes and goalOutcome metadata.",
   "--transcript writes a best-effort redacted provider-visible one-shot transcript as schema-versioned JSONL. Live provider requests are not redacted.",
   "--skill loads .agents/skills/<name>/SKILL.md as explicit workflow guidance for the current run.",

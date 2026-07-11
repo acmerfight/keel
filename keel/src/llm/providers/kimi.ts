@@ -155,6 +155,7 @@ export function createKimiProvider(config: KimiConfig) {
     id: "kimi",
     providerName: "Kimi",
     config,
+    messageOptions: { maxOutputTokensField: "max_completion_tokens" },
     parseChunk: parseKimiChunk,
     captureUsage: captureKimiUsage,
   });

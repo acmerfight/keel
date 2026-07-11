@@ -218,7 +218,7 @@ describe("CLI Main - One Shot Cost And Edit", () => {
       });
     });
     await listen(server);
-    const fixture = createRuntime(["--max-cost", "0.0001", "hello"], {
+    const fixture = createRuntime(["--max-cost", "0.01", "hello"], {
       env: {
         DEEPSEEK_API_KEY: "test-key",
         DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,

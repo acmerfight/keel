@@ -11,6 +11,7 @@ const providers = [
     id: "deepseek",
     name: "DeepSeek",
     model: "deepseek-v4-flash",
+    maxOutputTokensField: "max_tokens",
     createProvider: createDeepseekProvider,
     usage: ({ inputTokens, outputTokens }) => ({
       prompt_tokens: inputTokens,
@@ -23,6 +24,7 @@ const providers = [
     id: "kimi",
     name: "Kimi",
     model: "kimi-k2.6",
+    maxOutputTokensField: "max_completion_tokens",
     createProvider: createKimiProvider,
     usage: ({ inputTokens, outputTokens }) => ({
       prompt_tokens: inputTokens,
@@ -33,6 +35,7 @@ const providers = [
     id: "qwen",
     name: "Qwen",
     model: "qwen3.7-max",
+    maxOutputTokensField: "max_tokens",
     createProvider: createQwenProvider,
     usage: ({ inputTokens, outputTokens }) => ({
       prompt_tokens: inputTokens,

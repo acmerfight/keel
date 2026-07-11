@@ -19,6 +19,97 @@ import {
 } from "../../../src/testing/interactive-session-fixtures.ts";
 
 describe("Interactive Session - Model Switch Compaction Session", () => {
+  test(`Given model-switch compaction cannot fit its conservative minimum cost,
+    When Keel tries to compact before switching models,
+    Then it rolls back and rejects the switch without calling the provider`, async () => {
+    // Given
+    const initialMessages: readonly Message[] = [
+      { role: "user", content: "large history ".repeat(3_000).trim() },
+      { role: "assistant", content: "old provider reply", toolCalls: [] },
+    ];
+    let oldProviderCalls = 0;
+    let targetProviderCalls = 0;
+    const oldProvider: LLMProvider = {
+      id: "unaffordable-model-switch-compaction",
+      estimateInputTokens: () => 1_000_000,
+      async *stream() {
+        oldProviderCalls++;
+        yield { type: "text", text: "unexpected summary" };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const targetProvider: LLMProvider = {
+      id: "unreached-model-switch-target",
+      async *stream() {
+        targetProviderCalls++;
+        yield { type: "text", text: "unexpected target" };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled", maxCostUsd: 0.01 },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialMessages,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) => {
+        if (selection?.providerId === "qwen") {
+          return resolvedProvider(
+            "qwen",
+            selection.model ?? "tiny",
+            targetProvider,
+            ONE_DOLLAR_PER_MILLION_INPUT,
+            {
+              contextWindowTokens: 2_000,
+              reserveTokens: 0,
+              keepRecentTokens: 1,
+            },
+          );
+        }
+        return resolvedProvider(
+          "fake",
+          "fake",
+          oldProvider,
+          ONE_DOLLAR_PER_MILLION_INPUT,
+        );
+      },
+      requireKnownCostModel: () => ONE_DOLLAR_PER_MILLION_INPUT,
+      printAgentEvents: async (stream) => {
+        for await (const event of stream) {
+          if (event.type === "text") stdout += event.text;
+        }
+        return undefined;
+      },
+      formatCostReport: (cost, maxUsd) =>
+        `Cost: ${cost.spentUsd.toFixed(2)} / ${maxUsd.toFixed(2)} limited=${cost.budgetLimited}\n`,
+    });
+    input.end("/model qwen/tiny\nsecond prompt\n");
+
+    // When
+    await session;
+
+    // Then
+    expect(oldProviderCalls).toBe(0);
+    expect(targetProviderCalls).toBe(0);
+    expect(stdout).not.toContain("Model switched to qwen/tiny");
+    expect(stderr).toContain("Cost: 0.00 / 0.01 limited=true");
+  });
+
   test(`Given restored history has no safe model-switch compaction boundary,
     When user enters /model for a smaller target,
     Then the switch is rejected and the default provider remains active`, async () => {
@@ -203,7 +294,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         return finalEnd;
       },
       formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(2)} / ${maxUsd.toFixed(2)} exceeded=${cost.budgetExceeded}\n`,
+        `Cost: ${cost.spentUsd.toFixed(2)} / ${maxUsd.toFixed(2)} limited=${cost.budgetLimited}\n`,
     });
 
     // When
@@ -214,7 +305,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     expect(stdout).toContain("Model switched to qwen/tiny");
     expect(stdout).not.toContain("unexpected target");
     expect(stderr).toContain("Context compacted: model switch");
-    expect(stderr).toContain("Cost: 2.00 / 0.01 exceeded=true");
+    expect(stderr).toContain("Cost: 2.00 / 0.01 limited=true");
     expect(oldProviderSummaryRequests).toBe(1);
     expect(targetProviderTurns).toBe(0);
     expect(sigintHandlers.size).toBe(0);
@@ -338,7 +429,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         return finalEnd;
       },
       formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(2)} / ${maxUsd.toFixed(2)} exceeded=${cost.budgetExceeded}\n`,
+        `Cost: ${cost.spentUsd.toFixed(2)} / ${maxUsd.toFixed(2)} limited=${cost.budgetLimited}\n`,
     });
 
     // When
@@ -349,7 +440,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     expect(stdout).toContain("Model switched to qwen/tiny");
     expect(stdout).not.toContain("unexpected target");
     expect(stderr).toContain("Context compacted: model switch");
-    expect(stderr).toContain("Cost: 2.00 / 0.01 exceeded=true");
+    expect(stderr).toContain("Cost: 2.00 / 0.01 limited=true");
     expect(oldProviderSummaryRequests).toBe(1);
     expect(targetProviderTurns).toBe(0);
     expect(persisted[0]?.reason).toBe("compaction");
@@ -454,7 +545,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         usage: EXPENSIVE_USAGE,
         turns: 0,
         stopReason: "completed",
-        cost: { spentUsd: 2, budgetExceeded: false },
+        cost: { spentUsd: 2, budgetLimited: false, overshootUsd: 0 },
       },
     });
     expect(stdout).toContain("Model switched to qwen/tiny");

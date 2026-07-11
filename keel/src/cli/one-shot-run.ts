@@ -3,6 +3,7 @@ import { runAgent } from "../agent/loop.ts";
 import { buildAgentSystemPrompt } from "../agent/prompt.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { isAbortThrow } from "../core/error.ts";
+import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
 import type { Message } from "../llm/types.ts";
 import {
   type BashMode,
@@ -143,6 +144,9 @@ export async function runOneShotCli(
       ...(projectInstructions !== undefined ? { projectInstructions } : {}),
       ...(workflowSkill !== undefined ? { workflowSkill } : {}),
     });
+    const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
+      resolved.modelMetadata,
+    );
     let transcriptMessages: readonly Message[] | undefined;
     const stream = runAgent({
       workspace,
@@ -160,6 +164,9 @@ export async function runOneShotCli(
         ? {
             costTracking: {
               model: requireKnownCostModel(resolved),
+              ...(modelMaxOutputTokens !== undefined
+                ? { modelMaxOutputTokens }
+                : {}),
               ...(cliArgs.maxCostUsd !== undefined
                 ? { maxCostUsd: cliArgs.maxCostUsd }
                 : {}),

@@ -359,9 +359,9 @@ describe("CLI Main - Headless Goal", () => {
     }
   });
 
-  test(`Given a headless Goal reaches the session cost budget,
-    When Keel writes its stable limited outcome,
-    Then the report preserves cost as the stopping authority`, async () => {
+  test(`Given a headless Goal budget cannot cover its first provider request,
+    When Keel evaluates the request before sending it,
+    Then no provider spend occurs and the report preserves the stable limited outcome`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-headless-cost-"));
     const home = await mkdtemp(join(tmpdir(), "keel-headless-cost-home-"));
@@ -411,18 +411,93 @@ describe("CLI Main - Headless Goal", () => {
 
       // Then
       expect(exitCode).toBe(4);
-      expect(providerCalls).toBe(1);
+      expect(providerCalls).toBe(0);
       expect(fixture.stdout()).toContain(
         "Headless goal outcome: budget_limited; session: headless-cost\n",
       );
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
         stopReason: "cost_budget",
+        costBudgetUsd: 0.000001,
+        costUsd: 0,
+        costOvershootUsd: 0,
         goalOutcome: {
           sessionId: "headless-cost",
           status: "budget_limited",
           reason:
-            "Session cost budget was reached before the active goal completed.",
+            "Session cost budget could not admit another provider request before the active goal completed.",
         },
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an admitted headless Goal request reports cost above its estimate,
+    When Keel stops the active goal after the response,
+    Then the report exposes the exact numeric overshoot`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-headless-overage-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-headless-overage-home-"));
+    const reportPath = join(workspace, "overage-report.json");
+    let providerCalls = 0;
+    const server = createServer((_req, res) => {
+      providerCalls++;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      res.end(
+        sseTextReplyWithUsage("Cost budget reached.", {
+          prompt_tokens: 1_000_000,
+          completion_tokens: 0,
+        }),
+      );
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "goal",
+        "--objective",
+        "Stop after an admitted request exceeds its estimate",
+        "--verify",
+        "true",
+        "--session",
+        "headless-overage",
+        "--bash-policy",
+        "trusted",
+        "--provider",
+        "deepseek",
+        "--max-cost",
+        "0.01",
+        "--report",
+        reportPath,
+      ],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_HOME: home,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(4);
+      expect(providerCalls).toBe(1);
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        schemaVersion: 4,
+        stopReason: "cost_budget",
+        costBudgetUsd: 0.01,
+        costUsd: 0.14,
+        costOvershootUsd: 0.13,
       });
     } finally {
       await close(server);

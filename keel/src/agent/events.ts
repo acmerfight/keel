@@ -11,7 +11,8 @@ import type {
 export interface CostReport {
   readonly spentUsd: number;
   readonly maxUsd?: number;
-  readonly budgetExceeded: boolean;
+  readonly budgetLimited: boolean;
+  readonly overshootUsd: number;
 }
 
 type ContextCompactionReason = "proactive" | "preflight" | "overflow_recovery";

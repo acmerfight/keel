@@ -123,8 +123,9 @@ What a user can do today:
   workspace-write, and unknown/dangerous commands, and verification-family
   approvals cover common project checks such as `pnpm test`, `pnpm typecheck`,
   `pnpm lint`, and `pnpm build`.
-- `keel --max-cost <usd>` — one-shot or interactive session cost tracking
-  with budget stop.
+- `keel --max-cost <usd>` — one-shot or interactive best-effort session cost
+  budget with conservative request admission, provider output bounds, and
+  post-response accounting.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with turns, stop reason, token usage, duration,
   provider/model, and cost when tracked.

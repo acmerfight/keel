@@ -127,7 +127,7 @@ describe("CLI Text Reply", () => {
     try {
       // When
       const result = await runCli(
-        ["--max-cost", "0.001", "summarize expensive context"],
+        ["--max-cost", "0.01", "summarize expensive context"],
         {
           DEEPSEEK_API_KEY: "test-key",
           DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
@@ -138,17 +138,19 @@ describe("CLI Text Reply", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe("Done.\n");
       expect(result.stderr).toContain("Cost: $");
-      expect(result.stderr).toContain("budget $0.0010 exceeded");
+      expect(result.stderr).toContain("budget $0.0100 exceeded");
     } finally {
       await close(server);
     }
   });
 
-  test(`Given a tiny max cost and the configured provider reports a small overage,
+  test(`Given a tiny max cost cannot cover the configured provider request,
     When user runs the CLI,
-    Then the CLI prints non-zero spent cost and budget values`, async () => {
+    Then the CLI prints zero spend and does not contact the provider`, async () => {
     // Given
+    let providerCalls = 0;
     const server = createServer((req, res) => {
+      providerCalls++;
       if (req.url !== "/chat/completions") {
         res.writeHead(404);
         res.end();
@@ -184,8 +186,11 @@ describe("CLI Text Reply", () => {
 
       // Then
       expect(result.exitCode).toBe(0);
-      expect(result.stderr).toContain("Cost: $0.000001");
-      expect(result.stderr).toContain("budget $0.000001 exceeded");
+      expect(providerCalls).toBe(0);
+      expect(result.stderr).toContain("Cost: $0.000000");
+      expect(result.stderr).toContain(
+        "remaining best-effort budget cannot admit another provider request",
+      );
     } finally {
       await close(server);
     }

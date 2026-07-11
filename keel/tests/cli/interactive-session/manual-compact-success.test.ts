@@ -1066,6 +1066,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     let requestTurn = 0;
     const provider: LLMProvider = {
       id: "fake",
+      estimateInputTokens: () => 1,
       async *stream(options) {
         if (options.toolChoice === "none") {
           yield { type: "text", text: "Costed checkpoint summary." };
@@ -1091,7 +1092,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", maxCostUsd: 0.01 },
+      cliArgs: { bashMode: "disabled", maxCostUsd: 0.1 },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -1139,7 +1140,7 @@ describe("Interactive Session - Manual Compact Success", () => {
         return finalEnd;
       },
       formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(2)} exceeded=${cost.budgetExceeded}\n`,
+        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(1)} limited=${cost.budgetLimited}\n`,
     });
 
     // When
@@ -1152,7 +1153,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     await session;
     expect(stdout).toBe("First done\n");
     expect(stderr).toContain("Context compacted: manual");
-    expect(stderr).toContain("Cost: 0.005000 / 0.01 exceeded=false\n");
+    expect(stderr).toContain("Cost: 0.005000 / 0.1 limited=false\n");
   });
 
   test(`Given manual compaction runs during a report-only interactive session,
@@ -1236,7 +1237,7 @@ describe("Interactive Session - Manual Compact Success", () => {
         return finalEnd;
       },
       formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(2)} exceeded=${cost.budgetExceeded}\n`,
+        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(2)} limited=${cost.budgetLimited}\n`,
     });
 
     // When
@@ -1271,6 +1272,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     let requestTurn = 0;
     const provider: LLMProvider = {
       id: "fake",
+      estimateInputTokens: () => 1,
       async *stream(options) {
         if (options.toolChoice === "none") {
           yield { type: "text", text: "Costed checkpoint summary." };
@@ -1281,7 +1283,7 @@ describe("Interactive Session - Manual Compact Success", () => {
               inputTokens: 30,
               cachedInputTokens: 0,
               uncachedInputTokens: 30,
-              outputTokens: 10,
+              outputTokens: 1_000,
             },
           };
           return;
@@ -1304,7 +1306,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const session = runInteractiveSession({
       cliArgs: {
         bashMode: "disabled",
-        maxCostUsd: 0.001,
+        maxCostUsd: 0.1,
         reportFile: "session.json",
       },
       workspace: process.cwd(),
@@ -1345,7 +1347,7 @@ describe("Interactive Session - Manual Compact Success", () => {
         return finalEnd;
       },
       formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(3)} exceeded=${cost.budgetExceeded}\n`,
+        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(1)} limited=${cost.budgetLimited}\n`,
     });
 
     // When
@@ -1360,9 +1362,114 @@ describe("Interactive Session - Manual Compact Success", () => {
     expect(requestTurn).toBe(1);
     expect(stdout).toBe("First done\n");
     expect(stderr).toContain("Context compacted: manual");
-    expect(stderr).toContain("Cost: 0.005000 / 0.001 exceeded=true\n");
+    expect(stderr).toContain("Cost: 0.203000 / 0.1 limited=true\n");
     expect(result.report?.end.stopReason).toBe("cost_budget");
-    expect(result.report?.end.cost.spentUsd).toBeCloseTo(0.005);
+    expect(result.report?.end.cost.spentUsd).toBeCloseTo(0.203);
+  });
+
+  test(`Given an interactive turn leaves too little budget for compaction,
+    When user enters /compact,
+    Then Keel stops without sending a compaction provider request`, async () => {
+    // Given
+    let receiveFirstEnd: () => void = () => {};
+    const firstTurnEnded = new Promise<void>((resolve) => {
+      receiveFirstEnd = resolve;
+    });
+    let requestTurns = 0;
+    let summaryRequests = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      estimateInputTokens: () => 1,
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          yield { type: "text", text: "unexpected summary" };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        requestTurns++;
+        yield { type: "text", text: "First done" };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 990,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 990,
+            outputTokens: 0,
+          },
+        };
+      },
+    };
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const costModel: CostModel = {
+      type: "fixed",
+      uncachedInputPerMillionTokens: 100,
+      cachedInputPerMillionTokens: 0,
+      outputPerMillionTokens: 200,
+    };
+    const session = runInteractiveSession({
+      cliArgs: {
+        bashMode: "disabled",
+        maxCostUsd: 0.1,
+        reportFile: "session.json",
+      },
+      workspace: process.cwd(),
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => costModel,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") stdout += event.text;
+          if (event.type === "end") {
+            finalEnd = event;
+            receiveFirstEnd();
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: (cost, maxUsd) =>
+        `Cost: ${cost.spentUsd.toFixed(3)} / ${maxUsd.toFixed(1)} limited=${cost.budgetLimited}\n`,
+    });
+
+    // When
+    input.write("first prompt\n");
+    await withTimeout(firstTurnEnded, 5000, "first turn did not finish");
+    input.end("/compact\n");
+
+    // Then
+    const result = await session;
+    expect(requestTurns).toBe(1);
+    expect(summaryRequests).toBe(0);
+    expect(stdout).toBe("First done\n");
+    expect(stderr).toContain("Cost: 0.099 / 0.1 limited=true\n");
+    expect(result.report?.end.stopReason).toBe("cost_budget");
+    expect(result.report?.end.cost).toMatchObject({
+      spentUsd: 0.099,
+      overshootUsd: 0,
+    });
   });
 
   test(`Given manual compaction cost model resolution fails,

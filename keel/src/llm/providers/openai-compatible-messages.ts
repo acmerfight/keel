@@ -6,6 +6,7 @@ import type { Message, StreamOptions } from "../types.ts";
 
 export interface OpenAICompatibleMessageOptions {
   readonly assistantReasoningContent?: "omit" | "require";
+  readonly maxOutputTokensField?: "max_completion_tokens" | "max_tokens";
 }
 
 export function createChatCompletionsBody(
@@ -19,6 +20,12 @@ export function createChatCompletionsBody(
     model,
     stream: true,
     stream_options: { include_usage: true },
+    ...(options.maxOutputTokens !== undefined
+      ? {
+          [messageOptions.maxOutputTokensField ?? "max_tokens"]:
+            options.maxOutputTokens,
+        }
+      : {}),
     ...(options.toolChoice === "none" ? {} : { tools, tool_choice: "auto" }),
     messages: [
       { role: "system", content: options.systemPrompt },

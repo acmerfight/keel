@@ -31,6 +31,20 @@ export function buildSessionCostReport(
   return {
     spentUsd,
     ...(maxCostUsd !== undefined ? { maxUsd: maxCostUsd } : {}),
-    budgetExceeded: maxCostUsd !== undefined && spentUsd > maxCostUsd,
+    budgetLimited: maxCostUsd !== undefined && spentUsd >= maxCostUsd,
+    overshootUsd:
+      maxCostUsd === undefined ? 0 : Math.max(0, spentUsd - maxCostUsd),
+  };
+}
+
+export function buildSessionCostBudgetLimitedReport(
+  spentUsd: number,
+  maxCostUsd: number,
+): CostReport {
+  return {
+    spentUsd,
+    maxUsd: maxCostUsd,
+    budgetLimited: true,
+    overshootUsd: Math.max(0, spentUsd - maxCostUsd),
   };
 }

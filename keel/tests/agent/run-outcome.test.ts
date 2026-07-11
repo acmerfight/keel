@@ -255,6 +255,7 @@ describe("Run Outcome Reporting", () => {
     await writeFile(join(workspace, "note.txt"), "old value\n", "utf8");
     const provider: LLMProvider = {
       id: "expensive-tool-call",
+      estimateInputTokens: () => 1,
       async *stream() {
         yield {
           type: "tool_call",
@@ -364,7 +365,7 @@ describe("Run Outcome Reporting", () => {
       const finalEvent = endEvent(events);
       expect(finalEvent.usage.inputTokens).toBe(300_000);
       expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
-      expect(finalEvent.cost?.budgetExceeded).toBe(false);
+      expect(finalEvent.cost?.budgetLimited).toBe(false);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -438,7 +439,7 @@ describe("Run Outcome Reporting", () => {
     const finalEvent = endEvent(events);
     expect(finalEvent.usage.inputTokens).toBe(300_000);
     expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
-    expect(finalEvent.cost?.budgetExceeded).toBe(false);
+    expect(finalEvent.cost?.budgetLimited).toBe(false);
   });
 
   test(`Given turn-limit wrap-up adds a low-tier provider request,
@@ -507,7 +508,7 @@ describe("Run Outcome Reporting", () => {
       expect(finalEvent.stopReason).toBe("turn_limit");
       expect(finalEvent.usage.inputTokens).toBe(300_000);
       expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
-      expect(finalEvent.cost?.budgetExceeded).toBe(false);
+      expect(finalEvent.cost?.budgetLimited).toBe(false);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

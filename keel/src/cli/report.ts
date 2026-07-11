@@ -31,7 +31,7 @@ interface RunReportModelUsage {
 }
 
 interface RunReport {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly modelsUsed: readonly {
     readonly provider: string;
     readonly model: string;
@@ -42,6 +42,8 @@ interface RunReport {
   readonly usage: Extract<AgentEvent, { readonly type: "end" }>["usage"];
   readonly durationMs: number;
   readonly costUsd: number;
+  readonly costBudgetUsd?: number;
+  readonly costOvershootUsd: number;
   readonly contextCompactions: readonly RunReportContextCompaction[];
   readonly goalOutcome?: RunReportGoalOutcome;
 }
@@ -73,7 +75,7 @@ export function assertEndEventHasCost(
 export function writeRunReport(filePath: string, input: RunReportInput): void {
   const cost = input.end.cost;
   const report: RunReport = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     modelsUsed: input.usageByModel.map((entry) => ({
       provider: entry.provider,
       model: entry.model,
@@ -90,6 +92,8 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     usage: input.end.usage,
     durationMs: input.durationMs,
     costUsd: cost.spentUsd,
+    ...(cost.maxUsd !== undefined ? { costBudgetUsd: cost.maxUsd } : {}),
+    costOvershootUsd: cost.overshootUsd,
     contextCompactions: input.contextCompactions,
     ...(input.goalOutcome !== undefined
       ? { goalOutcome: input.goalOutcome }

@@ -26,6 +26,7 @@ export interface OpenAICompatibleConformanceProvider {
   readonly id: string;
   readonly name: string;
   readonly model: string;
+  readonly maxOutputTokensField: "max_completion_tokens" | "max_tokens";
   readonly createProvider: (
     config: OpenAICompatibleConformanceConfig,
   ) => LLMProvider;
@@ -92,6 +93,8 @@ const expectedUsage = {
 
 const requestBodySchema = z
   .object({
+    max_tokens: z.number().int().positive().optional(),
+    max_completion_tokens: z.number().int().positive().optional(),
     messages: z.array(
       z
         .object({
@@ -401,6 +404,9 @@ function chunksForPrompt(
   provider: OpenAICompatibleConformanceProvider,
   requestCount: number,
 ): readonly string[] | null {
+  if (prompt === "conformance-output-budget") {
+    return textResponse(provider, "bounded");
+  }
   for (const row of [...successCases, ...failureCases]) {
     if (row.prompt === prompt) {
       return row.chunks(provider);
@@ -434,6 +440,7 @@ async function handleRequest(
   res: ServerResponse,
   provider: OpenAICompatibleConformanceProvider,
   requestCounts: Map<string, number>,
+  requestBodies: Map<string, string>,
 ): Promise<void> {
   if (req.url !== "/chat/completions") {
     res.writeHead(404);
@@ -448,6 +455,7 @@ async function handleRequest(
       (prompt === null ? 0 : (requestCounts.get(prompt) ?? 0)) + 1;
     if (prompt !== null) {
       requestCounts.set(prompt, requestCount);
+      requestBodies.set(prompt, body);
     }
     const chunks = chunksForPrompt(prompt, provider, requestCount);
     if (chunks === null) {
@@ -507,11 +515,13 @@ export function runOpenAICompatibleConformance(
     let server: Server;
     let provider: LLMProvider;
     let requestCounts: Map<string, number>;
+    let requestBodies: Map<string, string>;
 
     beforeAll(async () => {
       requestCounts = new Map();
+      requestBodies = new Map();
       server = createServer((req, res) => {
-        void handleRequest(req, res, spec, requestCounts);
+        void handleRequest(req, res, spec, requestCounts, requestBodies);
       });
       await listen(server);
       provider = createProvider(spec, `http://127.0.0.1:${getPort(server)}`);
@@ -529,6 +539,31 @@ export function runOpenAICompatibleConformance(
 
       // Then
       expect(events).toEqual(row.expectedEvents);
+    });
+
+    test(`Given an affordable completion token budget,
+      When the enrolled provider sends a bounded request,
+      Then it uses the provider's supported output limit field`, async () => {
+      // When
+      await collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [{ role: "user", content: "conformance-output-budget" }],
+          signal: freshSignal(),
+          maxOutputTokens: 321,
+        }),
+      );
+
+      // Then
+      const body = requestBodies.get("conformance-output-budget");
+      expect(body).toBeDefined();
+      const parsed = requestBodySchema.parse(JSON.parse(body ?? ""));
+      expect(parsed[spec.maxOutputTokensField]).toBe(321);
+      const otherField =
+        spec.maxOutputTokensField === "max_tokens"
+          ? "max_completion_tokens"
+          : "max_tokens";
+      expect(parsed[otherField]).toBeUndefined();
     });
 
     test.each(failureCases)(`Given the enrolled provider streams $label,
