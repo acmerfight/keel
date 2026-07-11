@@ -157,6 +157,8 @@ describe("Interactive Terminal Display", () => {
     display.lineInput.once("close", () => {
       closedCount++;
     });
+    display.setActivityStatus("Preparing");
+    display.setGoalStatus("active - Verify terminal status");
     display.writeIntro();
     display.start();
 
@@ -174,6 +176,8 @@ describe("Interactive Terminal Display", () => {
     terminal.input("\x15");
     terminal.input("\x04");
     const screen = await terminal.waitForText("status: working");
+    display.setActivityStatus(null);
+    display.setGoalStatus(null);
     display.closePrompt();
     display.stop();
 
@@ -181,6 +185,8 @@ describe("Interactive Terminal Display", () => {
     expect(screen).toContain("notice");
     expect(screen).toContain("assistant:");
     expect(screen).toContain("answer");
+    expect(screen).toContain("activity: Preparing");
+    expect(screen).toContain("goal · active - Verify terminal status");
     expect(interrupted).toBe(1);
     expect(closedCount).toBe(1);
     expect(terminal.stopCount).toBe(1);

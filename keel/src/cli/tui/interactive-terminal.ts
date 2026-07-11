@@ -57,6 +57,8 @@ export interface InteractiveTerminalDisplay extends StableInteractiveDisplay {
     value: string,
     disposition: InteractiveInputDisposition,
   ) => void;
+  readonly setActivityStatus: (text: string | null) => void;
+  readonly setGoalStatus: (text: string | null) => void;
   readonly setComposerMode: (mode: InteractiveComposerMode) => void;
   readonly start: () => void;
   readonly stop: () => void;
@@ -97,6 +99,8 @@ export function createInteractiveTerminalDisplay(
 ): InteractiveTerminalDisplay {
   const tui = new TUI(terminal, true);
   const transcript = new Text();
+  const activityStatus = new Text();
+  const goalStatus = new Text();
   const prompt = new Text("keel>");
   const editor = new Editor(tui, EDITOR_THEME);
   const composerHint = new Text();
@@ -151,6 +155,8 @@ export function createInteractiveTerminalDisplay(
   };
 
   tui.addChild(transcript);
+  tui.addChild(activityStatus);
+  tui.addChild(goalStatus);
   tui.addChild(prompt);
   tui.addChild(editor);
   tui.addChild(composerHint);
@@ -265,6 +271,14 @@ export function createInteractiveTerminalDisplay(
     lineInput,
     renderSubmittedInput: (value, disposition) => {
       append(`${formatSubmittedInput(value, disposition)}\n`);
+    },
+    setActivityStatus: (text) => {
+      activityStatus.setText(text === null ? "" : `activity: ${text}`);
+      if (started) tui.requestRender();
+    },
+    setGoalStatus: (text) => {
+      goalStatus.setText(text === null ? "" : `goal · ${text}`);
+      if (started) tui.requestRender();
     },
     setComposerMode,
     start: () => {

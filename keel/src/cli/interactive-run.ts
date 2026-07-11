@@ -975,6 +975,7 @@ async function runSessionCli(
               setComposerMode: interactiveTerminalDisplay.setComposerMode,
               renderSubmittedInput:
                 interactiveTerminalDisplay.renderSubmittedInput,
+              setGoalStatus: interactiveTerminalDisplay.setGoalStatus,
             }
           : {}),
         onSigint: (handler) => {

@@ -5,6 +5,7 @@ import {
   formatSessionGoalCompletionEvidenceSummary,
   formatSessionGoalRuntimeOutcomeSummary,
   formatSessionGoalSummary,
+  type SessionGoal,
 } from "../core/session-goal.ts";
 import { formatSessionTaskProgressSummary } from "../core/task-progress.ts";
 import { toolCallLabel } from "../tools/registry.ts";
@@ -19,6 +20,7 @@ interface StableInteractiveOutputRuntime {
   readonly writeStdout: (text: string) => void;
   readonly writeAssistantHeader: () => void;
   readonly writeStatusLine: (text: string) => void;
+  readonly setActivityStatus?: (text: string | null) => void;
 }
 
 export type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
@@ -94,6 +96,18 @@ export function sanitizeStatusLineText(text: string): string {
   return escaped.length <= STATUS_LINE_TEXT_MAX_LENGTH
     ? escaped
     : `${escaped.slice(0, STATUS_LINE_TEXT_MAX_LENGTH)}...`;
+}
+
+export function formatLiveSessionGoalStatus(
+  goal: SessionGoal | undefined,
+): string | null {
+  if (goal === undefined) return null;
+  const summary = formatSessionGoalSummary(goal, {
+    includeCompletionEvidence: false,
+  });
+  const outcome = formatSessionGoalRuntimeOutcomeSummary(goal);
+  if (outcome === null) return sanitizeStatusLineText(summary);
+  return sanitizeStatusLineText(`${summary}; outcome: ${outcome}`);
 }
 
 export function formatUndoCheckpointList(
@@ -270,71 +284,91 @@ export async function printStableInteractiveAgentEvents(
 ): Promise<EndEvent | undefined> {
   let finalEnd: EndEvent | undefined;
   let assistantHeaderWritten = false;
-  for await (const event of stream) {
-    reportRecorder?.record(event);
-    switch (event.type) {
-      case "text":
-        if (!assistantHeaderWritten) {
-          runtime.writeAssistantHeader();
-          assistantHeaderWritten = true;
-        }
-        runtime.writeStdout(sanitizeAssistantText(event.text));
-        break;
-      case "context_compacted":
-        runtime.writeStatusLine(
-          formatContextCompactionReport({
-            ...event,
-            reasonLabel: contextCompactionReasonLabel(event.reason),
-          }).trimEnd(),
-        );
-        break;
-      case "provider_retry":
-        runtime.writeStatusLine(
-          `Provider retry: ${sanitizeToolLabel(event.provider)} ${providerRetryReasonLabel(event.reason)} (attempt ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)}ms)`,
-        );
-        break;
-      case "tool_start":
-        runtime.writeStatusLine(
-          `Tool: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}`,
-        );
-        break;
-      case "tool_end":
-        if (!event.ok) {
+  runtime.setActivityStatus?.("Thinking");
+  try {
+    for await (const event of stream) {
+      reportRecorder?.record(event);
+      switch (event.type) {
+        case "text":
+          runtime.setActivityStatus?.("Responding");
+          if (!assistantHeaderWritten) {
+            runtime.writeAssistantHeader();
+            assistantHeaderWritten = true;
+          }
+          runtime.writeStdout(sanitizeAssistantText(event.text));
+          break;
+        case "context_compacted":
+          runtime.setActivityStatus?.("Context compacted");
           runtime.writeStatusLine(
-            `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}`,
+            formatContextCompactionReport({
+              ...event,
+              reasonLabel: contextCompactionReasonLabel(event.reason),
+            }).trimEnd(),
           );
-        }
-        break;
-      case "task_progress_updated":
-        runtime.writeStatusLine(
-          `Task progress: ${sanitizeStatusLineText(formatSessionTaskProgressSummary(event.taskProgress))}`,
-        );
-        break;
-      case "session_goal_updated": {
-        const evidence = formatSessionGoalCompletionEvidenceSummary(event.goal);
-        const outcome = formatSessionGoalRuntimeOutcomeSummary(event.goal);
-        runtime.writeStatusLine(
-          `Session goal: ${sanitizeStatusLineText(formatSessionGoalSummary(event.goal, { includeCompletionEvidence: false }))}`,
-        );
-        if (outcome !== null) {
+          break;
+        case "provider_retry":
+          runtime.setActivityStatus?.("Waiting to retry provider");
           runtime.writeStatusLine(
-            `Session goal outcome: ${sanitizeStatusLineText(outcome)}`,
+            `Provider retry: ${sanitizeToolLabel(event.provider)} ${providerRetryReasonLabel(event.reason)} (attempt ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)}ms)`,
           );
-        }
-        if (evidence !== null) {
+          break;
+        case "tool_start":
+          runtime.setActivityStatus?.(
+            `Tool: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}`,
+          );
           runtime.writeStatusLine(
-            `Session goal evidence: ${sanitizeStatusLineText(evidence)}`,
+            `Tool: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}`,
           );
+          break;
+        case "tool_end":
+          runtime.setActivityStatus?.(
+            event.ok
+              ? "Thinking"
+              : `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}`,
+          );
+          if (!event.ok) {
+            runtime.writeStatusLine(
+              `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}`,
+            );
+          }
+          break;
+        case "task_progress_updated":
+          runtime.setActivityStatus?.("Task progress updated");
+          runtime.writeStatusLine(
+            `Task progress: ${sanitizeStatusLineText(formatSessionTaskProgressSummary(event.taskProgress))}`,
+          );
+          break;
+        case "session_goal_updated": {
+          const evidence = formatSessionGoalCompletionEvidenceSummary(
+            event.goal,
+          );
+          const outcome = formatSessionGoalRuntimeOutcomeSummary(event.goal);
+          runtime.writeStatusLine(
+            `Session goal: ${sanitizeStatusLineText(formatSessionGoalSummary(event.goal, { includeCompletionEvidence: false }))}`,
+          );
+          if (outcome !== null) {
+            runtime.writeStatusLine(
+              `Session goal outcome: ${sanitizeStatusLineText(outcome)}`,
+            );
+          }
+          if (evidence !== null) {
+            runtime.writeStatusLine(
+              `Session goal evidence: ${sanitizeStatusLineText(evidence)}`,
+            );
+          }
+          break;
         }
-        break;
+        case "tool_output_artifact":
+          runtime.setActivityStatus?.("Stored tool output artifact");
+          runtime.writeStatusLine(formatToolOutputArtifactNotice(event));
+          break;
+        case "end":
+          finalEnd = event;
+          break;
       }
-      case "tool_output_artifact":
-        runtime.writeStatusLine(formatToolOutputArtifactNotice(event));
-        break;
-      case "end":
-        finalEnd = event;
-        break;
     }
+  } finally {
+    runtime.setActivityStatus?.(null);
   }
   return finalEnd;
 }

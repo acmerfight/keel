@@ -145,6 +145,7 @@ export interface InteractiveSessionOptions {
     value: string,
     disposition: InteractiveInputDisposition,
   ) => void;
+  readonly setGoalStatus?: (text: string | null) => void;
   readonly onSigint: (handler: () => void) => void;
   readonly offSigint: (handler: () => void) => void;
   readonly setExitCode: (code: number) => void;
