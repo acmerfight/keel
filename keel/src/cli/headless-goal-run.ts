@@ -1,10 +1,12 @@
 import {
+  assessSessionGoalResume,
   copySessionGoal,
   formatSessionGoalResumeRejection,
   pauseActiveSessionGoal,
   type SessionGoal,
   type SessionGoalBudget,
   type SessionGoalCriterionKind,
+  type SessionGoalResumeAssessment,
 } from "../core/session-goal.ts";
 import {
   createSessionBashPermissionPolicy,
@@ -168,15 +170,11 @@ function headlessGoalForResume(
   };
 }
 
-function headlessGoalCanResume(
+function headlessGoalResumeAssessment(
   cliArgs: GoalResumeCliArgs,
   goal: SessionGoal | undefined,
-): boolean {
-  return (
-    formatSessionGoalResumeRejection(
-      headlessGoalForResume(goal, cliArgs.budget),
-    ) === null
-  );
+): SessionGoalResumeAssessment {
+  return assessSessionGoalResume(headlessGoalForResume(goal, cliArgs.budget));
 }
 
 function writeHeadlessGoalOutcome(
@@ -277,7 +275,7 @@ export async function runHeadlessGoalCli(
             await prepareHeadlessGoalResume(cliArgs, runtime, goal)
         : undefined,
       cliArgs.mode === "resume"
-        ? (goal) => headlessGoalCanResume(cliArgs, goal)
+        ? (goal) => headlessGoalResumeAssessment(cliArgs, goal)
         : undefined,
     );
   } catch (error) {

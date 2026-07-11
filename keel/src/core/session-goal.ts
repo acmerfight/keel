@@ -629,11 +629,28 @@ export function formatSessionGoalBudgetLimitReason(
     : `Session goal budget reached: ${reached.join("; ")}.`;
 }
 
-export function formatSessionGoalResumeRejection(
+export type SessionGoalResumeAssessment =
+  | {
+      readonly kind: "not_resumable";
+      readonly rejection: string;
+    }
+  | {
+      readonly kind: "budget_rejected";
+      readonly rejection: string;
+    }
+  | {
+      readonly kind: "ready";
+      readonly rejection: null;
+    };
+
+export function assessSessionGoalResume(
   goal: SessionGoal | undefined,
-): string | null {
+): SessionGoalResumeAssessment {
   if (goal === undefined) {
-    return "Error: no session goal is set.";
+    return {
+      kind: "not_resumable",
+      rejection: "Error: no session goal is set.",
+    };
   }
   if (
     goal.status !== "paused" &&
@@ -641,18 +658,35 @@ export function formatSessionGoalResumeRejection(
     goal.status !== "budget_limited" &&
     goal.status !== "usage_limited"
   ) {
-    return "Error: only paused, blocked, or limited session goals can be resumed.";
+    return {
+      kind: "not_resumable",
+      rejection:
+        "Error: only paused, blocked, or limited session goals can be resumed.",
+    };
   }
   if (
     goal.criterionKind === undefined ||
     goal.completionCriterion === undefined
   ) {
-    return "Error: the session goal has no completion criterion. Set a new goal before resuming.";
+    return {
+      kind: "not_resumable",
+      rejection:
+        "Error: the session goal has no completion criterion. Set a new goal before resuming.",
+    };
   }
   const budgetLimitReason = formatSessionGoalBudgetLimitReason(goal);
   return budgetLimitReason === null
-    ? null
-    : `Error: ${budgetLimitReason} Raise or clear the goal budget before resuming.`;
+    ? { kind: "ready", rejection: null }
+    : {
+        kind: "budget_rejected",
+        rejection: `Error: ${budgetLimitReason} Raise or clear the goal budget before resuming.`,
+      };
+}
+
+export function formatSessionGoalResumeRejection(
+  goal: SessionGoal | undefined,
+): string | null {
+  return assessSessionGoalResume(goal).rejection;
 }
 
 function copySessionGoalCompletionEvidence(

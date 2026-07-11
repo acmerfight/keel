@@ -1193,6 +1193,151 @@ describe("CLI Main - Headless Goal", () => {
     }
   });
 
+  test(`Given the latest saved Goal has a valid resume contract but exhausted its durable budget,
+    When automation resumes the latest Goal without a budget override,
+    Then Keel reports the actionable budget rejection without provider work`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-last-budget-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-last-budget-home-"),
+    );
+    await writeSessionLedger({
+      home,
+      id: "latest-budget-limited",
+      workspace: await realpath(workspace),
+      createdAt: "2026-07-11T00:00:00.000Z",
+      records: [
+        sessionGoalRecordLine({
+          timestamp: "2026-07-11T00:00:01.000Z",
+          goal: {
+            objective: "Continue after raising the durable turn budget",
+            status: "budget_limited",
+            statusReason: "Session goal budget reached: turns 1/1.",
+            budget: { turns: 1 },
+            usage: { turns: 1, tokens: 10, activeTimeMs: 100 },
+            criterionKind: "command",
+            completionCriterion: "true",
+          },
+        }),
+      ],
+    });
+    const ledgerPath = join(
+      home,
+      "sessions",
+      "latest-budget-limited",
+      "ledger.jsonl",
+    );
+    const ledgerBeforeResume = await readFile(ledgerPath, "utf8");
+    const fixture = createRuntime(
+      [
+        "goal",
+        "resume",
+        "--last",
+        "--bash-policy",
+        "trusted",
+        "--provider",
+        "fake",
+      ],
+      {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Error: Session goal budget reached: turns 1/1. Raise or clear the goal budget before resuming.\n",
+      );
+      expect(await readFile(ledgerPath, "utf8")).toBe(ledgerBeforeResume);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a newer saved Goal is budget-rejected and an older saved Goal is ready to resume,
+    When automation resumes the latest resumable Goal,
+    Then Keel preserves ready-Goal selection instead of treating the newer budget rejection as selectable`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-last-ready-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-last-ready-home-"),
+    );
+    const canonicalWorkspace = await realpath(workspace);
+    await writeSessionLedger({
+      home,
+      id: "older-ready",
+      workspace: canonicalWorkspace,
+      createdAt: "2026-07-11T00:00:00.000Z",
+      records: [
+        sessionGoalRecordLine({
+          timestamp: "2026-07-11T00:00:01.000Z",
+          goal: {
+            objective: "Resume the latest ready Goal",
+            status: "paused",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+            criterionKind: "command",
+            completionCriterion: "true",
+          },
+        }),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "newer-budget-limited",
+      workspace: canonicalWorkspace,
+      createdAt: "2026-07-11T00:00:02.000Z",
+      records: [
+        sessionGoalRecordLine({
+          timestamp: "2026-07-11T00:00:03.000Z",
+          goal: {
+            objective: "Wait for a larger durable budget",
+            status: "budget_limited",
+            statusReason: "Session goal budget reached: turns 1/1.",
+            budget: { turns: 1 },
+            usage: { turns: 1, tokens: 10, activeTimeMs: 100 },
+            criterionKind: "command",
+            completionCriterion: "true",
+          },
+        }),
+      ],
+    });
+    const fixture = createRuntime(
+      ["goal", "resume", "--last", "--provider", "fake"],
+      {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Resuming latest session: older-ready\n" +
+          "Error: headless command Goals require --bash-policy trusted or a matching saved project approval with --bash-policy ask.\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the latest saved session has no Goal and no resumable Goal exists,
     When automation asks to resume the latest Goal,
     Then Keel fails before provider resolution with a Goal-specific error`, async () => {
