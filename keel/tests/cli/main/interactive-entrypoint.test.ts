@@ -546,6 +546,114 @@ describe("CLI Main - Interactive Entrypoint", () => {
     }
   });
 
+  test(`Given one goal command contains an objective, verifier, timeout, and budgets,
+    When Keel accepts the command,
+    Then it persists the complete contract atomically and immediately starts work`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-atomic-launch-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-goal-atomic-launch-home-"),
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length > 1) {
+          res.end(sseTextReplyWithUsage("Atomic goal completed."));
+          return;
+        }
+        res.write(
+          sseToolCall("complete_goal", "update_goal", {
+            status: "completed",
+          }),
+        );
+        res.write(sseToolFinish());
+        res.end("data: [DONE]\n\n");
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.end(
+      '/goal --objective "Ship atomic checkout" --verify "node -e \\"process.exit(0)\\"" --turns 3 --tokens 5000 --time 5s --timeout 2s\n',
+    );
+    const fixture = createRuntime(
+      ["--session", "goal-atomic-launch", "--bash-policy=trusted"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input,
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("Goal set: active\n");
+      expect(fixture.stdout()).toContain(
+        'Session goal: active - Ship atomic checkout; criterion(command): node -e "process.exit(0)"; verifier timeout: 2s; usage: 0 turns, 0 tokens, 0ms active; budget: 3 turns, 5000 tokens, 5s active\n',
+      );
+      expect(JSON.stringify(capturedBodies[0])).toContain(
+        'source=\\"goal_activation\\"',
+      );
+      const goalRecords = (
+        await readFile(
+          join(home, "sessions", "goal-atomic-launch", "ledger.jsonl"),
+          "utf8",
+        )
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .filter((line) => line.type === "session_goal");
+      expect(goalRecords[0]).toMatchObject({
+        goal: {
+          objective: "Ship atomic checkout",
+          status: "active",
+          budget: { turns: 3, tokens: 5_000, activeTimeMs: 5_000 },
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+          criterionKind: "command",
+          completionCriterion: 'node -e "process.exit(0)"',
+          verificationTimeoutMs: 2_000,
+        },
+      });
+      expect(goalRecords.at(-1)).toMatchObject({
+        goal: { status: "completed" },
+      });
+      expect(fixture.stderr()).toContain(
+        'Completion command "node -e \\"process.exit(0)\\"" exited 0 at the completion boundary.',
+      );
+      expect(fixture.stderr()).not.toContain("Tool failed:");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a command goal configures a short verification timeout,
     When the model proposes completion and the verifier exceeds that timeout,
     Then the CLI rejects completion at the configured boundary and preserves the contract`, async () => {

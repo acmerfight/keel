@@ -74,6 +74,14 @@ type GoalCommand =
     }
   | {
       readonly kind: "goal";
+      readonly action: "launch";
+      readonly objective: string;
+      readonly budget: SessionGoalBudget;
+      readonly command: string;
+      readonly verificationTimeoutMs?: number;
+    }
+  | {
+      readonly kind: "goal";
       readonly action: "verify";
       readonly command: string;
       readonly verificationTimeoutMs?: number;
@@ -165,6 +173,9 @@ export function formatInteractiveHelp(): string {
     "  /status            Show session state and recovery commands.",
     "  /title [text]      Show or set this saved session title.",
     "  /goal [condition]  Show or start a goal with this completion condition.",
+    '  /goal --objective "<condition>" --verify "<cmd>"',
+    "                     [--timeout 30s] [--turns N] [--tokens N] [--time 30m]",
+    "                     Atomically configure and start a verified goal.",
     "  /goal verify [--timeout 30s] <cmd>",
     "                     Set the command that proves the goal is done.",
     "  /goal done-when <criterion>",
@@ -437,6 +448,9 @@ function parseGoalCommandArgs(
   if (trimmedArgs === "clear") {
     return { kind: "goal", action: "clear" };
   }
+  if (trimmedArgs.startsWith("--")) {
+    return parseAtomicGoalArgs(trimmedArgs);
+  }
   if (trimmedArgs === "verify") {
     return {
       kind: "invalid",
@@ -533,7 +547,9 @@ function parseGoalVerificationTimeout(
 
 function parseGoalVerifyArgs(
   rawArgs: string,
-): GoalCommand | InvalidInteractiveCommand {
+):
+  | Extract<GoalCommand, { readonly action: "verify" }>
+  | InvalidInteractiveCommand {
   const trimmedArgs = rawArgs.trim();
   if (!trimmedArgs.startsWith("--timeout")) {
     return {
@@ -563,10 +579,11 @@ function parseGoalVerifyArgs(
   };
 }
 
-function parseGoalBudgetArgs(
+function parseGoalBudgetValues(
   rawArgs: string,
-): GoalCommand | InvalidInteractiveCommand {
-  const args = rawArgs.trim().split(/\s+/u);
+): ParseResult<SessionGoalBudget> {
+  const trimmedArgs = rawArgs.trim();
+  const args = trimmedArgs.split(/\s+/u);
   const budget: {
     turns?: number;
     tokens?: number;
@@ -577,23 +594,201 @@ function parseGoalBudgetArgs(
     const rawValue = args[index + 1];
     if (option === "--turns" || option === "--tokens") {
       const parsed = parsePositiveIntegerOption(option, rawValue);
-      if (!parsed.ok) return { kind: "invalid", message: parsed.message };
+      if (!parsed.ok) return parsed;
       if (option === "--turns") budget.turns = parsed.value;
       else budget.tokens = parsed.value;
       continue;
     }
     if (option === "--time") {
       const parsed = parseGoalDuration(rawValue);
-      if (!parsed.ok) return { kind: "invalid", message: parsed.message };
+      if (!parsed.ok) return parsed;
       budget.activeTimeMs = parsed.value;
       continue;
     }
     return {
-      kind: "invalid",
+      ok: false,
       message: `Error: unknown /goal budget option "${option}".`,
     };
   }
-  return { kind: "goal", action: "budget", budget };
+  return { ok: true, value: budget };
+}
+
+function parseGoalBudgetArgs(
+  rawArgs: string,
+): GoalCommand | InvalidInteractiveCommand {
+  const parsed = parseGoalBudgetValues(rawArgs);
+  return parsed.ok
+    ? { kind: "goal", action: "budget", budget: parsed.value }
+    : { kind: "invalid", message: parsed.message };
+}
+
+interface AtomicGoalToken {
+  readonly value: string;
+  readonly quoted: boolean;
+}
+
+function tokenizeAtomicGoalArgs(
+  rawArgs: string,
+): ParseResult<readonly AtomicGoalToken[]> {
+  const tokens: AtomicGoalToken[] = [];
+  let index = 0;
+  while (index < rawArgs.length) {
+    while (/\s/u.test(rawArgs.charAt(index))) index += 1;
+
+    if (rawArgs[index] === '"') {
+      const start = index;
+      index += 1;
+      let escaped = false;
+      while (index < rawArgs.length) {
+        const character = rawArgs[index];
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === '"') {
+          break;
+        }
+        index += 1;
+      }
+      if (rawArgs[index] !== '"') {
+        return {
+          ok: false,
+          message:
+            "Error: atomic goal options require valid JSON-style double-quoted strings.",
+        };
+      }
+      const encoded = rawArgs.slice(start, index + 1);
+      let value: unknown;
+      try {
+        value = JSON.parse(encoded);
+      } catch {
+        return {
+          ok: false,
+          message:
+            "Error: atomic goal options require valid JSON-style double-quoted strings.",
+        };
+      }
+      index += 1;
+      if (
+        typeof value !== "string" ||
+        (index < rawArgs.length && !/\s/u.test(rawArgs[index] ?? ""))
+      ) {
+        return {
+          ok: false,
+          message:
+            "Error: atomic goal options require valid JSON-style double-quoted strings.",
+        };
+      }
+      tokens.push({ value, quoted: true });
+      continue;
+    }
+
+    const start = index;
+    while (index < rawArgs.length && !/\s/u.test(rawArgs.charAt(index))) {
+      index += 1;
+    }
+    tokens.push({ value: rawArgs.slice(start, index), quoted: false });
+  }
+  return { ok: true, value: tokens };
+}
+
+function parseAtomicGoalArgs(
+  trimmedArgs: string,
+): GoalCommand | InvalidInteractiveCommand {
+  const tokenized = tokenizeAtomicGoalArgs(trimmedArgs);
+  if (!tokenized.ok) {
+    return { kind: "invalid", message: tokenized.message };
+  }
+
+  let objective: string | undefined;
+  let command: string | undefined;
+  let verificationTimeoutMs: number | undefined;
+  const budget: {
+    turns?: number;
+    tokens?: number;
+    activeTimeMs?: number;
+  } = {};
+  const seenOptions = new Set<string>();
+  const tokens = tokenized.value;
+  for (const [index, optionToken] of tokens.entries()) {
+    if (index % 2 !== 0) continue;
+    const option = optionToken.value;
+    const valueToken = tokens[index + 1];
+    if (seenOptions.has(option)) {
+      return {
+        kind: "invalid",
+        message: `Error: duplicate atomic goal option "${option}".`,
+      };
+    }
+    seenOptions.add(option);
+
+    if (option === "--objective" || option === "--verify") {
+      if (valueToken?.quoted !== true) {
+        return {
+          kind: "invalid",
+          message: `Error: ${option} requires a non-empty double-quoted value.`,
+        };
+      }
+      const normalized =
+        option === "--objective"
+          ? normalizeSessionGoalObjective(valueToken.value)
+          : normalizeSessionGoalCompletionCommand(valueToken.value);
+      if (normalized === "") {
+        return {
+          kind: "invalid",
+          message: `Error: ${option} requires a non-empty double-quoted value.`,
+        };
+      }
+      if (option === "--objective") objective = normalized;
+      else command = normalized;
+      continue;
+    }
+
+    if (option === "--turns" || option === "--tokens") {
+      const parsed = parsePositiveIntegerOption(option, valueToken?.value);
+      if (!parsed.ok) return { kind: "invalid", message: parsed.message };
+      if (option === "--turns") budget.turns = parsed.value;
+      else budget.tokens = parsed.value;
+      continue;
+    }
+    if (option === "--time") {
+      const parsed = parseGoalDuration(valueToken?.value);
+      if (!parsed.ok) return { kind: "invalid", message: parsed.message };
+      budget.activeTimeMs = parsed.value;
+      continue;
+    }
+    if (option === "--timeout") {
+      const parsed = parseGoalVerificationTimeout(valueToken?.value);
+      if (!parsed.ok) return { kind: "invalid", message: parsed.message };
+      verificationTimeoutMs = parsed.value;
+      continue;
+    }
+    return {
+      kind: "invalid",
+      message: `Error: unknown atomic goal option "${option}".`,
+    };
+  }
+
+  if (objective === undefined) {
+    return {
+      kind: "invalid",
+      message: 'Error: an atomic goal requires --objective "<objective>".',
+    };
+  }
+  if (command === undefined) {
+    return {
+      kind: "invalid",
+      message: 'Error: an atomic goal requires --verify "<command>".',
+    };
+  }
+  return {
+    kind: "goal",
+    action: "launch",
+    objective,
+    budget,
+    command,
+    ...(verificationTimeoutMs === undefined ? {} : { verificationTimeoutMs }),
+  };
 }
 
 function parseUnknownGoalSubcommand(
