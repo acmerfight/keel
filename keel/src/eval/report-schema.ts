@@ -83,6 +83,21 @@ export const runReportSchema = z.object({
   durationMs: z.number().nonnegative(),
   costUsd: z.number().nonnegative(),
   contextCompactions: z.array(contextCompactionSchema),
+  goalOutcome: z
+    .object({
+      sessionId: z.string(),
+      status: z.enum([
+        "blocked",
+        "budget_limited",
+        "usage_limited",
+        "completed",
+      ]),
+      reason: z.string(),
+      evidenceKind: z
+        .enum(["command", "assertion_evaluator", "user_override"])
+        .optional(),
+    })
+    .optional(),
 });
 
 export type RunReport = z.infer<typeof runReportSchema>;

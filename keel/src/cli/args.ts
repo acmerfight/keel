@@ -6,6 +6,7 @@ import { parseAuthArgs } from "./args/auth.ts";
 import { parseConfigArgs } from "./args/config.ts";
 import { parseDoctorArgs } from "./args/doctor.ts";
 import { parseEvalArgs } from "./args/eval.ts";
+import { parseGoalArgs } from "./args/goal.ts";
 import { parseRunArgs } from "./args/run.ts";
 import { parseSessionsArgs } from "./args/sessions.ts";
 import { parseSetupArgs } from "./args/setup.ts";
@@ -120,6 +121,10 @@ export function parseCliArgs(args: readonly string[]): CliArgsParseResult {
 
   if (args[0] === "eval") {
     return parseEvalArgs(args.slice(1));
+  }
+
+  if (args[0] === "goal") {
+    return parseGoalArgs(args.slice(1));
   }
 
   const parsedRunArgs = parseRunArgs(args);

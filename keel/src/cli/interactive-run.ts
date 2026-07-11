@@ -1,11 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
 import { isAbortThrow } from "../core/error.ts";
 import {
   pauseActiveSessionGoal,
   type SessionGoal,
 } from "../core/session-goal.ts";
 import type { Message } from "../llm/types.ts";
-import type { BashApprovalGrant } from "../permissions/bash.ts";
+import type {
+  BashApprovalGrant,
+  SessionBashPermissionPolicy,
+} from "../permissions/bash.ts";
 import type { CliArgs } from "./args.ts";
 import { USAGE } from "./args.ts";
 import {
@@ -35,7 +38,7 @@ import {
   requireKnownCostModel,
   resolveInteractiveProvider,
 } from "./provider-config.ts";
-import { writeRunReport } from "./report.ts";
+import { type RunReportGoalOutcome, writeRunReport } from "./report.ts";
 import { createAgentEventReportRecorder } from "./report-events.ts";
 import { resolveResumedWorkflowSkill } from "./resumed-workflow-skill.ts";
 import type { CliRuntime } from "./runtime.ts";
@@ -46,6 +49,7 @@ import {
   formatSessionPicker,
   formatSessionStartupPrompt,
 } from "./session-catalog-format.ts";
+import { createAutomaticSessionId } from "./session-id.ts";
 import {
   readSessionPickerSelection,
   readSessionStartupSelection,
@@ -93,6 +97,19 @@ type DirectResumeSessionCliArg = Exclude<
 const RESUME_PICK_REQUIRES_TTY_ERROR =
   "Error: --resume --pick requires a real TTY so the session choice cannot be read from piped input. Use keel --resume for the latest session or keel --resume <id> for automation.";
 
+type SessionCliMode =
+  | { readonly kind: "interactive" }
+  | {
+      readonly kind: "headless-goal";
+      readonly activationCommand: string;
+      readonly bashPermission?: SessionBashPermissionPolicy;
+      readonly onActivated: (sessionId: string) => void;
+      readonly onFinished: (result: {
+        readonly sessionId: string;
+        readonly goal: SessionGoal | undefined;
+      }) => void;
+    };
+
 type InteractiveSessionStart =
   | {
       readonly kind: "ephemeral";
@@ -125,10 +142,6 @@ type PromptedInteractiveSessionStart =
 interface BareKeelPromptCatalog {
   readonly catalog: SessionCatalog;
   readonly latestSession: SessionCatalogEntry;
-}
-
-function createAutomaticSessionId(): string {
-  return `session-${randomUUID()}`;
 }
 
 function interactiveSessionStartFromCliArgs(
@@ -336,24 +349,34 @@ function activeSessionIdForStart(
   }
 }
 
-export async function runInteractiveCli(
+async function runSessionCli(
   cliArgs: RunCliArgs,
   runtime: CliRuntime,
+  mode: SessionCliMode,
 ): Promise<number> {
   let exitCode = 0;
 
-  if (cliArgs.resumeSession?.kind === "pick" && runtime.input.isTTY !== true) {
+  if (
+    mode.kind === "interactive" &&
+    cliArgs.resumeSession?.kind === "pick" &&
+    runtime.input.isTTY !== true
+  ) {
     runtime.writeStderr(`${RESUME_PICK_REQUIRES_TTY_ERROR}\n`);
     return 1;
   }
   if (
+    mode.kind === "interactive" &&
     runtime.input.isTTY !== true &&
     runtime.env("KEEL_FORCE_INTERACTIVE") !== "1"
   ) {
     runtime.writeStderr(`${USAGE}\n`);
     return 1;
   }
-  if (cliArgs.bashMode === "ask" && runtime.input.isTTY !== true) {
+  if (
+    mode.kind === "interactive" &&
+    cliArgs.bashMode === "ask" &&
+    runtime.input.isTTY !== true
+  ) {
     runtime.writeStderr(
       "Error: --bash-policy ask requires a real TTY so approvals cannot be read from piped input. Use --bash-policy deny or --bash-policy trusted for non-TTY runs.\n",
     );
@@ -364,7 +387,7 @@ export async function runInteractiveCli(
   try {
     const workspace = runtime.cwd();
     const projectBashApprovals =
-      cliArgs.bashMode === "ask"
+      cliArgs.bashMode === "ask" && mode.kind === "interactive"
         ? (() => {
             const projectRoot = bashApprovalProjectRoot(workspace);
             return {
@@ -374,7 +397,8 @@ export async function runInteractiveCli(
           })()
         : undefined;
     let sessionStart: InteractiveSessionStart;
-    let initialInputLines: readonly string[] = [];
+    let initialInputLines: readonly string[] =
+      mode.kind === "headless-goal" ? [mode.activationCommand] : [];
     if (cliArgs.resumeSession?.kind === "pick") {
       const pickedSession = await pickedSessionIdForWorkspace({
         workspace,
@@ -387,7 +411,10 @@ export async function runInteractiveCli(
       initialInputLines = pickedSession.initialInputLines;
       runtime.writeStderr(`Resuming selected session: ${sessionId}\n`);
       sessionStart = { kind: "resume", sessionId };
-    } else if (shouldPromptForSavedSessionOnBareKeel(cliArgs, runtime)) {
+    } else if (
+      mode.kind === "interactive" &&
+      shouldPromptForSavedSessionOnBareKeel(cliArgs, runtime)
+    ) {
       const promptCatalog = bareKeelPromptCatalog({
         workspace,
         runtime,
@@ -602,6 +629,7 @@ export async function runInteractiveCli(
             }) => void;
           }
         | undefined;
+      let headlessGoalActivated = false;
       if (activeSessionId !== undefined) {
         const sessionId = activeSessionId;
         const ensureActiveSession = (): SessionState => {
@@ -745,13 +773,23 @@ export async function runInteractiveCli(
           persistSessionGoal: (update: {
             readonly goal: SessionGoal | null;
             readonly consumedInputIds: readonly string[];
-          }) =>
-            persistSessionGoal({
+          }) => {
+            const persistedGoal = persistSessionGoal({
               session: ensureActiveSession(),
               goal: update.goal,
               runtime,
               consumedInputIds: update.consumedInputIds,
-            }),
+            });
+            if (
+              mode.kind === "headless-goal" &&
+              !headlessGoalActivated &&
+              persistedGoal?.status === "active"
+            ) {
+              headlessGoalActivated = true;
+              mode.onActivated(sessionId);
+            }
+            return persistedGoal;
+          },
           persistTaskProgress: (update: {
             readonly taskProgress: SessionState["taskProgress"];
             readonly messageOrdinal: number;
@@ -821,7 +859,7 @@ export async function runInteractiveCli(
         }),
       };
       const interactiveDisplay =
-        runtime.input.isTTY === true
+        mode.kind === "interactive" && runtime.input.isTTY === true
           ? createStableInteractiveDisplay(runtime, {
               inputEchoesToDisplay: runtime.stderrIsTTY === true,
               session:
@@ -840,6 +878,10 @@ export async function runInteractiveCli(
         cliArgs,
         workspace,
         platform: runtime.platform,
+        ...(mode.kind === "headless-goal" ? { exitOnTurnAbort: true } : {}),
+        ...(mode.kind === "headless-goal" && mode.bashPermission !== undefined
+          ? { bashPermission: mode.bashPermission }
+          : {}),
         ...(activeSessionId !== undefined
           ? {
               sessionId: activeSessionId,
@@ -924,11 +966,33 @@ export async function runInteractiveCli(
         cliArgs.reportFile !== undefined &&
         interactiveResult.report !== undefined
       ) {
+        const goalOutcome =
+          mode.kind === "headless-goal" && activeSessionId !== undefined
+            ? runReportGoalOutcome(activeSessionId, interactiveResult.goal)
+            : undefined;
+        const headlessStopReason =
+          mode.kind === "headless-goal" &&
+          interactiveResult.report.end.stopReason !== "cost_budget"
+            ? headlessGoalReportStopReason(interactiveResult.goal)
+            : undefined;
         writeRunReport(cliArgs.reportFile, {
           usageByModel: interactiveResult.report.usageByModel,
-          end: interactiveResult.report.end,
+          end:
+            headlessStopReason === undefined
+              ? interactiveResult.report.end
+              : {
+                  ...interactiveResult.report.end,
+                  stopReason: headlessStopReason,
+                },
           durationMs: runtime.now() - startedAt,
           contextCompactions: reportRecorder.contextCompactions(),
+          ...(goalOutcome !== undefined ? { goalOutcome } : {}),
+        });
+      }
+      if (mode.kind === "headless-goal" && activeSessionId !== undefined) {
+        mode.onFinished({
+          sessionId: activeSessionId,
+          goal: interactiveResult.goal,
         });
       }
     } finally {
@@ -963,4 +1027,98 @@ export async function runInteractiveCli(
     return 1;
   }
   return exitCode;
+}
+
+function runReportGoalOutcome(
+  sessionId: string,
+  goal: SessionGoal | undefined,
+): RunReportGoalOutcome | undefined {
+  /* v8 ignore start: report finalization follows a terminal headless Goal, so it cannot be absent, active, or paused. */
+  if (
+    goal === undefined ||
+    goal.status === "active" ||
+    goal.status === "paused"
+  ) {
+    return undefined;
+  }
+  /* v8 ignore stop */
+  if (goal.status === "completed") {
+    return {
+      sessionId,
+      status: "completed",
+      /* v8 ignore next: completed Goals always persist a completion runtime outcome before report finalization. */
+      reason: goal.latestRuntimeOutcome?.reason ?? "Session goal completed.",
+      evidenceKind: goal.completionEvidence.kind,
+    };
+  }
+  return {
+    sessionId,
+    status: goal.status,
+    reason: goal.statusReason,
+  };
+}
+
+function headlessGoalReportStopReason(
+  goal: SessionGoal | undefined,
+): "goal_blocked" | "goal_budget" | "goal_usage_limit" | undefined {
+  /* v8 ignore start: report finalization follows a terminal headless Goal, so it cannot be absent, active, or paused. */
+  if (
+    goal === undefined ||
+    goal.status === "active" ||
+    goal.status === "paused"
+  )
+    return undefined;
+  /* v8 ignore stop */
+  switch (goal.status) {
+    case "blocked":
+      return "goal_blocked";
+    case "budget_limited":
+      return "goal_budget";
+    case "usage_limited":
+      return "goal_usage_limit";
+    case "completed":
+      return undefined;
+  }
+}
+
+export interface HeadlessSessionCliResult {
+  readonly exitCode: number;
+  readonly sessionId: string;
+  readonly goal?: SessionGoal;
+}
+
+export async function runHeadlessSessionCli(
+  cliArgs: RunCliArgs & { readonly sessionId: string },
+  runtime: CliRuntime,
+  activationCommand: string,
+  bashPermission: SessionBashPermissionPolicy | undefined,
+  onActivated: (sessionId: string) => void,
+): Promise<HeadlessSessionCliResult> {
+  let finalGoal: SessionGoal | undefined;
+  const headlessInput = Readable.from([]);
+  const exitCode = await runSessionCli(
+    cliArgs,
+    { ...runtime, input: headlessInput },
+    {
+      kind: "headless-goal",
+      activationCommand,
+      ...(bashPermission !== undefined ? { bashPermission } : {}),
+      onActivated,
+      onFinished: (result) => {
+        finalGoal = result.goal;
+      },
+    },
+  );
+  return {
+    exitCode,
+    sessionId: cliArgs.sessionId,
+    ...(finalGoal !== undefined ? { goal: finalGoal } : {}),
+  };
+}
+
+export async function runInteractiveCli(
+  cliArgs: RunCliArgs,
+  runtime: CliRuntime,
+): Promise<number> {
+  return await runSessionCli(cliArgs, runtime, { kind: "interactive" });
 }

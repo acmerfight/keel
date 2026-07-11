@@ -12,6 +12,14 @@ interface RunReportInput {
   readonly end: EndEventWithCost;
   readonly durationMs: number;
   readonly contextCompactions: readonly RunReportContextCompaction[];
+  readonly goalOutcome?: RunReportGoalOutcome;
+}
+
+export interface RunReportGoalOutcome {
+  readonly sessionId: string;
+  readonly status: "blocked" | "budget_limited" | "usage_limited" | "completed";
+  readonly reason: string;
+  readonly evidenceKind?: "command" | "assertion_evaluator" | "user_override";
 }
 
 interface RunReportModelUsage {
@@ -35,6 +43,7 @@ interface RunReport {
   readonly durationMs: number;
   readonly costUsd: number;
   readonly contextCompactions: readonly RunReportContextCompaction[];
+  readonly goalOutcome?: RunReportGoalOutcome;
 }
 
 type EndEventWithCost = EndEvent & { readonly cost: CostReport };
@@ -82,6 +91,9 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     durationMs: input.durationMs,
     costUsd: cost.spentUsd,
     contextCompactions: input.contextCompactions,
+    ...(input.goalOutcome !== undefined
+      ? { goalOutcome: input.goalOutcome }
+      : {}),
   };
   try {
     writeFileSync(filePath, `${JSON.stringify(report)}\n`, "utf8");

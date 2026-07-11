@@ -12,6 +12,7 @@ import type {
   BashApprovalGrant,
   BashMode,
   BashProjectApprovalGrant,
+  SessionBashPermissionPolicy,
 } from "../../permissions/bash.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
 import type { ModelSource, ProviderSelection } from "../provider-config.ts";
@@ -86,7 +87,9 @@ export interface InteractiveSessionOptions {
   readonly initialBashApprovalGrants?: readonly BashApprovalGrant[];
   readonly projectRoot?: string;
   readonly initialProjectBashApprovalGrants?: readonly BashProjectApprovalGrant[];
+  readonly bashPermission?: SessionBashPermissionPolicy;
   readonly goalAutomaticContinuationTurnLimit?: number;
+  readonly exitOnTurnAbort?: boolean;
   readonly now?: () => number;
   readonly persistProjectBashApprovalGrant?: (
     grant: BashProjectApprovalGrant,
@@ -161,6 +164,7 @@ export interface InteractiveReportModelUsage {
 }
 
 export interface InteractiveSessionResult {
+  readonly goal?: SessionGoal;
   readonly report?: {
     readonly modelsUsed: readonly {
       readonly provider: ProviderId;

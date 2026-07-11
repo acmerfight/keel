@@ -444,27 +444,29 @@ export async function runInteractiveSession(
       ? { persistQueuedInput: options.persistQueuedInput }
       : {}),
   });
-  const bashPermission = interactiveBashPermissionPolicy(
-    options.cliArgs.bashMode,
-    lineReader,
-    options.writeStderr,
-    {
-      ...(options.initialBashApprovalGrants !== undefined
-        ? { initialGrants: options.initialBashApprovalGrants }
-        : {}),
-      onGrant: (grant) => {
-        options.persistBashApprovalGrant?.(grant);
+  const bashPermission =
+    options.bashPermission ??
+    interactiveBashPermissionPolicy(
+      options.cliArgs.bashMode,
+      lineReader,
+      options.writeStderr,
+      {
+        ...(options.initialBashApprovalGrants !== undefined
+          ? { initialGrants: options.initialBashApprovalGrants }
+          : {}),
+        onGrant: (grant) => {
+          options.persistBashApprovalGrant?.(grant);
+        },
+        ...(options.projectRoot !== undefined
+          ? { projectRoot: options.projectRoot }
+          : {}),
+        initialProjectGrants: activeProjectBashApprovalGrants,
+        onProjectGrant: (grant) => {
+          appendProjectBashApprovalGrant(grant);
+          options.persistProjectBashApprovalGrant?.(grant);
+        },
       },
-      ...(options.projectRoot !== undefined
-        ? { projectRoot: options.projectRoot }
-        : {}),
-      initialProjectGrants: activeProjectBashApprovalGrants,
-      onProjectGrant: (grant) => {
-        appendProjectBashApprovalGrant(grant);
-        options.persistProjectBashApprovalGrant?.(grant);
-      },
-    },
-  );
+    );
   const activeBashApprovalGrants = (): readonly BashApprovalGrant[] =>
     bashPermission?.grants() ?? inactiveBashApprovalGrants;
   const revokeBashApprovalGrant = (grant: BashApprovalGrant): void => {
@@ -565,6 +567,10 @@ export async function runInteractiveSession(
       if (activeAbortController.signal.aborted) {
         options.writeStdout("\n");
         options.forceExit(130);
+      }
+      if (options.exitOnTurnAbort === true) {
+        options.setExitCode(130);
+        input.close();
       }
       activeAbortController.abort();
       return;
@@ -1986,12 +1992,15 @@ export async function runInteractiveSession(
     options.offSigint(abortActiveTurn);
     input.close();
   }
+  const finalGoal =
+    sessionGoal === undefined ? {} : { goal: copySessionGoal(sessionGoal) };
   if (options.cliArgs.reportFile !== undefined) {
     const reportEnd = currentReportEnd();
     if (reportEnd === undefined) {
-      return {};
+      return finalGoal;
     }
     return {
+      ...finalGoal,
       report: {
         modelsUsed: [...reportUsageByModel.values()].map((entry) => ({
           provider: entry.provider,
@@ -2002,5 +2011,5 @@ export async function runInteractiveSession(
       },
     };
   }
-  return {};
+  return finalGoal;
 }

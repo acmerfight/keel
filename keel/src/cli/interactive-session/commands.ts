@@ -1,4 +1,3 @@
-import { MAX_COMMAND_TIMEOUT_MS } from "../../core/command-timeout.ts";
 import { errorMessage } from "../../core/error.ts";
 import { isProviderId } from "../../core/provider-id.ts";
 import {
@@ -13,6 +12,11 @@ import {
   type SessionGoalBudget,
   type SessionGoalCriterionKind,
 } from "../../core/session-goal.ts";
+import {
+  parseGoalDuration,
+  parseGoalPositiveIntegerOption,
+  parseGoalVerificationTimeout,
+} from "../goal-options.ts";
 import { sanitizeStatusLineText } from "../output.ts";
 import { redactTextForPersistence } from "../persistence-redaction.ts";
 import type { ProviderSelection } from "../provider-config.ts";
@@ -490,61 +494,6 @@ function parseGoalCommandArgs(
   };
 }
 
-function parsePositiveIntegerOption(
-  option: "--turns" | "--tokens",
-  raw: string | undefined,
-): ParseResult<number> {
-  if (raw === undefined || !/^[1-9][0-9]*$/u.test(raw)) {
-    return {
-      ok: false,
-      message: `Error: ${option} must be a positive integer.`,
-    };
-  }
-  const value = Number(raw);
-  return Number.isSafeInteger(value)
-    ? { ok: true, value }
-    : {
-        ok: false,
-        message: `Error: ${option} must be a positive integer.`,
-      };
-}
-
-function parseGoalDuration(raw: string | undefined): ParseResult<number> {
-  const match = /^([1-9][0-9]*)(ms|s|m|h)$/u.exec(raw ?? "");
-  if (match === null) {
-    return {
-      ok: false,
-      message:
-        "Error: --time must be a positive duration using ms, s, m, or h.",
-    };
-  }
-  const amount = Number(match[1]);
-  const unit = match[2];
-  const multiplier =
-    unit === "ms" ? 1 : unit === "s" ? 1000 : unit === "m" ? 60_000 : 3_600_000;
-  const activeTimeMs = amount * multiplier;
-  return Number.isSafeInteger(activeTimeMs)
-    ? { ok: true, value: activeTimeMs }
-    : {
-        ok: false,
-        message:
-          "Error: --time must be a positive duration using ms, s, m, or h.",
-      };
-}
-
-function parseGoalVerificationTimeout(
-  raw: string | undefined,
-): ParseResult<number> {
-  const parsed = parseGoalDuration(raw);
-  if (!parsed.ok || parsed.value > MAX_COMMAND_TIMEOUT_MS) {
-    return {
-      ok: false,
-      message: `Error: --timeout must be a positive duration up to ${formatSessionGoalDuration(MAX_COMMAND_TIMEOUT_MS)} using ms, s, or m.`,
-    };
-  }
-  return parsed;
-}
-
 function parseGoalVerifyArgs(
   rawArgs: string,
 ):
@@ -593,7 +542,7 @@ function parseGoalBudgetValues(
     const option = args[index];
     const rawValue = args[index + 1];
     if (option === "--turns" || option === "--tokens") {
-      const parsed = parsePositiveIntegerOption(option, rawValue);
+      const parsed = parseGoalPositiveIntegerOption(option, rawValue);
       if (!parsed.ok) return parsed;
       if (option === "--turns") budget.turns = parsed.value;
       else budget.tokens = parsed.value;
@@ -745,7 +694,7 @@ function parseAtomicGoalArgs(
     }
 
     if (option === "--turns" || option === "--tokens") {
-      const parsed = parsePositiveIntegerOption(option, valueToken?.value);
+      const parsed = parseGoalPositiveIntegerOption(option, valueToken?.value);
       if (!parsed.ok) return { kind: "invalid", message: parsed.message };
       if (option === "--turns") budget.turns = parsed.value;
       else budget.tokens = parsed.value;
