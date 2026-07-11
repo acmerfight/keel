@@ -14,6 +14,72 @@ import {
 import { runtime } from "../../../src/testing/session-store-fixtures.ts";
 
 describe("Interactive TUI Composer", () => {
+  test(`Given an assistant turn is still running,
+    When the user submits guidance and a slash command,
+    Then the composer distinguishes steering from a queued command`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tui-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-tui-home-"));
+    const server = createServer((req, res) => {
+      req.resume();
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      res.write(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "working" } }] })}\n\n`,
+      );
+    });
+    await listen(server);
+    const pty = runCliPty(["--ephemeral"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+        KEEL_PROVIDER: "deepseek",
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      await pty.waitForScreen(
+        (screen) => screen.includes("keel>"),
+        "interactive composer did not render",
+      );
+      pty.write("start work\r");
+      await pty.waitForScreen(
+        (screen) => screen.includes("working"),
+        "assistant turn did not start",
+      );
+
+      // When
+      pty.write("/tmp/output is relevant\r");
+      pty.write("focus on queue visibility\r");
+      pty.write("/status\r");
+      pty.write("after the status barrier\r");
+
+      // Then
+      const screen = await pty.waitForScreen(
+        (current) =>
+          current.includes("steer/next> /tmp/output is relevant") &&
+          current.includes("steer/next> focus on queue visibility") &&
+          current.includes("queue> /status") &&
+          current.includes("queue> after the status barrier") &&
+          current.includes("runs next"),
+        "steering and queued command dispositions were not visible",
+      );
+      expect(screen).toContain("steer/next>");
+      expect(screen).toContain("queue>");
+    } finally {
+      pty.kill();
+      server.closeAllConnections();
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a real terminal session with a multiline draft,
     When the user pastes two lines and submits once,
     Then Keel sends one message with the original line break and renders one reply`, async () => {

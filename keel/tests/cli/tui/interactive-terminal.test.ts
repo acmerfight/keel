@@ -5,6 +5,8 @@ import type { Terminal } from "@earendil-works/pi-tui";
 import xtermHeadless from "@xterm/headless";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
+import { createPromptedBashPermissionPolicy } from "../../../src/cli/interactive-session/bash-approval.ts";
+import { createLineReader } from "../../../src/cli/interactive-session/line-reader.ts";
 import { createInteractiveTerminalDisplay } from "../../../src/cli/tui/interactive-terminal.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
@@ -236,6 +238,120 @@ describe("Interactive Terminal Display", () => {
     ]);
     const screen = await terminal.waitForText("multi");
     expect(screen).toContain("line");
+    display.stop();
+  });
+
+  test(`Given the runtime changes how submitted input will be consumed,
+    When the composer moves through steering, queue, approval, and ready modes,
+    Then each disposition and its guidance are visible before submission`, async () => {
+    // Given
+    const terminal = new TestTerminal();
+    const display = createInteractiveTerminalDisplay(terminal, {
+      inputEchoesToDisplay: true,
+      session: { kind: "ephemeral" },
+      onInterrupt: () => {},
+    });
+    const submittedDispositions = [
+      "steer/next",
+      "queue",
+      "queue",
+      "approve",
+      "keel",
+    ] as const;
+    let submittedIndex = 0;
+    display.lineInput.on("line", (line) => {
+      const disposition = submittedDispositions[submittedIndex];
+      if (disposition === undefined) {
+        throw new Error("unexpected submitted input");
+      }
+      submittedIndex++;
+      display.renderSubmittedInput(line, disposition);
+    });
+    display.setComposerMode("queue");
+    display.start();
+    const initialQueue = await terminal.waitForText(
+      "current operation finishes",
+    );
+    expect(initialQueue).toContain("queue>");
+
+    // When / Then: steering
+    display.setComposerMode("steer");
+    const steering = await terminal.waitForText("runs next");
+    expect(steering).toContain("steer/next>");
+    terminal.input("guide this turn");
+    terminal.input("\r");
+    terminal.input("/status");
+    terminal.input("\r");
+
+    // When / Then: operation queue
+    display.setComposerMode("queue");
+    const queued = await terminal.waitForText("current operation finishes");
+    expect(queued).toContain("queue>");
+    terminal.input("\x1b[200~after\ncompaction\x1b[201~");
+    terminal.input("\r");
+
+    // When / Then: approval response
+    display.setComposerMode("approval");
+    const approval = await terminal.waitForText("any other input denies");
+    expect(approval).toContain("approve>");
+    terminal.input("y");
+    terminal.input("\r");
+
+    // When / Then: ordinary prompt
+    display.setComposerMode("ready");
+    terminal.input("/help");
+    terminal.input("\r");
+    const ready = await terminal.waitForText("keel> /help");
+    expect(ready).toContain("steer/next> guide this turn");
+    expect(ready).toContain("queue> /status");
+    expect(ready).toContain("queue> after");
+    expect(ready).toContain("       compaction");
+    expect(ready).toContain("approve> y");
+    display.stop();
+  });
+
+  test(`Given bash approval is waiting in the real TUI composer,
+    When the user presses Enter without an answer,
+    Then the empty response reaches the approval policy and denies the command`, async () => {
+    // Given
+    const terminal = new TestTerminal();
+    const display = createInteractiveTerminalDisplay(terminal, {
+      inputEchoesToDisplay: true,
+      session: { kind: "ephemeral" },
+      onInterrupt: () => {},
+    });
+    const lineReader = createLineReader(display.lineInput, {});
+    const policy = createPromptedBashPermissionPolicy(
+      lineReader,
+      display.writeStderr,
+      {
+        scopeLabel: "session",
+        onPromptStart: () => {
+          display.setComposerMode("approval");
+        },
+        onPromptEnd: () => {
+          display.setComposerMode("steer");
+        },
+      },
+    );
+    display.start();
+    const decision = policy.review({
+      command: "pwd",
+      cwd: process.cwd(),
+      signal: new AbortController().signal,
+    });
+    await terminal.waitForText("approve>");
+
+    // When
+    terminal.input("\r");
+
+    // Then
+    await expect(decision).resolves.toEqual({
+      type: "deny",
+      message: "No approval response provided.",
+    });
+    const screen = await terminal.waitForText("approve>");
+    expect(screen).toContain("Approve bash command?");
     display.stop();
   });
 

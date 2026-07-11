@@ -81,6 +81,7 @@ export function createLineReader(
       readonly sequence: number;
       readonly line: string;
     }) => SessionQueuedInput;
+    readonly onLineSubmitted?: (line: string) => void;
   },
 ): LineReader {
   const queued: QueuedLine[] = (options.initialQueuedInputs ?? []).map(
@@ -110,6 +111,7 @@ export function createLineReader(
   // Approval answers must be typed after the approval prompt appears. The
   // sequence lets approval waits ignore already-queued user messages.
   input.on("line", (line) => {
+    options.onLineSubmitted?.(line);
     currentSequence++;
     const queuedLine = { sequence: currentSequence, line };
     const freshWaiterIndex = freshWaiters.findIndex(

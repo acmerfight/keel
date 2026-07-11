@@ -34,6 +34,7 @@ describe("Interactive Session - Bash Approval Prompts", () => {
     });
     const lineReader = createLineReader(promptInput, {});
     let stderr = "";
+    const promptLifecycle: string[] = [];
     const policy = createPromptedBashPermissionPolicy(
       lineReader,
       (text) => {
@@ -45,6 +46,12 @@ describe("Interactive Session - Bash Approval Prompts", () => {
       {
         scopeLabel: "session",
         projectRoot: workspace,
+        onPromptStart: () => {
+          promptLifecycle.push("approval");
+        },
+        onPromptEnd: () => {
+          promptLifecycle.push("steer");
+        },
       },
     );
 
@@ -61,6 +68,7 @@ describe("Interactive Session - Bash Approval Prompts", () => {
       expect(stderr).toContain(
         "[r] allow command family for this project: git status",
       );
+      expect(promptLifecycle).toEqual(["approval", "steer"]);
     } finally {
       promptInput.close();
       await rm(workspace, { recursive: true, force: true });

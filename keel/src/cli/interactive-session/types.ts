@@ -140,6 +140,11 @@ export interface InteractiveSessionOptions {
   readonly renderPrompt?: () => void;
   readonly acceptInput?: () => void;
   readonly closePrompt?: () => void;
+  readonly setComposerMode?: (mode: InteractiveComposerMode) => void;
+  readonly renderSubmittedInput?: (
+    value: string,
+    disposition: InteractiveInputDisposition,
+  ) => void;
   readonly onSigint: (handler: () => void) => void;
   readonly offSigint: (handler: () => void) => void;
   readonly setExitCode: (code: number) => void;
@@ -156,6 +161,14 @@ export interface InteractiveSessionOptions {
   ) => Promise<EndEvent | undefined>;
   readonly formatCostReport: (cost: CostReport, maxUsd: number) => string;
 }
+
+export type InteractiveComposerMode = "approval" | "queue" | "ready" | "steer";
+
+export type InteractiveInputDisposition =
+  | "approve"
+  | "keel"
+  | "queue"
+  | "steer/next";
 
 export interface InteractiveReportModelUsage {
   readonly provider: ProviderId;
