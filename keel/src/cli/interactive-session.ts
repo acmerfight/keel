@@ -95,6 +95,7 @@ import {
   goalContinuationStagnationFingerprint,
   repeatedGoalContinuationPattern,
 } from "./interactive-session/goal-stagnation.ts";
+import { createInteractiveInputDispositionTracker } from "./interactive-session/input-disposition.ts";
 import {
   createLineReader,
   type QueuedLine,
@@ -109,6 +110,7 @@ import {
 import type {
   EndEvent,
   EndEventWithCost,
+  InteractiveComposerMode,
   InteractiveReportModelUsage,
   InteractiveResolvedProvider,
   InteractiveSessionOptions,
@@ -362,6 +364,11 @@ export async function runInteractiveSession(
       ? undefined
       : copySessionGoal(options.initialSessionGoal);
   let pendingGoalDriveMessage: string | null = null;
+  const inputDisposition = createInteractiveInputDispositionTracker();
+  const setComposerMode = (mode: InteractiveComposerMode): void => {
+    inputDisposition.setComposerMode(mode);
+    options.setComposerMode?.(mode);
+  };
   const currentSystemPrompt = (): string =>
     systemPromptWithSessionGoal(
       systemPrompt,
@@ -445,6 +452,16 @@ export async function runInteractiveSession(
     ...(options.persistQueuedInput !== undefined
       ? { persistQueuedInput: options.persistQueuedInput }
       : {}),
+    ...(options.renderSubmittedInput !== undefined
+      ? {
+          onLineSubmitted: (line: string) => {
+            options.renderSubmittedInput?.(
+              line,
+              inputDisposition.dispositionFor(line),
+            );
+          },
+        }
+      : {}),
   });
   const bashPermission =
     options.bashPermission ??
@@ -466,6 +483,12 @@ export async function runInteractiveSession(
         onProjectGrant: (grant) => {
           appendProjectBashApprovalGrant(grant);
           options.persistProjectBashApprovalGrant?.(grant);
+        },
+        onPromptStart: () => {
+          setComposerMode("approval");
+        },
+        onPromptEnd: () => {
+          setComposerMode("steer");
         },
       },
     );
@@ -752,6 +775,7 @@ export async function runInteractiveSession(
     let taskProgressChanged = false;
     let sessionGoalStateChanged = false;
     let sessionGoalUpdateReportedDuringTurn = false;
+    setComposerMode("steer");
 
     try {
       const remainingCostUsd = remainingMaxCostUsd();
@@ -1045,6 +1069,7 @@ export async function runInteractiveSession(
         });
       }
       activeAbortController = null;
+      setComposerMode("ready");
     }
   };
   const runAutomaticGoalContinuations = async (
@@ -1791,6 +1816,7 @@ export async function runInteractiveSession(
             resolved = currentResolved;
             const compactAbortController = new AbortController();
             activeAbortController = compactAbortController;
+            setComposerMode("queue");
             try {
               const compaction = await executeModelSwitchCompaction({
                 current: currentResolved,
@@ -1814,6 +1840,7 @@ export async function runInteractiveSession(
               modelSwitchCost = compaction.cost;
             } finally {
               activeAbortController = null;
+              setComposerMode("ready");
             }
             options.persistSessionMessages?.(
               messages,
@@ -1885,6 +1912,7 @@ export async function runInteractiveSession(
         const compactResolved = resolveActiveProvider(userMessage);
         const compactAbortController = new AbortController();
         activeAbortController = compactAbortController;
+        setComposerMode("queue");
         let compactCost: CostReport | undefined;
         try {
           compactCost = await executeManualCompaction({
@@ -1904,6 +1932,7 @@ export async function runInteractiveSession(
           });
         } finally {
           activeAbortController = null;
+          setComposerMode("ready");
         }
         if (compactAbortController.signal.aborted) {
           consumeQueuedInputLines([rawInput]);

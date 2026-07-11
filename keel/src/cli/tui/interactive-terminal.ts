@@ -14,6 +14,10 @@ import type {
 } from "../interactive-session/display.ts";
 import { formatInteractiveIntro } from "../interactive-session/display.ts";
 import type { InteractiveLineInput } from "../interactive-session/line-reader.ts";
+import type {
+  InteractiveComposerMode,
+  InteractiveInputDisposition,
+} from "../interactive-session/types.ts";
 
 const plainText = (text: string): string => text;
 const graphemeSegmenter = new Intl.Segmenter(undefined, {
@@ -49,6 +53,11 @@ class TerminalLineInput extends EventEmitter implements InteractiveLineInput {
 
 export interface InteractiveTerminalDisplay extends StableInteractiveDisplay {
   readonly lineInput: InteractiveLineInput;
+  readonly renderSubmittedInput: (
+    value: string,
+    disposition: InteractiveInputDisposition,
+  ) => void;
+  readonly setComposerMode: (mode: InteractiveComposerMode) => void;
   readonly start: () => void;
   readonly stop: () => void;
 }
@@ -66,10 +75,17 @@ type ComposerHistoryState =
       };
     };
 
-function formatSubmittedInput(value: string): string {
+function formatSubmittedInput(
+  value: string,
+  label: InteractiveInputDisposition,
+): string {
+  const continuationPrefix = " ".repeat(label.length + 1);
   return value
     .split("\n")
-    .map((line, index) => `${index === 0 ? "keel>" : "     "} ${line}`)
+    .map(
+      (line, index) =>
+        `${index === 0 ? `${label}>` : continuationPrefix} ${line}`,
+    )
     .join("\n");
 }
 
@@ -83,12 +99,14 @@ export function createInteractiveTerminalDisplay(
   const transcript = new Text();
   const prompt = new Text("keel>");
   const editor = new Editor(tui, EDITOR_THEME);
+  const composerHint = new Text();
   const lineInput = new TerminalLineInput();
   let transcriptText = "";
   let started = false;
   let stopped = false;
   const history: string[] = [];
   let historyState: ComposerHistoryState = { kind: "idle" };
+  let composerMode: InteractiveComposerMode = "ready";
 
   const append = (text: string): void => {
     transcriptText += text;
@@ -99,15 +117,18 @@ export function createInteractiveTerminalDisplay(
   };
 
   editor.onSubmit = (value) => {
-    if (value === "") {
+    if (value === "" && composerMode !== "approval") {
       return;
     }
-    if (history.at(0) !== value) {
+    if (
+      composerMode !== "approval" &&
+      value !== "" &&
+      history.at(0) !== value
+    ) {
       history.unshift(value);
       history.splice(100);
     }
     historyState = { kind: "idle" };
-    append(`${formatSubmittedInput(value)}\n`);
     lineInput.submit(value);
   };
 
@@ -132,6 +153,7 @@ export function createInteractiveTerminalDisplay(
   tui.addChild(transcript);
   tui.addChild(prompt);
   tui.addChild(editor);
+  tui.addChild(composerHint);
   tui.setFocus(editor);
   tui.addInputListener((data) => {
     if (matchesKey(data, Key.ctrl("c"))) {
@@ -208,8 +230,43 @@ export function createInteractiveTerminalDisplay(
     tui.stop();
   };
 
+  const setComposerMode = (mode: InteractiveComposerMode): void => {
+    composerMode = mode;
+    switch (mode) {
+      case "approval":
+        prompt.setText("approve>");
+        composerHint.setText(
+          "Answer the approval prompt; any other input denies.",
+        );
+        break;
+      case "queue":
+        prompt.setText("queue>");
+        composerHint.setText(
+          "Input runs after the current operation finishes.",
+        );
+        break;
+      case "ready":
+        prompt.setText("keel>");
+        composerHint.setText("");
+        break;
+      case "steer":
+        prompt.setText("steer/next>");
+        composerHint.setText(
+          "Steers at the next tool boundary; if this turn finishes first, it runs next. /commands run after the turn.",
+        );
+        break;
+    }
+    if (started) {
+      tui.requestRender();
+    }
+  };
+
   return {
     lineInput,
+    renderSubmittedInput: (value, disposition) => {
+      append(`${formatSubmittedInput(value, disposition)}\n`);
+    },
+    setComposerMode,
     start: () => {
       started = true;
       tui.start();

@@ -18,6 +18,8 @@ export function interactiveBashPermissionPolicy(
     readonly projectRoot?: string;
     readonly initialProjectGrants?: readonly BashProjectApprovalGrant[];
     readonly onProjectGrant?: (grant: BashProjectApprovalGrant) => void;
+    readonly onPromptStart?: () => void;
+    readonly onPromptEnd?: () => void;
   },
 ): SessionBashPermissionPolicy | undefined {
   if (mode !== "ask") {
@@ -40,6 +42,8 @@ export function createPromptedBashPermissionPolicy(
     readonly projectRoot?: string;
     readonly initialProjectGrants?: readonly BashProjectApprovalGrant[];
     readonly onProjectGrant?: (grant: BashProjectApprovalGrant) => void;
+    readonly onPromptStart?: () => void;
+    readonly onPromptEnd?: () => void;
   },
 ): SessionBashPermissionPolicy {
   return createSessionBashPermissionPolicy({
@@ -57,67 +61,72 @@ export function createPromptedBashPermissionPolicy(
       policyOptions.onProjectGrant ??
       ((_grant: BashProjectApprovalGrant) => undefined),
     prompt: async (request) => {
-      const promptSequence = lineReader.sequence();
-      const prefixApprovalLine =
-        request.prefixApproval === undefined
-          ? []
-          : [
-              `[p] allow ${request.prefixApproval.promptLabel} for ${policyOptions.scopeLabel}: ${escapeApprovalText(
-                request.prefixApproval.display,
-              )}`,
-            ];
-      const projectApprovalLine =
-        request.projectApproval === undefined
-          ? []
-          : [
-              `[r] allow ${request.projectApproval.promptLabel} for this project: ${escapeApprovalText(
-                request.projectApproval.display,
-              )}`,
-            ];
-      writeStderr(
-        [
-          "Approve bash command?",
-          `cwd: ${escapeApprovalText(request.cwd)}`,
-          `$ ${escapeApprovalText(request.command)}`,
-          `risk: ${request.assessment.risk} - ${escapeApprovalText(
-            request.assessment.summary,
-          )}`,
-          ...prefixApprovalLine,
-          ...projectApprovalLine,
-          "Approved command output may be sent to the provider unredacted.",
-          `[y] allow once, [s] allow exact command for ${policyOptions.scopeLabel}, [n] deny; any other input denies: `,
-        ].join("\n"),
-      );
-      const rawAnswer = await lineReader.readLineAfter(
-        promptSequence,
-        request.signal,
-      );
-      if (rawAnswer === null) {
-        return {
-          type: "deny",
-          message: "Command approval was interrupted or input closed.",
-        };
+      policyOptions.onPromptStart?.();
+      try {
+        const promptSequence = lineReader.sequence();
+        const prefixApprovalLine =
+          request.prefixApproval === undefined
+            ? []
+            : [
+                `[p] allow ${request.prefixApproval.promptLabel} for ${policyOptions.scopeLabel}: ${escapeApprovalText(
+                  request.prefixApproval.display,
+                )}`,
+              ];
+        const projectApprovalLine =
+          request.projectApproval === undefined
+            ? []
+            : [
+                `[r] allow ${request.projectApproval.promptLabel} for this project: ${escapeApprovalText(
+                  request.projectApproval.display,
+                )}`,
+              ];
+        writeStderr(
+          [
+            "Approve bash command?",
+            `cwd: ${escapeApprovalText(request.cwd)}`,
+            `$ ${escapeApprovalText(request.command)}`,
+            `risk: ${request.assessment.risk} - ${escapeApprovalText(
+              request.assessment.summary,
+            )}`,
+            ...prefixApprovalLine,
+            ...projectApprovalLine,
+            "Approved command output may be sent to the provider unredacted.",
+            `[y] allow once, [s] allow exact command for ${policyOptions.scopeLabel}, [n] deny; any other input denies: `,
+          ].join("\n"),
+        );
+        const rawAnswer = await lineReader.readLineAfter(
+          promptSequence,
+          request.signal,
+        );
+        if (rawAnswer === null) {
+          return {
+            type: "deny",
+            message: "Command approval was interrupted or input closed.",
+          };
+        }
+        const answer = rawAnswer.trim().toLowerCase();
+        if (answer === "") {
+          return {
+            type: "deny",
+            message: "No approval response provided.",
+          };
+        }
+        if (answer === "y" || answer === "yes") {
+          return { type: "allow", scope: "once" };
+        }
+        if (answer === "s" || answer === "session" || answer === "a") {
+          return { type: "allow", scope: "session" };
+        }
+        if (request.prefixApproval !== undefined && answer === "p") {
+          return { type: "allow", scope: "session-prefix" };
+        }
+        if (request.projectApproval !== undefined && answer === "r") {
+          return { type: "allow", scope: "project-prefix" };
+        }
+        return { type: "deny", message: "User did not approve this command." };
+      } finally {
+        policyOptions.onPromptEnd?.();
       }
-      const answer = rawAnswer.trim().toLowerCase();
-      if (answer === "") {
-        return {
-          type: "deny",
-          message: "No approval response provided.",
-        };
-      }
-      if (answer === "y" || answer === "yes") {
-        return { type: "allow", scope: "once" };
-      }
-      if (answer === "s" || answer === "session" || answer === "a") {
-        return { type: "allow", scope: "session" };
-      }
-      if (request.prefixApproval !== undefined && answer === "p") {
-        return { type: "allow", scope: "session-prefix" };
-      }
-      if (request.projectApproval !== undefined && answer === "r") {
-        return { type: "allow", scope: "project-prefix" };
-      }
-      return { type: "deny", message: "User did not approve this command." };
     },
   });
 }

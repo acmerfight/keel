@@ -48,7 +48,9 @@ Interactive sessions are saved by default. Use `keel sessions` to find the
 resume command for prior work, or `keel --ephemeral` when you intentionally do
 not want a session ledger. In a real terminal, the interactive composer supports
 multiline drafts, bracketed paste, prompt history, and terminal resize while
-agent output is streaming.
+agent output is streaming. While a turn is active, the composer labels ordinary
+guidance as `steer/next>` because it steers at the next tool boundary or runs as
+the next follow-up if the turn finishes first; slash commands remain queued work.
 
 Useful follow-up commands:
 

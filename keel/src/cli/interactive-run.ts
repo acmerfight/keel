@@ -970,6 +970,13 @@ async function runSessionCli(
         ...(interactiveDisplay !== undefined
           ? { closePrompt: interactiveDisplay.closePrompt }
           : {}),
+        ...(interactiveTerminalDisplay !== undefined
+          ? {
+              setComposerMode: interactiveTerminalDisplay.setComposerMode,
+              renderSubmittedInput:
+                interactiveTerminalDisplay.renderSubmittedInput,
+            }
+          : {}),
         onSigint: (handler) => {
           activeSigintHandler = handler;
           runtime.onSigint(handler);
