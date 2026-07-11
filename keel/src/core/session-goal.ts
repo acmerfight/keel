@@ -527,6 +527,24 @@ export function sessionGoalAccounting(goal: SessionGoal): {
   };
 }
 
+export function pauseActiveSessionGoal(
+  goal: Extract<SessionGoal, { readonly status: "active" }>,
+): Extract<SessionGoal, { readonly status: "paused" }> {
+  return {
+    objective: goal.objective,
+    status: "paused",
+    ...sessionGoalAccounting(goal),
+    ...(goal.criterionKind !== undefined &&
+    goal.completionCriterion !== undefined
+      ? {
+          criterionKind: goal.criterionKind,
+          completionCriterion: goal.completionCriterion,
+        }
+      : {}),
+    ...sessionGoalRuntimeOutcome(goal),
+  };
+}
+
 export function accountSessionGoalTurn(
   goal: SessionGoal,
   usage: { readonly tokens: number; readonly activeTimeMs: number },

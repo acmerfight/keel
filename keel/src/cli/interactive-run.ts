@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { isAbortThrow } from "../core/error.ts";
-import type { SessionGoal } from "../core/session-goal.ts";
+import {
+  pauseActiveSessionGoal,
+  type SessionGoal,
+} from "../core/session-goal.ts";
 import type { Message } from "../llm/types.ts";
 import type { BashApprovalGrant } from "../permissions/bash.ts";
 import type { CliArgs } from "./args.ts";
@@ -664,14 +667,30 @@ export async function runInteractiveCli(
             storedMessages: sessionStoredMessages(ensureActiveSession()),
           });
         const initialSession = session;
+        const initialSessionGoal = (() => {
+          if (
+            sessionStart.kind !== "resume" ||
+            initialSession?.goal?.status !== "active"
+          ) {
+            return initialSession?.goal;
+          }
+          const pausedGoal = pauseActiveSessionGoal(initialSession.goal);
+          persistSessionGoal({
+            session: initialSession,
+            goal: pausedGoal,
+            runtime,
+          });
+          runtime.writeStdout(
+            "Goal paused after session resume. Run /goal resume to continue.\n",
+          );
+          return pausedGoal;
+        })();
         sessionPersistence = {
           initialMessages: initialSession?.messages ?? [],
           ...(initialSession?.title !== undefined
             ? { initialSessionTitle: initialSession.title }
             : {}),
-          ...(initialSession?.goal !== undefined
-            ? { initialSessionGoal: initialSession.goal }
-            : {}),
+          ...(initialSessionGoal !== undefined ? { initialSessionGoal } : {}),
           initialTaskProgress: initialSession?.taskProgress ?? {
             tasks: [],
           },

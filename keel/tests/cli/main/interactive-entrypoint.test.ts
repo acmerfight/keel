@@ -246,9 +246,9 @@ describe("CLI Main - Interactive Entrypoint", () => {
     }
   });
 
-  test(`Given a resumed saved session has an active goal,
-    When the user asks for status,
-    Then the interactive entrypoint restores the goal into the status snapshot`, async () => {
+  test(`Given a saved session stopped with an active goal,
+    When the user resumes the session and explicitly resumes the goal,
+    Then Keel first parks the goal without provider spend and then continues it`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-goal-resume-"));
     const ledgerWorkspace = await realpath(workspace);
@@ -267,14 +267,25 @@ describe("CLI Main - Interactive Entrypoint", () => {
           goal: {
             objective: "Resume durable goal state",
             status: "active",
-            budget: {},
+            budget: { turns: 1 },
             usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+            criterionKind: "assertion",
+            completionCriterion: "The durable goal is complete",
+            blockedAudit: {
+              consecutiveCount: 1,
+              reason: "The previous process was still checking a blocker.",
+            },
+            latestRuntimeOutcome: {
+              kind: "progress_observed",
+              reason: "The previous process changed the workspace.",
+            },
           },
         }),
       ],
     });
     const input = new PassThrough();
-    input.end("/status\n");
+    input.write("/status\n");
+    input.end("/goal resume\n");
     const fixture = createRuntime(
       ["--resume", "goal-entrypoint", "--provider=fake", "--bash-policy=deny"],
       {
@@ -295,9 +306,27 @@ describe("CLI Main - Interactive Entrypoint", () => {
       // Then
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toContain(
-        "  goal: active - Resume durable goal state; criterion: missing\n",
+        "Goal paused after session resume. Run /goal resume to continue.\n",
       );
-      expect(fixture.stderr()).toBe("");
+      expect(fixture.stdout()).toContain(
+        "  goal: paused - Resume durable goal state; criterion(assertion): The durable goal is complete; usage: 0 turns, 0 tokens, 0ms active; budget: 1 turn\n",
+      );
+      expect(fixture.stdout()).toContain(
+        "  goal outcome: progress observed - The previous process changed the workspace.\n",
+      );
+      expect(fixture.stdout()).toContain(
+        "Goal resumed: Resume durable goal state\n",
+      );
+      expect(fixture.stdout()).toContain('source="goal_resumption"');
+      expect(fixture.stderr()).toContain(
+        "Session goal budget reached: turns 1/1",
+      );
+      const resumedLedger = await readFile(
+        join(home, "sessions", "goal-entrypoint", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(resumedLedger).toContain('"status":"paused"');
+      expect(resumedLedger).toContain('"status":"budget_limited"');
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
