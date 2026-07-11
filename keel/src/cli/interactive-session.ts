@@ -1309,20 +1309,30 @@ export async function runInteractiveSession(
             try {
               const nextGoal: SessionGoal =
                 goalCommand.action === "launch"
-                  ? {
-                      objective: goalCommand.objective,
-                      status: "active",
-                      budget: goalCommand.budget,
-                      usage: emptySessionGoalUsage(),
-                      criterionKind: "command",
-                      completionCriterion: goalCommand.command,
-                      ...(goalCommand.verificationTimeoutMs !== undefined
-                        ? {
-                            verificationTimeoutMs:
-                              goalCommand.verificationTimeoutMs,
-                          }
-                        : {}),
-                    }
+                  ? goalCommand.criterion.kind === "command"
+                    ? {
+                        objective: goalCommand.objective,
+                        status: "active",
+                        budget: goalCommand.budget,
+                        usage: emptySessionGoalUsage(),
+                        criterionKind: "command",
+                        completionCriterion: goalCommand.criterion.command,
+                        ...(goalCommand.criterion.verificationTimeoutMs !==
+                        undefined
+                          ? {
+                              verificationTimeoutMs:
+                                goalCommand.criterion.verificationTimeoutMs,
+                            }
+                          : {}),
+                      }
+                    : {
+                        objective: goalCommand.objective,
+                        status: "active",
+                        budget: goalCommand.budget,
+                        usage: emptySessionGoalUsage(),
+                        criterionKind: "assertion",
+                        completionCriterion: goalCommand.criterion.assertion,
+                      }
                   : {
                       objective: goalCommand.objective,
                       status: "active",

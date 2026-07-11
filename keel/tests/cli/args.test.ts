@@ -359,7 +359,7 @@ describe("CLI Args", () => {
   test.each([
     [
       ["goal", "--objective", "Ship it", "--bash-policy", "trusted"],
-      "Error: goal requires --verify <command>.\n",
+      "Error: goal requires exactly one of --verify <command> or --done-when <criterion>.\n",
     ],
     [
       [
@@ -389,6 +389,30 @@ describe("CLI Args", () => {
         "pnpm test:unit",
       ],
       'Error: duplicate goal option "--verify".\n',
+    ],
+    [
+      [
+        "goal",
+        "--objective",
+        "Ship it",
+        "--verify",
+        "pnpm test",
+        "--done-when",
+        "the release is ready",
+      ],
+      "Error: --verify and --done-when are mutually exclusive.\n",
+    ],
+    [
+      [
+        "goal",
+        "--objective",
+        "Ship it",
+        "--done-when",
+        "the release is ready",
+        "--timeout",
+        "30s",
+      ],
+      "Error: --timeout is only valid with --verify.\n",
     ],
     [
       ["goal", "--objective", "Ship it", "--verify", "pnpm test", "--bogus"],
@@ -531,8 +555,11 @@ describe("CLI Args", () => {
         command: "goal",
         mode: "launch",
         objective: "Ship checkout",
-        verificationCommand: "pnpm test checkout",
-        verificationTimeoutMs: 45_000,
+        criterion: {
+          kind: "command",
+          command: "pnpm test checkout",
+          verificationTimeoutMs: 45_000,
+        },
         budget: {
           turns: 12,
           tokens: 50_000,
@@ -545,6 +572,38 @@ describe("CLI Args", () => {
         maxCostUsd: 1.25,
         reportFile: "goal.json",
         sessionId: "checkout",
+      },
+    });
+  });
+
+  test(`Given a headless Goal has a subjective completion condition,
+    When the CLI parses --done-when without shell authorization,
+    Then it produces one normalized assertion-backed Goal contract`, () => {
+    // When
+    const parsed = parseCliArgs([
+      "goal",
+      "--objective=Polish the release narrative",
+      "--done-when=the release notes are clear and complete",
+      "--turns=12",
+      "--provider=fake",
+      "--session=release-narrative",
+    ]);
+
+    // Then
+    expect(parsed).toEqual({
+      ok: true,
+      value: {
+        command: "goal",
+        mode: "launch",
+        objective: "Polish the release narrative",
+        criterion: {
+          kind: "assertion",
+          assertion: "the release notes are clear and complete",
+        },
+        budget: { turns: 12 },
+        bashMode: "disabled",
+        providerId: "fake",
+        sessionId: "release-narrative",
       },
     });
   });
@@ -732,13 +791,30 @@ describe("CLI Args", () => {
       "--verify",
       `${verifierAtLimit}v`,
     ]);
+    const acceptedAssertion = parseCliArgs([
+      "goal",
+      "--objective",
+      "Ship it",
+      "--done-when",
+      `  ${verifierAtLimit}  `,
+    ]);
+    const oversizedAssertion = parseCliArgs([
+      "goal",
+      "--objective",
+      "Ship it",
+      "--done-when",
+      `${verifierAtLimit}a`,
+    ]);
 
     // Then
     expect(accepted).toMatchObject({
       ok: true,
       value: {
         objective: objectiveAtLimit,
-        verificationCommand: verifierAtLimit,
+        criterion: {
+          kind: "command",
+          command: verifierAtLimit,
+        },
       },
     });
     expect(oversizedObjective).toEqual({
@@ -746,6 +822,19 @@ describe("CLI Args", () => {
       message: `Error: /goal objective must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
     });
     expect(oversizedVerifier).toEqual({
+      ok: false,
+      message: `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
+    });
+    expect(acceptedAssertion).toMatchObject({
+      ok: true,
+      value: {
+        criterion: {
+          kind: "assertion",
+          assertion: verifierAtLimit,
+        },
+      },
+    });
+    expect(oversizedAssertion).toEqual({
       ok: false,
       message: `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
     });

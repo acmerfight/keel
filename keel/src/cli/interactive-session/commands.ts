@@ -81,8 +81,16 @@ type GoalCommand =
       readonly action: "launch";
       readonly objective: string;
       readonly budget: SessionGoalBudget;
-      readonly command: string;
-      readonly verificationTimeoutMs?: number;
+      readonly criterion:
+        | {
+            readonly kind: "command";
+            readonly command: string;
+            readonly verificationTimeoutMs?: number;
+          }
+        | {
+            readonly kind: "assertion";
+            readonly assertion: string;
+          };
     }
   | {
       readonly kind: "goal";
@@ -177,9 +185,11 @@ export function formatInteractiveHelp(): string {
     "  /status            Show session state and recovery commands.",
     "  /title [text]      Show or set this saved session title.",
     "  /goal [condition]  Show or start a goal with this completion condition.",
-    '  /goal --objective "<condition>" --verify "<cmd>"',
-    "                     [--timeout 30s] [--turns N] [--tokens N] [--time 30m]",
-    "                     Atomically configure and start a verified goal.",
+    '  /goal --objective "<condition>"',
+    '                     (--verify "<cmd>" [--timeout 30s]',
+    '                      | --done-when "<criterion>")',
+    "                     [--turns N] [--tokens N] [--time 30m]",
+    "                     Atomically configure and start a goal.",
     "  /goal verify [--timeout 30s] <cmd>",
     "                     Set the command that proves the goal is done.",
     "  /goal done-when <criterion>",
@@ -651,6 +661,7 @@ function parseAtomicGoalArgs(
 
   let objective: string | undefined;
   let command: string | undefined;
+  let assertion: string | undefined;
   let verificationTimeoutMs: number | undefined;
   const budget: {
     turns?: number;
@@ -671,7 +682,11 @@ function parseAtomicGoalArgs(
     }
     seenOptions.add(option);
 
-    if (option === "--objective" || option === "--verify") {
+    if (
+      option === "--objective" ||
+      option === "--verify" ||
+      option === "--done-when"
+    ) {
       if (valueToken?.quoted !== true) {
         return {
           kind: "invalid",
@@ -681,7 +696,9 @@ function parseAtomicGoalArgs(
       const normalized =
         option === "--objective"
           ? normalizeSessionGoalObjective(valueToken.value)
-          : normalizeSessionGoalCompletionCommand(valueToken.value);
+          : option === "--verify"
+            ? normalizeSessionGoalCompletionCommand(valueToken.value)
+            : normalizeSessionGoalCompletionCriterion(valueToken.value);
       if (normalized === "") {
         return {
           kind: "invalid",
@@ -689,7 +706,8 @@ function parseAtomicGoalArgs(
         };
       }
       if (option === "--objective") objective = normalized;
-      else command = normalized;
+      else if (option === "--verify") command = normalized;
+      else assertion = normalized;
       continue;
     }
 
@@ -725,9 +743,31 @@ function parseAtomicGoalArgs(
     };
   }
   if (command === undefined) {
+    if (assertion === undefined) {
+      return {
+        kind: "invalid",
+        message:
+          'Error: an atomic goal requires exactly one of --verify "<command>" or --done-when "<criterion>".',
+      };
+    }
+    if (verificationTimeoutMs !== undefined) {
+      return {
+        kind: "invalid",
+        message: "Error: --timeout is only valid with --verify.",
+      };
+    }
+    return {
+      kind: "goal",
+      action: "launch",
+      objective,
+      budget,
+      criterion: { kind: "assertion", assertion },
+    };
+  }
+  if (assertion !== undefined) {
     return {
       kind: "invalid",
-      message: 'Error: an atomic goal requires --verify "<command>".',
+      message: "Error: --verify and --done-when are mutually exclusive.",
     };
   }
   return {
@@ -735,8 +775,11 @@ function parseAtomicGoalArgs(
     action: "launch",
     objective,
     budget,
-    command,
-    ...(verificationTimeoutMs === undefined ? {} : { verificationTimeoutMs }),
+    criterion: {
+      kind: "command",
+      command,
+      ...(verificationTimeoutMs === undefined ? {} : { verificationTimeoutMs }),
+    },
   };
 }
 

@@ -122,7 +122,7 @@ describe("Interactive Session - Goals", () => {
     When Keel documents atomic goal launch,
     Then every supported timeout and budget option is visible`, () => {
     expect(formatInteractiveHelp()).toContain(
-      '  /goal --objective "<condition>" --verify "<cmd>"\n                     [--timeout 30s] [--turns N] [--tokens N] [--time 30m]\n',
+      '  /goal --objective "<condition>"\n                     (--verify "<cmd>" [--timeout 30s]\n                      | --done-when "<criterion>")\n                     [--turns N] [--tokens N] [--time 30m]\n',
     );
   });
 
@@ -247,8 +247,11 @@ describe("Interactive Session - Goals", () => {
         tokens: 120_000,
         activeTimeMs: 45 * 60 * 1000,
       },
-      command: "pnpm test -- --runInBand",
-      verificationTimeoutMs: 45_000,
+      criterion: {
+        kind: "command",
+        command: "pnpm test -- --runInBand",
+        verificationTimeoutMs: 45_000,
+      },
     });
     expect(
       parseInteractiveCommand('/goal --verify "pnpm test -- --runInBand"'),
@@ -266,13 +269,49 @@ describe("Interactive Session - Goals", () => {
       action: "launch",
       objective: "Release notes ; touch marker -- v2",
       budget: {},
-      command: "printf ok",
+      criterion: {
+        kind: "command",
+        command: "printf ok",
+      },
     });
     expect(
       parseInteractiveCommand('/goal --objective "Missing verifier" --turns 3'),
     ).toEqual({
       kind: "invalid",
-      message: 'Error: an atomic goal requires --verify "<command>".',
+      message:
+        'Error: an atomic goal requires exactly one of --verify "<command>" or --done-when "<criterion>".',
+      scope: "goal",
+    });
+    expect(
+      parseInteractiveCommand(
+        '/goal --objective "Polish the release" --done-when "the release reads clearly" --turns 3',
+      ),
+    ).toEqual({
+      kind: "goal",
+      action: "launch",
+      objective: "Polish the release",
+      budget: { turns: 3 },
+      criterion: {
+        kind: "assertion",
+        assertion: "the release reads clearly",
+      },
+    });
+    expect(
+      parseInteractiveCommand(
+        '/goal --objective "Ambiguous" --verify "true" --done-when "looks done"',
+      ),
+    ).toEqual({
+      kind: "invalid",
+      message: "Error: --verify and --done-when are mutually exclusive.",
+      scope: "goal",
+    });
+    expect(
+      parseInteractiveCommand(
+        '/goal --objective "Invalid timeout" --done-when "looks done" --timeout 30s',
+      ),
+    ).toEqual({
+      kind: "invalid",
+      message: "Error: --timeout is only valid with --verify.",
       scope: "goal",
     });
     expect(
