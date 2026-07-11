@@ -429,10 +429,12 @@ export async function runInteractiveSession(
       },
     ];
   };
-  const input = createInterface({
-    input: options.input,
-    crlfDelay: Number.POSITIVE_INFINITY,
-  });
+  const input =
+    options.lineInput ??
+    createInterface({
+      input: options.input,
+      crlfDelay: Number.POSITIVE_INFINITY,
+    });
   const lineReader = createLineReader(input, {
     ...(options.initialQueuedInputs !== undefined
       ? { initialQueuedInputs: options.initialQueuedInputs }

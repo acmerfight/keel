@@ -14,7 +14,7 @@ interface StableInteractiveDisplayRuntime {
   readonly writeStderr: (text: string) => void;
 }
 
-interface StableInteractiveDisplayOptions {
+export interface StableInteractiveDisplayOptions {
   readonly inputEchoesToDisplay: boolean;
   readonly session:
     | {
@@ -27,7 +27,7 @@ interface StableInteractiveDisplayOptions {
       };
 }
 
-function formatInteractiveIntro(
+export function formatInteractiveIntro(
   session: StableInteractiveDisplayOptions["session"],
 ): string {
   if (session.kind === "ephemeral") {
