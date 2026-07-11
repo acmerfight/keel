@@ -629,6 +629,32 @@ export function formatSessionGoalBudgetLimitReason(
     : `Session goal budget reached: ${reached.join("; ")}.`;
 }
 
+export function formatSessionGoalResumeRejection(
+  goal: SessionGoal | undefined,
+): string | null {
+  if (goal === undefined) {
+    return "Error: no session goal is set.";
+  }
+  if (
+    goal.status !== "paused" &&
+    goal.status !== "blocked" &&
+    goal.status !== "budget_limited" &&
+    goal.status !== "usage_limited"
+  ) {
+    return "Error: only paused, blocked, or limited session goals can be resumed.";
+  }
+  if (
+    goal.criterionKind === undefined ||
+    goal.completionCriterion === undefined
+  ) {
+    return "Error: the session goal has no completion criterion. Set a new goal before resuming.";
+  }
+  const budgetLimitReason = formatSessionGoalBudgetLimitReason(goal);
+  return budgetLimitReason === null
+    ? null
+    : `Error: ${budgetLimitReason} Raise or clear the goal budget before resuming.`;
+}
+
 function copySessionGoalCompletionEvidence(
   evidence: SessionGoalCompletionEvidence,
 ): SessionGoalCompletionEvidence {

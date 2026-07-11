@@ -117,8 +117,19 @@ type SessionCliMode =
   | { readonly kind: "interactive" }
   | {
       readonly kind: "headless-goal";
-      readonly activationCommand: string;
+      readonly initialCommand: string;
       readonly bashPermission?: SessionBashPermissionPolicy;
+      readonly prepareResumedGoal?: (goal: SessionGoal | undefined) => Promise<
+        | {
+            readonly kind: "ready";
+            readonly goal: SessionGoal;
+            readonly bashPermission?: SessionBashPermissionPolicy;
+          }
+        | { readonly kind: "rejected" }
+      >;
+      readonly latestGoalIsResumable?: (
+        goal: SessionGoal | undefined,
+      ) => boolean;
       readonly onActivated: (sessionId: string) => void;
       readonly onFinished: (result: {
         readonly sessionId: string;
@@ -171,6 +182,7 @@ function interactiveSessionStartFromCliArgs(
   options: {
     readonly workspace: string;
     readonly runtime: CliRuntime;
+    readonly latestSessionFilter?: (session: SessionCatalogEntry) => boolean;
   },
 ): InteractiveSessionStart {
   if (cliArgs.ephemeral) {
@@ -206,13 +218,19 @@ function interactiveSessionStartFromCliArgs(
 function latestSessionIdForWorkspace(options: {
   readonly workspace: string;
   readonly runtime: CliRuntime;
+  readonly latestSessionFilter?: (session: SessionCatalogEntry) => boolean;
 }): string {
   const catalog = listSessionCatalog(options);
   options.runtime.writeStderr(formatSessionCatalogWarnings(catalog.warnings));
-  const latestSession = catalog.sessions[0];
+  const latestSession =
+    options.latestSessionFilter === undefined
+      ? catalog.sessions[0]
+      : catalog.sessions.find(options.latestSessionFilter);
   if (latestSession === undefined) {
     throw new SessionStoreError(
-      `Error: no saved sessions for workspace ${catalog.workspace}. Complete an interactive turn before running keel --resume.`,
+      options.latestSessionFilter === undefined
+        ? `Error: no saved sessions for workspace ${catalog.workspace}. Create a saved session before resuming.`
+        : `Error: no resumable saved Goals for workspace ${catalog.workspace}.`,
     );
   }
   return latestSession.id;
@@ -414,7 +432,7 @@ async function runSessionCli(
         : undefined;
     let sessionStart: InteractiveSessionStart;
     let initialInputLines: readonly string[] =
-      mode.kind === "headless-goal" ? [mode.activationCommand] : [];
+      mode.kind === "headless-goal" ? [mode.initialCommand] : [];
     if (cliArgs.resumeSession?.kind === "pick") {
       const pickedSession = await pickedSessionIdForWorkspace({
         workspace,
@@ -478,6 +496,13 @@ async function runSessionCli(
         {
           workspace,
           runtime,
+          ...(mode.kind === "headless-goal" &&
+          mode.latestGoalIsResumable !== undefined
+            ? {
+                latestSessionFilter: (catalogSession: SessionCatalogEntry) =>
+                  mode.latestGoalIsResumable?.(catalogSession.goal) === true,
+              }
+            : {}),
         },
       );
     }
@@ -499,6 +524,9 @@ async function runSessionCli(
       let activeSessionId: string | undefined;
       let persistedMessages: readonly Message[] = [];
       let initialModelSelection: SessionModelSelection | undefined;
+      let headlessGoalBashPermission =
+        mode.kind === "headless-goal" ? mode.bashPermission : undefined;
+      let headlessPreparedSessionGoal: SessionGoal | undefined;
       let workflowSkill =
         (sessionStart.kind === "create" || sessionStart.kind === "ephemeral") &&
         cliArgs.skillName !== undefined
@@ -551,6 +579,22 @@ async function runSessionCli(
           sourceSessionLock = undefined;
         } else {
           session = resumedSession;
+          if (
+            mode.kind === "headless-goal" &&
+            mode.prepareResumedGoal !== undefined
+          ) {
+            const goalForPreparation =
+              session.goal?.status === "active"
+                ? pauseActiveSessionGoal(session.goal)
+                : session.goal;
+            const preparation =
+              await mode.prepareResumedGoal(goalForPreparation);
+            if (preparation.kind === "rejected") {
+              return 1;
+            }
+            headlessPreparedSessionGoal = preparation.goal;
+            headlessGoalBashPermission = preparation.bashPermission;
+          }
         }
         workflowSkill = resumedWorkflowSkill;
         activeSessionId = session.id;
@@ -712,6 +756,9 @@ async function runSessionCli(
           });
         const initialSession = session;
         const initialSessionGoal = (() => {
+          if (headlessPreparedSessionGoal !== undefined) {
+            return headlessPreparedSessionGoal;
+          }
           if (
             sessionStart.kind !== "resume" ||
             initialSession?.goal?.status !== "active"
@@ -916,8 +963,9 @@ async function runSessionCli(
         workspace,
         platform: runtime.platform,
         ...(mode.kind === "headless-goal" ? { exitOnTurnAbort: true } : {}),
-        ...(mode.kind === "headless-goal" && mode.bashPermission !== undefined
-          ? { bashPermission: mode.bashPermission }
+        ...(mode.kind === "headless-goal" &&
+        headlessGoalBashPermission !== undefined
+          ? { bashPermission: headlessGoalBashPermission }
           : {}),
         ...(activeSessionId !== undefined
           ? {
@@ -1140,17 +1188,27 @@ function headlessGoalReportStopReason(
 
 export interface HeadlessSessionCliResult {
   readonly exitCode: number;
-  readonly sessionId: string;
+  readonly sessionId?: string;
   readonly goal?: SessionGoal;
 }
 
 export async function runHeadlessSessionCli(
-  cliArgs: RunCliArgs & { readonly sessionId: string },
+  cliArgs: RunCliArgs,
   runtime: CliRuntime,
-  activationCommand: string,
+  initialCommand: string,
   bashPermission: SessionBashPermissionPolicy | undefined,
   onActivated: (sessionId: string) => void,
+  prepareResumedGoal?: (goal: SessionGoal | undefined) => Promise<
+    | {
+        readonly kind: "ready";
+        readonly goal: SessionGoal;
+        readonly bashPermission?: SessionBashPermissionPolicy;
+      }
+    | { readonly kind: "rejected" }
+  >,
+  latestGoalIsResumable?: (goal: SessionGoal | undefined) => boolean,
 ): Promise<HeadlessSessionCliResult> {
+  let finalSessionId: string | undefined;
   let finalGoal: SessionGoal | undefined;
   const headlessInput = Readable.from([]);
   const exitCode = await runSessionCli(
@@ -1158,17 +1216,20 @@ export async function runHeadlessSessionCli(
     { ...runtime, input: headlessInput },
     {
       kind: "headless-goal",
-      activationCommand,
+      initialCommand,
       ...(bashPermission !== undefined ? { bashPermission } : {}),
+      ...(prepareResumedGoal !== undefined ? { prepareResumedGoal } : {}),
+      ...(latestGoalIsResumable !== undefined ? { latestGoalIsResumable } : {}),
       onActivated,
       onFinished: (result) => {
+        finalSessionId = result.sessionId;
         finalGoal = result.goal;
       },
     },
   );
   return {
     exitCode,
-    sessionId: cliArgs.sessionId,
+    ...(finalSessionId !== undefined ? { sessionId: finalSessionId } : {}),
     ...(finalGoal !== undefined ? { goal: finalGoal } : {}),
   };
 }

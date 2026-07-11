@@ -529,6 +529,7 @@ describe("CLI Args", () => {
       ok: true,
       value: {
         command: "goal",
+        mode: "launch",
         objective: "Ship checkout",
         verificationCommand: "pnpm test checkout",
         verificationTimeoutMs: 45_000,
@@ -546,6 +547,158 @@ describe("CLI Args", () => {
         sessionId: "checkout",
       },
     });
+  });
+
+  test.each([
+    [
+      [
+        "goal",
+        "resume",
+        "checkout",
+        "--bash-policy=trusted",
+        "--provider=fake",
+        "--model=test-model",
+        "--skill=release",
+        "--max-cost=1.25",
+        "--report=goal.json",
+        "--turns=12",
+        "--tokens=50000",
+        "--time=2h",
+      ],
+      {
+        kind: "id",
+        sessionId: "checkout",
+      },
+    ],
+    [
+      ["goal", "resume", "--last", "--bash-policy=deny"],
+      {
+        kind: "latest",
+      },
+    ],
+    [
+      ["goal", "resume", "checkout", "--allow-bash"],
+      {
+        kind: "id",
+        sessionId: "checkout",
+      },
+    ],
+  ])(`Given a resumable headless Goal selector %j,
+    When the CLI parses the command,
+    Then it preserves the non-interactive resume target and invocation options`, (args, resumeSession) => {
+    // When
+    const parsed = parseCliArgs(args);
+
+    // Then
+    expect(parsed).toEqual({
+      ok: true,
+      value: {
+        command: "goal",
+        mode: "resume",
+        resumeSession,
+        bashMode: args.includes("--bash-policy=deny") ? "disabled" : "trusted",
+        budget: args.includes("--turns=12")
+          ? {
+              turns: 12,
+              tokens: 50_000,
+              activeTimeMs: 7_200_000,
+            }
+          : {},
+        ...(args.includes("--provider=fake") ? { providerId: "fake" } : {}),
+        ...(args.includes("--model=test-model") ? { model: "test-model" } : {}),
+        ...(args.includes("--skill=release") ? { skillName: "release" } : {}),
+        ...(args.includes("--max-cost=1.25") ? { maxCostUsd: 1.25 } : {}),
+        ...(args.includes("--report=goal.json")
+          ? { reportFile: "goal.json" }
+          : {}),
+      },
+    });
+  });
+
+  test.each([
+    [
+      ["goal", "resume"],
+      "Error: goal resume requires <session-id> or --last.\n",
+    ],
+    [
+      ["goal", "resume", "checkout", "--last"],
+      "Error: goal resume accepts either <session-id> or --last, not both.\n",
+    ],
+    [
+      ["goal", "resume", "checkout", "other"],
+      'Error: unexpected goal resume argument "other".\n',
+    ],
+    [
+      ["goal", "resume", "checkout", "--turns", "0"],
+      "Error: --turns must be a positive integer.\n",
+    ],
+    [
+      ["goal", "resume", "checkout", "--bogus"],
+      'Error: unknown goal resume option "--bogus".\n',
+    ],
+    [
+      ["goal", "resume", "checkout", "--report", "one", "--report", "two"],
+      'Error: duplicate goal option "--report".\n',
+    ],
+    [
+      ["goal", "resume", "checkout", "--model", "--report", "goal.json"],
+      'Error: --model requires a value, but got option "--report".\n',
+    ],
+    [
+      ["goal", "resume", "checkout", "--bash-policy", "always"],
+      "Error: --bash-policy must be one of: ask, deny, trusted.\n",
+    ],
+    [
+      ["goal", "resume", "checkout", "--time", "0s"],
+      "Error: --time must be a positive duration using ms, s, m, or h.\n",
+    ],
+    [
+      ["goal", "resume", "checkout", "--provider", "unknown"],
+      "Error: --provider must be one of: fake, deepseek, kimi, qwen.\n",
+    ],
+    [
+      ["goal", "resume", "checkout", "--max-cost", "0"],
+      "Error: --max-cost must be a positive number.\n",
+    ],
+    [
+      ["goal", "resume", "--last=true"],
+      "Error: --last does not accept a value.\n",
+    ],
+    [
+      [
+        "goal",
+        "resume",
+        "checkout",
+        "--bash-policy",
+        "trusted",
+        "--allow-bash",
+      ],
+      "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.\n",
+    ],
+    [
+      [
+        "goal",
+        "resume",
+        "checkout",
+        "--allow-bash",
+        "--bash-policy",
+        "trusted",
+      ],
+      "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.\n",
+    ],
+  ])(`Given ambiguous headless Goal resume arguments %j,
+    When the user runs the CLI,
+    Then Keel rejects them before session or provider work`, async (args, message) => {
+    // Given
+    const fixture = createRuntime(args);
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(message);
   });
 
   test(`Given headless Goal text is at or beyond its durable schema boundary,

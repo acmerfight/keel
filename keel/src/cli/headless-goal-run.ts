@@ -1,4 +1,11 @@
-import type { SessionGoal } from "../core/session-goal.ts";
+import {
+  copySessionGoal,
+  formatSessionGoalResumeRejection,
+  pauseActiveSessionGoal,
+  type SessionGoal,
+  type SessionGoalBudget,
+  type SessionGoalCriterionKind,
+} from "../core/session-goal.ts";
 import {
   createSessionBashPermissionPolicy,
   type SessionBashPermissionPolicy,
@@ -9,14 +16,19 @@ import {
   bashApprovalProjectRoot,
   listBashProjectApprovalGrants,
 } from "./bash-project-approvals.ts";
-import { runHeadlessSessionCli } from "./interactive-run.ts";
+import {
+  type HeadlessSessionCliResult,
+  runHeadlessSessionCli,
+} from "./interactive-run.ts";
 import { sanitizeStatusLineText } from "./output.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { createAutomaticSessionId } from "./session-id.ts";
 
 type GoalCliArgs = Extract<CliArgs, { readonly command: "goal" }>;
+type GoalLaunchCliArgs = Extract<GoalCliArgs, { readonly mode: "launch" }>;
+type GoalResumeCliArgs = Extract<GoalCliArgs, { readonly mode: "resume" }>;
 
-function headlessGoalActivationCommand(cliArgs: GoalCliArgs): string {
+function headlessGoalActivationCommand(cliArgs: GoalLaunchCliArgs): string {
   return [
     "/goal",
     "--objective",
@@ -39,13 +51,33 @@ function headlessGoalActivationCommand(cliArgs: GoalCliArgs): string {
 }
 
 async function headlessGoalBashPermission(
-  cliArgs: GoalCliArgs,
+  contract: {
+    readonly bashMode: GoalCliArgs["bashMode"];
+    readonly criterionKind: SessionGoalCriterionKind;
+    readonly completionCriterion: string;
+  },
   runtime: CliRuntime,
 ): Promise<SessionBashPermissionPolicy | null | undefined> {
-  if (cliArgs.bashMode === "trusted") {
+  if (contract.bashMode === "trusted") {
     return undefined;
   }
-  if (cliArgs.bashMode === "disabled") {
+  if (contract.criterionKind === "assertion") {
+    if (contract.bashMode === "disabled") {
+      return undefined;
+    }
+    const workspace = runtime.cwd();
+    const projectRoot = bashApprovalProjectRoot(workspace);
+    return createSessionBashPermissionPolicy({
+      projectRoot,
+      initialProjectGrants: listBashProjectApprovalGrants(runtime, projectRoot),
+      prompt: () => ({
+        type: "deny",
+        message:
+          "Headless command approval is unavailable and no saved project approval matched.",
+      }),
+    });
+  }
+  if (contract.bashMode === "disabled") {
     runtime.writeStderr(
       "Error: headless command Goals require --bash-policy trusted or a matching saved project approval with --bash-policy ask.\n",
     );
@@ -63,7 +95,7 @@ async function headlessGoalBashPermission(
     }),
   });
   const decision = await policy.review({
-    command: cliArgs.verificationCommand,
+    command: contract.completionCriterion,
     cwd: workspace,
     signal: new AbortController().signal,
   });
@@ -72,6 +104,77 @@ async function headlessGoalBashPermission(
   }
   runtime.writeStderr(`Error: ${decision.message}\n`);
   return null;
+}
+
+async function prepareHeadlessGoalResume(
+  cliArgs: GoalResumeCliArgs,
+  runtime: CliRuntime,
+  goal: SessionGoal | undefined,
+): Promise<
+  | {
+      readonly kind: "ready";
+      readonly goal: SessionGoal;
+      readonly bashPermission?: SessionBashPermissionPolicy;
+    }
+  | { readonly kind: "rejected" }
+> {
+  const preparedGoal = headlessGoalForResume(goal, cliArgs.budget);
+  const resumeRejection = formatSessionGoalResumeRejection(preparedGoal);
+  if (resumeRejection !== null) {
+    runtime.writeStderr(`${resumeRejection}\n`);
+    return { kind: "rejected" };
+  }
+  /* v8 ignore start: the shared resume gate guarantees a durable criterion. */
+  if (
+    preparedGoal === undefined ||
+    preparedGoal.criterionKind === undefined ||
+    preparedGoal.completionCriterion === undefined
+  ) {
+    return { kind: "rejected" };
+  }
+  /* v8 ignore stop */
+  const bashPermission = await headlessGoalBashPermission(
+    {
+      bashMode: cliArgs.bashMode,
+      criterionKind: preparedGoal.criterionKind,
+      completionCriterion: preparedGoal.completionCriterion,
+    },
+    runtime,
+  );
+  return bashPermission === null
+    ? { kind: "rejected" }
+    : {
+        kind: "ready",
+        goal: preparedGoal,
+        ...(bashPermission !== undefined ? { bashPermission } : {}),
+      };
+}
+
+function headlessGoalForResume(
+  goal: SessionGoal | undefined,
+  budget: SessionGoalBudget,
+): SessionGoal | undefined {
+  if (goal === undefined) return undefined;
+  const resumableGoal =
+    goal.status === "active" ? pauseActiveSessionGoal(goal) : goal;
+  return {
+    ...copySessionGoal(resumableGoal),
+    budget: {
+      ...resumableGoal.budget,
+      ...budget,
+    },
+  };
+}
+
+function headlessGoalCanResume(
+  cliArgs: GoalResumeCliArgs,
+  goal: SessionGoal | undefined,
+): boolean {
+  return (
+    formatSessionGoalResumeRejection(
+      headlessGoalForResume(goal, cliArgs.budget),
+    ) === null
+  );
 }
 
 function writeHeadlessGoalOutcome(
@@ -96,22 +199,82 @@ function writeHeadlessGoalOutcome(
     case "completed":
       return 0;
     case "blocked":
-      runtime.writeStdout(`Resume with: keel --resume ${safeSessionId}\n`);
+      runtime.writeStdout(`Resume with: keel goal resume ${safeSessionId}\n`);
       return 3;
     case "budget_limited":
     case "usage_limited":
-      runtime.writeStdout(`Resume with: keel --resume ${safeSessionId}\n`);
+      runtime.writeStdout(`Resume with: keel goal resume ${safeSessionId}\n`);
       return 4;
   }
+}
+
+function headlessGoalRunArgs(
+  cliArgs: GoalCliArgs,
+): Extract<CliArgs, { readonly command: "run" }> {
+  return {
+    command: "run",
+    bashMode: cliArgs.bashMode,
+    ephemeral: false,
+    ...(cliArgs.mode === "launch"
+      ? {
+          sessionId: cliArgs.sessionId ?? createAutomaticSessionId(),
+        }
+      : { resumeSession: cliArgs.resumeSession }),
+    ...(cliArgs.maxCostUsd !== undefined
+      ? { maxCostUsd: cliArgs.maxCostUsd }
+      : {}),
+    ...(cliArgs.reportFile !== undefined
+      ? { reportFile: cliArgs.reportFile }
+      : {}),
+    ...(cliArgs.providerId !== undefined
+      ? { providerId: cliArgs.providerId }
+      : {}),
+    ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
+    ...(cliArgs.skillName !== undefined
+      ? { skillName: cliArgs.skillName }
+      : {}),
+  };
 }
 
 export async function runHeadlessGoalCli(
   cliArgs: GoalCliArgs,
   runtime: CliRuntime,
 ): Promise<number> {
-  let bashPermission: SessionBashPermissionPolicy | null | undefined;
+  let result: HeadlessSessionCliResult;
   try {
-    bashPermission = await headlessGoalBashPermission(cliArgs, runtime);
+    let bashPermission: SessionBashPermissionPolicy | undefined;
+    if (cliArgs.mode === "launch") {
+      const preparedBashPermission = await headlessGoalBashPermission(
+        {
+          bashMode: cliArgs.bashMode,
+          criterionKind: "command",
+          completionCriterion: cliArgs.verificationCommand,
+        },
+        runtime,
+      );
+      if (preparedBashPermission === null) return 1;
+      bashPermission = preparedBashPermission;
+    }
+    result = await runHeadlessSessionCli(
+      headlessGoalRunArgs(cliArgs),
+      runtime,
+      cliArgs.mode === "launch"
+        ? headlessGoalActivationCommand(cliArgs)
+        : "/goal resume",
+      bashPermission,
+      (activatedSessionId) => {
+        runtime.writeStdout(
+          `Headless goal session: ${sanitizeStatusLineText(activatedSessionId)}\n`,
+        );
+      },
+      cliArgs.mode === "resume"
+        ? async (goal) =>
+            await prepareHeadlessGoalResume(cliArgs, runtime, goal)
+        : undefined,
+      cliArgs.mode === "resume"
+        ? (goal) => headlessGoalCanResume(cliArgs, goal)
+        : undefined,
+    );
   } catch (error) {
     /* v8 ignore start: approval loading is the only expected preflight throw; unexpected faults must reach the CLI boundary. */
     if (!(error instanceof BashProjectApprovalsError)) throw error;
@@ -119,41 +282,16 @@ export async function runHeadlessGoalCli(
     runtime.writeStderr(`${error.message}\n`);
     return 1;
   }
-  if (bashPermission === null) {
-    return 1;
-  }
-  const sessionId = cliArgs.sessionId ?? createAutomaticSessionId();
-  const result = await runHeadlessSessionCli(
-    {
-      command: "run",
-      bashMode: cliArgs.bashMode,
-      ephemeral: false,
-      sessionId,
-      ...(cliArgs.maxCostUsd !== undefined
-        ? { maxCostUsd: cliArgs.maxCostUsd }
-        : {}),
-      ...(cliArgs.reportFile !== undefined
-        ? { reportFile: cliArgs.reportFile }
-        : {}),
-      ...(cliArgs.providerId !== undefined
-        ? { providerId: cliArgs.providerId }
-        : {}),
-      ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
-      ...(cliArgs.skillName !== undefined
-        ? { skillName: cliArgs.skillName }
-        : {}),
-    },
-    runtime,
-    headlessGoalActivationCommand(cliArgs),
-    bashPermission,
-    (activatedSessionId) => {
-      runtime.writeStdout(
-        `Headless goal session: ${sanitizeStatusLineText(activatedSessionId)}\n`,
-      );
-    },
-  );
   if (result.exitCode !== 0) {
     return result.exitCode;
+  }
+  const sessionId = result.sessionId;
+  /* v8 ignore start: a successful headless run always reports the active saved session. */
+  if (sessionId === undefined) {
+    runtime.writeStderr(
+      "Error: headless Goal ended without an active saved session.\n",
+    );
+    return 1;
   }
   /* v8 ignore start: exit 0 is produced only after the generated activation command reaches a terminal durable Goal. */
   if (result.goal === undefined) {
