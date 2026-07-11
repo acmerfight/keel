@@ -3,6 +3,7 @@ import { isAbortThrow } from "../core/error.ts";
 import {
   pauseActiveSessionGoal,
   type SessionGoal,
+  type SessionGoalResumeAssessment,
 } from "../core/session-goal.ts";
 import type { Message } from "../llm/types.ts";
 import type {
@@ -127,9 +128,9 @@ type SessionCliMode =
           }
         | { readonly kind: "rejected" }
       >;
-      readonly latestGoalIsResumable?: (
+      readonly latestGoalResumeAssessment?: (
         goal: SessionGoal | undefined,
-      ) => boolean;
+      ) => SessionGoalResumeAssessment;
       readonly onActivated: (sessionId: string) => void;
       readonly onFinished: (result: {
         readonly sessionId: string;
@@ -182,7 +183,9 @@ function interactiveSessionStartFromCliArgs(
   options: {
     readonly workspace: string;
     readonly runtime: CliRuntime;
-    readonly latestSessionFilter?: (session: SessionCatalogEntry) => boolean;
+    readonly latestSessionAssessment?: (
+      session: SessionCatalogEntry,
+    ) => SessionGoalResumeAssessment;
   },
 ): InteractiveSessionStart {
   if (cliArgs.ephemeral) {
@@ -218,19 +221,34 @@ function interactiveSessionStartFromCliArgs(
 function latestSessionIdForWorkspace(options: {
   readonly workspace: string;
   readonly runtime: CliRuntime;
-  readonly latestSessionFilter?: (session: SessionCatalogEntry) => boolean;
+  readonly latestSessionAssessment?: (
+    session: SessionCatalogEntry,
+  ) => SessionGoalResumeAssessment;
 }): string {
   const catalog = listSessionCatalog(options);
   options.runtime.writeStderr(formatSessionCatalogWarnings(catalog.warnings));
+  const latestSessionAssessment = options.latestSessionAssessment;
+  const assessedSessions =
+    latestSessionAssessment === undefined
+      ? undefined
+      : catalog.sessions.map((session) => ({
+          session,
+          assessment: latestSessionAssessment(session),
+        }));
   const latestSession =
-    options.latestSessionFilter === undefined
+    assessedSessions === undefined
       ? catalog.sessions[0]
-      : catalog.sessions.find(options.latestSessionFilter);
+      : assessedSessions.find(({ assessment }) => assessment.kind === "ready")
+          ?.session;
   if (latestSession === undefined) {
+    const budgetRejection = assessedSessions?.find(
+      ({ assessment }) => assessment.kind === "budget_rejected",
+    )?.assessment.rejection;
     throw new SessionStoreError(
-      options.latestSessionFilter === undefined
+      options.latestSessionAssessment === undefined
         ? `Error: no saved sessions for workspace ${catalog.workspace}. Create a saved session before resuming.`
-        : `Error: no resumable saved Goals for workspace ${catalog.workspace}.`,
+        : (budgetRejection ??
+            `Error: no resumable saved Goals for workspace ${catalog.workspace}.`),
     );
   }
   return latestSession.id;
@@ -430,6 +448,10 @@ async function runSessionCli(
             };
           })()
         : undefined;
+    const latestGoalResumeAssessment =
+      mode.kind === "headless-goal"
+        ? mode.latestGoalResumeAssessment
+        : undefined;
     let sessionStart: InteractiveSessionStart;
     let initialInputLines: readonly string[] =
       mode.kind === "headless-goal" ? [mode.initialCommand] : [];
@@ -496,11 +518,11 @@ async function runSessionCli(
         {
           workspace,
           runtime,
-          ...(mode.kind === "headless-goal" &&
-          mode.latestGoalIsResumable !== undefined
+          ...(latestGoalResumeAssessment !== undefined
             ? {
-                latestSessionFilter: (catalogSession: SessionCatalogEntry) =>
-                  mode.latestGoalIsResumable?.(catalogSession.goal) === true,
+                latestSessionAssessment: (
+                  catalogSession: SessionCatalogEntry,
+                ) => latestGoalResumeAssessment(catalogSession.goal),
               }
             : {}),
         },
@@ -1206,7 +1228,9 @@ export async function runHeadlessSessionCli(
       }
     | { readonly kind: "rejected" }
   >,
-  latestGoalIsResumable?: (goal: SessionGoal | undefined) => boolean,
+  latestGoalResumeAssessment?: (
+    goal: SessionGoal | undefined,
+  ) => SessionGoalResumeAssessment,
 ): Promise<HeadlessSessionCliResult> {
   let finalSessionId: string | undefined;
   let finalGoal: SessionGoal | undefined;
@@ -1219,7 +1243,9 @@ export async function runHeadlessSessionCli(
       initialCommand,
       ...(bashPermission !== undefined ? { bashPermission } : {}),
       ...(prepareResumedGoal !== undefined ? { prepareResumedGoal } : {}),
-      ...(latestGoalIsResumable !== undefined ? { latestGoalIsResumable } : {}),
+      ...(latestGoalResumeAssessment !== undefined
+        ? { latestGoalResumeAssessment }
+        : {}),
       onActivated,
       onFinished: (result) => {
         finalSessionId = result.sessionId;
