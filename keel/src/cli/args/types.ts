@@ -1,4 +1,5 @@
 import type { ApiKeyProviderId, ProviderId } from "../../core/provider-id.ts";
+import type { SessionGoalBudget } from "../../core/session-goal.ts";
 import type { BashMode } from "../../permissions/bash.ts";
 
 export interface EvalRunCliArgs {
@@ -144,6 +145,21 @@ export interface RunCliArgs {
   readonly skillName?: string;
 }
 
+export interface GoalCliArgs {
+  readonly command: "goal";
+  readonly objective: string;
+  readonly verificationCommand: string;
+  readonly verificationTimeoutMs?: number;
+  readonly budget: SessionGoalBudget;
+  readonly bashMode: BashMode;
+  readonly maxCostUsd?: number;
+  readonly reportFile?: string;
+  readonly sessionId?: string;
+  readonly providerId?: ProviderId;
+  readonly model?: string;
+  readonly skillName?: string;
+}
+
 type ResumeSessionCliArg =
   | {
       readonly kind: "id";
@@ -168,4 +184,5 @@ export type CliArgs =
   | ApprovalsCliArgs
   | SessionsCliArgs
   | EvalCliArgs
+  | GoalCliArgs
   | RunCliArgs;

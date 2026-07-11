@@ -74,6 +74,13 @@ What a user can do today:
   intro, `keel>` prompts, `status:` progress lines, and an `assistant:` header.
   Local commands include `/help`, `/undo`, `/model`, `/skill`, `/status`,
   `/approvals`, `/compact`, `/fork`, and `/fork-points`.
+- `keel goal --objective <text> --verify <command> ...` — run one saved,
+  command-verified Goal without an interactive terminal. The command prints the
+  resumable session id before provider work, preserves the interactive Goal
+  state machine and Runtime-owned final verifier, returns stable exit codes for
+  completed / blocked / limited outcomes, and adds bounded `goalOutcome`
+  metadata to `--report` output. Trusted Bash or a matching saved project
+  approval is required before provider spend.
 - `keel --session <id>` / `keel --resume <id>` / `keel sessions` /
   `keel sessions fork <source-id> <target-id> [--before-message <id>]` —
   name, resume, list, and fork interactive transcripts as JSONL session

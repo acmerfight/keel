@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseCliArgs, USAGE } from "./args.ts";
 import { runForkPointsCommand } from "./fork-points-command.ts";
+import { runHeadlessGoalCli } from "./headless-goal-run.ts";
 import { runInteractiveCli } from "./interactive-run.ts";
 import { runOneShotCli } from "./one-shot-run.ts";
 import {
@@ -55,6 +56,10 @@ async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
 
   if (cliArgs.command === "eval") {
     return await runEvalCommand(cliArgs, runtime);
+  }
+
+  if (cliArgs.command === "goal") {
+    return await runHeadlessGoalCli(cliArgs, runtime);
   }
 
   if (cliArgs.command === "undo") {
