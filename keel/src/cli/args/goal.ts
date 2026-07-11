@@ -1,6 +1,8 @@
 import {
   normalizeSessionGoalCompletionCommand,
   normalizeSessionGoalObjective,
+  SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
+  SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
   type SessionGoalBudget,
 } from "../../core/session-goal.ts";
 import { bashModeFromPolicy } from "../../permissions/bash.ts";
@@ -172,6 +174,18 @@ export function parseGoalArgs(
   }
   if (verificationCommand === undefined || verificationCommand === "") {
     return parseError("Error: goal requires --verify <command>.");
+  }
+  if (objective.length > SESSION_GOAL_OBJECTIVE_MAX_LENGTH) {
+    return parseError(
+      `Error: /goal objective must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
+    );
+  }
+  if (
+    verificationCommand.length > SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH
+  ) {
+    return parseError(
+      `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
+    );
   }
 
   return parseOk({

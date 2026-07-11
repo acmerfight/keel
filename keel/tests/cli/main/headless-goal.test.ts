@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
 import {
+  SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
+  SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
+} from "../../../src/core/session-goal.ts";
+import {
   createRuntime,
   type SigintCapture,
 } from "../../../src/testing/cli-runtime-fixtures.ts";
@@ -132,6 +136,125 @@ describe("CLI Main - Headless Goal", () => {
       });
     } finally {
       await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a headless Goal objective is invalid at the durable boundary,
+    When the user corrects it and retries the same named session,
+    Then the failed launch leaves no session and the retry starts normally`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-headless-invalid-goal-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-headless-invalid-goal-home-"),
+    );
+    const invalid = createRuntime(
+      [
+        "goal",
+        "--objective",
+        "o".repeat(SESSION_GOAL_OBJECTIVE_MAX_LENGTH + 1),
+        "--verify",
+        "false",
+        "--session",
+        "atomic-retry",
+        "--bash-policy",
+        "trusted",
+        "--provider",
+        "fake",
+      ],
+      { cwd: workspace, env: { KEEL_HOME: home } },
+    );
+
+    try {
+      // When
+      const invalidExitCode = await runCliMain(invalid.runtime);
+      const retry = createRuntime(
+        [
+          "goal",
+          "--objective",
+          "Retry a valid Goal",
+          "--verify",
+          "false",
+          "--turns",
+          "1",
+          "--session",
+          "atomic-retry",
+          "--bash-policy",
+          "trusted",
+          "--provider",
+          "fake",
+        ],
+        { cwd: workspace, env: { KEEL_HOME: home } },
+      );
+      const retryExitCode = await runCliMain(retry.runtime);
+
+      // Then
+      expect(invalidExitCode).toBe(1);
+      expect(invalid.stdout()).toBe("");
+      expect(invalid.stderr()).toContain(
+        `objective must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer`,
+      );
+      expect(retryExitCode).toBe(4);
+      expect(retry.stdout()).toContain("Headless goal session: atomic-retry\n");
+      await expect(
+        readFile(
+          join(home, "sessions", "atomic-retry", "ledger.jsonl"),
+          "utf8",
+        ),
+      ).resolves.toContain('"status":"budget_limited"');
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an unnamed headless Goal verifier exceeds the durable limit,
+    When launch validation fails,
+    Then no invisible generated session appears in the workspace catalog`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-headless-invalid-auto-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-headless-invalid-auto-home-"),
+    );
+    const invalid = createRuntime(
+      [
+        "goal",
+        "--objective",
+        "Reject an invalid verifier",
+        "--verify",
+        "v".repeat(SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH + 1),
+        "--bash-policy",
+        "trusted",
+        "--provider",
+        "fake",
+      ],
+      { cwd: workspace, env: { KEEL_HOME: home } },
+    );
+
+    try {
+      // When
+      const invalidExitCode = await runCliMain(invalid.runtime);
+      const catalog = createRuntime(["sessions"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      const catalogExitCode = await runCliMain(catalog.runtime);
+
+      // Then
+      expect(invalidExitCode).toBe(1);
+      expect(invalid.stdout()).toBe("");
+      expect(invalid.stderr()).toContain(
+        `completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer`,
+      );
+      expect(catalogExitCode).toBe(0);
+      expect(catalog.stdout()).toContain("No sessions for workspace ");
+      expect(catalog.stderr()).toBe("");
+    } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }

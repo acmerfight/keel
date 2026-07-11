@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { parseCliArgs, USAGE } from "../../src/cli/args.ts";
 import { runCliMain } from "../../src/cli/index.ts";
+import {
+  SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
+  SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
+} from "../../src/core/session-goal.ts";
 import { createRuntime } from "../../src/testing/cli-runtime-fixtures.ts";
 
 describe("CLI Args", () => {
@@ -541,6 +545,56 @@ describe("CLI Args", () => {
         reportFile: "goal.json",
         sessionId: "checkout",
       },
+    });
+  });
+
+  test(`Given headless Goal text is at or beyond its durable schema boundary,
+    When the CLI parses the normalized contract,
+    Then exact limits are accepted and the first excess character is rejected`, () => {
+    // Given
+    const objectiveAtLimit = "o".repeat(SESSION_GOAL_OBJECTIVE_MAX_LENGTH);
+    const verifierAtLimit = "v".repeat(
+      SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
+    );
+
+    // When
+    const accepted = parseCliArgs([
+      "goal",
+      "--objective",
+      `  ${objectiveAtLimit}  `,
+      "--verify",
+      `  ${verifierAtLimit}  `,
+    ]);
+    const oversizedObjective = parseCliArgs([
+      "goal",
+      "--objective",
+      `${objectiveAtLimit}o`,
+      "--verify",
+      "true",
+    ]);
+    const oversizedVerifier = parseCliArgs([
+      "goal",
+      "--objective",
+      "Ship it",
+      "--verify",
+      `${verifierAtLimit}v`,
+    ]);
+
+    // Then
+    expect(accepted).toMatchObject({
+      ok: true,
+      value: {
+        objective: objectiveAtLimit,
+        verificationCommand: verifierAtLimit,
+      },
+    });
+    expect(oversizedObjective).toEqual({
+      ok: false,
+      message: `Error: /goal objective must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
+    });
+    expect(oversizedVerifier).toEqual({
+      ok: false,
+      message: `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
     });
   });
 
