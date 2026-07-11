@@ -24,6 +24,7 @@ import {
   emptySessionGoalBudget,
   emptySessionGoalUsage,
   formatSessionGoalBudgetLimitReason,
+  formatSessionGoalResumeRejection,
   formatSessionGoalSummary,
   pauseActiveSessionGoal,
   type SessionGoal,
@@ -1381,38 +1382,16 @@ export async function runInteractiveSession(
               break;
             }
             if (sessionGoal === undefined) {
-              options.writeStderr("Error: no session goal is set.\n");
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (
-              sessionGoal.status !== "paused" &&
-              sessionGoal.status !== "blocked" &&
-              sessionGoal.status !== "budget_limited" &&
-              sessionGoal.status !== "usage_limited"
-            ) {
               options.writeStderr(
-                "Error: only paused, blocked, or limited session goals can be resumed.\n",
+                `${formatSessionGoalResumeRejection(sessionGoal)}\n`,
               );
               consumeQueuedInputLines([rawInput]);
               break;
             }
-            if (
-              sessionGoal.criterionKind === undefined ||
-              sessionGoal.completionCriterion === undefined
-            ) {
-              options.writeStderr(
-                "Error: the session goal has no completion criterion. Set a new goal before resuming.\n",
-              );
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            const budgetLimitReason =
-              formatSessionGoalBudgetLimitReason(sessionGoal);
-            if (budgetLimitReason !== null) {
-              options.writeStderr(
-                `Error: ${budgetLimitReason} Raise or clear the goal budget before resuming.\n`,
-              );
+            const resumeRejection =
+              formatSessionGoalResumeRejection(sessionGoal);
+            if (resumeRejection !== null) {
+              options.writeStderr(`${resumeRejection}\n`);
               consumeQueuedInputLines([rawInput]);
               break;
             }

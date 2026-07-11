@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +27,10 @@ import {
   sseToolCall,
   sseToolFinish,
 } from "../../../src/testing/provider-sse-fixtures.ts";
+import {
+  sessionGoalRecordLine,
+  writeSessionLedger,
+} from "../../../src/testing/session-ledger-fixtures.ts";
 
 describe("CLI Main - Headless Goal", () => {
   test(`Given a command-backed objective,
@@ -343,7 +354,7 @@ describe("CLI Main - Headless Goal", () => {
         "Headless goal outcome: budget_limited; session: headless-limited\n",
       );
       expect(fixture.stdout()).toContain(
-        "Resume with: keel --resume headless-limited\n",
+        "Resume with: keel goal resume headless-limited\n",
       );
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
         stopReason: "goal_budget",
@@ -429,6 +440,552 @@ describe("CLI Main - Headless Goal", () => {
       });
     } finally {
       await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["by id", ["headless-resume"]],
+    ["by latest", ["--last"]],
+  ])(`Given a saved headless Goal stopped at an invocation cost boundary,
+    When a later non-interactive invocation resumes it %s with enough cost budget,
+    Then Keel preserves the durable contract and drives the same Goal to verified completion`, async (_selector, resumeTarget) => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-headless-resume-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-headless-resume-home-"));
+    const reportPath = join(workspace, "resume-report.json");
+    let providerCalls = 0;
+    const server = createServer((_req, res) => {
+      providerCalls++;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      if (providerCalls % 2 === 1) {
+        res.write(
+          sseToolCall("complete_resumed_goal", "update_goal", {
+            status: "completed",
+          }),
+        );
+        res.write(sseToolFinish());
+        res.end("data: [DONE]\n\n");
+        return;
+      }
+      res.end(sseTextReplyWithUsage("Resumed goal completed."));
+    });
+    await listen(server);
+    const runtimeOptions = {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_HOME: home,
+      },
+    } as const;
+    const launch = createRuntime(
+      [
+        "goal",
+        "--objective",
+        "Resume the same durable Goal",
+        "--verify",
+        "true",
+        "--timeout",
+        "2s",
+        "--turns",
+        "3",
+        "--tokens",
+        "10000",
+        "--time",
+        "1m",
+        "--session",
+        "headless-resume",
+        "--bash-policy",
+        "trusted",
+        "--provider",
+        "deepseek",
+        "--max-cost",
+        "0.000001",
+      ],
+      runtimeOptions,
+    );
+
+    try {
+      expect(await runCliMain(launch.runtime)).toBe(4);
+      expect(providerCalls).toBe(0);
+      expect(launch.stdout()).toContain(
+        "Resume with: keel goal resume headless-resume\n",
+      );
+      if (_selector === "by latest") {
+        const newerCompletedSession = createRuntime(
+          [
+            "goal",
+            "--objective",
+            "Complete a newer Goal that must not hide the resumable one",
+            "--verify",
+            "true",
+            "--session",
+            "headless-newer-completed",
+            "--bash-policy",
+            "trusted",
+            "--provider",
+            "deepseek",
+            "--max-cost",
+            "1",
+          ],
+          runtimeOptions,
+        );
+        expect(await runCliMain(newerCompletedSession.runtime)).toBe(0);
+        const completedResume = createRuntime(
+          [
+            "goal",
+            "resume",
+            "headless-newer-completed",
+            "--bash-policy",
+            "trusted",
+            "--provider",
+            "deepseek",
+          ],
+          runtimeOptions,
+        );
+        expect(await runCliMain(completedResume.runtime)).toBe(1);
+        expect(completedResume.stderr()).toContain(
+          "Error: only paused, blocked, or limited session goals can be resumed.\n",
+        );
+        expect(providerCalls).toBe(2);
+      }
+
+      // When
+      const resume = createRuntime(
+        [
+          "goal",
+          "resume",
+          ...resumeTarget,
+          "--bash-policy",
+          "trusted",
+          "--provider",
+          "deepseek",
+          "--max-cost",
+          "1",
+          "--report",
+          reportPath,
+        ],
+        runtimeOptions,
+      );
+      const exitCode = await runCliMain(resume.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(providerCalls).toBe(_selector === "by latest" ? 4 : 2);
+      expect(resume.stdout()).toContain(
+        "Headless goal session: headless-resume\n",
+      );
+      expect(resume.stdout()).toContain(
+        "Headless goal outcome: completed; session: headless-resume\n",
+      );
+      const ledger = await readFile(
+        join(home, "sessions", "headless-resume", "ledger.jsonl"),
+        "utf8",
+      );
+      const latestGoalRecord = ledger
+        .trim()
+        .split("\n")
+        .filter((line) => line.includes('"type":"session_goal"'))
+        .at(-1);
+      expect(latestGoalRecord).toContain(
+        '"objective":"Resume the same durable Goal"',
+      );
+      expect(latestGoalRecord).toContain('"criterionKind":"command"');
+      expect(latestGoalRecord).toContain('"completionCriterion":"true"');
+      expect(latestGoalRecord).toContain('"verificationTimeoutMs":2000');
+      expect(latestGoalRecord).toContain(
+        '"budget":{"turns":3,"tokens":10000,"activeTimeMs":60000}',
+      );
+      expect(latestGoalRecord).toContain('"status":"completed"');
+      expect(latestGoalRecord).not.toContain(
+        '"usage":{"turns":0,"tokens":0,"activeTimeMs":0}',
+      );
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        stopReason: "completed",
+        goalOutcome: {
+          sessionId: "headless-resume",
+          status: "completed",
+          evidenceKind: "command",
+        },
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a saved command Goal requires shell authorization,
+    When a headless resume has neither trusted Bash nor a matching saved approval,
+    Then Keel fails closed before provider spend or durable session mutation`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-denied-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-denied-home-"),
+    );
+    let providerCalls = 0;
+    const server = createServer((_req, res) => {
+      providerCalls++;
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end(sseTextReplyWithUsage("This request must not be sent."));
+    });
+    await listen(server);
+    const runtimeOptions = {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_HOME: home,
+      },
+    } as const;
+    const launch = createRuntime(
+      [
+        "goal",
+        "--objective",
+        "Keep the command verifier authorized",
+        "--verify",
+        "true",
+        "--session",
+        "resume-denied",
+        "--bash-policy",
+        "trusted",
+        "--provider",
+        "deepseek",
+        "--max-cost",
+        "0.000001",
+      ],
+      runtimeOptions,
+    );
+
+    try {
+      expect(await runCliMain(launch.runtime)).toBe(4);
+      expect(providerCalls).toBe(0);
+      const ledgerPath = join(
+        home,
+        "sessions",
+        "resume-denied",
+        "ledger.jsonl",
+      );
+      const ledgerBeforeResume = await readFile(ledgerPath, "utf8");
+      const resume = createRuntime(
+        ["goal", "resume", "resume-denied", "--provider", "deepseek"],
+        runtimeOptions,
+      );
+
+      // When
+      const exitCode = await runCliMain(resume.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(providerCalls).toBe(0);
+      expect(resume.stdout()).toBe("");
+      expect(resume.stderr()).toBe(
+        "Error: headless command Goals require --bash-policy trusted or a matching saved project approval with --bash-policy ask.\n",
+      );
+      expect(await readFile(ledgerPath, "utf8")).toBe(ledgerBeforeResume);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["disabled Bash", []],
+    ["saved-approval-only Bash", ["--bash-policy", "ask"]],
+  ])(`Given an assertion Goal was configured interactively with %s,
+    When automation resumes it without a command verifier,
+    Then headless execution preserves the external assertion hard gate`, async (_label, bashArgs) => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-assertion-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-assertion-home-"),
+    );
+    const reportPath = join(workspace, "assertion-resume-report.json");
+    const attemptsUnapprovedBash = _label === "saved-approval-only Bash";
+    await writeSessionLedger({
+      home,
+      id: "resume-assertion",
+      workspace: await realpath(workspace),
+      createdAt: "2026-07-11T00:00:00.000Z",
+      records: [
+        sessionGoalRecordLine({
+          timestamp: "2026-07-11T00:00:01.000Z",
+          goal: {
+            objective: "Preserve assertion completion on resume",
+            status: attemptsUnapprovedBash ? "paused" : "active",
+            budget: {},
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+            criterionKind: "assertion",
+            completionCriterion: "the saved assertion remains externally gated",
+          },
+        }),
+      ],
+    });
+    let providerCalls = 0;
+    const server = createServer((_req, res) => {
+      providerCalls++;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      if (attemptsUnapprovedBash && providerCalls === 1) {
+        res.write(
+          sseToolCall("unapproved_assertion_bash", "bash", {
+            command: "true",
+          }),
+        );
+        res.write(sseToolFinish());
+        res.end("data: [DONE]\n\n");
+        return;
+      }
+      const completionRequest = attemptsUnapprovedBash ? 2 : 1;
+      if (providerCalls === completionRequest) {
+        res.write(
+          sseToolCall("complete_resumed_assertion", "update_goal", {
+            status: "completed",
+          }),
+        );
+        res.write(sseToolFinish());
+        res.end("data: [DONE]\n\n");
+        return;
+      }
+      if (providerCalls === completionRequest + 1) {
+        res.end(
+          sseTextReplyWithUsage(
+            JSON.stringify({
+              completed: true,
+              reason: "Fresh evaluator approved the saved assertion.",
+            }),
+          ),
+        );
+        return;
+      }
+      res.end(sseTextReplyWithUsage("Assertion Goal completed."));
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "goal",
+        "resume",
+        ...(attemptsUnapprovedBash ? ["resume-assertion"] : ["--last"]),
+        ...bashArgs,
+        "--provider",
+        "deepseek",
+        "--report",
+        reportPath,
+      ],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_HOME: home,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(providerCalls).toBe(attemptsUnapprovedBash ? 4 : 3);
+      expect(fixture.stdout()).toContain(
+        "Headless goal outcome: completed; session: resume-assertion\n",
+      );
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        stopReason: "completed",
+        goalOutcome: {
+          sessionId: "resume-assertion",
+          status: "completed",
+          evidenceKind: "assertion_evaluator",
+        },
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a saved headless Goal exhausted its durable turn budget,
+    When automation resumes it with a larger absolute Goal budget,
+    Then the budget update and resume happen under the same lock before work continues`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-budget-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-budget-home-"),
+    );
+    const resumeReportPath = join(workspace, "resume-budget-report.json");
+    let providerCalls = 0;
+    const server = createServer((_req, res) => {
+      providerCalls++;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      if (providerCalls === 1) {
+        res.end(sseTextReplyWithUsage("Still working."));
+        return;
+      }
+      if (providerCalls === 2) {
+        res.write(
+          sseToolCall("complete_budget_resumed_goal", "update_goal", {
+            status: "completed",
+          }),
+        );
+        res.write(sseToolFinish());
+        res.end("data: [DONE]\n\n");
+        return;
+      }
+      res.end(sseTextReplyWithUsage("Budget-resumed goal completed."));
+    });
+    await listen(server);
+    const runtimeOptions = {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_HOME: home,
+      },
+    } as const;
+    const launch = createRuntime(
+      [
+        "goal",
+        "--objective",
+        "Continue after a durable turn limit",
+        "--verify",
+        "true",
+        "--turns",
+        "1",
+        "--tokens",
+        "10000",
+        "--time",
+        "1m",
+        "--session",
+        "resume-turn-budget",
+        "--bash-policy",
+        "trusted",
+        "--provider",
+        "deepseek",
+      ],
+      runtimeOptions,
+    );
+
+    try {
+      expect(await runCliMain(launch.runtime)).toBe(4);
+      expect(providerCalls).toBe(1);
+      expect(launch.stdout()).toContain(
+        "Headless goal outcome: budget_limited; session: resume-turn-budget\n",
+      );
+      const resume = createRuntime(
+        [
+          "goal",
+          "resume",
+          "resume-turn-budget",
+          "--turns",
+          "3",
+          "--bash-policy",
+          "trusted",
+          "--provider",
+          "deepseek",
+          "--report",
+          resumeReportPath,
+        ],
+        runtimeOptions,
+      );
+
+      // When
+      const exitCode = await runCliMain(resume.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(providerCalls).toBe(3);
+      expect(resume.stdout()).toContain(
+        "Headless goal outcome: completed; session: resume-turn-budget\n",
+      );
+      const ledger = await readFile(
+        join(home, "sessions", "resume-turn-budget", "ledger.jsonl"),
+        "utf8",
+      );
+      const latestGoalRecord = ledger
+        .trim()
+        .split("\n")
+        .filter((line) => line.includes('"type":"session_goal"'))
+        .at(-1);
+      expect(latestGoalRecord).toContain(
+        '"budget":{"turns":3,"tokens":10000,"activeTimeMs":60000}',
+      );
+      expect(latestGoalRecord).toContain('"status":"completed"');
+      expect(
+        JSON.parse(await readFile(resumeReportPath, "utf8")),
+      ).toMatchObject({
+        stopReason: "completed",
+        goalOutcome: {
+          sessionId: "resume-turn-budget",
+          status: "completed",
+          evidenceKind: "command",
+        },
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the latest saved session has no Goal and no resumable Goal exists,
+    When automation asks to resume the latest Goal,
+    Then Keel fails before provider resolution with a Goal-specific error`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-last-empty-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-last-empty-home-"),
+    );
+    await writeSessionLedger({
+      home,
+      id: "ordinary-session",
+      workspace: await realpath(workspace),
+      createdAt: "2026-07-11T00:00:00.000Z",
+      records: [],
+    });
+    const fixture = createRuntime(
+      ["goal", "resume", "--last", "--provider", "fake"],
+      {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        `Error: no resumable saved Goals for workspace ${await realpath(workspace)}.\n`,
+      );
+    } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
@@ -572,7 +1129,7 @@ describe("CLI Main - Headless Goal", () => {
         "Headless goal outcome: blocked; session: headless-blocked\n",
       );
       expect(fixture.stdout()).toContain(
-        "Resume with: keel --resume headless-blocked\n",
+        "Resume with: keel goal resume headless-blocked\n",
       );
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
         stopReason: "goal_blocked",

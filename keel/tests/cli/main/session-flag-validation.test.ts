@@ -157,7 +157,7 @@ describe("CLI Main - Session Flag Validation", () => {
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toBe(
-        `Error: no saved sessions for workspace ${await realpath(workspace)}. Complete an interactive turn before running keel --resume.\n`,
+        `Error: no saved sessions for workspace ${await realpath(workspace)}. Create a saved session before resuming.\n`,
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

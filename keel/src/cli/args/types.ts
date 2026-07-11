@@ -145,16 +145,11 @@ export interface RunCliArgs {
   readonly skillName?: string;
 }
 
-export interface GoalCliArgs {
+interface GoalCliCommonArgs {
   readonly command: "goal";
-  readonly objective: string;
-  readonly verificationCommand: string;
-  readonly verificationTimeoutMs?: number;
-  readonly budget: SessionGoalBudget;
   readonly bashMode: BashMode;
   readonly maxCostUsd?: number;
   readonly reportFile?: string;
-  readonly sessionId?: string;
   readonly providerId?: ProviderId;
   readonly model?: string;
   readonly skillName?: string;
@@ -171,6 +166,26 @@ type ResumeSessionCliArg =
   | {
       readonly kind: "latest";
     };
+
+interface GoalLaunchCliArgs extends GoalCliCommonArgs {
+  readonly mode: "launch";
+  readonly objective: string;
+  readonly verificationCommand: string;
+  readonly verificationTimeoutMs?: number;
+  readonly budget: SessionGoalBudget;
+  readonly sessionId?: string;
+}
+
+interface GoalResumeCliArgs extends GoalCliCommonArgs {
+  readonly mode: "resume";
+  readonly budget: SessionGoalBudget;
+  readonly resumeSession: Exclude<
+    ResumeSessionCliArg,
+    { readonly kind: "pick" }
+  >;
+}
+
+export type GoalCliArgs = GoalLaunchCliArgs | GoalResumeCliArgs;
 
 export type CliArgs =
   | { readonly command: "help" }
