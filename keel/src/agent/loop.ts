@@ -27,6 +27,7 @@ import {
 import { toolCallAccesses } from "../tools/tool-access.ts";
 import {
   addRequestAccounting,
+  buildCostBudgetLimitedReport,
   buildCostReport,
   type CostTrackingOptions,
   emptyRunAccounting,
@@ -37,6 +38,10 @@ import {
   type ContextCompactionOptions,
   projectCompactedToolOutput,
 } from "./context-compaction.ts";
+import {
+  CostBudgetAdmissionError,
+  createCostBudgetedProvider,
+} from "./cost-budget.ts";
 import type { AgentEvent } from "./events.ts";
 import { postCompactionReadToolCallId } from "./post-compaction-read-id.ts";
 import { restorePostCompactionReads } from "./post-compaction-restore.ts";
@@ -81,6 +86,8 @@ import {
 const MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS = 512;
 const DUPLICATE_BLOCKED_GOAL_PROPOSAL_TOOL_RESULT =
   "Tool failed: update_goal blocked proposal already recorded for this agent turn.\nRecovery: Continue working, or wait until the next agent turn before proposing the blocked goal state again.";
+const COST_BUDGET_ADMISSION_TOOL_RESULT =
+  "Goal completion was not evaluated because the remaining session cost budget could not admit the assertion evaluator request.";
 
 export interface RunAgentOptions {
   readonly workspace: string;
@@ -536,8 +543,19 @@ export async function* runAgentTurn(
     };
   };
   let postCompactionReadSequence = 0;
+  const requestProvider =
+    costTracking?.maxCostUsd === undefined
+      ? provider
+      : createCostBudgetedProvider({
+          provider,
+          model: costTracking.model,
+          maxCostUsd: costTracking.maxCostUsd,
+          ...(costTracking.modelMaxOutputTokens !== undefined
+            ? { modelMaxOutputTokens: costTracking.modelMaxOutputTokens }
+            : {}),
+        });
   const config: CompactionConfig = {
-    provider,
+    provider: requestProvider,
     systemPrompt,
     signal,
     contextCompaction: options.contextCompaction,
@@ -586,14 +604,35 @@ export async function* runAgentTurn(
   };
 
   for (let completedTurns = 1; ; completedTurns++) {
-    const turnResult = yield* streamTurnWithOverflowRecovery(config, state, {
-      provider,
-      systemPrompt,
-      getLedger: () => sessionLedger,
-      setLedger: applySessionLedger,
-      signal,
-      allowBash,
-    });
+    let turnResult: AgentTurn;
+    try {
+      turnResult = yield* streamTurnWithOverflowRecovery(config, state, {
+        provider: requestProvider,
+        systemPrompt,
+        getLedger: () => sessionLedger,
+        setLedger: applySessionLedger,
+        signal,
+        allowBash,
+      });
+    } catch (error) {
+      if (
+        !(error instanceof CostBudgetAdmissionError) ||
+        costTracking?.maxCostUsd === undefined
+      ) {
+        throw error;
+      }
+      yield {
+        type: "end",
+        usage: state.accounting.totalUsage,
+        turns: completedTurns - 1,
+        stopReason: "cost_budget",
+        cost: buildCostBudgetLimitedReport(state.accounting.totalCostUsd, {
+          ...costTracking,
+          maxCostUsd: costTracking.maxCostUsd,
+        }),
+      };
+      return;
+    }
     state.accounting = addRequestAccounting(
       state.accounting,
       turnResult.usage,
@@ -635,14 +674,40 @@ export async function* runAgentTurn(
     }
 
     if (decision.type === "summarize") {
-      const wrapUpTurn = yield* streamWrapUpSummary({
-        config,
-        state,
-        streamOptions: { provider, systemPrompt, signal, allowBash },
-        turnText: turnResult.text,
-        turnReasoningContent: turnResult.reasoningContent,
-        sessionLedger,
-      });
+      let wrapUpTurn: AgentTurn;
+      try {
+        wrapUpTurn = yield* streamWrapUpSummary({
+          config,
+          state,
+          streamOptions: {
+            provider: requestProvider,
+            systemPrompt,
+            signal,
+            allowBash,
+          },
+          turnText: turnResult.text,
+          turnReasoningContent: turnResult.reasoningContent,
+          sessionLedger,
+        });
+      } catch (error) {
+        if (
+          !(error instanceof CostBudgetAdmissionError) ||
+          costTracking?.maxCostUsd === undefined
+        ) {
+          throw error;
+        }
+        yield {
+          type: "end",
+          usage: state.accounting.totalUsage,
+          turns: completedTurns,
+          stopReason: "cost_budget",
+          cost: buildCostBudgetLimitedReport(state.accounting.totalCostUsd, {
+            ...costTracking,
+            maxCostUsd: costTracking.maxCostUsd,
+          }),
+        };
+        return;
+      }
       const summary =
         wrapUpTurn.text === "" ? MISSING_SUMMARY_NOTICE : wrapUpTurn.text;
       if (wrapUpTurn.text === "") {
@@ -712,6 +777,7 @@ export async function* runAgentTurn(
     const sessionGoalAtTurnStart =
       sessionGoal === undefined ? undefined : copySessionGoal(sessionGoal);
     let blockedGoalProposalRecordedThisTurn = false;
+    let toolCostBudgetAdmission: CostBudgetAdmissionError | null = null;
 
     const executeTurnToolCall = async (
       toolCall: ToolCall,
@@ -741,16 +807,27 @@ export async function* runAgentTurn(
         projectInstructions: projectInstructionVisibility,
         evaluateAssertionGoalCompletion: async (goal) => {
           const evidenceMessages = sessionLedgerMessages(sessionLedger);
-          const evaluation = await evaluateAssertionGoalCompletionWithProvider({
-            provider,
-            signal,
-            goal,
-            evidenceMessages,
-            resourceFreshness: assertionEvidenceResourceFreshness({
-              workspace,
-              messages: evidenceMessages,
-            }),
-          });
+          let evaluation: Awaited<
+            ReturnType<typeof evaluateAssertionGoalCompletionWithProvider>
+          >;
+          try {
+            evaluation = await evaluateAssertionGoalCompletionWithProvider({
+              provider: requestProvider,
+              signal,
+              goal,
+              evidenceMessages,
+              resourceFreshness: assertionEvidenceResourceFreshness({
+                workspace,
+                messages: evidenceMessages,
+              }),
+            });
+          } catch (error) {
+            /* v8 ignore else -- non-budget evaluator failures follow the tool layer's existing recoverable-error path. */
+            if (error instanceof CostBudgetAdmissionError) {
+              toolCostBudgetAdmission = error;
+            }
+            throw error;
+          }
           state.accounting = addRequestAccounting(
             state.accounting,
             evaluation.usage,
@@ -914,6 +991,33 @@ export async function* runAgentTurn(
             yield { type: "tool_output_artifact", ...notice };
           }
           throw error;
+        }
+        if (
+          toolCostBudgetAdmission !== null &&
+          costTracking?.maxCostUsd !== undefined
+        ) {
+          recordCompletedToolExecution({
+            toolCall,
+            execution: {
+              content: COST_BUDGET_ADMISSION_TOOL_RESULT,
+              ok: false,
+            },
+          });
+          /* v8 ignore next 3 -- the fixed short budget message cannot cross the artifact threshold. */
+          for (const notice of await settlePendingToolExecutions()) {
+            yield { type: "tool_output_artifact", ...notice };
+          }
+          yield {
+            type: "end",
+            usage: state.accounting.totalUsage,
+            turns: completedTurns,
+            stopReason: "cost_budget",
+            cost: buildCostBudgetLimitedReport(state.accounting.totalCostUsd, {
+              ...costTracking,
+              maxCostUsd: costTracking.maxCostUsd,
+            }),
+          };
+          return;
         }
         yield toolEndEvent(toolCall, execution);
         const taskProgressEvent = taskProgressEventFromExecution(execution);

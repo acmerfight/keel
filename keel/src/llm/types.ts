@@ -82,9 +82,12 @@ export interface StreamOptions {
   // that must produce text only, e.g. the wrap-up summary after the turn
   // limit; providers enforce it at the protocol level.
   readonly toolChoice?: "none";
+  readonly maxOutputTokens?: number;
+  readonly beforeRequestAttempt?: () => void;
 }
 
 export interface LLMProvider {
   readonly id: string;
+  readonly estimateInputTokens?: (options: StreamOptions) => number;
   readonly stream: (options: StreamOptions) => AsyncIterable<LLMEvent>;
 }

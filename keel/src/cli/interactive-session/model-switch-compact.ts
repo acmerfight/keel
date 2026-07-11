@@ -3,10 +3,15 @@ import {
   contextCompactionStatsForCurrentMessages,
   shouldCompactBeforeRequest,
 } from "../../agent/context-compaction.ts";
+import {
+  CostBudgetAdmissionError,
+  createCostBudgetedProvider,
+} from "../../agent/cost-budget.ts";
 import type { CostReport } from "../../agent/events.ts";
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
 import type { ReadVisibilityState } from "../../agent/read-visibility.ts";
 import type { CostModel } from "../../core/cost.ts";
+import { modelMetadataMaxOutputTokens } from "../../core/model-metadata.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
 import type { Message, Usage } from "../../llm/types.ts";
 import { bashModeExposesTool } from "../../permissions/bash.ts";
@@ -38,6 +43,8 @@ export interface ModelSwitchCompactionContext {
     usage: Usage,
     costModel: CostModel,
   ) => CostReport;
+  readonly remainingCostUsd?: number;
+  readonly costBudgetLimitedReport: () => CostReport;
 }
 
 export type ModelSwitchCompactionResult =
@@ -45,7 +52,7 @@ export type ModelSwitchCompactionResult =
       readonly status: "accepted";
       readonly cost?: CostReport;
     }
-  | { readonly status: "rejected" };
+  | { readonly status: "rejected"; readonly cost?: CostReport };
 
 type VisibleReadSnapshot = ReturnType<
   ReadVisibilityState["visibleReadsMostRecentFirst"]
@@ -162,6 +169,8 @@ export async function executeModelSwitchCompaction(
     taskProgress,
     options,
     recordCompactionCost,
+    remainingCostUsd,
+    costBudgetLimitedReport,
   } = ctx;
   const compactionCostModel = !shouldTrackInteractiveCost(options.cliArgs)
     ? undefined
@@ -181,10 +190,25 @@ export async function executeModelSwitchCompaction(
       projectInstructionVisibilityBeforeCompact,
     });
   };
+  const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
+    current.modelMetadata,
+  );
+  const provider =
+    compactionCostModel === undefined || remainingCostUsd === undefined
+      ? current.provider
+      : createCostBudgetedProvider({
+          provider: current.provider,
+          model: compactionCostModel,
+          maxCostUsd: remainingCostUsd,
+          /* v8 ignore next 3 -- metadata normalization is covered at the model-metadata boundary. */
+          ...(modelMaxOutputTokens !== undefined
+            ? { modelMaxOutputTokens }
+            : {}),
+        });
 
   try {
     const result = await compactMessages({
-      provider: current.provider,
+      provider,
       systemPrompt,
       messages,
       signal,
@@ -269,6 +293,16 @@ export async function executeModelSwitchCompaction(
     if (signal.aborted) {
       options.writeStdout("\n");
       return { status: "rejected" };
+    }
+    if (error instanceof CostBudgetAdmissionError) {
+      const cost = costBudgetLimitedReport();
+      /* v8 ignore next 3 -- the wrapper exists only when --max-cost supplied the remaining budget. */
+      if (options.cliArgs.maxCostUsd !== undefined) {
+        options.writeStderr(
+          options.formatCostReport(cost, options.cliArgs.maxCostUsd),
+        );
+      }
+      return { status: "rejected", cost };
     }
     options.writeStderr(formatManualCompactionFailure(error));
     return { status: "rejected" };

@@ -74,6 +74,63 @@ function calculateRequestCostUsd(
   );
 }
 
+export function calculateConservativeRequestCostUsd(
+  inputTokens: number,
+  outputTokens: number,
+  model: CostModel,
+): number {
+  return calculateRequestCostUsd(
+    {
+      usage: {
+        inputTokens,
+        cachedInputTokens: 0,
+        uncachedInputTokens: inputTokens,
+        outputTokens,
+      },
+    },
+    model,
+  );
+}
+
+export function maxAffordableOutputTokens(options: {
+  readonly remainingUsd: number;
+  readonly inputTokens: number;
+  readonly model: CostModel;
+  readonly modelMaxOutputTokens?: number;
+}): number | null {
+  const inputCostUsd = calculateConservativeRequestCostUsd(
+    options.inputTokens,
+    0,
+    options.model,
+  );
+  if (inputCostUsd >= options.remainingUsd) {
+    return null;
+  }
+
+  const rates = costRatesForRequest(
+    {
+      usage: {
+        inputTokens: options.inputTokens,
+        cachedInputTokens: 0,
+        uncachedInputTokens: options.inputTokens,
+        outputTokens: 0,
+      },
+    },
+    options.model,
+  );
+  if (rates.outputPerMillionTokens === 0) {
+    return options.modelMaxOutputTokens ?? Number.MAX_SAFE_INTEGER;
+  }
+  const affordable = Math.floor(
+    ((options.remainingUsd - inputCostUsd) * 1_000_000) /
+      rates.outputPerMillionTokens,
+  );
+  return Math.min(
+    affordable,
+    options.modelMaxOutputTokens ?? Number.MAX_SAFE_INTEGER,
+  );
+}
+
 export function calculateRequestCostBatchUsd(
   batch: RequestCostBatch,
   model: CostModel,

@@ -379,6 +379,7 @@ describe("Agent Stopping", () => {
     await writeFile(join(workspace, "note.txt"), "old value\n", "utf8");
     const provider: LLMProvider = {
       id: "expensive-tool-call",
+      estimateInputTokens: () => 1,
       async *stream() {
         yield {
           type: "tool_call",
@@ -438,7 +439,8 @@ describe("Agent Stopping", () => {
         cost: {
           spentUsd: 1,
           maxUsd: 0.5,
-          budgetExceeded: true,
+          budgetLimited: true,
+          overshootUsd: 0.5,
         },
       });
     } finally {

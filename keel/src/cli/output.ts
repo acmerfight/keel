@@ -210,9 +210,11 @@ export function formatToolOutputArtifactNotice(
 export function formatCostReport(cost: CostReport, maxUsd: number): string {
   const spent = `$${formatUsd(cost.spentUsd)}`;
   const budget = `$${formatUsd(maxUsd)}`;
-  return cost.budgetExceeded
-    ? `Cost: ${spent} (budget ${budget} exceeded)\n`
-    : `Cost: ${spent} (budget ${budget})\n`;
+  return cost.overshootUsd > 0
+    ? `Cost: ${spent} (best-effort budget ${budget} exceeded by $${formatUsd(cost.overshootUsd)})\n`
+    : cost.budgetLimited
+      ? `Cost: ${spent} (remaining best-effort budget cannot admit another provider request)\n`
+      : `Cost: ${spent} (budget ${budget})\n`;
 }
 
 export async function printAgentEvents(

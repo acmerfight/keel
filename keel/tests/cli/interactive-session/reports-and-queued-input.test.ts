@@ -284,7 +284,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
       formatCostReport: (cost) =>
         `Cost: ${cost.spentUsd.toFixed(2)} exceeded=${String(
-          cost.budgetExceeded,
+          cost.budgetLimited,
         )}\n`,
     });
 
@@ -1403,7 +1403,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     // Then
     expect(providerCalls).toBe(2);
     expect(stderr).toBe(
-      "Session goal: budget_limited - Finish the budget-limited continuation goal; criterion: missing; reason: Session cost budget was reached before the active goal completed.\n",
+      "Session goal: budget_limited - Finish the budget-limited continuation goal; criterion: missing; reason: Session cost budget could not admit another provider request before the active goal completed.\n",
     );
     expect(persistedGoals.at(-1)).toEqual({
       objective: "Finish the budget-limited continuation goal",
@@ -1415,12 +1415,135 @@ describe("Interactive Session - Reports And Queued Input", () => {
         activeTimeMs: expect.any(Number),
       },
       statusReason:
-        "Session cost budget was reached before the active goal completed.",
+        "Session cost budget could not admit another provider request before the active goal completed.",
       latestRuntimeOutcome: {
         kind: "limit_reached",
         reason:
-          "Session cost budget was reached before the active goal completed.",
+          "Session cost budget could not admit another provider request before the active goal completed.",
       },
+    });
+  });
+
+  test(`Given an assertion completion leaves too little cost budget for its evaluator,
+    When the evaluator request is rejected before provider spend,
+    Then the interactive owner durably limits the active goal instead of crashing`, async () => {
+    // Given
+    const initialGoal: SessionGoal = {
+      objective: "Finish the assertion within budget",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "assertion",
+      completionCriterion: "The assertion is demonstrably satisfied.",
+    };
+    const persistedGoals: SessionGoal[] = [];
+    let persistedMessages: readonly Message[] = [];
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "interactive-unaffordable-assertion-evaluator",
+      estimateInputTokens: () => 1,
+      async *stream(options) {
+        options.beforeRequestAttempt?.();
+        providerCalls++;
+        yield {
+          type: "tool_call",
+          id: "complete_goal",
+          tool: "update_goal",
+          status: "completed",
+        };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 499_800,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 499_800,
+            outputTokens: 0,
+          },
+        };
+      },
+    };
+    const costModel = {
+      type: "fixed",
+      uncachedInputPerMillionTokens: 1,
+      cachedInputPerMillionTokens: 0.5,
+      outputPerMillionTokens: 2,
+    } as const;
+    const input = new PassThrough();
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: {
+        bashMode: "disabled",
+        maxCostUsd: 0.5,
+        reportFile: "session.json",
+      },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialSessionGoal: initialGoal,
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel,
+      }),
+      requireKnownCostModel: () => costModel,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") finalEnd = event;
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistSessionMessages: (messages) => {
+        persistedMessages = structuredClone([...messages]);
+      },
+      persistSessionGoal: (update) => {
+        if (update.goal === null) return undefined;
+        persistedGoals.push(update.goal);
+        return update.goal;
+      },
+    });
+    input.end("complete the assertion goal\n");
+
+    // When
+    const result = await session;
+
+    // Then
+    expect(providerCalls).toBe(1);
+    expect(result.report?.end.stopReason).toBe("cost_budget");
+    expect(stderr).toContain(
+      "Session goal: budget_limited - Finish the assertion within budget",
+    );
+    expect(persistedGoals.at(-1)).toMatchObject({
+      objective: "Finish the assertion within budget",
+      status: "budget_limited",
+      statusReason:
+        "Session cost budget could not admit another provider request before the active goal completed.",
+      latestRuntimeOutcome: { kind: "limit_reached" },
+    });
+    const completionRequest = persistedMessages.find(
+      (message) =>
+        message.role === "assistant" &&
+        message.toolCalls.some((toolCall) => toolCall.id === "complete_goal"),
+    );
+    expect(completionRequest).toBeDefined();
+    expect(persistedMessages).toContainEqual({
+      role: "tool",
+      toolCallId: "complete_goal",
+      content:
+        "Goal completion was not evaluated because the remaining session cost budget could not admit the assertion evaluator request.",
     });
   });
 

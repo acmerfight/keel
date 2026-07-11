@@ -2331,7 +2331,7 @@ describe("DeepSeek Provider", () => {
 
   test(`Given the API rate limits a request once,
     When provider streams the response,
-    Then it retries with backoff and returns the successful stream`, async () => {
+    Then it rechecks request admission before retrying and returns the successful stream`, async () => {
     // Given
     transientRateLimitRequests = 0;
     const provider = createDeepseekProvider({
@@ -2340,6 +2340,7 @@ describe("DeepSeek Provider", () => {
       model: "deepseek-v4-flash",
       retry: { maxRetries: 1, initialDelayMs: 0, maxDelayMs: 0 },
     });
+    let admittedAttempts = 0;
 
     // When
     const events = await collect(
@@ -2347,11 +2348,15 @@ describe("DeepSeek Provider", () => {
         systemPrompt: "You are helpful.",
         messages: [{ role: "user", content: "transient-rate-limit" }],
         signal: freshSignal(),
+        beforeRequestAttempt: () => {
+          admittedAttempts++;
+        },
       }),
     );
 
     // Then
     expect(transientRateLimitRequests).toBe(2);
+    expect(admittedAttempts).toBe(2);
     expect(events[0]).toEqual({
       type: "provider_retry",
       provider: "DeepSeek",

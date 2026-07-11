@@ -16,6 +16,7 @@ import {
   restoreLastEditCheckpoint,
   restoreUndoCheckpointsThrough,
 } from "../core/git.ts";
+import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
 import {
   accountSessionGoalTurn,
   activeSessionGoalSystemPrompt,
@@ -85,6 +86,7 @@ import {
 } from "./interactive-session/commands.ts";
 import {
   addUsage,
+  buildSessionCostBudgetLimitedReport,
   buildSessionCostReport,
   EMPTY_USAGE,
   shouldTrackInteractiveCost,
@@ -229,7 +231,7 @@ const GOAL_STAGNATION_RECOVERY_OUTCOME: SessionGoalRuntimeOutcome = {
 };
 
 const GOAL_BUDGET_LIMIT_REASON =
-  "Session cost budget was reached before the active goal completed.";
+  "Session cost budget could not admit another provider request before the active goal completed.";
 
 function resolveGoalAutomaticContinuationTurnLimit(
   limit: number | undefined,
@@ -531,7 +533,9 @@ export async function runInteractiveSession(
   let sessionUsage = EMPTY_USAGE;
   let sessionTurns = 0;
   let sessionPromptTurnAttempted = false;
+  let sessionEndObserved = false;
   let sessionCostUsd = 0;
+  let sessionCostBudgetLimited = false;
   let sessionStopReason = "completed";
   let modelSwitchCount = options.initialModelSwitchCount ?? 0;
   const reportUsageByModel = new Map<string, InteractiveReportModelUsage>();
@@ -619,10 +623,31 @@ export async function runInteractiveSession(
     options.setExitCode(130);
     input.close();
   };
-  const currentSessionCostReport = (): CostReport =>
-    buildSessionCostReport(sessionCostUsd, options.cliArgs.maxCostUsd);
+  const currentSessionCostReport = (): CostReport => {
+    const cost = buildSessionCostReport(
+      sessionCostUsd,
+      options.cliArgs.maxCostUsd,
+    );
+    return sessionCostBudgetLimited && options.cliArgs.maxCostUsd !== undefined
+      ? buildSessionCostBudgetLimitedReport(
+          sessionCostUsd,
+          options.cliArgs.maxCostUsd,
+        )
+      : cost;
+  };
+  const currentSessionCostBudgetLimitedReport = (): CostReport => {
+    /* v8 ignore next 3 -- admission can call this only when --max-cost created the budget wrapper. */
+    if (options.cliArgs.maxCostUsd === undefined) {
+      return currentSessionCostReport();
+    }
+    sessionCostBudgetLimited = true;
+    return buildSessionCostBudgetLimitedReport(
+      sessionCostUsd,
+      options.cliArgs.maxCostUsd,
+    );
+  };
   const currentReportEnd = (): EndEventWithCost | undefined => {
-    if (sessionTurns === 0 && sessionPromptTurnAttempted) {
+    if (sessionPromptTurnAttempted && !sessionEndObserved) {
       return undefined;
     }
     return {
@@ -694,9 +719,13 @@ export async function runInteractiveSession(
     return currentSessionCostReport();
   };
   const recordTurnEnd = (end: EndEvent): CostReport | undefined => {
+    sessionEndObserved = true;
     sessionUsage = addUsage(sessionUsage, end.usage);
     sessionTurns += end.turns;
     sessionStopReason = end.stopReason;
+    if (end.cost?.budgetLimited === true) {
+      sessionCostBudgetLimited = true;
+    }
     const turnCostUsd = end.cost?.spentUsd ?? 0;
     recordReportUsage(
       modelSelectionFromResolved(resolvedForUsageAttribution()),
@@ -794,6 +823,9 @@ export async function runInteractiveSession(
 
     try {
       const remainingCostUsd = remainingMaxCostUsd();
+      const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
+        resolved.modelMetadata,
+      );
       const stream = observeAgentStateEvents(
         runAgentTurn({
           workspace: options.workspace,
@@ -810,6 +842,9 @@ export async function runInteractiveSession(
             ? {
                 costTracking: {
                   model: options.requireKnownCostModel(resolved),
+                  ...(modelMaxOutputTokens !== undefined
+                    ? { modelMaxOutputTokens }
+                    : {}),
                   ...(remainingCostUsd !== undefined
                     ? { maxCostUsd: remainingCostUsd }
                     : {}),
@@ -1036,7 +1071,10 @@ export async function runInteractiveSession(
           options.formatCostReport(cumulativeCost, options.cliArgs.maxCostUsd),
         );
       }
-      if (cumulativeCost?.budgetExceeded === true) {
+      if (
+        finalEnd?.stopReason === "cost_budget" ||
+        cumulativeCost?.budgetLimited === true
+      ) {
         sessionStopReason = "cost_budget";
         limitActiveGoal("budget_limited", GOAL_BUDGET_LIMIT_REASON);
         return {
@@ -1827,6 +1865,7 @@ export async function runInteractiveSession(
             activeAbortController = compactAbortController;
             setComposerMode("queue");
             try {
+              const remainingCostUsd = remainingMaxCostUsd();
               const compaction = await executeModelSwitchCompaction({
                 current: currentResolved,
                 target: nextResolved,
@@ -1841,8 +1880,14 @@ export async function runInteractiveSession(
                 taskProgress,
                 options,
                 recordCompactionCost,
+                ...(remainingCostUsd !== undefined ? { remainingCostUsd } : {}),
+                costBudgetLimitedReport: currentSessionCostBudgetLimitedReport,
               });
               if (compaction.status === "rejected") {
+                if (compaction.cost?.budgetLimited === true) {
+                  sessionStopReason = "cost_budget";
+                  break;
+                }
                 consumeQueuedInputLines([rawInput]);
                 continue;
               }
@@ -1877,7 +1922,7 @@ export async function runInteractiveSession(
           options.writeStdout(
             `Model switched to ${formatActiveModel(resolved)}\n`,
           );
-          if (modelSwitchCost?.budgetExceeded === true) {
+          if (modelSwitchCost?.budgetLimited === true) {
             if (!consumedByPersistence) {
               consumeQueuedInputLines([rawInput]);
             }
@@ -1924,6 +1969,7 @@ export async function runInteractiveSession(
         setComposerMode("queue");
         let compactCost: CostReport | undefined;
         try {
+          const remainingCostUsd = remainingMaxCostUsd();
           compactCost = await executeManualCompaction({
             command: interactiveCommand,
             resolved: compactResolved,
@@ -1938,6 +1984,8 @@ export async function runInteractiveSession(
             taskProgress,
             options,
             recordCompactionCost,
+            ...(remainingCostUsd !== undefined ? { remainingCostUsd } : {}),
+            costBudgetLimitedReport: currentSessionCostBudgetLimitedReport,
           });
         } finally {
           activeAbortController = null;
@@ -1952,7 +2000,7 @@ export async function runInteractiveSession(
             queuedInputIds([rawInput]),
           );
         }
-        if (compactCost?.budgetExceeded === true) {
+        if (compactCost?.budgetLimited === true) {
           sessionStopReason = "cost_budget";
           break;
         }

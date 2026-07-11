@@ -368,8 +368,10 @@ export async function* requestChatCompletions(
   signal: AbortSignal,
   providerName: string,
   retry: ProviderRetryController = new ProviderRetryController(config.retry),
+  beforeRequestAttempt?: () => void,
 ): AsyncGenerator<LLMEvent, Response> {
   for (;;) {
+    beforeRequestAttempt?.();
     let response: Response;
     try {
       response = await fetch(chatCompletionsUrl(config.baseUrl), {

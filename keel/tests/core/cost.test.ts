@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   type CostModel,
   calculateRequestCostBatchUsd,
+  maxAffordableOutputTokens,
 } from "../../src/core/cost.ts";
 
 describe("Cost Tracking", () => {
@@ -164,5 +165,44 @@ describe("Cost Tracking", () => {
 
     // Then
     expect(cost).toBeCloseTo(0.732);
+  });
+
+  test(`Given a request budget covers conservative input and bounded output,
+    When the affordable output allowance is calculated,
+    Then it is clamped to the model output limit`, () => {
+    const model: CostModel = {
+      type: "fixed",
+      uncachedInputPerMillionTokens: 1,
+      cachedInputPerMillionTokens: 0.1,
+      outputPerMillionTokens: 2,
+    };
+
+    const result = maxAffordableOutputTokens({
+      remainingUsd: 0.001,
+      inputTokens: 100,
+      model,
+      modelMaxOutputTokens: 300,
+    });
+
+    expect(result).toBe(300);
+  });
+
+  test(`Given conservative input alone exactly consumes the request budget,
+    When the affordable output allowance is calculated,
+    Then the request is rejected`, () => {
+    const model: CostModel = {
+      type: "fixed",
+      uncachedInputPerMillionTokens: 1,
+      cachedInputPerMillionTokens: 0.1,
+      outputPerMillionTokens: 2,
+    };
+
+    const result = maxAffordableOutputTokens({
+      remainingUsd: 0.001,
+      inputTokens: 1_000,
+      model,
+    });
+
+    expect(result).toBeNull();
   });
 });

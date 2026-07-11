@@ -64,6 +64,16 @@ export function createFakeProvider(
 
   return {
     id: "fake",
+    estimateInputTokens(options): number {
+      return new TextEncoder().encode(
+        JSON.stringify({
+          systemPrompt: options.systemPrompt,
+          messages: options.messages,
+          allowBash: options.allowBash === true,
+          toolChoice: options.toolChoice ?? "auto",
+        }),
+      ).length;
+    },
     async *stream() {
       const response = script[turn];
       turn++;

@@ -49,6 +49,18 @@ export function createOpenAICompatibleProvider<
 >(providerConfig: OpenAICompatibleProviderConfig<Chunk>): LLMProvider {
   return {
     id: providerConfig.id,
+    estimateInputTokens(options): number {
+      // All enrolled providers use byte-based tokenizers. Counting the complete
+      // serialized request bytes intentionally over-reserves protocol fields,
+      // JSON escaping, and tool schemas instead of underpricing prompt text.
+      return new TextEncoder().encode(
+        createChatCompletionsBody(
+          providerConfig.config.model,
+          options,
+          providerConfig.messageOptions,
+        ),
+      ).length;
+    },
     async *stream(options): AsyncIterable<LLMEvent> {
       const body = createChatCompletionsBody(
         providerConfig.config.model,
@@ -65,6 +77,7 @@ export function createOpenAICompatibleProvider<
           options.signal,
           providerConfig.providerName,
           retry,
+          options.beforeRequestAttempt,
         );
         try {
           const reader = getResponseReader(

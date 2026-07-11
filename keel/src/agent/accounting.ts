@@ -5,6 +5,7 @@ import type { CostReport } from "./events.ts";
 export interface CostTrackingOptions {
   readonly model: CostModel;
   readonly maxCostUsd?: number;
+  readonly modelMaxOutputTokens?: number;
 }
 
 export interface RunAccounting {
@@ -58,13 +59,30 @@ export function buildCostReport(
   if (costTracking === undefined) {
     return undefined;
   }
-  const budgetExceeded =
-    costTracking.maxCostUsd !== undefined && spentUsd > costTracking.maxCostUsd;
+  const budgetLimited =
+    costTracking.maxCostUsd !== undefined &&
+    spentUsd >= costTracking.maxCostUsd;
   return {
     spentUsd,
     ...(costTracking.maxCostUsd !== undefined
       ? { maxUsd: costTracking.maxCostUsd }
       : {}),
-    budgetExceeded,
+    budgetLimited,
+    overshootUsd:
+      costTracking.maxCostUsd === undefined
+        ? 0
+        : Math.max(0, spentUsd - costTracking.maxCostUsd),
+  };
+}
+
+export function buildCostBudgetLimitedReport(
+  spentUsd: number,
+  costTracking: CostTrackingOptions & { readonly maxCostUsd: number },
+): CostReport {
+  return {
+    spentUsd,
+    maxUsd: costTracking.maxCostUsd,
+    budgetLimited: true,
+    overshootUsd: Math.max(0, spentUsd - costTracking.maxCostUsd),
   };
 }

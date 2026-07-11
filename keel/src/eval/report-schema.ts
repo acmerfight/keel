@@ -61,7 +61,7 @@ const contextCompactionSchema = z.object({
 });
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(3),
+  schemaVersion: z.literal(4),
   modelsUsed: z.array(
     z.object({
       provider: z.string(),
@@ -77,11 +77,13 @@ export const runReportSchema = z.object({
       costUsd: z.number().nonnegative(),
     }),
   ),
-  turns: z.number().int().positive(),
+  turns: z.number().int().nonnegative(),
   stopReason: z.string(),
   usage: usageSchema,
   durationMs: z.number().nonnegative(),
   costUsd: z.number().nonnegative(),
+  costBudgetUsd: z.number().positive().optional(),
+  costOvershootUsd: z.number().nonnegative(),
   contextCompactions: z.array(contextCompactionSchema),
   goalOutcome: z
     .object({
