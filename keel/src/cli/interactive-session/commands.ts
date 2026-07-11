@@ -1,7 +1,9 @@
+import { MAX_COMMAND_TIMEOUT_MS } from "../../core/command-timeout.ts";
 import { errorMessage } from "../../core/error.ts";
 import { isProviderId } from "../../core/provider-id.ts";
 import {
   formatSessionGoalCompletionEvidenceSummary,
+  formatSessionGoalDuration,
   formatSessionGoalRuntimeOutcomeSummary,
   formatSessionGoalSummary,
   normalizeSessionGoalCompletionCommand,
@@ -74,6 +76,7 @@ type GoalCommand =
       readonly kind: "goal";
       readonly action: "verify";
       readonly command: string;
+      readonly verificationTimeoutMs?: number;
     }
   | {
       readonly kind: "goal";
@@ -162,7 +165,8 @@ export function formatInteractiveHelp(): string {
     "  /status            Show session state and recovery commands.",
     "  /title [text]      Show or set this saved session title.",
     "  /goal [condition]  Show or start a goal with this completion condition.",
-    "  /goal verify <cmd> Set the command that proves the goal is done.",
+    "  /goal verify [--timeout 30s] <cmd>",
+    "                     Set the command that proves the goal is done.",
     "  /goal done-when <criterion>",
     "                     Set an assertion completion criterion.",
     "  /goal pause        Pause the current session goal.",
@@ -447,10 +451,7 @@ function parseGoalCommandArgs(
   }
   const verifyPrefix = "verify ";
   if (trimmedArgs.startsWith(verifyPrefix)) {
-    const command = normalizeSessionGoalCompletionCommand(
-      trimmedArgs.slice(verifyPrefix.length),
-    );
-    return { kind: "goal", action: "verify", command };
+    return parseGoalVerifyArgs(trimmedArgs.slice(verifyPrefix.length));
   }
   const doneWhenPrefix = "done-when ";
   if (trimmedArgs.startsWith(doneWhenPrefix)) {
@@ -515,6 +516,51 @@ function parseGoalDuration(raw: string | undefined): ParseResult<number> {
         message:
           "Error: --time must be a positive duration using ms, s, m, or h.",
       };
+}
+
+function parseGoalVerificationTimeout(
+  raw: string | undefined,
+): ParseResult<number> {
+  const parsed = parseGoalDuration(raw);
+  if (!parsed.ok || parsed.value > MAX_COMMAND_TIMEOUT_MS) {
+    return {
+      ok: false,
+      message: `Error: --timeout must be a positive duration up to ${formatSessionGoalDuration(MAX_COMMAND_TIMEOUT_MS)} using ms, s, or m.`,
+    };
+  }
+  return parsed;
+}
+
+function parseGoalVerifyArgs(
+  rawArgs: string,
+): GoalCommand | InvalidInteractiveCommand {
+  const trimmedArgs = rawArgs.trim();
+  if (!trimmedArgs.startsWith("--timeout")) {
+    return {
+      kind: "goal",
+      action: "verify",
+      command: normalizeSessionGoalCompletionCommand(trimmedArgs),
+    };
+  }
+  const match = /^--timeout(?:\s+(\S+))?(?:\s+([\s\S]+))?$/u.exec(trimmedArgs);
+  const parsed = parseGoalVerificationTimeout(match?.[1]);
+  if (!parsed.ok) {
+    return { kind: "invalid", message: parsed.message };
+  }
+  const command = normalizeSessionGoalCompletionCommand(match?.[2] ?? "");
+  if (command === "") {
+    return {
+      kind: "invalid",
+      message:
+        "Error: /goal verify requires a command after --timeout <duration>.",
+    };
+  }
+  return {
+    kind: "goal",
+    action: "verify",
+    command,
+    verificationTimeoutMs: parsed.value,
+  };
 }
 
 function parseGoalBudgetArgs(
@@ -835,10 +881,14 @@ export function formatInteractiveGoalVerificationSet(
   const setMessage = `Goal verification command set: ${formatInteractiveGoalText(
     goal.completionCriterion,
   )}\n`;
+  const timeoutMessage =
+    goal.verificationTimeoutMs === undefined
+      ? ""
+      : `Goal verification timeout: ${formatSessionGoalDuration(goal.verificationTimeoutMs)}\n`;
   if (options.bashToolVisible) {
-    return setMessage;
+    return `${setMessage}${timeoutMessage}`;
   }
-  return `${setMessage}Note: bash is disabled in this run, so the agent cannot run this verification command. Resume with --bash-policy ask or --bash-policy trusted, or use /goal complete after checking it manually.\n`;
+  return `${setMessage}${timeoutMessage}Note: bash is disabled in this run, so the agent cannot run this verification command. Resume with --bash-policy ask or --bash-policy trusted, or use /goal complete after checking it manually.\n`;
 }
 
 export function formatInteractiveGoalCriterionSet(

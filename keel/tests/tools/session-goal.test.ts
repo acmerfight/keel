@@ -111,6 +111,7 @@ describe("Session Goal Tool", () => {
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         criterionKind: "command",
         completionCriterion: " pnpm test ",
+        verificationTimeoutMs: 45_000,
       }),
     ).toEqual({
       objective: "Ship the checkout fix",
@@ -119,6 +120,7 @@ describe("Session Goal Tool", () => {
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
+      verificationTimeoutMs: 45_000,
     });
   });
 

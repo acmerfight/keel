@@ -217,6 +217,28 @@ describe("Interactive Session - Goals", () => {
       kind: "goal",
       action: "resume",
     });
+    expect(
+      parseInteractiveCommand("/goal verify --timeout 45s pnpm test"),
+    ).toEqual({
+      kind: "goal",
+      action: "verify",
+      command: "pnpm test",
+      verificationTimeoutMs: 45_000,
+    });
+    expect(
+      parseInteractiveCommand("/goal verify --timeout 61s pnpm test"),
+    ).toEqual({
+      kind: "invalid",
+      message:
+        "Error: --timeout must be a positive duration up to 1m using ms, s, or m.",
+      scope: "goal",
+    });
+    expect(parseInteractiveCommand("/goal verify --timeout 20s")).toEqual({
+      kind: "invalid",
+      message:
+        "Error: /goal verify requires a command after --timeout <duration>.",
+      scope: "goal",
+    });
     expect(parseInteractiveCommand("/goal budget")).toEqual({
       kind: "goal",
       action: "show_budget",
@@ -378,7 +400,13 @@ describe("Interactive Session - Goals", () => {
     expect(belowBudget.persistedGoals.at(-1)?.status).toBe("active");
 
     const exhaustedWithCriterion = await runLocalGoalCommandScenario({
-      commands: ["/goal budget --turns 1"],
+      commands: [
+        "/goal budget --turns 1",
+        "/goal budget --turns 2",
+        "/goal resume",
+        "/goal pause",
+        "/goal",
+      ],
       initialGoal: {
         objective: "Limit immediately",
         status: "active",
@@ -386,14 +414,69 @@ describe("Interactive Session - Goals", () => {
         usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
         criterionKind: "command",
         completionCriterion: "pnpm test",
+        verificationTimeoutMs: 45_000,
       },
       persistence: "normal",
     });
-    expect(exhaustedWithCriterion.persistedGoals.at(-1)).toMatchObject({
-      status: "budget_limited",
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
-    });
+    expect(exhaustedWithCriterion.persistedGoals).toEqual([
+      {
+        objective: "Limit immediately",
+        status: "budget_limited",
+        statusReason: "Session goal budget reached: turns 1/1.",
+        budget: { turns: 1 },
+        usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        verificationTimeoutMs: 45_000,
+        latestRuntimeOutcome: {
+          kind: "limit_reached",
+          reason: "Session goal budget reached: turns 1/1.",
+        },
+      },
+      {
+        objective: "Limit immediately",
+        status: "budget_limited",
+        statusReason: "Session goal budget reached: turns 1/1.",
+        budget: { turns: 2 },
+        usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        verificationTimeoutMs: 45_000,
+        latestRuntimeOutcome: {
+          kind: "limit_reached",
+          reason: "Session goal budget reached: turns 1/1.",
+        },
+      },
+      {
+        objective: "Limit immediately",
+        status: "active",
+        budget: { turns: 2 },
+        usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        verificationTimeoutMs: 45_000,
+        latestRuntimeOutcome: {
+          kind: "limit_reached",
+          reason: "Session goal budget reached: turns 1/1.",
+        },
+      },
+      {
+        objective: "Limit immediately",
+        status: "paused",
+        budget: { turns: 2 },
+        usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "command",
+        completionCriterion: "pnpm test",
+        verificationTimeoutMs: 45_000,
+        latestRuntimeOutcome: {
+          kind: "limit_reached",
+          reason: "Session goal budget reached: turns 1/1.",
+        },
+      },
+    ]);
+    expect(exhaustedWithCriterion.stdout).toContain(
+      "Session goal: paused - Limit immediately; criterion(command): pnpm test; verifier timeout: 45s; usage: 1 turn, 0 tokens, 0ms active; budget: 2 turns\n",
+    );
 
     const exhaustedWithoutCriterion = await runLocalGoalCommandScenario({
       commands: ["/goal budget --turns 1"],
@@ -1009,6 +1092,7 @@ describe("Interactive Session - Goals", () => {
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       criterionKind: "command",
       completionCriterion: "pnpm test",
+      verificationTimeoutMs: 45_000,
     };
     const providerPrompts: string[] = [];
     const providerMessages: (readonly Message[])[] = [];
@@ -1087,21 +1171,23 @@ describe("Interactive Session - Goals", () => {
       usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
       criterionKind: "command",
       completionCriterion: "pnpm test",
+      verificationTimeoutMs: 45_000,
     });
     expect(stdout).toContain("Goal paused: Finish lifecycle states\n");
     expect(stdout).toContain(
-      "  goal: paused - Finish lifecycle states; criterion(command): pnpm test\n",
+      "  goal: paused - Finish lifecycle states; criterion(command): pnpm test; verifier timeout: 45s\n",
     );
     expect(stdout).toContain("Paused turn.\n");
     expect(stdout).toContain("Goal resumed: Finish lifecycle states\n");
     expect(stdout).toContain(
-      "  goal: active - Finish lifecycle states; criterion(command): pnpm test\n",
+      "  goal: active - Finish lifecycle states; criterion(command): pnpm test; verifier timeout: 45s\n",
     );
     expect(stdout).toContain("Resumed turn.\n");
     expect(providerPrompts).toHaveLength(2);
     expect(providerPrompts[0]).not.toContain("Session goal:");
     expect(providerPrompts[1]).toContain("Session goal:");
     expect(providerPrompts[1]).toContain("Finish lifecycle states");
+    expect(providerPrompts[1]).toContain("Completion command timeout: 45s.");
     expect(providerMessages).toEqual([
       [{ role: "user", content: "handle a side request while paused" }],
       [

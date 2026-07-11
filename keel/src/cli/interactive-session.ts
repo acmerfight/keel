@@ -29,6 +29,7 @@ import {
   type SessionGoalRuntimeOutcome,
   sessionGoalAccounting,
   sessionGoalCommandMatchesCriterion,
+  sessionGoalCompletionContract,
   sessionGoalStatesEqual,
   withSessionGoalRuntimeOutcome,
 } from "../core/session-goal.ts";
@@ -676,14 +677,7 @@ export async function runInteractiveSession(
     if (activeGoal?.status !== "active") {
       return;
     }
-    const criterion =
-      activeGoal.criterionKind !== undefined &&
-      activeGoal.completionCriterion !== undefined
-        ? {
-            criterionKind: activeGoal.criterionKind,
-            completionCriterion: activeGoal.completionCriterion,
-          }
-        : {};
+    const criterion = sessionGoalCompletionContract(activeGoal);
     const limitedGoalWithoutOutcome: SessionGoal =
       status === "budget_limited"
         ? {
@@ -1329,8 +1323,7 @@ export async function runInteractiveSession(
                   objective: sessionGoal.objective,
                   status: "active",
                   ...sessionGoalAccounting(sessionGoal),
-                  criterionKind: sessionGoal.criterionKind,
-                  completionCriterion: sessionGoal.completionCriterion,
+                  ...sessionGoalCompletionContract(sessionGoal),
                 },
               );
               sessionGoal = options.persistSessionGoal({
@@ -1373,21 +1366,13 @@ export async function runInteractiveSession(
               if (budgetedGoal.status === "active") {
                 const reason = formatSessionGoalBudgetLimitReason(budgetedGoal);
                 if (reason !== null) {
-                  const criterion =
-                    budgetedGoal.criterionKind !== undefined &&
-                    budgetedGoal.completionCriterion !== undefined
-                      ? {
-                          criterionKind: budgetedGoal.criterionKind,
-                          completionCriterion: budgetedGoal.completionCriterion,
-                        }
-                      : {};
                   budgetedGoal = withSessionGoalRuntimeOutcome(
                     {
                       objective: budgetedGoal.objective,
                       status: "budget_limited",
                       statusReason: reason,
                       ...sessionGoalAccounting(budgetedGoal),
-                      ...criterion,
+                      ...sessionGoalCompletionContract(budgetedGoal),
                     },
                     { kind: "limit_reached", reason },
                   );
@@ -1457,13 +1442,7 @@ export async function runInteractiveSession(
                 status: "completed",
                 completionEvidence: { kind: "user_override" },
                 ...sessionGoalAccounting(sessionGoal),
-                ...(sessionGoal.criterionKind !== undefined &&
-                sessionGoal.completionCriterion !== undefined
-                  ? {
-                      criterionKind: sessionGoal.criterionKind,
-                      completionCriterion: sessionGoal.completionCriterion,
-                    }
-                  : {}),
+                ...sessionGoalCompletionContract(sessionGoal),
               };
               const completedGoal = withSessionGoalRuntimeOutcome(
                 completedGoalWithoutOutcome,
@@ -1510,6 +1489,11 @@ export async function runInteractiveSession(
                 ...sessionGoalAccounting(sessionGoal),
                 criterionKind: "command",
                 completionCriterion: goalCommand.command,
+                ...(goalCommand.verificationTimeoutMs !== undefined
+                  ? {
+                      verificationTimeoutMs: goalCommand.verificationTimeoutMs,
+                    }
+                  : {}),
               } satisfies SessionGoal & {
                 readonly criterionKind: "command";
                 readonly completionCriterion: string;

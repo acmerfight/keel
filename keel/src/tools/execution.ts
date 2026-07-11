@@ -18,6 +18,7 @@ import {
   type SessionGoal,
   type SessionGoalBlockedAuditCount,
   sessionGoalAccounting,
+  sessionGoalCompletionContract,
   withSessionGoalRuntimeOutcome,
 } from "../core/session-goal.ts";
 import {
@@ -259,13 +260,7 @@ async function executeUpdateGoalTool(
         status: "blocked",
         statusReason: blockedReason,
         ...sessionGoalAccounting(sessionGoal),
-        ...(sessionGoal.criterionKind !== undefined &&
-        sessionGoal.completionCriterion !== undefined
-          ? {
-              criterionKind: sessionGoal.criterionKind,
-              completionCriterion: sessionGoal.completionCriterion,
-            }
-          : {}),
+        ...sessionGoalCompletionContract(sessionGoal),
       };
       const blockedGoal = withSessionGoalRuntimeOutcome(
         blockedGoalWithoutOutcome,
@@ -287,13 +282,7 @@ async function executeUpdateGoalTool(
         consecutiveCount,
         reason: blockedReason,
       },
-      ...(sessionGoal.criterionKind !== undefined &&
-      sessionGoal.completionCriterion !== undefined
-        ? {
-            criterionKind: sessionGoal.criterionKind,
-            completionCriterion: sessionGoal.completionCriterion,
-          }
-        : {}),
+      ...sessionGoalCompletionContract(sessionGoal),
     } satisfies Extract<SessionGoal, { readonly status: "active" }> & {
       readonly blockedAudit: NonNullable<
         Extract<SessionGoal, { readonly status: "active" }>["blockedAudit"]
@@ -354,8 +343,7 @@ async function executeUpdateGoalTool(
       objective: sessionGoal.objective,
       status: "completed",
       ...sessionGoalAccounting(sessionGoal),
-      criterionKind: sessionGoal.criterionKind,
-      completionCriterion: sessionGoal.completionCriterion,
+      ...sessionGoalCompletionContract(sessionGoal),
       completionEvidence: {
         kind: "assertion_evaluator",
         reason: evaluation.reason,
@@ -400,6 +388,9 @@ async function executeUpdateGoalTool(
   }
   const verification = await executeBash(workspace, expectedCommand, {
     signal,
+    ...(sessionGoal.verificationTimeoutMs !== undefined
+      ? { timeoutMs: sessionGoal.verificationTimeoutMs }
+      : {}),
   });
   if (verification.exitCode !== 0) {
     const rejection = rejectedGoalCompletion(
@@ -430,8 +421,7 @@ async function executeUpdateGoalTool(
     objective: sessionGoal.objective,
     status: "completed",
     ...sessionGoalAccounting(sessionGoal),
-    criterionKind: sessionGoal.criterionKind,
-    completionCriterion: sessionGoal.completionCriterion,
+    ...sessionGoalCompletionContract(sessionGoal),
     completionEvidence: {
       kind: "command",
       command: expectedCommand,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_COMMAND_TIMEOUT_MS } from "../core/command-timeout.ts";
 import {
   applyPatchToolArgumentsSchema,
   bashToolArgumentsSchema,
@@ -388,7 +389,7 @@ const bashTool = defineTool({
     "Run a trusted shell command in the workspace. Commands use the current OS user's permissions and are not constrained by Keel's gitignore file-tool policy. Output is capped to the last 20KB per stream.",
     "Use when: the task needs commands the dedicated tools cannot do, such as running builds, tests, commits, logs, or other git operations beyond current status, current diffs, and safe ref-to-ref diffs.",
     "Do not use when: a dedicated tool can do the job - prefer read, ls, glob, grep, git_status, git_diff, edit, and write for file inspection and changes.",
-    "On failure: a non-zero exit code returns stdout/stderr for diagnosis - fix the command rather than retrying it unchanged; if the command timed out, raise timeoutMs (up to 60000) or run a narrower command.",
+    `On failure: a non-zero exit code returns stdout/stderr for diagnosis - fix the command rather than retrying it unchanged; if the command timed out, raise timeoutMs (up to ${MAX_COMMAND_TIMEOUT_MS}) or run a narrower command.`,
   ].join("\n"),
   args: toolArgs(bashToolArgumentsSchema),
   permission: {
