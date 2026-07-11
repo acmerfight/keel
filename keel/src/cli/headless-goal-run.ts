@@ -33,11 +33,13 @@ function headlessGoalActivationCommand(cliArgs: GoalLaunchCliArgs): string {
     "/goal",
     "--objective",
     JSON.stringify(cliArgs.objective),
-    "--verify",
-    JSON.stringify(cliArgs.verificationCommand),
-    ...(cliArgs.verificationTimeoutMs === undefined
+    ...(cliArgs.criterion.kind === "command"
+      ? ["--verify", JSON.stringify(cliArgs.criterion.command)]
+      : ["--done-when", JSON.stringify(cliArgs.criterion.assertion)]),
+    ...(cliArgs.criterion.kind !== "command" ||
+    cliArgs.criterion.verificationTimeoutMs === undefined
       ? []
-      : ["--timeout", `${cliArgs.verificationTimeoutMs}ms`]),
+      : ["--timeout", `${cliArgs.criterion.verificationTimeoutMs}ms`]),
     ...(cliArgs.budget.turns === undefined
       ? []
       : ["--turns", String(cliArgs.budget.turns)]),
@@ -247,8 +249,11 @@ export async function runHeadlessGoalCli(
       const preparedBashPermission = await headlessGoalBashPermission(
         {
           bashMode: cliArgs.bashMode,
-          criterionKind: "command",
-          completionCriterion: cliArgs.verificationCommand,
+          criterionKind: cliArgs.criterion.kind,
+          completionCriterion:
+            cliArgs.criterion.kind === "command"
+              ? cliArgs.criterion.command
+              : cliArgs.criterion.assertion,
         },
         runtime,
       );

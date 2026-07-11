@@ -33,6 +33,249 @@ import {
 } from "../../../src/testing/session-ledger-fixtures.ts";
 
 describe("CLI Main - Headless Goal", () => {
+  test(`Given an assertion-backed objective,
+    When the acting model proposes completion and a fresh evaluator approves it,
+    Then headless execution completes without Bash authorization and reports evaluator evidence`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-headless-assertion-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-headless-assertion-home-"));
+    const reportPath = join(workspace, "assertion-report.json");
+    let providerCalls = 0;
+    const server = createServer((_req, res) => {
+      providerCalls++;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      if (providerCalls === 1) {
+        res.write(
+          sseToolCall("complete_assertion_goal", "update_goal", {
+            status: "completed",
+          }),
+        );
+        res.write(sseToolFinish());
+        res.end("data: [DONE]\n\n");
+        return;
+      }
+      if (providerCalls === 2) {
+        res.end(
+          sseTextReplyWithUsage(
+            JSON.stringify({
+              completed: true,
+              reason: "Fresh evaluator approved the quality bar.",
+            }),
+          ),
+        );
+        return;
+      }
+      res.end(sseTextReplyWithUsage("Assertion goal completed."));
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "goal",
+        "--objective",
+        "Polish the release narrative",
+        "--done-when",
+        "the release notes are clear, complete, and internally consistent",
+        "--session",
+        "headless-assertion",
+        "--provider",
+        "deepseek",
+        "--report",
+        reportPath,
+      ],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_HOME: home,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(providerCalls).toBe(3);
+      expect(fixture.stdout()).toContain(
+        "Headless goal session: headless-assertion\n",
+      );
+      expect(fixture.stdout()).toContain(
+        "Headless goal outcome: completed; session: headless-assertion\n",
+      );
+      const ledger = await readFile(
+        join(home, "sessions", "headless-assertion", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(ledger).toContain('"criterionKind":"assertion"');
+      expect(ledger).toContain(
+        '"completionCriterion":"the release notes are clear, complete, and internally consistent"',
+      );
+      expect(ledger).toContain('"kind":"assertion_evaluator"');
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        stopReason: "completed",
+        goalOutcome: {
+          sessionId: "headless-assertion",
+          status: "completed",
+          evidenceKind: "assertion_evaluator",
+        },
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an assertion evaluator rejects the acting model's completion claim,
+    When the durable turn budget is exhausted,
+    Then the Goal remains uncompleted and exits with the stable limited outcome`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-headless-assertion-rejected-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-headless-assertion-rejected-home-"),
+    );
+    let providerCalls = 0;
+    const server = createServer((_req, res) => {
+      providerCalls++;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      if (providerCalls === 1) {
+        res.write(
+          sseToolCall("reject_assertion_goal", "update_goal", {
+            status: "completed",
+          }),
+        );
+        res.write(sseToolFinish());
+        res.end("data: [DONE]\n\n");
+        return;
+      }
+      res.end(
+        sseTextReplyWithUsage(
+          JSON.stringify({
+            completed: false,
+            reason: "The quality bar is not yet demonstrated.",
+          }),
+        ),
+      );
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "goal",
+        "--objective",
+        "Demonstrate a strict quality bar",
+        "--done-when",
+        "the result is demonstrably production quality",
+        "--turns",
+        "1",
+        "--session",
+        "headless-assertion-rejected",
+        "--provider",
+        "deepseek",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_HOME: home,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(4);
+      expect(providerCalls).toBe(3);
+      expect(fixture.stdout()).toContain(
+        "Headless goal outcome: budget_limited; session: headless-assertion-rejected\n",
+      );
+      const ledger = await readFile(
+        join(home, "sessions", "headless-assertion-rejected", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(ledger).toContain('"status":"budget_limited"');
+      const goalRecords = ledger
+        .split("\n")
+        .filter((line) => line.includes('"type":"session_goal"'))
+        .join("\n");
+      expect(goalRecords).not.toContain('"status":"completed"');
+      expect(goalRecords).not.toContain('"kind":"assertion_evaluator"');
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a headless assertion exceeds the durable criterion boundary,
+    When launch validation fails,
+    Then Keel creates no named session and spends no provider tokens`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-headless-assertion-invalid-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-headless-assertion-invalid-home-"),
+    );
+    const fixture = createRuntime(
+      [
+        "goal",
+        "--objective",
+        "Reject an oversized assertion",
+        "--done-when",
+        "a".repeat(SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH + 1),
+        "--session",
+        "invalid-assertion",
+        "--provider",
+        "deepseek",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          KEEL_HOME: home,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain(
+        `completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer`,
+      );
+      await expect(
+        readFile(
+          join(home, "sessions", "invalid-assertion", "ledger.jsonl"),
+          "utf8",
+        ),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a command-backed objective,
     When the user launches it without an interactive terminal,
     Then Keel runs to verified completion with stable process and report outcomes`, async () => {

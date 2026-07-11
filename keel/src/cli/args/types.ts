@@ -170,8 +170,16 @@ type ResumeSessionCliArg =
 interface GoalLaunchCliArgs extends GoalCliCommonArgs {
   readonly mode: "launch";
   readonly objective: string;
-  readonly verificationCommand: string;
-  readonly verificationTimeoutMs?: number;
+  readonly criterion:
+    | {
+        readonly kind: "command";
+        readonly command: string;
+        readonly verificationTimeoutMs?: number;
+      }
+    | {
+        readonly kind: "assertion";
+        readonly assertion: string;
+      };
   readonly budget: SessionGoalBudget;
   readonly sessionId?: string;
 }

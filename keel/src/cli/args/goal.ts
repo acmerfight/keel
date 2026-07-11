@@ -1,5 +1,6 @@
 import {
   normalizeSessionGoalCompletionCommand,
+  normalizeSessionGoalCompletionCriterion,
   normalizeSessionGoalObjective,
   SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
   SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
@@ -26,6 +27,7 @@ import type { GoalCliArgs } from "./types.ts";
 const GOAL_OPTIONS = [
   "--objective",
   "--verify",
+  "--done-when",
   "--timeout",
   "--turns",
   "--tokens",
@@ -79,6 +81,7 @@ function parseGoalLaunchArgs(
 ): ParseResult<GoalCliArgs> {
   let objective: string | undefined;
   let verificationCommand: string | undefined;
+  let assertionCriterion: string | undefined;
   let verificationTimeoutMs: number | undefined;
   const budget: {
     turns?: number;
@@ -133,6 +136,10 @@ function parseGoalLaunchArgs(
     }
     if (option === "--verify") {
       verificationCommand = normalizeSessionGoalCompletionCommand(value);
+      continue;
+    }
+    if (option === "--done-when") {
+      assertionCriterion = normalizeSessionGoalCompletionCriterion(value);
       continue;
     }
     if (option === "--timeout") {
@@ -195,16 +202,40 @@ function parseGoalLaunchArgs(
   if (objective === undefined || objective === "") {
     return parseError("Error: goal requires --objective <objective>.");
   }
-  if (verificationCommand === undefined || verificationCommand === "") {
-    return parseError("Error: goal requires --verify <command>.");
+  const verificationSupplied = verificationCommand !== undefined;
+  const assertionSupplied = assertionCriterion !== undefined;
+  if (verificationSupplied && assertionSupplied) {
+    return parseError(
+      "Error: --verify and --done-when are mutually exclusive.",
+    );
+  }
+  const hasVerificationCommand =
+    verificationCommand !== undefined && verificationCommand !== "";
+  const hasAssertionCriterion =
+    assertionCriterion !== undefined && assertionCriterion !== "";
+  if (!hasVerificationCommand && !hasAssertionCriterion) {
+    return parseError(
+      "Error: goal requires exactly one of --verify <command> or --done-when <criterion>.",
+    );
+  }
+  if (hasAssertionCriterion && verificationTimeoutMs !== undefined) {
+    return parseError("Error: --timeout is only valid with --verify.");
   }
   if (objective.length > SESSION_GOAL_OBJECTIVE_MAX_LENGTH) {
     return parseError(
       `Error: /goal objective must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
     );
   }
+  const completionCriterion = hasVerificationCommand
+    ? verificationCommand
+    : assertionCriterion;
+  /* v8 ignore start: the exclusive criterion checks above guarantee a value. */
+  if (completionCriterion === undefined) {
+    return parseError("Error: goal completion criterion is required.");
+  }
+  /* v8 ignore stop */
   if (
-    verificationCommand.length > SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH
+    completionCriterion.length > SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH
   ) {
     return parseError(
       `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
@@ -215,10 +246,17 @@ function parseGoalLaunchArgs(
     command: "goal",
     mode: "launch",
     objective,
-    verificationCommand,
+    criterion: hasVerificationCommand
+      ? {
+          kind: "command",
+          command: completionCriterion,
+          ...(verificationTimeoutMs !== undefined
+            ? { verificationTimeoutMs }
+            : {}),
+        }
+      : { kind: "assertion", assertion: completionCriterion },
     budget: budget satisfies SessionGoalBudget,
     bashMode,
-    ...(verificationTimeoutMs !== undefined ? { verificationTimeoutMs } : {}),
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(skillName !== undefined ? { skillName } : {}),
