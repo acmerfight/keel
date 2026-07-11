@@ -117,7 +117,11 @@ import type {
   InteractiveSessionResult,
   ProviderSelection,
 } from "./interactive-session/types.ts";
-import { formatUndoCheckpointList, sanitizeStatusLineText } from "./output.ts";
+import {
+  formatLiveSessionGoalStatus,
+  formatUndoCheckpointList,
+  sanitizeStatusLineText,
+} from "./output.ts";
 import {
   formatSessionStatusSnapshot,
   formatSessionTasks,
@@ -378,8 +382,19 @@ export async function runInteractiveSession(
   const updateTaskProgress = (next: SessionTaskProgress): void => {
     taskProgress = copySessionTaskProgress(next);
   };
-  const updateSessionGoal = (next: SessionGoal): void => {
-    sessionGoal = copySessionGoal(next);
+  const updateSessionGoal = (next: SessionGoal | undefined): void => {
+    sessionGoal = next === undefined ? undefined : copySessionGoal(next);
+    options.setGoalStatus?.(formatLiveSessionGoalStatus(sessionGoal));
+  };
+  options.setGoalStatus?.(formatLiveSessionGoalStatus(sessionGoal));
+  const persistSessionGoalUpdate = (
+    request: Parameters<
+      NonNullable<InteractiveSessionOptions["persistSessionGoal"]>
+    >[0],
+  ): SessionGoal | undefined => {
+    const persisted = options.persistSessionGoal?.(request);
+    updateSessionGoal(persisted);
+    return persisted;
   };
   const observeAgentStateEvents = async function* (
     stream: AsyncIterable<AgentEvent>,
@@ -869,10 +884,7 @@ export async function runInteractiveSession(
       if (turnAbortController.signal.aborted) {
         messages.splice(0, messages.length, ...messagesBeforeTurn);
         updateTaskProgress(taskProgressBeforeTurn);
-        sessionGoal =
-          sessionGoalBeforeTurn === undefined
-            ? undefined
-            : copySessionGoal(sessionGoalBeforeTurn);
+        updateSessionGoal(sessionGoalBeforeTurn);
         projectInstructionVisibility.clear();
         projectInstructionVisibility.markInstructionPathsVisible(
           projectInstructionPathsBeforeTurnOldestFirst,
@@ -911,7 +923,7 @@ export async function runInteractiveSession(
       }
       if (options.persistSessionGoal !== undefined) {
         for (const goal of sessionGoalUpdatesDuringTurn) {
-          sessionGoal = options.persistSessionGoal({
+          sessionGoal = persistSessionGoalUpdate({
             goal,
             consumedInputIds: [],
           });
@@ -1044,10 +1056,7 @@ export async function runInteractiveSession(
       }
       messages.splice(0, messages.length, ...messagesBeforeTurn);
       updateTaskProgress(taskProgressBeforeTurn);
-      sessionGoal =
-        sessionGoalBeforeTurn === undefined
-          ? undefined
-          : copySessionGoal(sessionGoalBeforeTurn);
+      updateSessionGoal(sessionGoalBeforeTurn);
       projectInstructionVisibility.clear();
       projectInstructionVisibility.markInstructionPathsVisible(
         projectInstructionPathsBeforeTurnOldestFirst,
@@ -1283,7 +1292,7 @@ export async function runInteractiveSession(
                       criterionKind: "assertion",
                       completionCriterion: goalCommand.objective,
                     };
-              sessionGoal = options.persistSessionGoal({
+              sessionGoal = persistSessionGoalUpdate({
                 goal: nextGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
               });
@@ -1317,7 +1326,7 @@ export async function runInteractiveSession(
             }
             try {
               const pausedGoal = pauseActiveSessionGoal(sessionGoal);
-              sessionGoal = options.persistSessionGoal({
+              sessionGoal = persistSessionGoalUpdate({
                 goal: pausedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
               });
@@ -1379,7 +1388,7 @@ export async function runInteractiveSession(
                   ...sessionGoalCompletionContract(sessionGoal),
                 },
               );
-              sessionGoal = options.persistSessionGoal({
+              sessionGoal = persistSessionGoalUpdate({
                 goal: resumedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
               });
@@ -1431,7 +1440,7 @@ export async function runInteractiveSession(
                   );
                 }
               }
-              sessionGoal = options.persistSessionGoal({
+              sessionGoal = persistSessionGoalUpdate({
                 goal: budgetedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
               });
@@ -1466,7 +1475,7 @@ export async function runInteractiveSession(
                 ...copySessionGoal(sessionGoal),
                 budget: emptySessionGoalBudget(),
               };
-              sessionGoal = options.persistSessionGoal({
+              sessionGoal = persistSessionGoalUpdate({
                 goal: clearedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
               });
@@ -1505,7 +1514,7 @@ export async function runInteractiveSession(
                     "The user explicitly completed the goal with /goal complete.",
                 },
               );
-              sessionGoal = options.persistSessionGoal({
+              sessionGoal = persistSessionGoalUpdate({
                 goal: completedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
               });
@@ -1555,7 +1564,7 @@ export async function runInteractiveSession(
                 sessionGoal,
                 verifiedGoalWithoutOutcome,
               );
-              sessionGoal = options.persistSessionGoal({
+              sessionGoal = persistSessionGoalUpdate({
                 goal: verifiedGoal,
                 consumedInputIds: queuedInputIds([rawInput]),
               });
@@ -1601,7 +1610,7 @@ export async function runInteractiveSession(
                 sessionGoal,
                 goalWithCriterionWithoutOutcome,
               );
-              sessionGoal = options.persistSessionGoal({
+              sessionGoal = persistSessionGoalUpdate({
                 goal: goalWithCriterion,
                 consumedInputIds: queuedInputIds([rawInput]),
               });
@@ -1620,7 +1629,7 @@ export async function runInteractiveSession(
               break;
             }
             try {
-              sessionGoal = options.persistSessionGoal({
+              sessionGoal = persistSessionGoalUpdate({
                 goal: null,
                 consumedInputIds: queuedInputIds([rawInput]),
               });

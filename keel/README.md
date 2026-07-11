@@ -51,6 +51,8 @@ multiline drafts, bracketed paste, prompt history, and terminal resize while
 agent output is streaming. While a turn is active, the composer labels ordinary
 guidance as `steer/next>` because it steers at the next tool boundary or runs as
 the next follow-up if the turn finishes first; slash commands remain queued work.
+A live region keeps current provider/tool activity and the latest durable Goal
+state visible without replacing an in-progress draft.
 
 Useful follow-up commands:
 

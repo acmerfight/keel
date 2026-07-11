@@ -72,8 +72,9 @@ What a user can do today:
   tool turn is running is injected after tool results at the next model
   request. Real TTY sessions render a differential terminal display with a
   multiline composer, bracketed paste, draft-preserving history and resize,
-  visible `steer/next` / queued-command dispositions, session intro, `status:`
-  progress lines, and an `assistant:` header.
+  visible `steer/next` / queued-command dispositions, transient provider/tool
+  activity, persistent durable Goal status, session intro, `status:` progress
+  lines, and an `assistant:` header.
   Local commands include `/help`, `/undo`, `/model`, `/skill`, `/status`,
   `/approvals`, `/compact`, `/fork`, and `/fork-points`.
 - `keel goal --objective <text> --verify <command> ...` — run one saved,
@@ -213,8 +214,9 @@ Known limits that shape the priorities below:
    models used, and cost. Real TTY sessions now have a multiline composer with
    differential redraw, bracketed paste, history draft restoration, and resize
    handling, plus active-turn steering, deferred-command, approval, and
-   operation-queue modes. Remaining work includes persistent activity/Goal
-   status, richer branch browsing, and future sub-agent state.
+   operation-queue modes, transient activity, and persistent durable Goal
+   status. Remaining work includes richer branch browsing and future sub-agent
+   state.
    Real coding is conversational:
    follow-ups, corrections, "now also fix the tests" —
    including while a run is in progress. Daily use also generates the real-task

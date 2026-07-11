@@ -4,12 +4,58 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import {
+  formatLiveSessionGoalStatus,
   printAgentEvents,
   printStableInteractiveAgentEvents,
 } from "../../src/cli/output.ts";
 import { runCli } from "../../src/testing/cli-harness.ts";
 
 describe("CLI Tool Progress", () => {
+  test(`Given live Goal status may be absent or contain long model-owned reasons,
+    When it is formatted for the bounded TUI region,
+    Then missing state clears the region and rendered state stays single-line safe`, () => {
+    expect(formatLiveSessionGoalStatus(undefined)).toBeNull();
+    expect(
+      formatLiveSessionGoalStatus({
+        objective: "Inspect checkout",
+        status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        criterionKind: "assertion",
+        completionCriterion: "The checkout is understood",
+      }),
+    ).toBe(
+      "active - Inspect checkout; criterion(assertion): The checkout is understood",
+    );
+    expect(
+      formatLiveSessionGoalStatus({
+        objective: "Inspect checkout",
+        status: "active",
+        budget: {},
+        usage: { turns: 1, tokens: 20, activeTimeMs: 50 },
+        criterionKind: "assertion",
+        completionCriterion: "The checkout is understood",
+        latestRuntimeOutcome: {
+          kind: "progress_observed",
+          reason: "Fresh evidence was recorded.",
+        },
+      }),
+    ).toBe(
+      "active - Inspect checkout; criterion(assertion): The checkout is understood; outcome: progress observed - Fresh evidence was recorded.",
+    );
+    const status = formatLiveSessionGoalStatus({
+      objective: "Inspect\ncheckout",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      criterionKind: "assertion",
+      completionCriterion: "x".repeat(400),
+    });
+    expect(status).toContain("active - Inspect\\ncheckout");
+    expect(status).toHaveLength(243);
+    expect(status?.endsWith("...")).toBe(true);
+  });
+
   test(`Given a workspace file contains text to replace,
     When user runs the CLI and the agent edits the file,
     Then the user sees the running tool call without polluting the final answer`, async () => {
@@ -379,6 +425,91 @@ describe("CLI Tool Progress", () => {
     // Then
     expect(statusLines).toEqual([
       "Session goal: active - Continue checkout; criterion(command): pnpm test",
+    ]);
+  });
+
+  test(`Given stable interactive events move through tools, Goal updates, and text,
+    When the stable event printer observes the stream,
+    Then it owns only transient activity while Goal updates remain transcript output`, async () => {
+    // Given
+    async function* events(): AsyncIterable<AgentEvent> {
+      const toolCall = {
+        id: "live_read",
+        tool: "read",
+        path: "README.md",
+      } as const;
+      yield {
+        type: "context_compacted",
+        reason: "proactive",
+        historyCompacted: true,
+        artifacts: [],
+        beforeMessageCount: 8,
+        afterMessageCount: 3,
+        beforeEstimatedTokens: 1_000,
+        afterEstimatedTokens: 400,
+        toolOutputsCompacted: 0,
+        staleToolOutputsCompacted: 0,
+        currentToolOutputsCompacted: 0,
+        toolOutputCharsBefore: 0,
+        toolOutputCharsAfter: 0,
+        toolOutputEstimatedTokensBefore: 0,
+        toolOutputEstimatedTokensAfter: 0,
+      };
+      yield { type: "tool_start", toolCall };
+      yield { type: "tool_end", toolCall, ok: true };
+      yield { type: "tool_end", toolCall, ok: false };
+      yield {
+        type: "session_goal_updated",
+        messageOrdinal: 2,
+        goal: {
+          objective: "Ship live status",
+          status: "active",
+          budget: {},
+          usage: { turns: 1, tokens: 20, activeTimeMs: 50 },
+          criterionKind: "assertion",
+          completionCriterion: "Live status is visible",
+          latestRuntimeOutcome: {
+            kind: "progress_observed",
+            reason: "The status boundary rendered fresh progress.",
+          },
+        },
+      };
+      yield { type: "text", text: "Done" };
+      yield { type: "text", text: "." };
+      yield {
+        type: "end",
+        usage: {
+          inputTokens: 10,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 10,
+          outputTokens: 1,
+        },
+        turns: 1,
+        stopReason: "completed",
+      };
+    }
+    const activities: Array<string | null> = [];
+
+    // When
+    await printStableInteractiveAgentEvents(events(), {
+      writeStdout() {},
+      writeAssistantHeader() {},
+      writeStatusLine() {},
+      setActivityStatus(text) {
+        activities.push(text);
+      },
+    });
+
+    // Then
+    expect(activities).toEqual([
+      "Thinking",
+      "Context compacted",
+      "Tool: read README.md",
+      "Thinking",
+      "Tool failed: read README.md",
+      "Responding",
+      "Responding",
+      null,
     ]);
   });
 });
