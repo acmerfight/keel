@@ -21,6 +21,7 @@ import type {
   SessionPersistenceReason,
   SessionQueuedInput,
 } from "../session-store.ts";
+import type { InteractiveLineInput } from "./line-reader.ts";
 
 export type { ProviderSelection } from "../provider-config.ts";
 export type { SessionPersistenceReason } from "../session-store.ts";
@@ -133,6 +134,7 @@ export interface InteractiveSessionOptions {
   }) => void;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly input: NodeJS.ReadableStream;
+  readonly lineInput?: InteractiveLineInput;
   readonly writeStdout: (text: string) => void;
   readonly writeStderr: (text: string) => void;
   readonly renderPrompt?: () => void;

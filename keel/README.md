@@ -46,7 +46,9 @@ keel
 
 Interactive sessions are saved by default. Use `keel sessions` to find the
 resume command for prior work, or `keel --ephemeral` when you intentionally do
-not want a session ledger.
+not want a session ledger. In a real terminal, the interactive composer supports
+multiline drafts, bracketed paste, prompt history, and terminal resize while
+agent output is streaming.
 
 Useful follow-up commands:
 

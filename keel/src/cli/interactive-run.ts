@@ -21,6 +21,7 @@ import { sessionForkPointsFromStoredMessages } from "./fork-points.ts";
 import { createStableInteractiveDisplay } from "./interactive-session/display.ts";
 import {
   type InteractiveForkSessionRequest,
+  type InteractiveSessionOptions,
   runInteractiveSession,
   type SessionPersistenceReason,
 } from "./interactive-session.ts";
@@ -86,9 +87,24 @@ import {
   newToolOutputArtifactScope,
   toolOutputArtifactScopeForSession,
 } from "./tool-output-artifacts.ts";
+import {
+  createInteractiveTerminalDisplay,
+  type InteractiveTerminalDisplay,
+} from "./tui/interactive-terminal.ts";
 import { loadWorkflowSkill, WorkflowSkillError } from "./workflow-skills.ts";
 
 type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
+
+async function runInteractiveSessionWithTerminalDisplay(
+  options: InteractiveSessionOptions,
+  terminalDisplay: InteractiveTerminalDisplay | undefined,
+) {
+  try {
+    return await runInteractiveSession(options);
+  } finally {
+    terminalDisplay?.stop();
+  }
+}
 type DirectResumeSessionCliArg = Exclude<
   NonNullable<RunCliArgs["resumeSession"]>,
   { readonly kind: "pick" }
@@ -858,23 +874,44 @@ async function runSessionCli(
           scope: toolOutputArtifactScope,
         }),
       };
+      const displaySession =
+        activeSessionId === undefined
+          ? ({ kind: "ephemeral" } as const)
+          : ({
+              kind: "saved",
+              sessionId: activeSessionId,
+              resumeAvailable: sessionStart.kind !== "create",
+            } as const);
+      let activeSigintHandler: (() => void) | null = null;
+      const interactiveTerminalDisplay =
+        mode.kind === "interactive" &&
+        runtime.input.isTTY === true &&
+        runtime.stdoutIsTTY === true &&
+        runtime.stderrIsTTY === true &&
+        runtime.createInteractiveTerminal !== undefined
+          ? createInteractiveTerminalDisplay(
+              runtime.createInteractiveTerminal(),
+              {
+                inputEchoesToDisplay: true,
+                session: displaySession,
+                onInterrupt: () => {
+                  activeSigintHandler?.();
+                },
+              },
+            )
+          : undefined;
       const interactiveDisplay =
-        mode.kind === "interactive" && runtime.input.isTTY === true
+        interactiveTerminalDisplay ??
+        (mode.kind === "interactive" && runtime.input.isTTY === true
           ? createStableInteractiveDisplay(runtime, {
               inputEchoesToDisplay: runtime.stderrIsTTY === true,
-              session:
-                activeSessionId === undefined
-                  ? { kind: "ephemeral" }
-                  : {
-                      kind: "saved",
-                      sessionId: activeSessionId,
-                      resumeAvailable: sessionStart.kind !== "create",
-                    },
+              session: displaySession,
             })
-          : undefined;
+          : undefined);
       const reportRecorder = createAgentEventReportRecorder();
       interactiveDisplay?.writeIntro();
-      const interactiveResult = await runInteractiveSession({
+      interactiveTerminalDisplay?.start();
+      const interactiveSessionOptions: InteractiveSessionOptions = {
         cliArgs,
         workspace,
         platform: runtime.platform,
@@ -915,6 +952,9 @@ async function runSessionCli(
           : {}),
         toolOutputArtifacts,
         input: runtime.input,
+        ...(interactiveTerminalDisplay !== undefined
+          ? { lineInput: interactiveTerminalDisplay.lineInput }
+          : {}),
         writeStdout: (text) => {
           (interactiveDisplay ?? runtime).writeStdout(text);
         },
@@ -931,15 +971,20 @@ async function runSessionCli(
           ? { closePrompt: interactiveDisplay.closePrompt }
           : {}),
         onSigint: (handler) => {
+          activeSigintHandler = handler;
           runtime.onSigint(handler);
         },
         offSigint: (handler) => {
+          activeSigintHandler = null;
           runtime.offSigint(handler);
         },
         setExitCode: (code) => {
           exitCode = code;
         },
-        forceExit: runtime.forceExit,
+        forceExit: (code) => {
+          interactiveTerminalDisplay?.stop();
+          return runtime.forceExit(code);
+        },
         resolveProvider: (message, selection) =>
           resolveInteractiveProvider(
             message,
@@ -961,7 +1006,11 @@ async function runSessionCli(
                 reportRecorder,
               ),
         formatCostReport,
-      });
+      };
+      const interactiveResult = await runInteractiveSessionWithTerminalDisplay(
+        interactiveSessionOptions,
+        interactiveTerminalDisplay,
+      );
       if (
         cliArgs.reportFile !== undefined &&
         interactiveResult.report !== undefined

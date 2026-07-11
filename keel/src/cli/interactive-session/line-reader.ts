@@ -1,5 +1,13 @@
-import type { createInterface } from "node:readline/promises";
 import type { SessionQueuedInput } from "../session-store.ts";
+
+export interface InteractiveLineInput {
+  readonly on: (
+    event: "line",
+    listener: (line: string) => void,
+  ) => InteractiveLineInput;
+  readonly once: (event: "close", listener: () => void) => InteractiveLineInput;
+  readonly close: () => void;
+}
 
 export interface LineReader {
   readonly readLine: () => Promise<QueuedLine | null>;
@@ -65,7 +73,7 @@ export function queuedInputIds(
 }
 
 export function createLineReader(
-  input: ReturnType<typeof createInterface>,
+  input: InteractiveLineInput,
   options: {
     readonly initialQueuedInputs?: readonly SessionQueuedInput[];
     readonly initialInputLines?: readonly string[];

@@ -1,4 +1,5 @@
 import { writeSync } from "node:fs";
+import type { Terminal } from "@earendil-works/pi-tui";
 import { isAbortThrow } from "../core/error.ts";
 import { formatCliRuntimeError } from "./runtime-error.ts";
 import type { SessionStoreRuntime } from "./session-store.ts";
@@ -14,6 +15,8 @@ export interface CliRuntime extends SessionStoreRuntime {
   readonly input: CliInput;
   readonly platform: NodeJS.Platform;
   readonly stderrIsTTY?: boolean;
+  readonly stdoutIsTTY?: boolean;
+  readonly createInteractiveTerminal?: () => Terminal;
   readonly writeStdout: (text: string) => void;
   readonly writeStderr: (text: string) => void;
   readonly onSigint: (handler: () => void) => void;

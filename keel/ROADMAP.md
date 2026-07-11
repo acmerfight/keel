@@ -70,8 +70,9 @@ What a user can do today:
   persist completed turns to an automatic JSONL session ledger by default;
   `keel --ephemeral` keeps the conversation process-local. Input typed while a
   tool turn is running is injected after tool results at the next model
-  request. Real TTY sessions render a stable terminal display with a session
-  intro, `keel>` prompts, `status:` progress lines, and an `assistant:` header.
+  request. Real TTY sessions render a differential terminal display with a
+  multiline composer, bracketed paste, draft-preserving history and resize,
+  session intro, `status:` progress lines, and an `assistant:` header.
   Local commands include `/help`, `/undo`, `/model`, `/skill`, `/status`,
   `/approvals`, `/compact`, `/fork`, and `/fork-points`.
 - `keel goal --objective <text> --verify <command> ...` — run one saved,
@@ -208,9 +209,11 @@ Known limits that shape the priorities below:
    sessions persist transcripts, compaction replacement records, unconsumed
    queued input, active model switches, and workflow skill identity;
    interactive `--report` records session-level turns, usage, provider/model,
-   models used, and cost. Real TTY sessions now have stable prompt/status
-   chrome; remaining work is full-screen or richer session UI, richer branch
-   browsing, and future sub-agent state. Real coding is conversational:
+   models used, and cost. Real TTY sessions now have a multiline composer with
+   differential redraw, bracketed paste, history draft restoration, and resize
+   handling. Remaining work includes visible steer/follow-up queues, persistent
+   activity/Goal status, richer branch browsing, and future sub-agent state.
+   Real coding is conversational:
    follow-ups, corrections, "now also fix the tests" —
    including while a run is in progress. Daily use also generates the real-task
    corpus the eval suite needs.

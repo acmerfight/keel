@@ -2,6 +2,7 @@
 
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { ProcessTerminal } from "@earendil-works/pi-tui";
 import { parseCliArgs, USAGE } from "./args.ts";
 import { runForkPointsCommand } from "./fork-points-command.ts";
 import { runHeadlessGoalCli } from "./headless-goal-run.ts";
@@ -134,6 +135,8 @@ function defaultRuntime(): CliRuntime {
     input: process.stdin,
     platform: process.platform,
     stderrIsTTY: process.stderr.isTTY === true,
+    stdoutIsTTY: process.stdout.isTTY === true,
+    createInteractiveTerminal: () => new ProcessTerminal(),
     now: () => Date.now(),
     writeStdout: (text) => {
       process.stdout.write(text);

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import type { Terminal } from "@earendil-works/pi-tui";
 import type { CliRuntime } from "../cli/runtime.ts";
 
 export interface RuntimeFixture {
@@ -20,6 +21,8 @@ export function createRuntime(
     readonly input?: PassThrough;
     readonly inputIsTTY?: boolean;
     readonly stderrIsTTY?: boolean;
+    readonly stdoutIsTTY?: boolean;
+    readonly createInteractiveTerminal?: () => Terminal;
     readonly onStdout?: (text: string) => void;
     readonly onStderr?: (text: string) => void;
     readonly onSigint?: (handler: () => void) => void;
@@ -50,6 +53,12 @@ export function createRuntime(
       input,
       platform: process.platform,
       stderrIsTTY,
+      ...(options.stdoutIsTTY !== undefined
+        ? { stdoutIsTTY: options.stdoutIsTTY }
+        : {}),
+      ...(options.createInteractiveTerminal !== undefined
+        ? { createInteractiveTerminal: options.createInteractiveTerminal }
+        : {}),
       now: options.now ?? (() => 0),
       writeStdout: (text) => {
         stdout += text;
