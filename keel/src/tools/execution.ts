@@ -27,7 +27,6 @@ import {
   sessionTaskProgressFromPlan,
 } from "../core/task-progress.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
-import { formatSkillActivation } from "../skills/activation.ts";
 import type {
   SkillActivationCapability,
   SkillActivationRecord,
@@ -98,7 +97,10 @@ interface BuiltinToolExecutionContext {
   readonly workspace: string;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
-  readonly skillActivation?: SkillActivationCapability;
+  readonly skillActivation?: Pick<
+    SkillActivationCapability,
+    "activate" | "search" | "readResource"
+  >;
   readonly recordCheckpoints?: boolean;
   readonly bashPermission?: BashPermissionPolicy;
   readonly readBeforeEdit?: {
@@ -131,7 +133,6 @@ interface AssertionGoalCompletionEvaluation {
 export interface ToolExecution {
   readonly content: string;
   readonly ok: boolean;
-  readonly preserveInlineOutput?: boolean;
   readonly sourceTruncated?: boolean;
   readonly artifactContent?: string;
   readonly artifactSourceTruncated?: boolean;
@@ -192,10 +193,13 @@ function executeSkillTool(
   try {
     const activation = context.skillActivation.activate(toolCall.name);
     return {
-      content: formatSkillActivation(activation.skill),
+      content: activation.newlyActivated
+        ? `Workflow skill ${activation.activation.qualifiedName} activated. Its instructions and resource index are now active in the system context.`
+        : `Workflow skill ${activation.activation.qualifiedName} is already active; no instructions were duplicated.`,
       ok: true,
-      preserveInlineOutput: true,
-      skillActivation: activation.record,
+      ...(activation.record === undefined
+        ? {}
+        : { skillActivation: activation.record }),
     };
   } catch (error) {
     if (!(error instanceof WorkflowSkillError)) {

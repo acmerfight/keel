@@ -6,11 +6,12 @@ import type {
 } from "../../core/task-progress.ts";
 import type { Message } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
-import type { WorkflowSkill } from "../../skills/model.ts";
+import type {
+  SkillActivation,
+  SkillLifecycleState,
+} from "../../skills/model.ts";
 
-export type { WorkflowSkill };
-
-export const SESSION_SCHEMA_VERSION = 3;
+export const SESSION_SCHEMA_VERSION = 4;
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 export const SESSION_LOCK_DIRECTORY_NAME = "active.lock";
 export const SESSION_LOCK_OWNER_FILE_NAME = "owner.json";
@@ -71,13 +72,12 @@ export interface SessionGraphRecord {
 }
 
 export interface SessionHeaderRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "session";
   readonly id: string;
   readonly createdAt: string;
   readonly workspace: string;
   readonly graph: SessionGraphRecord;
-  readonly workflowSkill?: WorkflowSkill;
 }
 
 export interface SessionModelSelection {
@@ -93,25 +93,27 @@ export interface SessionModelSwitch {
 }
 
 export interface AppendSessionRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "append";
   readonly timestamp: string;
   readonly reason: "turn";
   readonly messages: readonly StoredMessage[];
+  readonly skillState?: SkillLifecycleState;
   readonly consumedInputIds?: readonly string[];
 }
 
 export interface ReplaceSessionRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "replace";
   readonly timestamp: string;
   readonly reason: "turn" | "compaction";
   readonly messages: readonly StoredMessage[];
+  readonly skillState?: SkillLifecycleState;
   readonly consumedInputIds?: readonly string[];
 }
 
 export interface ModelSwitchSessionRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "model_switch";
   readonly timestamp: string;
   readonly from: SessionModelSelection | null;
@@ -120,7 +122,7 @@ export interface ModelSwitchSessionRecord {
 }
 
 export interface SessionTitleSessionRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "session_title";
   readonly timestamp: string;
   readonly title: string;
@@ -128,7 +130,7 @@ export interface SessionTitleSessionRecord {
 }
 
 export interface SessionGoalSessionRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "session_goal";
   readonly timestamp: string;
   readonly goal: SessionGoal | null;
@@ -136,7 +138,7 @@ export interface SessionGoalSessionRecord {
 }
 
 interface TaskProgressSessionRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "task_progress";
   readonly timestamp: string;
   readonly messageOrdinal: number;
@@ -149,7 +151,7 @@ export interface SessionTaskProgressCheckpoint {
 }
 
 interface InputAdmittedSessionRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "input_admitted";
   readonly timestamp: string;
   readonly id: string;
@@ -158,21 +160,21 @@ interface InputAdmittedSessionRecord {
 }
 
 interface InputConsumedSessionRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "input_consumed";
   readonly timestamp: string;
   readonly inputIds: readonly string[];
 }
 
 interface BashApprovalGrantedSessionRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "bash_approval_granted";
   readonly timestamp: string;
   readonly grant: BashApprovalGrant;
 }
 
 interface BashApprovalRevokedSessionRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "bash_approval_revoked";
   readonly timestamp: string;
   readonly grant: BashApprovalGrant;
@@ -180,14 +182,14 @@ interface BashApprovalRevokedSessionRecord {
 }
 
 interface BashApprovalsClearedSessionRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "bash_approvals_cleared";
   readonly timestamp: string;
   readonly consumedInputIds?: readonly string[];
 }
 
 export interface SnapshotSessionRecord {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly type: "snapshot";
   readonly timestamp: string;
   readonly reason: "size_threshold";
@@ -199,6 +201,21 @@ export interface SnapshotSessionRecord {
   readonly activeModel?: SessionModelSelection;
   readonly modelSwitches?: readonly SessionModelSwitch[];
   readonly taskProgressCheckpoints?: readonly SessionTaskProgressCheckpoint[];
+  readonly skillStateCheckpoints: readonly SessionSkillStateCheckpoint[];
+}
+
+export interface SkillStateSessionRecord {
+  readonly schemaVersion: 4;
+  readonly type: "skill_state";
+  readonly timestamp: string;
+  readonly messageOrdinal: number;
+  readonly skillActivations: readonly SkillActivation[];
+  readonly activeSkillIds: readonly string[];
+  readonly consumedInputIds?: readonly string[];
+}
+
+export interface SessionSkillStateCheckpoint extends SkillLifecycleState {
+  readonly messageOrdinal: number;
 }
 
 export type SessionMutationRecord =
@@ -213,6 +230,7 @@ export type SessionMutationRecord =
   | BashApprovalGrantedSessionRecord
   | BashApprovalRevokedSessionRecord
   | BashApprovalsClearedSessionRecord
+  | SkillStateSessionRecord
   | SnapshotSessionRecord;
 
 export interface SessionRecords {
@@ -244,7 +262,8 @@ export interface SessionState {
   readonly taskProgress: SessionTaskProgress;
   readonly activeModel?: SessionModelSelection;
   readonly modelSwitches: readonly SessionModelSwitch[];
-  readonly workflowSkill?: WorkflowSkill;
+  readonly skillActivations: readonly SkillActivation[];
+  readonly activeSkillIds: readonly string[];
   readonly [sessionReplayStateKey]: SessionReplayState;
 }
 
@@ -261,7 +280,7 @@ export interface SessionCatalogEntry {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly graph: SessionGraphRecord;
-  readonly workflowSkill?: SessionCatalogWorkflowSkill;
+  readonly workflowSkills: readonly SessionCatalogWorkflowSkill[];
   readonly title?: string;
   readonly goal?: SessionGoal;
   readonly preview: string;
@@ -296,6 +315,8 @@ export interface SessionCatalogReplayState {
   readonly preview: CatalogPreviewState;
   readonly pendingInputsById: Map<string, SessionQueuedInput>;
   readonly taskProgress: SessionTaskProgress;
+  readonly skillActivations: readonly SkillActivation[];
+  readonly activeSkillIds: readonly string[];
 }
 
 export interface SessionReplayState {
@@ -308,6 +329,7 @@ export interface SessionReplayState {
   goal?: SessionGoal;
   activeModel?: SessionModelSelection;
   readonly modelSwitches: SessionModelSwitch[];
+  readonly skillStateCheckpoints: SessionSkillStateCheckpoint[];
 }
 
 export type ObjectValue =

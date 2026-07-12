@@ -66,13 +66,17 @@ function serializeSessionHeaderLine(
 function writeInitialHeader(
   filePath: string,
   header: SessionHeaderRecord,
+  mutations: readonly SessionMutationRecord[] = [],
 ): void {
   const headerLine = serializeSessionHeaderLine(filePath, header);
+  const content = `${headerLine}${mutations
+    .map((record) => `${JSON.stringify(record)}\n`)
+    .join("")}`;
   let fd: number | undefined;
   try {
     mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
     fd = openSync(filePath, "wx", 0o600);
-    writeFileSync(fd, headerLine, "utf8");
+    writeFileSync(fd, content, "utf8");
     fsyncSync(fd);
   } catch (error) {
     if (hasNodeErrorCode(error, "EEXIST")) {

@@ -35,6 +35,7 @@ export {
   persistSessionMessages,
   persistSessionModelSwitch,
   persistSessionQueuedInput,
+  persistSessionSkillState,
   persistSessionTaskProgress,
   persistSessionTitle,
   resumeSessionStore,

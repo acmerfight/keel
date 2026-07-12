@@ -33,6 +33,10 @@ interface WriteSkillOptions {
   readonly frontmatterName?: string;
 }
 
+function occurrences(text: string, value: string): number {
+  return text.split(value).length - 1;
+}
+
 function formatDescription(
   description: string,
   quote: WriteSkillOptions["descriptionQuote"] = "none",
@@ -704,11 +708,17 @@ describe("CLI Main - Skills", () => {
         }),
       );
       const thirdRequest = requestWithMessagesSchema.parse(capturedBodies[2]);
+      const thirdPrompt = thirdRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(thirdPrompt).toContain("RECOVERED ZEBRA WORKFLOW");
       expect(thirdRequest.messages).toContainEqual(
         expect.objectContaining({
           role: "tool",
           tool_call_id: "activate_skill",
-          content: expect.stringContaining("RECOVERED ZEBRA WORKFLOW"),
+          content: expect.stringContaining(
+            "instructions and resource index are now active in the system context",
+          ),
         }),
       );
       const report = JSON.parse(await readFile(reportPath, "utf8"));
@@ -771,8 +781,14 @@ describe("CLI Main - Skills", () => {
           "Cache-Control": "no-cache",
           Connection: "keep-alive",
         });
-        if (capturedBodies.length === 1) {
-          res.write(sseToolCall("call_skill", "skill", { name: "review" }));
+        if (capturedBodies.length <= 2) {
+          res.write(
+            sseToolCall(
+              capturedBodies.length === 1 ? "call_skill" : "call_skill_again",
+              "skill",
+              { name: "review" },
+            ),
+          );
           res.write(sseToolFinish());
           res.write("data: [DONE]\n\n");
           res.end();
@@ -800,7 +816,7 @@ describe("CLI Main - Skills", () => {
       // Then
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe("Review skill applied.\n");
-      expect(fixture.stderr()).toBe("Tool: skill review\n");
+      expect(fixture.stderr()).toBe("Tool: skill review\nTool: skill review\n");
       const firstRequest = requestWithMessagesSchema.parse(capturedBodies[0]);
       const firstSystemPrompt = firstRequest.messages?.find(
         (message) => message.role === "system",
@@ -816,35 +832,50 @@ describe("CLI Main - Skills", () => {
       expect(firstRequestTools?.map((tool) => tool.function?.name)).toContain(
         "skill",
       );
+      expect(capturedBodies).toHaveLength(3);
       const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
-      expect(secondRequest.messages).toContainEqual(
-        expect.objectContaining({
-          role: "tool",
-          tool_call_id: "call_skill",
-          content: expect.stringContaining("Read PR comments first."),
-        }),
-      );
-      expect(secondRequest.messages).toContainEqual(
-        expect.objectContaining({
-          role: "tool",
-          tool_call_id: "call_skill",
-          content: expect.stringMatching(
-            /<skill_activation id="repo:review" digest="sha256:[a-f0-9]{64}" trigger="model_selected"/u,
-          ),
-        }),
-      );
+      const secondSystemPrompt = secondRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(secondSystemPrompt).toContain("Read PR comments first.");
+      expect(secondSystemPrompt).toContain("references/checklist.md");
+      expect(
+        occurrences(secondSystemPrompt ?? "", "Read PR comments first."),
+      ).toBe(1);
       expect(secondRequest.messages).toContainEqual(
         expect.objectContaining({
           role: "tool",
           tool_call_id: "call_skill",
           content: expect.stringContaining(
-            "<path>references/checklist.md</path>",
+            "instructions and resource index are now active in the system context",
           ),
         }),
       );
+      expect(JSON.stringify(secondRequest.messages)).not.toContain(
+        '<skill_activation id="repo:review"',
+      );
+      const thirdRequest = requestWithMessagesSchema.parse(capturedBodies[2]);
+      const thirdSystemPrompt = thirdRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(
+        occurrences(thirdSystemPrompt ?? "", "Read PR comments first."),
+      ).toBe(1);
+      expect(thirdRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_skill_again",
+          content: expect.stringContaining(
+            "is already active; no instructions were duplicated",
+          ),
+        }),
+      );
+      expect(JSON.stringify(thirdRequest.messages)).not.toContain(
+        "<instructions>",
+      );
       expect(firstSystemPrompt).not.toContain("Private checklist body.");
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 6,
+        schemaVersion: 7,
         skillActivations: [
           {
             name: "repo:review",
@@ -932,7 +963,7 @@ describe("CLI Main - Skills", () => {
         }),
       );
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 6,
+        schemaVersion: 7,
         skillActivations: [],
       });
     } finally {
@@ -1001,7 +1032,15 @@ describe("CLI Main - Skills", () => {
           message.role === "tool" &&
           message.tool_call_id === "call_large_skill",
       )?.content;
-      expect(activationResult).toContain(sentinel);
+      const activeSystemPrompt = secondRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(activeSystemPrompt).toContain(sentinel);
+      expect(occurrences(activeSystemPrompt ?? "", sentinel)).toBe(1);
+      expect(activationResult).not.toContain(sentinel);
+      expect(activationResult).toContain(
+        "instructions and resource index are now active in the system context",
+      );
       expect(activationResult).not.toContain("tool output shortened");
       expect(fixture.stderr()).toBe("Tool: skill large-review\n");
     } finally {
@@ -1363,7 +1402,7 @@ describe("CLI Main - Skills", () => {
       // Then
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe(
-        "Workflow skills:\n- repo:review (.agents/skills/review/SKILL.md)\n",
+        "Active workflow skills:\n- repo:review (.agents/skills/review/SKILL.md) [user_explicit, current]\n",
       );
       expect(fixture.stderr()).toBe("");
     } finally {
@@ -1396,7 +1435,7 @@ describe("CLI Main - Skills", () => {
 
       // Then
       expect(exitCode).toBe(0);
-      expect(fixture.stdout()).toBe("No workflow skill selected.\n");
+      expect(fixture.stdout()).toBe("No active workflow skills.\n");
       expect(fixture.stderr()).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1937,7 +1976,7 @@ describe("CLI Main - Skills", () => {
       expect(firstExitCode).toBe(0);
       expect(secondExitCode).toBe(0);
       expect(firstRun.stderr()).toBe("");
-      expect(secondRun.stderr()).toBe("");
+      expect(secondRun.stderr()).toContain("repo:review changed_on_disk");
       const resumedRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
       const system = resumedRequest.messages?.find(
         (message) => message.role === "system",
@@ -2010,9 +2049,7 @@ describe("CLI Main - Skills", () => {
       expect(firstExitCode).toBe(0);
       expect(secondExitCode).toBe(0);
       expect(secondRun.stdout()).not.toBe("");
-      expect(secondRun.stderr()).toBe(
-        "Warning: this saved session persists only its first launch-selected workflow skill; additional explicit skills apply to the current run only.\n",
-      );
+      expect(secondRun.stderr()).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -2081,7 +2118,7 @@ describe("CLI Main - Skills", () => {
       expect(secondExitCode).toBe(1);
       expect(secondRun.stdout()).toBe("");
       expect(secondRun.stderr()).toBe(
-        'Error: session "demo" already uses workflow skill "repo:review"; cannot resume it with workflow skill "merge-pr".\n',
+        'Error: session "demo" does not have active workflow skill "merge-pr"; --fork-points cannot activate skills.\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -2132,7 +2169,7 @@ describe("CLI Main - Skills", () => {
       expect(secondExitCode).toBe(1);
       expect(secondRun.stdout()).toBe("");
       expect(secondRun.stderr()).toBe(
-        'Error: session "demo" has no workflow skill; cannot resume it with workflow skill "review".\n',
+        'Error: session "demo" does not have active workflow skill "review"; --fork-points cannot activate skills.\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

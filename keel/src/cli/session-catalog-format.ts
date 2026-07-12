@@ -40,11 +40,10 @@ function sessionCatalogEntryLines(
     ...(entry.graph.parentSessionId !== null
       ? [`${detailIndent}parent: ${entry.graph.parentSessionId}`]
       : []),
-    ...(entry.workflowSkill !== undefined
-      ? [
-          `${detailIndent}workflow skill: ${entry.workflowSkill.qualifiedName} (${entry.workflowSkill.relativePath})`,
-        ]
-      : []),
+    ...entry.workflowSkills.map(
+      (skill) =>
+        `${detailIndent}workflow skill: ${skill.qualifiedName} (${skill.relativePath})`,
+    ),
     ...(entry.graph.forkPoint !== null
       ? [
           `${detailIndent}fork point: ${formatSessionForkPoint(entry.graph.forkPoint)}`,
@@ -374,11 +373,10 @@ export function formatSessionDetail(options: {
     ...(options.entry.graph.parentSessionId !== null
       ? [`parent: ${options.entry.graph.parentSessionId}`]
       : []),
-    ...(options.entry.workflowSkill !== undefined
-      ? [
-          `workflow skill: ${options.entry.workflowSkill.qualifiedName} (${options.entry.workflowSkill.relativePath})`,
-        ]
-      : []),
+    ...options.entry.workflowSkills.map(
+      (skill) =>
+        `workflow skill: ${skill.qualifiedName} (${skill.relativePath})`,
+    ),
     ...(options.entry.graph.forkPoint !== null
       ? [`fork point: ${formatSessionForkPoint(options.entry.graph.forkPoint)}`]
       : []),
@@ -398,9 +396,7 @@ export function formatSessionDetail(options: {
       ...(options.session.goal !== undefined
         ? { goal: options.session.goal }
         : {}),
-      ...(options.entry.workflowSkill !== undefined
-        ? { workflowSkill: options.entry.workflowSkill }
-        : {}),
+      workflowSkills: options.entry.workflowSkills,
       messages: options.session.messages,
       messageCount: options.session.storedMessages.length,
       pendingInputCount: options.session.pendingInputs.length,

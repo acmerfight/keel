@@ -342,7 +342,7 @@ describe("Session Store Oversized Snapshot", () => {
     await writeFile(
       ledgerPath,
       `\n${JSON.stringify({
-        schemaVersion: 3,
+        schemaVersion: 4,
         type: "snapshot",
         timestamp: "1970-01-01T00:00:00.001Z",
         reason: "size_threshold",
@@ -511,13 +511,20 @@ describe("Session Store Oversized Snapshot", () => {
         throw new Error("Expected snapshot line");
       }
       expect(JSON.parse(lastLine)).toEqual({
-        schemaVersion: 3,
+        schemaVersion: 4,
         type: "snapshot",
         timestamp: "1970-01-01T00:00:00.004Z",
         reason: "size_threshold",
         title,
         messages: expectedStoredMessages(compactedMessages),
         pendingInputs: [queuedInput],
+        skillStateCheckpoints: [
+          {
+            messageOrdinal: 0,
+            skillActivations: [],
+            activeSkillIds: [],
+          },
+        ],
       });
       const resumed = resumeSessionStore({
         sessionId: "snapshot-threshold",

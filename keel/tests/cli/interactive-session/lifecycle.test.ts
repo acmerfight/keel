@@ -339,7 +339,7 @@ describe("Interactive Session - Lifecycle", () => {
       expect(stdout).toContain(`  workspace: ${workspace}\n`);
       expect(stdout).toContain("  active model: qwen/qwen3.7-max\n");
       expect(stdout).toContain(
-        "  workflow skill: repo:review (.agents/skills/review/SKILL.md)\n",
+        "  workflow skills: repo:review (.agents/skills/review/SKILL.md)\n",
       );
       expect(stdout).toContain("  messages: 1\n");
       expect(stdout).toContain("  pending inputs: 0\n");

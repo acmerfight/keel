@@ -64,7 +64,7 @@ export function restoredUserMessageId(
 
 export function headerLine(sessionId: string, workspace: string): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "session",
     id: sessionId,
     createdAt: "1970-01-01T00:00:00.000Z",
@@ -75,7 +75,7 @@ export function headerLine(sessionId: string, workspace: string): string {
 
 export function appendLine(messages: readonly Message[]): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "append",
     timestamp: "1970-01-01T00:00:00.000Z",
     reason: "turn",
@@ -107,19 +107,22 @@ export function snapshotLine(
   },
 ): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "snapshot",
     timestamp: "1970-01-01T00:00:00.000Z",
     reason: "size_threshold",
     messages: storedMessages(messages),
     pendingInputs,
+    skillStateCheckpoints: [
+      { messageOrdinal: 0, skillActivations: [], activeSkillIds: [] },
+    ],
     ...(snapshotState !== undefined ? snapshotState : {}),
   });
 }
 
 export function inputAdmittedLine(input: SessionQueuedInput): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "input_admitted",
     timestamp: input.timestamp,
     id: input.id,
@@ -130,7 +133,7 @@ export function inputAdmittedLine(input: SessionQueuedInput): string {
 
 export function inputConsumedLine(inputIds: readonly string[]): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "input_consumed",
     timestamp: "1970-01-01T00:00:00.005Z",
     inputIds,

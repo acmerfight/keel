@@ -19,6 +19,7 @@ import type {
   ToolCall,
 } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
+import { workflowSkillFromActivation } from "../skills/lifecycle.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
 import {
@@ -46,6 +47,7 @@ import {
 import type { AgentEvent } from "./events.ts";
 import { postCompactionReadToolCallId } from "./post-compaction-read-id.ts";
 import { restorePostCompactionReads } from "./post-compaction-restore.ts";
+import { appendWorkflowSkillsToSystemPrompt } from "./prompt.ts";
 import type { AgentTurn } from "./provider-turn.ts";
 import {
   createReadVisibilityState,
@@ -311,10 +313,6 @@ function settlementPlanByExecutionIndex(
   executions.forEach(({ execution }, index) => {
     const inlineLength =
       execution.artifactContent?.length ?? execution.content.length;
-    if (execution.preserveInlineOutput === true) {
-      estimatedInlineChars += inlineLength;
-      return;
-    }
     if (
       inlineLength - maxInlineChars >=
       MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS
@@ -334,13 +332,11 @@ function settlementPlanByExecutionIndex(
     .map(({ execution }, index) => ({
       index,
       length: execution.artifactContent?.length ?? execution.content.length,
-      preserveInlineOutput: execution.preserveInlineOutput === true,
     }))
     .filter(
-      ({ length, preserveInlineOutput }) =>
-        !preserveInlineOutput &&
+      ({ length }) =>
         length - aggregatePreviewChars >=
-          MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS,
+        MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS,
     )
     .sort((left, right) =>
       right.length === left.length
@@ -614,11 +610,21 @@ export async function* runAgentTurn(
   };
 
   for (let completedTurns = 1; ; completedTurns++) {
+    const turnSystemPrompt = appendWorkflowSkillsToSystemPrompt(
+      systemPrompt,
+      options.skillActivation === undefined
+        ? []
+        : options.skillActivation.active().map(workflowSkillFromActivation),
+    );
+    const turnConfig: CompactionConfig = {
+      ...config,
+      systemPrompt: turnSystemPrompt,
+    };
     let turnResult: AgentTurn;
     try {
-      turnResult = yield* streamTurnWithOverflowRecovery(config, state, {
+      turnResult = yield* streamTurnWithOverflowRecovery(turnConfig, state, {
         provider: requestProvider,
-        systemPrompt,
+        systemPrompt: turnSystemPrompt,
         getLedger: () => sessionLedger,
         setLedger: applySessionLedger,
         signal,
@@ -688,11 +694,11 @@ export async function* runAgentTurn(
       let wrapUpTurn: AgentTurn;
       try {
         wrapUpTurn = yield* streamWrapUpSummary({
-          config,
+          config: turnConfig,
           state,
           streamOptions: {
             provider: requestProvider,
-            systemPrompt,
+            systemPrompt: turnSystemPrompt,
             signal,
             allowBash,
             allowSkill,

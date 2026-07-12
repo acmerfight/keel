@@ -3,7 +3,6 @@ import {
   formatExternalSessionForkPoints,
   sessionForkPointsFromStoredMessages,
 } from "./fork-points.ts";
-import { ensureResumedWorkflowSkillMatchesRequest } from "./resumed-workflow-skill.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { resumeSessionStore, SessionStoreError } from "./session-store.ts";
 
@@ -20,12 +19,22 @@ export function runForkPointsCommand(
       workspace: runtime.cwd(),
       runtime,
     });
-    ensureResumedWorkflowSkillMatchesRequest({
-      session,
-      ...(cliArgs.skillNames?.[0] !== undefined
-        ? { requestedSkillName: cliArgs.skillNames[0] }
-        : {}),
-    });
+    for (const requested of cliArgs.skillNames ?? []) {
+      const alreadyActive = session.activeSkillIds.some((id) => {
+        const activation = session.skillActivations.findLast(
+          (candidate) => candidate.descriptorId === id,
+        );
+        return (
+          activation?.name === requested ||
+          activation?.qualifiedName === requested
+        );
+      });
+      if (!alreadyActive) {
+        throw new SessionStoreError(
+          `Error: session "${session.id}" does not have active workflow skill "${requested}"; --fork-points cannot activate skills.`,
+        );
+      }
+    }
     runtime.writeStdout(
       formatExternalSessionForkPoints(
         sessionForkPointsFromStoredMessages({

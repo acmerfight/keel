@@ -1,7 +1,10 @@
 import { writeFileSync } from "node:fs";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { errorMessage } from "../core/error.ts";
-import type { SkillActivationRecord } from "../skills/model.ts";
+import type {
+  ActiveSkillStatus,
+  SkillActivationRecord,
+} from "../skills/model.ts";
 import type { EndEvent } from "./output.ts";
 import type { RunReportContextCompaction } from "./report-events.ts";
 
@@ -14,6 +17,7 @@ interface RunReportInput {
   readonly durationMs: number;
   readonly contextCompactions: readonly RunReportContextCompaction[];
   readonly skillActivations: readonly SkillActivationRecord[];
+  readonly activeSkills: readonly RunReportActiveSkill[];
   readonly skillCatalog: RunReportSkillCatalog;
   readonly goalOutcome?: RunReportGoalOutcome;
 }
@@ -24,6 +28,13 @@ interface RunReportSkillCatalog {
   readonly total: number;
   readonly budgetChars: number;
   readonly usedChars: number;
+}
+
+interface RunReportActiveSkill {
+  readonly name: string;
+  readonly digest: string;
+  readonly trigger: "model_selected" | "user_explicit";
+  readonly diskStatus: "current" | "changed_on_disk" | "missing_on_disk";
 }
 
 export interface RunReportGoalOutcome {
@@ -42,7 +53,7 @@ interface RunReportModelUsage {
 }
 
 interface RunReport {
-  readonly schemaVersion: 6;
+  readonly schemaVersion: 7;
   readonly modelsUsed: readonly {
     readonly provider: string;
     readonly model: string;
@@ -57,6 +68,7 @@ interface RunReport {
   readonly costOvershootUsd: number;
   readonly contextCompactions: readonly RunReportContextCompaction[];
   readonly skillActivations: readonly SkillActivationRecord[];
+  readonly activeSkills: readonly RunReportActiveSkill[];
   readonly skillCatalog: RunReportSkillCatalog;
   readonly goalOutcome?: RunReportGoalOutcome;
 }
@@ -88,7 +100,7 @@ export function assertEndEventHasCost(
 export function writeRunReport(filePath: string, input: RunReportInput): void {
   const cost = input.end.cost;
   const report: RunReport = {
-    schemaVersion: 6,
+    schemaVersion: 7,
     modelsUsed: input.usageByModel.map((entry) => ({
       provider: entry.provider,
       model: entry.model,
@@ -109,6 +121,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     costOvershootUsd: cost.overshootUsd,
     contextCompactions: input.contextCompactions,
     skillActivations: input.skillActivations,
+    activeSkills: input.activeSkills,
     skillCatalog: input.skillCatalog,
     ...(input.goalOutcome !== undefined
       ? { goalOutcome: input.goalOutcome }
@@ -119,4 +132,15 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
   } catch (error) {
     throw new RunReportWriteError(filePath, error);
   }
+}
+
+export function reportActiveSkills(
+  statuses: readonly ActiveSkillStatus[],
+): readonly RunReportActiveSkill[] {
+  return statuses.map(({ activation, diskStatus }) => ({
+    name: activation.qualifiedName,
+    digest: activation.digest,
+    trigger: activation.trigger,
+    diskStatus,
+  }));
 }

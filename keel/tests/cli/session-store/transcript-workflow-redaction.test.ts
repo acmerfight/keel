@@ -13,10 +13,25 @@ import {
 } from "../../../src/cli/session-store.ts";
 import type { Message } from "../../../src/llm/types.ts";
 import type { BashApprovalGrant } from "../../../src/permissions/bash.ts";
+import { skillActivationFromWorkflowSkill } from "../../../src/skills/lifecycle.ts";
+import type { WorkflowSkill } from "../../../src/skills/model.ts";
 import {
   rootGraph,
   runtime,
 } from "../../../src/testing/session-store-fixtures.ts";
+
+function skillState(workflowSkill: WorkflowSkill) {
+  const activation = skillActivationFromWorkflowSkill({
+    skill: workflowSkill,
+    trigger: "user_explicit",
+    args: "",
+    activatedAt: "1970-01-01T00:00:00.000Z",
+  });
+  return {
+    skillActivations: [activation],
+    activeSkillIds: [activation.descriptorId],
+  };
+}
 
 describe("Session Store Transcript Workflow Redaction", () => {
   test(`Given a completed interactive transcript was persisted,
@@ -168,7 +183,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
         sessionId: "skilled",
         workspace,
         runtime: runtime(home),
-        workflowSkill,
+        skillState: skillState(workflowSkill),
       });
 
       // When
@@ -189,18 +204,24 @@ describe("Session Store Transcript Workflow Redaction", () => {
       });
 
       // Then
-      expect(resumed.workflowSkill).toEqual(workflowSkill);
-      expect(forked.workflowSkill).toEqual(workflowSkill);
-      expect(resumedFork.workflowSkill).toEqual(workflowSkill);
+      expect(resumed.skillActivations).toEqual(
+        skillState(workflowSkill).skillActivations,
+      );
+      expect(forked.skillActivations).toEqual(
+        skillState(workflowSkill).skillActivations,
+      );
+      expect(resumedFork.skillActivations).toEqual(
+        skillState(workflowSkill).skillActivations,
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
   });
 
-  test(`Given a workflow skill contains secret-like provider-visible text,
-    When the named session is persisted and resumed,
-    Then the ledger stores redacted workflow skill content at rest`, async () => {
+  test(`Given a workflow Skill snapshot contains secret-like text,
+    When a named session would persist a lossy redacted snapshot,
+    Then creation fails visibly instead of restoring content under a false digest`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
@@ -221,32 +242,16 @@ describe("Session Store Transcript Workflow Redaction", () => {
     };
 
     try {
-      const session = createSessionStore({
-        sessionId: "redacted-skill",
-        workspace,
-        runtime: runtime(home),
-        workflowSkill,
-      });
-
-      // When
-      const ledger = await readFile(session.filePath, "utf8");
-      const resumed = resumeSessionStore({
-        sessionId: "redacted-skill",
-        workspace,
-        runtime: runtime(home, 1),
-      });
-
-      // Then
-      expect(session.workflowSkill?.content).toContain("sk-secret-213");
-      expect(ledger).not.toContain("sk-secret-213");
-      expect(ledger).not.toContain("live-secret-213-token");
-      expect(ledger).toContain("[REDACTED_SECRET]");
-      expect(resumed.workflowSkill?.content).toContain("[REDACTED_SECRET]");
-      expect(resumed.workflowSkill?.resourcePaths).toContain(
-        "references/[REDACTED_SECRET].md",
-      );
-      expect(resumed.workflowSkill?.resourcePaths).toContain(
-        "scripts/[REDACTED_SECRET].ts",
+      // When / Then
+      expect(() =>
+        createSessionStore({
+          sessionId: "redacted-skill",
+          workspace,
+          runtime: runtime(home),
+          skillState: skillState(workflowSkill),
+        }),
+      ).toThrow(
+        'workflow skill "repo:review" cannot be persisted because its snapshot contains secret-like text',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -254,9 +259,9 @@ describe("Session Store Transcript Workflow Redaction", () => {
     }
   });
 
-  test(`Given a workflow skill would make the session header exceed the bounded header reader,
+  test(`Given durable Skill snapshots exceed the bounded session header reader,
     When the named session is created,
-    Then the session store rejects the oversized header before writing it`, async () => {
+    Then the small header remains readable and the activation ledger restores the full snapshot`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
@@ -273,23 +278,25 @@ describe("Session Store Transcript Workflow Redaction", () => {
     };
 
     try {
-      // When / Then
-      expect(() =>
-        createSessionStore({
-          sessionId: "oversized-skill-header",
-          workspace,
-          runtime: runtime(home),
-          workflowSkill,
-        }),
-      ).toThrow(SessionStoreError);
-      expect(() =>
-        createSessionStore({
-          sessionId: "oversized-skill-header",
-          workspace,
-          runtime: runtime(home),
-          workflowSkill,
-        }),
-      ).toThrow("session header is too large");
+      // When
+      const session = createSessionStore({
+        sessionId: "oversized-skill-ledger",
+        workspace,
+        runtime: runtime(home),
+        skillState: skillState(workflowSkill),
+      });
+      const ledger = await readFile(session.filePath, "utf8");
+      const resumed = resumeSessionStore({
+        sessionId: "oversized-skill-ledger",
+        workspace,
+        runtime: runtime(home, 1),
+      });
+
+      // Then
+      expect(ledger.split("\n")[0]?.length).toBeLessThan(64 * 1024);
+      expect(resumed.skillActivations[0]?.contentSnapshot).toHaveLength(
+        70 * 1024,
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -298,7 +305,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
 
   test(`Given a persisted workflow skill resource path escapes the skill resource directories,
     When the session is resumed,
-    Then the session store rejects the invalid header before restoring context`, async () => {
+    Then the session store rejects the invalid lifecycle record before restoring context`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
@@ -312,23 +319,34 @@ describe("Session Store Transcript Workflow Redaction", () => {
       await writeFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 3,
+          schemaVersion: 4,
           type: "session",
           id: session.id,
           createdAt: "1970-01-01T00:00:00.000Z",
           workspace: session.workspace,
           graph: rootGraph(session.id),
-          workflowSkill: {
-            id: "repo:test:review",
-            packageId: "repo:test:review",
-            digest: "digest",
-            qualifiedName: "repo:review",
-            scope: "repo",
-            name: "review",
-            relativePath: ".agents/skills/review/SKILL.md",
-            resourcePaths: ["../secret.md"],
-            content: "Review workflow body.",
-          },
+        })}\n${JSON.stringify({
+          schemaVersion: 4,
+          type: "skill_state",
+          timestamp: "1970-01-01T00:00:00.001Z",
+          messageOrdinal: 0,
+          skillActivations: [
+            {
+              descriptorId: "repo:test:review",
+              packageId: "repo:test:review",
+              digest: "digest",
+              qualifiedName: "repo:review",
+              scope: "repo",
+              name: "review",
+              relativePath: ".agents/skills/review/SKILL.md",
+              resourcePaths: ["../secret.md"],
+              trigger: "user_explicit",
+              args: "",
+              contentSnapshot: "Review workflow body.",
+              activatedAt: "1970-01-01T00:00:00.000Z",
+            },
+          ],
+          activeSkillIds: ["repo:test:review"],
         })}\n`,
         "utf8",
       );
@@ -347,7 +365,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
           workspace,
           runtime: runtime(home, 1),
         }),
-      ).toThrow("line 1 is not a valid session header");
+      ).toThrow("line 2 is not a valid session mutation record");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
