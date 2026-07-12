@@ -46,11 +46,24 @@ interface ModelCommand {
   readonly selection?: ProviderSelection;
 }
 
-interface SkillCommand {
-  readonly kind: "skill";
-  readonly lookup?: string;
-  readonly arguments?: string;
-}
+type SkillCommand =
+  | { readonly kind: "skill"; readonly action: "active" }
+  | {
+      readonly kind: "skill";
+      readonly action: "activate";
+      readonly lookup: string;
+      readonly arguments?: string;
+    }
+  | {
+      readonly kind: "skill";
+      readonly action: "deactivate";
+      readonly lookup: string;
+    }
+  | {
+      readonly kind: "skill";
+      readonly action: "reload";
+      readonly lookup: string;
+    };
 
 interface StatusCommand {
   readonly kind: "status";
@@ -183,9 +196,14 @@ export function formatInteractiveHelp(): string {
     "  /model             Show the active provider/model.",
     "  /model <provider>/<model>",
     "                     Switch the active provider/model for later prompts.",
-    "  /skill             Show active workflow skills.",
+    "  /skills active     Show active workflow skills and disk state.",
+    "  /skill             Alias for /skills active.",
     "  /skill <name|scope:name|scope:root-id:name> [task]",
     "                     Activate a skill, then optionally run a task.",
+    "  /skill deactivate <qualified-id>",
+    "                     Stop applying a skill to future turns.",
+    "  /skill reload <qualified-id>",
+    "                     Explicitly replace a snapshot from disk.",
     "  /status            Show session state and recovery commands.",
     "  /title [text]      Show or set this saved session title.",
     "  /goal [condition]  Show or start a goal with this completion condition.",
@@ -930,14 +948,40 @@ export function parseInteractiveCommand(
   const skillMatch = /^\/skill(?:\s+(.*))?$/u.exec(trimmed);
   if (skillMatch !== null) {
     const extraArgs = skillMatch[1]?.trim();
-    if (extraArgs === undefined || extraArgs === "") return { kind: "skill" };
+    if (extraArgs === undefined || extraArgs === "") {
+      return { kind: "skill", action: "active" };
+    }
+    const lifecycleMatch = /^(deactivate|reload)(?:\s+(.*))?$/u.exec(extraArgs);
+    if (lifecycleMatch !== null) {
+      const action =
+        lifecycleMatch[1] === "deactivate" ? "deactivate" : "reload";
+      const lookup = lifecycleMatch[2]?.trim();
+      if (lookup === undefined || lookup === "" || /\s/u.test(lookup)) {
+        return {
+          kind: "invalid",
+          message: `Error: /skill ${action} requires one workflow skill identity.`,
+        };
+      }
+      return { kind: "skill", action, lookup };
+    }
     const separator = extraArgs.search(/\s/u);
     return separator === -1
-      ? { kind: "skill", lookup: extraArgs }
+      ? { kind: "skill", action: "activate", lookup: extraArgs }
       : {
           kind: "skill",
+          action: "activate",
           lookup: extraArgs.slice(0, separator),
           arguments: extraArgs.slice(separator).trim(),
+        };
+  }
+
+  const skillsMatch = /^\/skills(?:\s+(.*))?$/u.exec(trimmed);
+  if (skillsMatch !== null) {
+    return skillsMatch[1]?.trim() === "active"
+      ? { kind: "skill", action: "active" }
+      : {
+          kind: "invalid",
+          message: "Error: use /skills active to list active workflow skills.",
         };
   }
 

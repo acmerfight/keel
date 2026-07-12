@@ -7,14 +7,14 @@ import type {
 import type { SessionGoal } from "../core/session-goal.ts";
 import type { SessionTask } from "../core/task-progress.ts";
 import type { Message } from "../llm/types.ts";
-import type { WorkflowSkill } from "../skills/model.ts";
+import type { SkillLifecycleState } from "../skills/model.ts";
 
 export function appendSessionRecordLine(
   timestamp: string,
   messages: readonly Message[],
 ): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "append",
     timestamp,
     reason: "turn",
@@ -27,7 +27,7 @@ export function replaceSessionRecordLine(
   messages: readonly Message[],
 ): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "replace",
     timestamp,
     reason: "compaction",
@@ -46,7 +46,7 @@ export function snapshotSessionRecordLine(
   } = {},
 ): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "snapshot",
     timestamp,
     reason: "size_threshold",
@@ -56,6 +56,9 @@ export function snapshotSessionRecordLine(
     ...(options.taskProgressCheckpoints !== undefined
       ? { taskProgressCheckpoints: options.taskProgressCheckpoints }
       : {}),
+    skillStateCheckpoints: [
+      { messageOrdinal: 0, skillActivations: [], activeSkillIds: [] },
+    ],
     ...(title !== undefined ? { title } : {}),
   });
 }
@@ -66,7 +69,7 @@ export function sessionGoalRecordLine(options: {
   readonly consumedInputIds?: readonly string[];
 }): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "session_goal",
     timestamp: options.timestamp,
     goal: options.goal,
@@ -84,7 +87,7 @@ export function sessionTitleRecordLine(
   } = {},
 ): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "session_title",
     timestamp,
     title,
@@ -100,7 +103,7 @@ export function taskProgressRecordLine(options: {
   readonly messageOrdinal?: number;
 }): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "task_progress",
     timestamp: options.timestamp,
     messageOrdinal: options.messageOrdinal ?? 0,
@@ -114,7 +117,7 @@ export function inputAdmittedRecordLine(options: {
   readonly line: string;
 }): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "input_admitted",
     timestamp: options.timestamp,
     id: options.id,
@@ -128,7 +131,7 @@ export function inputConsumedRecordLine(
   inputIds: readonly string[],
 ): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "input_consumed",
     timestamp,
     inputIds,
@@ -288,7 +291,7 @@ export async function writeSessionLedger(options: {
   readonly headerId?: string;
   readonly workspace: string;
   readonly createdAt: string;
-  readonly workflowSkill?: WorkflowSkill;
+  readonly skillState?: SkillLifecycleState;
   readonly parentSessionId?: string;
   readonly graph?:
     | ReturnType<typeof rootGraph>
@@ -304,7 +307,7 @@ export async function writeSessionLedger(options: {
     join(sessionDir, "ledger.jsonl"),
     `${[
       JSON.stringify({
-        schemaVersion: 3,
+        schemaVersion: 4,
         type: "session",
         id: headerId,
         createdAt: options.createdAt,
@@ -314,10 +317,19 @@ export async function writeSessionLedger(options: {
           (options.parentSessionId === undefined
             ? rootGraph(headerId)
             : forkGraph(headerId, options.parentSessionId)),
-        ...(options.workflowSkill !== undefined
-          ? { workflowSkill: options.workflowSkill }
-          : {}),
       }),
+      ...(options.skillState === undefined
+        ? []
+        : [
+            JSON.stringify({
+              schemaVersion: 4,
+              type: "skill_state",
+              timestamp: options.createdAt,
+              messageOrdinal: 0,
+              skillActivations: options.skillState.skillActivations,
+              activeSkillIds: options.skillState.activeSkillIds,
+            }),
+          ]),
       ...(options.records ?? []),
     ].join("\n")}\n`,
     "utf8",

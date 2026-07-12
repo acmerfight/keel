@@ -78,7 +78,7 @@ describe("Session Store Model Switch", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerLines.at(-1)).toEqual({
-        schemaVersion: 3,
+        schemaVersion: 4,
         type: "model_switch",
         timestamp: "1970-01-01T00:00:00.003Z",
         from: null,

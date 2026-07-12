@@ -53,7 +53,7 @@ ${skills.map(skillCatalogEntry).join("\n")}`;
 function workflowSkillSection(skill: WorkflowSkill): string {
   return `
 Workflow skill ${skill.qualifiedName} from ${skill.relativePath}:
-The user directly selected this workflow skill for this run. Follow it unless it conflicts with direct system, developer, or current user request instructions, or with explicit safety boundaries.
+This workflow skill is active for the current session. Follow it unless it conflicts with direct system, developer, or current user request instructions, or with explicit safety boundaries.
 Skill base directory: ${posixDirectoryName(skill.relativePath)}
 Relative paths in this workflow skill resolve from that directory.
 Read advertised resources with skill_resource using this skill's exact qualified name and the relative resource path. Do not use ordinary workspace file tools for resources outside the workspace.
@@ -61,6 +61,14 @@ ${workflowSkillResourceLines(skill)}
 Each workflow skill instruction line is quoted below.
 
 ${quotedInstructionLines(skill.content)}`;
+}
+
+export function appendWorkflowSkillsToSystemPrompt(
+  systemPrompt: string,
+  skills: readonly WorkflowSkill[],
+): string {
+  if (skills.length === 0) return systemPrompt;
+  return `${systemPrompt}${skills.map(workflowSkillSection).join("")}`;
 }
 
 export function buildAgentSystemPrompt(

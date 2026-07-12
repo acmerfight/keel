@@ -18,7 +18,6 @@ import {
   isBinarySample,
 } from "../tools/text-file.ts";
 import type {
-  SkillActivationCapability,
   SkillCatalog,
   SkillCatalogWarning,
   SkillDescriptor,
@@ -586,6 +585,17 @@ export function discoverSkillCatalog(
     warnings,
     load: (lookup) => loadWithWarning(sortedSkills, lookup),
     loadImplicit: (lookup) => loadWithWarning(implicitSkills, lookup),
+    loadPackage: (packageId) => {
+      const descriptor = sortedSkills.find(
+        (skill) => skill.packageId === packageId,
+      );
+      if (descriptor === undefined) return undefined;
+      const root = rootsById.get(descriptor.id);
+      /* v8 ignore next -- descriptors and roots are populated atomically above. */
+      if (root === undefined) return undefined;
+      const current = readSkillFile(root, descriptor.name, true);
+      return { ...current.skill, qualifiedName: descriptor.qualifiedName };
+    },
     search: (query, limit = 20) =>
       implicitSkills
         .map((skill) => ({ skill, score: searchScore(skill, query.trim()) }))
@@ -629,68 +639,44 @@ export function discoverSkillCatalog(
       );
       return decodeSkillBytes(resourcePath, readSkillBytes(resourcePath));
     },
-  };
-}
-
-export function createSkillActivation(
-  catalog: SkillCatalog,
-): SkillActivationCapability {
-  let activatedName: string | null = null;
-  const selectableIds = new Set<string>();
-  const activeIds = new Set<string>();
-  const activePackageIds = new Set<string>();
-  return {
-    expose: (skills) => {
-      for (const skill of skills) selectableIds.add(skill.id);
-    },
-    registerExplicit: (skills) => {
-      for (const skill of skills) {
-        activeIds.add(skill.id);
-        activePackageIds.add(skill.packageId);
-      }
-    },
-    search: (query) => {
-      const matches = catalog.search(query);
-      for (const skill of matches) selectableIds.add(skill.id);
-      return matches;
-    },
-    readResource: (lookup, path) => {
-      const skill = catalog.load(lookup);
-      if (!activeIds.has(skill.id)) {
+    readPackageResource: (packageId, digest, path) => {
+      if (!isWorkflowSkillResourcePath(path)) {
         throw new WorkflowSkillError(
-          `Error: workflow skill ${JSON.stringify(skill.qualifiedName)} must be active before reading its resources.`,
+          "Error: skill resource paths must stay under references/, scripts/, or assets/.",
         );
       }
-      return catalog.readResource(skill.qualifiedName, path);
-    },
-    activate: (name) => {
-      if (activatedName !== null) {
+      const descriptor = sortedSkills.find(
+        (skill) => skill.packageId === packageId,
+      );
+      if (descriptor === undefined) {
         throw new WorkflowSkillError(
-          `Error: workflow skill ${JSON.stringify(activatedName)} is already active; this run supports one model-selected skill.`,
+          `Error: active workflow skill package ${JSON.stringify(packageId)} is no longer available.`,
         );
       }
-      const skill = catalog.loadImplicit(name);
-      if (activePackageIds.has(skill.packageId)) {
+      const root = rootsById.get(descriptor.id);
+      /* v8 ignore next 4 -- descriptors and roots are populated atomically above. */
+      if (root === undefined) {
         throw new WorkflowSkillError(
-          `Error: workflow skill ${JSON.stringify(skill.qualifiedName)} is already active; do not activate the same package twice.`,
+          `Error: active workflow skill package ${JSON.stringify(packageId)} is no longer available.`,
         );
       }
-      if (!selectableIds.has(skill.id)) {
+      const current = readSkillFile(root, descriptor.name, true);
+      if (current.skill.digest !== digest) {
         throw new WorkflowSkillError(
-          `Error: workflow skill ${JSON.stringify(skill.qualifiedName)} is not in the exposed catalog or recent search results; search for it before activation.`,
+          `Error: workflow skill ${JSON.stringify(descriptor.qualifiedName)} changed on disk; reload it before reading resources.`,
         );
       }
-      activatedName = skill.qualifiedName;
-      activeIds.add(skill.id);
-      activePackageIds.add(skill.packageId);
-      return {
-        skill,
-        record: {
-          name: skill.qualifiedName,
-          relativePath: skill.relativePath,
-          trigger: "model_selected",
-        },
-      };
+      if (!current.skill.resourcePaths.includes(path)) {
+        throw new WorkflowSkillError(
+          `Error: resource ${JSON.stringify(path)} was not discovered for workflow skill ${JSON.stringify(descriptor.qualifiedName)}.`,
+        );
+      }
+      const resourcePath = join(root.rootPath, descriptor.name, path);
+      ensureRealPathInsideRoot(
+        join(root.rootPath, descriptor.name),
+        resourcePath,
+      );
+      return decodeSkillBytes(resourcePath, readSkillBytes(resourcePath));
     },
   };
 }

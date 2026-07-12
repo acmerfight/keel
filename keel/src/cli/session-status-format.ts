@@ -29,7 +29,7 @@ export interface SessionStatusSnapshotOptions {
   readonly workspace: string;
   readonly activeModel: string;
   readonly goal?: SessionGoal;
-  readonly workflowSkill?: SessionStatusWorkflowSkill;
+  readonly workflowSkills?: readonly SessionStatusWorkflowSkill[];
   readonly skillCatalog?: {
     readonly exposed: number;
     readonly omitted: number;
@@ -109,13 +109,18 @@ function latestCheckpointSummary(messages: readonly Message[]): string | null {
   return null;
 }
 
-function formatWorkflowSkill(
-  workflowSkill: SessionStatusWorkflowSkill | undefined,
+function formatWorkflowSkills(
+  workflowSkills: readonly SessionStatusWorkflowSkill[] | undefined,
 ): string {
-  if (workflowSkill === undefined) {
+  if (workflowSkills === undefined || workflowSkills.length === 0) {
     return "none";
   }
-  return `${formatStatusText(workflowSkill.qualifiedName)} (${formatStatusText(workflowSkill.relativePath)})`;
+  return workflowSkills
+    .map(
+      (skill) =>
+        `${formatStatusText(skill.qualifiedName)} (${formatStatusText(skill.relativePath)})`,
+    )
+    .join(", ");
 }
 
 function formatUndoCheckpointStatus(
@@ -143,7 +148,7 @@ export function formatSessionStatusSnapshot(
     ...formatStatusGoalLines(options.goal),
     `  workspace: ${formatStatusText(options.workspace)}`,
     `  active model: ${formatStatusText(options.activeModel)}`,
-    `  workflow skill: ${formatWorkflowSkill(options.workflowSkill)}`,
+    `  workflow skills: ${formatWorkflowSkills(options.workflowSkills)}`,
     `  skill catalog: ${
       options.skillCatalog === undefined
         ? "not available"

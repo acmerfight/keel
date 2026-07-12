@@ -242,8 +242,6 @@ describe("tool registry", () => {
         allowBash: false,
         toolCall: call,
         skillActivation: {
-          expose: () => {},
-          registerExplicit: () => {},
           search: () => [],
           readResource: () => "",
           activate: () => {
@@ -279,8 +277,6 @@ describe("tool registry", () => {
       allowBash: false,
     } as const;
     const capability = {
-      expose: () => {},
-      registerExplicit: () => {},
       search: () => [],
       readResource: () => "RESOURCE-OK",
       activate: () => {

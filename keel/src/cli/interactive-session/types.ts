@@ -18,6 +18,7 @@ import type {
   SkillActivationCapability,
   SkillActivationRecord,
   SkillDescriptor,
+  SkillLifecycleState,
   WorkflowSkill,
 } from "../../skills/model.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
@@ -83,6 +84,7 @@ export interface InteractiveSessionOptions {
   readonly workflowSkills?: readonly WorkflowSkill[];
   readonly skillCatalog?: readonly SkillDescriptor[];
   readonly skillActivation?: SkillActivationCapability;
+  readonly initialSkillActivationRecords?: readonly SkillActivationRecord[];
   readonly activateExplicitSkill?: (lookup: string) => WorkflowSkill;
   readonly initialSessionTitle?: string;
   readonly initialSessionGoal?: SessionGoal;
@@ -113,6 +115,7 @@ export interface InteractiveSessionOptions {
     messages: readonly Message[],
     reason: SessionPersistenceReason,
     consumedInputIds: readonly string[],
+    skillState?: SkillLifecycleState,
   ) => void;
   readonly persistSessionTitle?: (titleRecord: {
     readonly title: string;
@@ -131,6 +134,7 @@ export interface InteractiveSessionOptions {
     readonly to: SessionModelSelection;
     readonly consumedInputIds: readonly string[];
   }) => void;
+  readonly persistSkillState?: (state: SkillLifecycleState) => void;
   readonly forkSession?: (request: InteractiveForkSessionRequest) => string;
   readonly listForkPoints?: () => SessionForkPoints;
   readonly persistBashApprovalGrant?: (grant: BashApprovalGrant) => void;

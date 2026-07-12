@@ -16,6 +16,14 @@ import {
   type BashApprovalGrant,
   bashApprovalGrantKey,
 } from "../../permissions/bash.ts";
+import {
+  copySkillActivation,
+  copySkillLifecycleState,
+} from "../../skills/lifecycle.ts";
+import type {
+  SkillActivation,
+  SkillLifecycleState,
+} from "../../skills/model.ts";
 import { sessionStoreError } from "./errors.ts";
 import {
   endForkPoint,
@@ -37,18 +45,18 @@ import {
   type SessionPersistenceReason,
   type SessionQueuedInput,
   type SessionRecords,
+  type SessionSkillStateCheckpoint,
   type SessionState,
   type SessionStoreRuntime,
   type SessionTaskProgressCheckpoint,
+  type SkillStateSessionRecord,
   type StoredMessage,
-  type WorkflowSkill,
 } from "./model.ts";
 import { sessionFilePath } from "./paths.ts";
 import {
   bashApprovalGrantHasRedactionMarker,
   copyBashApprovalGrant,
   copyStoredMessage,
-  copyWorkflowSkill,
   messagesFromStoredMessages,
   normalizeSessionTitleForPersistence,
   parseProviderVisibleMessages,
@@ -56,19 +64,21 @@ import {
   redactSessionGoalForPersistence,
   redactSessionQueuedInputForPersistence,
   redactSessionTaskProgressForPersistence,
+  redactSkillActivationForPersistence,
   redactStoredMessageForPersistence,
-  redactWorkflowSkillForPersistence,
   validateCompletedTranscript,
 } from "./records.ts";
 import { isoTimestamp } from "./runtime.ts";
 import {
   appendReplayModelSwitch,
+  appendReplaySkillState,
   appendSessionSnapshotIfNeeded,
   consumeReplayInputs,
   copySessionModelSelection,
   hasMessagePrefix,
   messageArraysEqual,
   rebaseReplayModelSwitchesAfterReplace,
+  rebaseReplaySkillStateAfterReplace,
   rebaseReplayTaskProgressAfterReplace,
   replaceReplayMessages,
   replaceReplayTaskProgress,
@@ -83,7 +93,7 @@ export function createSessionStore(options: {
   readonly sessionId: string;
   readonly workspace: string;
   readonly runtime: SessionStoreRuntime;
-  readonly workflowSkill?: WorkflowSkill;
+  readonly skillState?: SkillLifecycleState;
 }): SessionState {
   return createEmptySessionStore(options);
 }
@@ -93,26 +103,45 @@ function createEmptySessionStore(options: {
   readonly workspace: string;
   readonly runtime: SessionStoreRuntime;
   readonly graph?: SessionGraphRecord;
-  readonly workflowSkill?: WorkflowSkill;
+  readonly skillState?: SkillLifecycleState;
 }): SessionState {
   const workspace = realpathSync(options.workspace);
   const filePath = sessionFilePath(options.runtime, options.sessionId);
   const graph = options.graph ?? rootSessionGraph(options.sessionId);
-  writeInitialHeader(filePath, {
-    schemaVersion: SESSION_SCHEMA_VERSION,
-    type: "session",
-    id: options.sessionId,
-    createdAt: isoTimestamp(options.runtime),
-    workspace,
-    graph,
-    ...(options.workflowSkill !== undefined
+  const skillState = copySkillLifecycleState(
+    options.skillState ?? { skillActivations: [], activeSkillIds: [] },
+  );
+  const persistedSkillState = {
+    skillActivations: skillState.skillActivations.map(
+      redactSkillActivationForPersistence,
+    ),
+    activeSkillIds: [...skillState.activeSkillIds],
+  };
+  const createdAt = isoTimestamp(options.runtime);
+  const initialSkillRecord: SkillStateSessionRecord | undefined =
+    skillState.skillActivations.length > 0 ||
+    skillState.activeSkillIds.length > 0
       ? {
-          workflowSkill: redactWorkflowSkillForPersistence(
-            options.workflowSkill,
-          ),
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          type: "skill_state" as const,
+          timestamp: isoTimestamp(options.runtime),
+          messageOrdinal: 0,
+          skillActivations: persistedSkillState.skillActivations,
+          activeSkillIds: persistedSkillState.activeSkillIds,
         }
-      : {}),
-  });
+      : undefined;
+  writeInitialHeader(
+    filePath,
+    {
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      type: "session",
+      id: options.sessionId,
+      createdAt,
+      workspace,
+      graph,
+    },
+    initialSkillRecord === undefined ? [] : [initialSkillRecord],
+  );
   return sessionStateFromReplay({
     id: options.sessionId,
     filePath,
@@ -122,9 +151,15 @@ function createEmptySessionStore(options: {
     pendingInputsById: new Map(),
     bashApprovalGrants: [],
     taskProgress: emptySessionTaskProgress(),
-    ...(options.workflowSkill !== undefined
-      ? { workflowSkill: copyWorkflowSkill(options.workflowSkill) }
-      : {}),
+    skillActivations: skillState.skillActivations,
+    activeSkillIds: skillState.activeSkillIds,
+    skillStateCheckpoints: [
+      {
+        messageOrdinal: 0,
+        skillActivations: skillState.skillActivations,
+        activeSkillIds: skillState.activeSkillIds,
+      },
+    ],
   });
 }
 
@@ -197,6 +232,23 @@ function taskProgressForForkPoint(options: {
   return copySessionTaskProgress(taskProgress);
 }
 
+function skillStateForForkPoint(options: {
+  readonly source: SessionState;
+  readonly forkedMessageCount: number;
+}): SkillLifecycleState {
+  let state: SkillLifecycleState = {
+    skillActivations: [],
+    activeSkillIds: [],
+  };
+  for (const checkpoint of replayStateForSession(options.source)
+    .skillStateCheckpoints) {
+    if (checkpoint.messageOrdinal <= options.forkedMessageCount) {
+      state = checkpoint;
+    }
+  }
+  return copySkillLifecycleState(state);
+}
+
 export function forkSessionStore(options: {
   readonly source: SessionState;
   readonly targetSessionId: string;
@@ -250,14 +302,16 @@ export function forkSessionStore(options: {
   )
     ? []
     : [{ messageOrdinal: 0, taskProgress }];
+  const skillState = skillStateForForkPoint({
+    source: options.source,
+    forkedMessageCount: storedMessages.length,
+  });
   const session = createEmptySessionStore({
     sessionId: options.targetSessionId,
     workspace: options.source.workspace,
     runtime: options.runtime,
     graph,
-    ...(options.source.workflowSkill !== undefined
-      ? { workflowSkill: copyWorkflowSkill(options.source.workflowSkill) }
-      : {}),
+    skillState,
   });
   const forkedSession = sessionStateFromReplay({
     id: options.targetSessionId,
@@ -273,9 +327,15 @@ export function forkSessionStore(options: {
     modelSwitches,
     taskProgress,
     taskProgressCheckpoints,
-    ...(options.source.workflowSkill !== undefined
-      ? { workflowSkill: copyWorkflowSkill(options.source.workflowSkill) }
-      : {}),
+    skillActivations: skillState.skillActivations,
+    activeSkillIds: skillState.activeSkillIds,
+    skillStateCheckpoints: [
+      {
+        messageOrdinal: 0,
+        skillActivations: skillState.skillActivations,
+        activeSkillIds: skillState.activeSkillIds,
+      },
+    ],
   });
   if (activeModel !== undefined) {
     appendJsonLine(session.filePath, {
@@ -348,6 +408,15 @@ export function resumeSessionStore(options: {
   let taskProgressCheckpoints: SessionTaskProgressCheckpoint[] = [];
   let title: string | undefined;
   let goal: SessionGoal | undefined;
+  let skillActivations: SkillActivation[] = [];
+  let activeSkillIds: string[] = [];
+  let skillStateCheckpoints: SessionSkillStateCheckpoint[] = [
+    {
+      messageOrdinal: 0,
+      skillActivations: [],
+      activeSkillIds: [],
+    },
+  ];
   for (const record of records.mutations) {
     switch (record.type) {
       case "append":
@@ -355,10 +424,28 @@ export function resumeSessionStore(options: {
           ...storedMessages,
           ...record.messages.map(copyStoredMessage),
         ];
+        if (record.skillState !== undefined) {
+          skillActivations =
+            record.skillState.skillActivations.map(copySkillActivation);
+          activeSkillIds = [...record.skillState.activeSkillIds];
+          skillStateCheckpoints = [
+            ...skillStateCheckpoints,
+            {
+              messageOrdinal: storedMessages.length,
+              skillActivations: skillActivations.map(copySkillActivation),
+              activeSkillIds: [...activeSkillIds],
+            },
+          ];
+        }
         consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         break;
       case "replace":
         storedMessages = record.messages.map(copyStoredMessage);
+        if (record.skillState !== undefined) {
+          skillActivations =
+            record.skillState.skillActivations.map(copySkillActivation);
+          activeSkillIds = [...record.skillState.activeSkillIds];
+        }
         consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         modelSwitches =
           activeModel === undefined
@@ -377,6 +464,13 @@ export function resumeSessionStore(options: {
         )
           ? []
           : [{ messageOrdinal: 0, taskProgress }];
+        skillStateCheckpoints = [
+          {
+            messageOrdinal: 0,
+            skillActivations: skillActivations.map(copySkillActivation),
+            activeSkillIds: [...activeSkillIds],
+          },
+        ];
         break;
       case "model_switch":
         activeModel = copySessionModelSelection(record.to);
@@ -449,6 +543,19 @@ export function resumeSessionStore(options: {
         bashApprovalGrants = [];
         consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         break;
+      case "skill_state":
+        skillActivations = record.skillActivations.map(copySkillActivation);
+        activeSkillIds = [...record.activeSkillIds];
+        skillStateCheckpoints = [
+          ...skillStateCheckpoints,
+          {
+            messageOrdinal: record.messageOrdinal,
+            skillActivations: skillActivations.map(copySkillActivation),
+            activeSkillIds: [...activeSkillIds],
+          },
+        ];
+        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
+        break;
       case "snapshot": {
         title = record.title;
         goal =
@@ -502,6 +609,24 @@ export function resumeSessionStore(options: {
         taskProgress =
           taskProgressCheckpoints.at(-1)?.taskProgress ??
           emptySessionTaskProgress();
+        skillStateCheckpoints = record.skillStateCheckpoints.map(
+          (checkpoint) => ({
+            messageOrdinal: checkpoint.messageOrdinal,
+            skillActivations:
+              checkpoint.skillActivations.map(copySkillActivation),
+            activeSkillIds: [...checkpoint.activeSkillIds],
+          }),
+        );
+        const snapshotSkillState = skillStateCheckpoints.at(-1);
+        /* v8 ignore next 3 -- the snapshot schema requires at least one lifecycle checkpoint. */
+        if (snapshotSkillState === undefined) {
+          sessionStoreError(
+            "Error: session snapshot has no skill lifecycle state.",
+          );
+        }
+        skillActivations =
+          snapshotSkillState.skillActivations.map(copySkillActivation);
+        activeSkillIds = [...snapshotSkillState.activeSkillIds];
         break;
       }
     }
@@ -525,9 +650,9 @@ export function resumeSessionStore(options: {
       ? { activeModel: copySessionModelSelection(activeModel) }
       : {}),
     modelSwitches,
-    ...(header.workflowSkill !== undefined
-      ? { workflowSkill: copyWorkflowSkill(header.workflowSkill) }
-      : {}),
+    skillActivations,
+    activeSkillIds,
+    skillStateCheckpoints,
   });
 }
 
@@ -653,6 +778,7 @@ export function persistSessionMessages(options: {
   readonly currentMessages: readonly Message[];
   readonly runtime: SessionStoreRuntime;
   readonly reason: SessionPersistenceReason;
+  readonly skillState?: SkillLifecycleState;
   readonly consumedInputIds?: readonly string[];
 }): readonly Message[] {
   const currentMessages = parseProviderVisibleMessages(
@@ -667,6 +793,15 @@ export function persistSessionMessages(options: {
     messages: currentMessages,
     previousStoredMessages: replayState.storedMessages,
   });
+  const persistedSkillState =
+    options.skillState === undefined
+      ? undefined
+      : {
+          skillActivations: options.skillState.skillActivations.map(
+            redactSkillActivationForPersistence,
+          ),
+          activeSkillIds: [...options.skillState.activeSkillIds],
+        };
 
   if (messageArraysEqual(currentMessages, options.previousMessages)) {
     replaceReplayMessages(replayState, currentStoredMessages);
@@ -697,11 +832,17 @@ export function persistSessionMessages(options: {
           timestamp: isoTimestamp(options.runtime),
           reason: "turn",
           messages,
+          ...(persistedSkillState !== undefined
+            ? { skillState: persistedSkillState }
+            : {}),
         },
         consumedInputIds,
       ),
     );
     replaceReplayMessages(replayState, currentStoredMessages);
+    if (persistedSkillState !== undefined) {
+      appendReplaySkillState(replayState, persistedSkillState);
+    }
     consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
     appendSessionSnapshotIfNeeded({
       session: options.session,
@@ -720,12 +861,16 @@ export function persistSessionMessages(options: {
         timestamp,
         reason: options.reason,
         messages: currentStoredMessages.map(copyStoredMessage),
+        ...(persistedSkillState !== undefined
+          ? { skillState: persistedSkillState }
+          : {}),
       },
       consumedInputIds,
     ),
   );
   replaceReplayMessages(replayState, currentStoredMessages);
   rebaseReplayModelSwitchesAfterReplace(replayState, timestamp);
+  rebaseReplaySkillStateAfterReplace(replayState, persistedSkillState);
   rebaseReplayTaskProgressAfterReplace(replayState);
   consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
   appendSessionSnapshotIfNeeded({
@@ -767,6 +912,39 @@ export function persistSessionModelSwitch(options: {
     to: options.to,
   });
   consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+}
+
+export function persistSessionSkillState(options: {
+  readonly session: SessionState;
+  readonly state: SkillLifecycleState;
+  readonly runtime: SessionStoreRuntime;
+  readonly consumedInputIds?: readonly string[];
+}): void {
+  const replayState = replayStateForSession(options.session);
+  const checkpoint: SessionSkillStateCheckpoint = {
+    messageOrdinal: replayState.storedMessages.length,
+    skillActivations: options.state.skillActivations.map(copySkillActivation),
+    activeSkillIds: [...options.state.activeSkillIds],
+  };
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "skill_state",
+    timestamp: isoTimestamp(options.runtime),
+    messageOrdinal: checkpoint.messageOrdinal,
+    skillActivations: checkpoint.skillActivations.map(
+      redactSkillActivationForPersistence,
+    ),
+    activeSkillIds: [...checkpoint.activeSkillIds],
+    ...(options.consumedInputIds === undefined
+      ? {}
+      : { consumedInputIds: uniqueInputIds(options.consumedInputIds) }),
+  });
+  replayState.skillStateCheckpoints.push(checkpoint);
+  consumeReplayInputs(replayState.pendingInputsById, options.consumedInputIds);
   appendSessionSnapshotIfNeeded({
     session: options.session,
     runtime: options.runtime,

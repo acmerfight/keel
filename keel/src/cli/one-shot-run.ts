@@ -1,6 +1,9 @@
 import { createInterface } from "node:readline/promises";
 import { runAgent } from "../agent/loop.ts";
-import { buildAgentSystemPrompt } from "../agent/prompt.ts";
+import {
+  appendWorkflowSkillsToSystemPrompt,
+  buildAgentSystemPrompt,
+} from "../agent/prompt.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { isAbortThrow } from "../core/error.ts";
 import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
@@ -17,8 +20,11 @@ import {
   formatSkillCatalogDegradation,
 } from "../skills/catalog.ts";
 import { parseExplicitSkillInvocation } from "../skills/explicit.ts";
+import {
+  createSkillActivation,
+  workflowSkillFromActivation,
+} from "../skills/lifecycle.ts";
 import { explicitSkillActivationRecord } from "../skills/model.ts";
-import { createSkillActivation } from "../skills/project.ts";
 import type { CliArgs } from "./args.ts";
 import {
   BashProjectApprovalsError,
@@ -38,7 +44,11 @@ import {
   requireKnownCostModel,
   resolveProvider,
 } from "./provider-config.ts";
-import { assertEndEventHasCost, writeRunReport } from "./report.ts";
+import {
+  assertEndEventHasCost,
+  reportActiveSkills,
+  writeRunReport,
+} from "./report.ts";
 import { createAgentEventReportRecorder } from "./report-events.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { formatCliRuntimeError } from "./runtime-error.ts";
@@ -149,7 +159,12 @@ export async function runOneShotCli(
       ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
     });
     const catalogExposure = exposeSkillCatalog({
-      skills: workflowSkills.length === 0 ? catalog.implicitSkills : [],
+      skills: catalog.implicitSkills.filter(
+        (descriptor) =>
+          !workflowSkills.some(
+            (active) => active.packageId === descriptor.packageId,
+          ),
+      ),
       request: userMessage,
       modelMetadata: resolved.modelMetadata,
     });
@@ -158,6 +173,7 @@ export async function runOneShotCli(
       catalog.skills.length > 0 ? createSkillActivation(catalog) : undefined;
     skillActivation?.expose(catalogExposure.skills);
     skillActivation?.registerExplicit(workflowSkills);
+    skillActivation?.beginTurn();
     runtime.onSigint(abort);
 
     const startedAt = runtime.now();
@@ -178,7 +194,6 @@ export async function runOneShotCli(
       workspace,
       platform: runtime.platform,
       ...(projectInstructions !== undefined ? { projectInstructions } : {}),
-      ...(workflowSkills.length > 0 ? { workflowSkills } : {}),
       ...(catalogExposure.skills.length > 0
         ? { skillCatalog: catalogExposure.skills }
         : {}),
@@ -250,6 +265,9 @@ export async function runOneShotCli(
           ...workflowSkills.map(explicitSkillActivationRecord),
           ...reportRecorder.skillActivations(),
         ],
+        activeSkills: reportActiveSkills(
+          skillActivation?.activeStatuses() ?? [],
+        ),
         skillCatalog: {
           exposed: catalogExposure.skills.length,
           omitted: catalogExposure.omitted,
@@ -266,7 +284,10 @@ export async function runOneShotCli(
       writeRunTranscript(cliArgs.transcriptFile, {
         provider: resolved.provider.id,
         model: resolved.model,
-        systemPrompt,
+        systemPrompt: appendWorkflowSkillsToSystemPrompt(
+          systemPrompt,
+          skillActivation?.active().map(workflowSkillFromActivation) ?? [],
+        ),
         messages: transcriptMessages,
       });
     }

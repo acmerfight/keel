@@ -45,17 +45,59 @@ export interface SkillCatalog {
   readonly warnings: readonly SkillCatalogWarning[];
   readonly load: (lookup: string) => WorkflowSkill;
   readonly loadImplicit: (lookup: string) => WorkflowSkill;
+  readonly loadPackage: (packageId: string) => WorkflowSkill | undefined;
   readonly search: (
     query: string,
     limit?: number,
   ) => readonly SkillDescriptor[];
   readonly readResource: (lookup: string, path: string) => string;
+  readonly readPackageResource: (
+    packageId: string,
+    digest: string,
+    path: string,
+  ) => string;
 }
 
 export interface SkillActivationRecord {
   readonly name: string;
   readonly relativePath: string;
   readonly trigger: "model_selected" | "user_explicit";
+}
+
+type SkillActivationTrigger = "model_selected" | "user_explicit";
+
+export interface SkillActivation {
+  readonly descriptorId: string;
+  readonly packageId: string;
+  readonly qualifiedName: string;
+  readonly scope: SkillScope;
+  readonly name: string;
+  readonly relativePath: string;
+  readonly resourcePaths: readonly string[];
+  readonly digest: string;
+  readonly trigger: SkillActivationTrigger;
+  readonly args: string;
+  readonly contentSnapshot: string;
+  readonly activatedAt: string;
+}
+
+export interface SkillLifecycleState {
+  readonly skillActivations: readonly SkillActivation[];
+  readonly activeSkillIds: readonly string[];
+}
+
+type ActiveSkillDiskStatus = "current" | "changed_on_disk" | "missing_on_disk";
+
+export interface ActiveSkillStatus {
+  readonly activation: SkillActivation;
+  readonly diskStatus: ActiveSkillDiskStatus;
+}
+
+export interface SkillActivationResult {
+  readonly activation: SkillActivation;
+  readonly skill: WorkflowSkill;
+  readonly newlyActivated: boolean;
+  readonly record?: SkillActivationRecord;
 }
 
 export function explicitSkillActivationRecord(
@@ -69,12 +111,22 @@ export function explicitSkillActivationRecord(
 }
 
 export interface SkillActivationCapability {
+  readonly beginTurn: () => void;
   readonly expose: (skills: readonly SkillDescriptor[]) => void;
-  readonly registerExplicit: (skills: readonly WorkflowSkill[]) => void;
+  readonly registerExplicit: (
+    skills: readonly WorkflowSkill[],
+  ) => readonly SkillActivation[];
+  readonly activateExplicit: (
+    skill: WorkflowSkill,
+    args: string,
+  ) => SkillActivationResult;
   readonly search: (query: string) => readonly SkillDescriptor[];
   readonly readResource: (lookup: string, path: string) => string;
-  readonly activate: (name: string) => {
-    readonly skill: WorkflowSkill;
-    readonly record: SkillActivationRecord;
-  };
+  readonly activate: (name: string) => SkillActivationResult;
+  readonly deactivate: (lookup: string) => SkillActivation;
+  readonly reload: (lookup: string) => SkillActivationResult;
+  readonly active: () => readonly SkillActivation[];
+  readonly activeStatuses: () => readonly ActiveSkillStatus[];
+  readonly state: () => SkillLifecycleState;
+  readonly restore: (state: SkillLifecycleState) => void;
 }

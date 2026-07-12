@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
+import { skillActivationFromWorkflowSkill } from "../../../src/skills/lifecycle.ts";
+import type { WorkflowSkill } from "../../../src/skills/model.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   appendSessionRecordLine,
@@ -19,9 +21,22 @@ import {
   writeSessionLedger,
 } from "../../../src/testing/session-ledger-fixtures.ts";
 
+function skillState(workflowSkill: WorkflowSkill) {
+  const activation = skillActivationFromWorkflowSkill({
+    skill: workflowSkill,
+    trigger: "user_explicit",
+    args: "",
+    activatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  return {
+    skillActivations: [activation],
+    activeSkillIds: [activation.descriptorId],
+  };
+}
+
 function modelSwitchRecordLine(timestamp: string): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "model_switch",
     timestamp,
     from: null,
@@ -31,7 +46,7 @@ function modelSwitchRecordLine(timestamp: string): string {
 
 function bashApprovalGrantedRecordLine(timestamp: string, cwd: string): string {
   return JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     type: "bash_approval_granted",
     timestamp,
     grant: {
@@ -614,7 +629,7 @@ describe("CLI Main - Sessions Command", () => {
         sourceLastMessageId: "source-last-message",
         sourceOrdinal: 7,
       }),
-      workflowSkill: {
+      skillState: skillState({
         id: "repo:test:review",
         packageId: "repo:test:review",
         digest: "digest",
@@ -624,7 +639,7 @@ describe("CLI Main - Sessions Command", () => {
         relativePath: ".agents/skills/review/SKILL.md",
         resourcePaths: ["references/checklist.md"],
         content: "Do not print this workflow body.",
-      },
+      }),
       records: [
         appendSessionRecordLine("2026-02-01T00:00:01.000Z", [
           {
@@ -722,7 +737,7 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain(`  workspace: ${ledgerWorkspace}\n`);
       expect(stdout).toContain("  active model: qwen/qwen3.7-max\n");
       expect(stdout).toContain(
-        "  workflow skill: repo:review (.agents/skills/review/SKILL.md)\n",
+        "  workflow skills: repo:review (.agents/skills/review/SKILL.md)\n",
       );
       expect(stdout).toContain("  messages: 4\n");
       expect(stdout).toContain("  pending inputs: 1\n");
@@ -906,7 +921,7 @@ describe("CLI Main - Sessions Command", () => {
       }),
       records: [
         JSON.stringify({
-          schemaVersion: 3,
+          schemaVersion: 4,
           type: "append",
           timestamp: "2026-02-05T00:00:01.000Z",
           reason: "turn",
@@ -944,7 +959,7 @@ describe("CLI Main - Sessions Command", () => {
           ],
         }),
         JSON.stringify({
-          schemaVersion: 3,
+          schemaVersion: 4,
           type: "model_switch",
           timestamp: "2026-02-05T00:00:02.000Z",
           from: null,
@@ -1678,7 +1693,7 @@ describe("CLI Main - Sessions Command", () => {
       id: "skilled",
       workspace: ledgerWorkspace,
       createdAt: "2026-01-01T00:00:00.000Z",
-      workflowSkill,
+      skillState: skillState(workflowSkill),
       records: [
         appendSessionRecordLine("2026-01-01T00:00:01.000Z", [
           { role: "user", content: "review PR" },
@@ -1690,7 +1705,7 @@ describe("CLI Main - Sessions Command", () => {
       id: "skilled-fork",
       workspace: ledgerWorkspace,
       createdAt: "2026-01-01T00:00:02.000Z",
-      workflowSkill,
+      skillState: skillState(workflowSkill),
       graph: endForkGraph({
         sessionId: "skilled-fork",
         parentSessionId: "skilled",

@@ -10,7 +10,16 @@ import type {
   BashApprovalGrant,
   SessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
-import { createSkillActivation } from "../skills/project.ts";
+import {
+  createSkillActivation,
+  skillLifecycleStatesEqual,
+  workflowSkillFromActivation,
+} from "../skills/lifecycle.ts";
+import type {
+  SkillActivationCapability,
+  SkillActivationRecord,
+  SkillLifecycleState,
+} from "../skills/model.ts";
 import type { CliArgs } from "./args.ts";
 import { USAGE } from "./args.ts";
 import {
@@ -41,9 +50,12 @@ import {
   requireKnownCostModel,
   resolveInteractiveProvider,
 } from "./provider-config.ts";
-import { type RunReportGoalOutcome, writeRunReport } from "./report.ts";
+import {
+  type RunReportGoalOutcome,
+  reportActiveSkills,
+  writeRunReport,
+} from "./report.ts";
 import { createAgentEventReportRecorder } from "./report-events.ts";
-import { resolveResumedWorkflowSkill } from "./resumed-workflow-skill.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { formatCliRuntimeError } from "./runtime-error.ts";
 import {
@@ -71,6 +83,7 @@ import {
   persistSessionMessages,
   persistSessionModelSwitch,
   persistSessionQueuedInput,
+  persistSessionSkillState,
   persistSessionTaskProgress,
   persistSessionTitle,
   resumeSessionStore,
@@ -555,11 +568,10 @@ async function runSessionCli(
       let headlessGoalBashPermission =
         mode.kind === "headless-goal" ? mode.bashPermission : undefined;
       let headlessPreparedSessionGoal: SessionGoal | undefined;
-      let workflowSkills =
-        (sessionStart.kind === "create" || sessionStart.kind === "ephemeral") &&
-        cliArgs.skillNames !== undefined
-          ? loadWorkflowSkills(runtime, workspace, cliArgs.skillNames)
-          : [];
+      const requestedWorkflowSkills =
+        cliArgs.skillNames === undefined
+          ? []
+          : loadWorkflowSkills(runtime, workspace, cliArgs.skillNames);
       if (sessionStart.kind === "create") {
         activeSessionId = sessionStart.sessionId;
         ensureSessionCanBeCreated({
@@ -579,13 +591,6 @@ async function runSessionCli(
           workspace,
           runtime,
         });
-        const resumedWorkflowSkill = resolveResumedWorkflowSkill({
-          session: resumedSession,
-        });
-        const requestedWorkflowSkills =
-          cliArgs.skillNames === undefined
-            ? []
-            : loadWorkflowSkills(runtime, workspace, cliArgs.skillNames);
         if (sessionStart.kind === "fork") {
           ensureSessionCanBeCreated({
             sessionId: sessionStart.targetSessionId,
@@ -625,15 +630,6 @@ async function runSessionCli(
             headlessGoalBashPermission = preparation.bashPermission;
           }
         }
-        workflowSkills = [
-          ...(resumedWorkflowSkill === undefined ? [] : [resumedWorkflowSkill]),
-          ...requestedWorkflowSkills,
-        ].filter(
-          (skill, index, skills) =>
-            skills.findIndex(
-              (candidate) => candidate.packageId === skill.packageId,
-            ) === index,
-        );
         activeSessionId = session.id;
         persistedMessages = session.messages;
         initialModelSelection = session.activeModel;
@@ -675,15 +671,77 @@ async function runSessionCli(
       runtime.writeStderr(
         formatWorkflowSkillListWarnings(skillCatalog.warnings),
       );
-      if (activeSessionId !== undefined && workflowSkills.length > 1) {
+      let skillActivation: SkillActivationCapability;
+      let lazySessionInitialSkillState: SkillLifecycleState = {
+        skillActivations: [],
+        activeSkillIds: [],
+      };
+      let ensureActiveSession: (() => SessionState) | undefined;
+      if (activeSessionId !== undefined) {
+        const sessionId = activeSessionId;
+        ensureActiveSession = (): SessionState => {
+          let activeSession = session;
+          if (activeSession === undefined) {
+            activeSession = createSessionStore({
+              sessionId,
+              workspace,
+              runtime,
+              skillState: lazySessionInitialSkillState,
+            });
+            session = activeSession;
+            persistedMessages = activeSession.messages;
+          }
+          return activeSession;
+        };
+      }
+      const persistSkillLifecycleState = (state: SkillLifecycleState): void => {
+        /* v8 ignore next -- this callback is exposed only through named-session persistence below. */
+        if (ensureActiveSession === undefined) return;
+        persistSessionSkillState({
+          session: ensureActiveSession(),
+          state,
+          runtime,
+        });
+      };
+      skillActivation = createSkillActivation(skillCatalog, {
+        initialState:
+          session === undefined
+            ? { skillActivations: [], activeSkillIds: [] }
+            : {
+                skillActivations: session.skillActivations,
+                activeSkillIds: session.activeSkillIds,
+              },
+        now: () => new Date(runtime.now()).toISOString(),
+      });
+      const skillStateBeforeRequested = skillActivation.state();
+      const initialSkillActivationRecords: SkillActivationRecord[] = [];
+      for (const skill of requestedWorkflowSkills) {
+        const activated = skillActivation.activateExplicit(skill, "");
+        if (activated.record !== undefined) {
+          initialSkillActivationRecords.push(activated.record);
+        }
+      }
+      if (
+        session !== undefined &&
+        !skillLifecycleStatesEqual(
+          skillStateBeforeRequested,
+          skillActivation.state(),
+        )
+      ) {
+        persistSkillLifecycleState(skillActivation.state());
+      }
+      if (session === undefined) {
+        lazySessionInitialSkillState = skillActivation.state();
+      }
+      const workflowSkills = skillActivation
+        .active()
+        .map(workflowSkillFromActivation);
+      for (const status of skillActivation.activeStatuses()) {
+        if (status.diskStatus === "current") continue;
         runtime.writeStderr(
-          "Warning: this saved session persists only its first launch-selected workflow skill; additional explicit skills apply to the current run only.\n",
+          `Warning: workflow skill ${status.activation.qualifiedName} ${status.diskStatus}; continuing with session snapshot sha256:${status.activation.digest}.\n`,
         );
       }
-      const skillActivation =
-        skillCatalog.skills.length > 0
-          ? createSkillActivation(skillCatalog)
-          : undefined;
       let sessionPersistence:
         | {
             readonly initialMessages: readonly Message[];
@@ -702,6 +760,7 @@ async function runSessionCli(
               messages: readonly Message[],
               reason: SessionPersistenceReason,
               consumedInputIds: readonly string[],
+              skillState?: SkillLifecycleState,
             ) => void;
             readonly persistSessionTitle: (titleRecord: {
               readonly title: string;
@@ -720,6 +779,7 @@ async function runSessionCli(
               readonly to: SessionModelSelection;
               readonly consumedInputIds: readonly string[];
             }) => void;
+            readonly persistSkillState: (state: SkillLifecycleState) => void;
             readonly forkSession: (
               request: InteractiveForkSessionRequest,
             ) => string;
@@ -742,26 +802,15 @@ async function runSessionCli(
       let headlessGoalActivated = false;
       if (activeSessionId !== undefined) {
         const sessionId = activeSessionId;
-        const ensureActiveSession = (): SessionState => {
-          let activeSession = session;
-          if (activeSession === undefined) {
-            activeSession = createSessionStore({
-              sessionId,
-              workspace,
-              runtime,
-              ...(workflowSkills[0] !== undefined
-                ? { workflowSkill: workflowSkills[0] }
-                : {}),
-            });
-            session = activeSession;
-            persistedMessages = activeSession.messages;
-          }
-          return activeSession;
-        };
+        const activeSessionForPersistence = ensureActiveSession;
+        /* v8 ignore next 3 -- activeSessionId installs this closure immediately above. */
+        if (activeSessionForPersistence === undefined) {
+          throw new Error("saved session persistence is unavailable");
+        }
         const forkActiveSession = (
           request: InteractiveForkSessionRequest,
         ): string => {
-          const sourceSessionId = ensureActiveSession().id;
+          const sourceSessionId = activeSessionForPersistence().id;
           let targetSessionLock: SessionLock | undefined;
           try {
             targetSessionLock = acquireSessionLock({
@@ -804,7 +853,9 @@ async function runSessionCli(
         const listActiveForkPoints = () =>
           sessionForkPointsFromStoredMessages({
             sessionId,
-            storedMessages: sessionStoredMessages(ensureActiveSession()),
+            storedMessages: sessionStoredMessages(
+              activeSessionForPersistence(),
+            ),
           });
         const initialSession = session;
         const initialSessionGoal = (() => {
@@ -848,14 +899,14 @@ async function runSessionCli(
             readonly line: string;
           }) =>
             persistSessionQueuedInput({
-              session: ensureActiveSession(),
+              session: activeSessionForPersistence(),
               sequence: input.sequence,
               line: input.line,
               runtime,
             }),
           consumeQueuedInputs: (inputIds: readonly string[]) => {
             consumeSessionQueuedInputs({
-              session: ensureActiveSession(),
+              session: activeSessionForPersistence(),
               inputIds,
               runtime,
             });
@@ -864,14 +915,16 @@ async function runSessionCli(
             messages: readonly Message[],
             reason: SessionPersistenceReason,
             consumedInputIds: readonly string[],
+            skillState?: SkillLifecycleState,
           ) => {
-            const activeSession = ensureActiveSession();
+            const activeSession = activeSessionForPersistence();
             persistedMessages = persistSessionMessages({
               session: activeSession,
               previousMessages: persistedMessages,
               currentMessages: messages,
               runtime,
               reason,
+              ...(skillState !== undefined ? { skillState } : {}),
               consumedInputIds,
             });
           },
@@ -880,7 +933,7 @@ async function runSessionCli(
             readonly consumedInputIds: readonly string[];
           }) =>
             persistSessionTitle({
-              session: ensureActiveSession(),
+              session: activeSessionForPersistence(),
               title: titleRecord.title,
               runtime,
               consumedInputIds: titleRecord.consumedInputIds,
@@ -890,7 +943,7 @@ async function runSessionCli(
             readonly consumedInputIds: readonly string[];
           }) => {
             const persistedGoal = persistSessionGoal({
-              session: ensureActiveSession(),
+              session: activeSessionForPersistence(),
               goal: update.goal,
               runtime,
               consumedInputIds: update.consumedInputIds,
@@ -910,7 +963,7 @@ async function runSessionCli(
             readonly messageOrdinal: number;
           }) => {
             persistSessionTaskProgress({
-              session: ensureActiveSession(),
+              session: activeSessionForPersistence(),
               taskProgress: update.taskProgress,
               messageOrdinal: update.messageOrdinal,
               runtime,
@@ -922,18 +975,19 @@ async function runSessionCli(
             readonly consumedInputIds: readonly string[];
           }) => {
             persistSessionModelSwitch({
-              session: ensureActiveSession(),
+              session: activeSessionForPersistence(),
               from: switchRecord.from,
               to: switchRecord.to,
               runtime,
               consumedInputIds: switchRecord.consumedInputIds,
             });
           },
+          persistSkillState: persistSkillLifecycleState,
           forkSession: forkActiveSession,
           listForkPoints: listActiveForkPoints,
           persistBashApprovalGrant: (grant: BashApprovalGrant) => {
             persistSessionBashApprovalGrant({
-              session: ensureActiveSession(),
+              session: activeSessionForPersistence(),
               grant,
               runtime,
             });
@@ -943,7 +997,7 @@ async function runSessionCli(
             readonly consumedInputIds: readonly string[];
           }) => {
             persistSessionBashApprovalRevoked({
-              session: ensureActiveSession(),
+              session: activeSessionForPersistence(),
               grant: revocation.grant,
               runtime,
               consumedInputIds: revocation.consumedInputIds,
@@ -953,7 +1007,7 @@ async function runSessionCli(
             readonly consumedInputIds: readonly string[];
           }) => {
             persistSessionBashApprovalsCleared({
-              session: ensureActiveSession(),
+              session: activeSessionForPersistence(),
               runtime,
               consumedInputIds: clear.consumedInputIds,
             });
@@ -1041,11 +1095,13 @@ async function runSessionCli(
           : {}),
         ...(projectInstructions !== undefined ? { projectInstructions } : {}),
         ...(workflowSkills.length > 0 ? { workflowSkills } : {}),
-        ...(workflowSkills.length === 0 &&
-        skillCatalog.implicitSkills.length > 0
+        ...(skillCatalog.implicitSkills.length > 0
           ? { skillCatalog: skillCatalog.implicitSkills }
           : {}),
-        ...(skillActivation !== undefined ? { skillActivation } : {}),
+        skillActivation,
+        ...(initialSkillActivationRecords.length > 0
+          ? { initialSkillActivationRecords }
+          : {}),
         activateExplicitSkill: (lookup) => skillCatalog.load(lookup),
         ...(sessionPersistence !== undefined ? sessionPersistence : {}),
         ...(initialInputLines.length > 0 ? { initialInputLines } : {}),
@@ -1155,6 +1211,7 @@ async function runSessionCli(
             ...interactiveResult.report.explicitSkillActivations,
             ...reportRecorder.skillActivations(),
           ],
+          activeSkills: reportActiveSkills(skillActivation.activeStatuses()),
           skillCatalog: interactiveResult.report.skillCatalog,
           ...(goalOutcome !== undefined ? { goalOutcome } : {}),
         });

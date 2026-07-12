@@ -61,7 +61,7 @@ const contextCompactionSchema = z.object({
 });
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(6),
+  schemaVersion: z.literal(7),
   modelsUsed: z.array(
     z.object({
       provider: z.string(),
@@ -90,6 +90,14 @@ export const runReportSchema = z.object({
       name: z.string(),
       relativePath: z.string(),
       trigger: z.enum(["model_selected", "user_explicit"]),
+    }),
+  ),
+  activeSkills: z.array(
+    z.object({
+      name: z.string(),
+      digest: z.string(),
+      trigger: z.enum(["model_selected", "user_explicit"]),
+      diskStatus: z.enum(["current", "changed_on_disk", "missing_on_disk"]),
     }),
   ),
   skillCatalog: z.object({

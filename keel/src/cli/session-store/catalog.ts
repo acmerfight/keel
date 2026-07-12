@@ -7,6 +7,7 @@ import {
   emptySessionTaskProgress,
 } from "../../core/task-progress.ts";
 import type { Message } from "../../llm/types.ts";
+import { copySkillActivation } from "../../skills/lifecycle.ts";
 import { redactTextForPersistence } from "../persistence-redaction.ts";
 import {
   formatNestedSessionStoreError,
@@ -129,6 +130,8 @@ function initialSessionCatalogReplayState(
     preview: { kind: "empty" },
     pendingInputsById: new Map(),
     taskProgress: emptySessionTaskProgress(),
+    skillActivations: [],
+    activeSkillIds: [],
   };
 }
 
@@ -163,6 +166,13 @@ function applySessionCatalogMutation(
           state.pendingInputsById,
           record.consumedInputIds,
         ),
+        ...(record.skillState === undefined
+          ? {}
+          : {
+              skillActivations:
+                record.skillState.skillActivations.map(copySkillActivation),
+              activeSkillIds: [...record.skillState.activeSkillIds],
+            }),
       };
     case "replace":
       return {
@@ -173,8 +183,22 @@ function applySessionCatalogMutation(
           state.pendingInputsById,
           record.consumedInputIds,
         ),
+        ...(record.skillState === undefined
+          ? {}
+          : {
+              skillActivations:
+                record.skillState.skillActivations.map(copySkillActivation),
+              activeSkillIds: [...record.skillState.activeSkillIds],
+            }),
       };
-    case "snapshot":
+    case "snapshot": {
+      const snapshotSkillState = record.skillStateCheckpoints.at(-1);
+      /* v8 ignore next 3 -- the snapshot schema requires at least one lifecycle checkpoint. */
+      if (snapshotSkillState === undefined) {
+        sessionStoreError(
+          "Error: session snapshot has no skill lifecycle state.",
+        );
+      }
       return {
         updatedAt: record.timestamp,
         ...(record.title !== undefined ? { title: record.title } : {}),
@@ -188,7 +212,11 @@ function applySessionCatalogMutation(
         taskProgress:
           record.taskProgressCheckpoints?.at(-1)?.taskProgress ??
           emptySessionTaskProgress(),
+        skillActivations:
+          snapshotSkillState.skillActivations.map(copySkillActivation),
+        activeSkillIds: [...snapshotSkillState.activeSkillIds],
       };
+    }
     case "session_title":
       return {
         ...state,
@@ -210,6 +238,8 @@ function applySessionCatalogMutation(
         preview: state.preview,
         pendingInputsById,
         taskProgress: copySessionTaskProgress(state.taskProgress),
+        skillActivations: state.skillActivations.map(copySkillActivation),
+        activeSkillIds: [...state.activeSkillIds],
       };
       return record.goal === null
         ? nextState
@@ -262,6 +292,17 @@ function applySessionCatalogMutation(
           record.consumedInputIds,
         ),
       };
+    case "skill_state":
+      return {
+        ...state,
+        updatedAt: record.timestamp,
+        skillActivations: record.skillActivations.map(copySkillActivation),
+        activeSkillIds: [...record.activeSkillIds],
+        pendingInputsById: consumeSessionCatalogInputs(
+          state.pendingInputsById,
+          record.consumedInputIds,
+        ),
+      };
   }
 }
 
@@ -283,13 +324,18 @@ function sessionCatalogEntry(records: SessionRecords): SessionCatalogEntry {
     createdAt: records.header.createdAt,
     updatedAt: state.updatedAt,
     graph: copySessionGraphRecord(records.header.graph),
-    ...(records.header.workflowSkill !== undefined
-      ? {
-          workflowSkill: sessionCatalogWorkflowSkill(
-            records.header.workflowSkill,
-          ),
-        }
-      : {}),
+    workflowSkills: state.activeSkillIds.map((id) => {
+      const activation = state.skillActivations.findLast(
+        (candidate) => candidate.descriptorId === id,
+      );
+      /* v8 ignore next 5 -- mutation parsing validates every active id has a persisted activation snapshot. */
+      if (activation === undefined) {
+        sessionStoreError(
+          `Error: session "${records.header.id}" has an active workflow skill without an activation snapshot.`,
+        );
+      }
+      return sessionCatalogWorkflowSkill(activation);
+    }),
     ...(state.title !== undefined ? { title: state.title } : {}),
     ...(state.goal !== undefined ? { goal: copySessionGoal(state.goal) } : {}),
     preview: catalogPreviewValue(state.preview),

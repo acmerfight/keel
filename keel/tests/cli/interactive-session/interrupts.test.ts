@@ -17,6 +17,8 @@ import {
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import { createSkillActivation } from "../../../src/skills/lifecycle.ts";
+import { discoverSkillCatalog } from "../../../src/skills/project.ts";
 import {
   expectInterruptedTurnPreservesVisibleScopedInstructions,
   ForcedExit,
@@ -119,6 +121,9 @@ describe("Interactive Session - Interrupts", () => {
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
+    const skillActivation = createSkillActivation(
+      discoverSkillCatalog({ workspace: process.cwd() }),
+    );
     const session = runInteractiveSession({
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
@@ -155,6 +160,7 @@ describe("Interactive Session - Interrupts", () => {
         return undefined;
       },
       formatCostReport: () => "",
+      skillActivation,
     });
 
     // When
@@ -206,6 +212,9 @@ describe("Interactive Session - Interrupts", () => {
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
+    const skillActivation = createSkillActivation(
+      discoverSkillCatalog({ workspace: process.cwd() }),
+    );
     const session = runInteractiveSession({
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
@@ -247,6 +256,7 @@ describe("Interactive Session - Interrupts", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
+      skillActivation,
     });
 
     // When

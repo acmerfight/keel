@@ -31,6 +31,8 @@ import type {
   UserMessageContextCompactionMetadata,
 } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
+import { copySkillActivation } from "../../skills/lifecycle.ts";
+import type { SkillActivation } from "../../skills/model.ts";
 import {
   isWorkflowSkillResourcePath,
   MAX_WORKFLOW_SKILL_RESOURCE_PATHS,
@@ -57,11 +59,12 @@ import {
   type SessionModelSwitch,
   type SessionMutationRecord,
   type SessionQueuedInput,
+  type SessionSkillStateCheckpoint,
   type SessionTaskProgressCheckpoint,
   type SessionTitleSessionRecord,
+  type SkillStateSessionRecord,
   type SnapshotSessionRecord,
   type StoredMessage,
-  type WorkflowSkill,
 } from "./model.ts";
 
 type BashApprovalRevokedSessionRecord = Extract<
@@ -197,15 +200,14 @@ const sessionGraphRecordSchema = z
   })
   .strict();
 
-const workflowSkillSchema = z
+const skillActivationSchema = z
   .object({
-    id: z.string(),
+    descriptorId: z.string(),
     packageId: z.string(),
     qualifiedName: z.string(),
     scope: z.enum(["repo", "user", "system", "extra"]),
-    digest: z.string(),
-    relativePath: z.string(),
     name: z.string(),
+    relativePath: z.string(),
     resourcePaths: z
       .array(
         z.string().refine(isWorkflowSkillResourcePath, {
@@ -214,7 +216,20 @@ const workflowSkillSchema = z
         }),
       )
       .max(MAX_WORKFLOW_SKILL_RESOURCE_PATHS),
-    content: z.string(),
+    digest: z.string(),
+    trigger: z.enum(["model_selected", "user_explicit"]),
+    args: z.string(),
+    contentSnapshot: z.string(),
+    activatedAt: z.string(),
+  })
+  .strict();
+
+const skillActivationsSchema = z.array(skillActivationSchema);
+const activeSkillIdsSchema = z.array(z.string());
+const skillLifecycleStateSchema = z
+  .object({
+    skillActivations: skillActivationsSchema,
+    activeSkillIds: activeSkillIdsSchema,
   })
   .strict();
 
@@ -226,7 +241,6 @@ const sessionHeaderSchema = z
     createdAt: z.string(),
     workspace: z.string(),
     graph: sessionGraphRecordSchema,
-    workflowSkill: workflowSkillSchema.optional(),
   })
   .strict();
 
@@ -255,6 +269,7 @@ const appendRecordSchema = z
     timestamp: z.string(),
     reason: z.literal("turn"),
     messages: z.array(storedMessageSchema),
+    skillState: skillLifecycleStateSchema.optional(),
     consumedInputIds: consumedInputIdsSchema.optional(),
   })
   .strict();
@@ -266,6 +281,7 @@ const replaceRecordSchema = z
     timestamp: z.string(),
     reason: z.enum(["turn", "compaction"]),
     messages: z.array(storedMessageSchema),
+    skillState: skillLifecycleStateSchema.optional(),
     consumedInputIds: consumedInputIdsSchema.optional(),
   })
   .strict();
@@ -308,6 +324,26 @@ const taskProgressRecordSchema = z
     timestamp: z.string(),
     messageOrdinal: z.number().int().nonnegative(),
     tasks: sessionTaskPlanSchema,
+  })
+  .strict();
+
+const sessionSkillStateCheckpointSchema = z
+  .object({
+    messageOrdinal: z.number().int().nonnegative(),
+    skillActivations: skillActivationsSchema,
+    activeSkillIds: activeSkillIdsSchema,
+  })
+  .strict();
+
+const skillStateRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("skill_state"),
+    timestamp: z.string(),
+    messageOrdinal: z.number().int().nonnegative(),
+    skillActivations: skillActivationsSchema,
+    activeSkillIds: activeSkillIdsSchema,
+    consumedInputIds: consumedInputIdsSchema.optional(),
   })
   .strict();
 
@@ -412,6 +448,7 @@ const snapshotRecordSchema = z
     taskProgressCheckpoints: z
       .array(sessionTaskProgressCheckpointSchema)
       .optional(),
+    skillStateCheckpoints: z.array(sessionSkillStateCheckpointSchema).min(1),
   })
   .strict();
 
@@ -433,6 +470,7 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   bashApprovalGrantedRecordSchema,
   bashApprovalRevokedRecordSchema,
   bashApprovalsClearedRecordSchema,
+  skillStateRecordSchema,
   snapshotRecordSchema,
 ]);
 
@@ -448,6 +486,10 @@ type RawSessionModelSwitch = z.infer<typeof sessionModelSwitchSchema>;
 type RawSessionGoal = z.infer<typeof sessionGoalSchema>;
 type RawSessionTaskProgressCheckpoint = z.infer<
   typeof sessionTaskProgressCheckpointSchema
+>;
+type RawSkillActivation = z.infer<typeof skillActivationSchema>;
+type RawSessionSkillStateCheckpoint = z.infer<
+  typeof sessionSkillStateCheckpointSchema
 >;
 type RawSessionHeaderRecord = z.infer<typeof sessionHeaderSchema>;
 type RawSessionMutationRecord = z.infer<typeof sessionMutationRecordSchema>;
@@ -655,33 +697,73 @@ function copySessionGraphRecord(graph: SessionGraphRecord): SessionGraphRecord {
   };
 }
 
-function copyWorkflowSkill(skill: WorkflowSkill): WorkflowSkill {
+function toSkillActivation(activation: RawSkillActivation): SkillActivation {
   return {
-    id: skill.id,
-    packageId: skill.packageId,
-    qualifiedName: skill.qualifiedName,
-    scope: skill.scope,
-    digest: skill.digest,
-    relativePath: skill.relativePath,
-    name: skill.name,
-    resourcePaths: [...skill.resourcePaths],
-    content: skill.content,
+    descriptorId: activation.descriptorId,
+    packageId: activation.packageId,
+    qualifiedName: activation.qualifiedName,
+    scope: activation.scope,
+    name: activation.name,
+    relativePath: activation.relativePath,
+    resourcePaths: [...activation.resourcePaths],
+    digest: activation.digest,
+    trigger: activation.trigger,
+    args: activation.args,
+    contentSnapshot: activation.contentSnapshot,
+    activatedAt: activation.activatedAt,
   };
 }
 
-function redactWorkflowSkillForPersistence(
-  skill: WorkflowSkill,
-): WorkflowSkill {
+function redactSkillActivationForPersistence(
+  activation: SkillActivation,
+): SkillActivation {
+  const redacted = {
+    descriptorId: activation.descriptorId,
+    packageId: activation.packageId,
+    qualifiedName: activation.qualifiedName,
+    scope: activation.scope,
+    name: activation.name,
+    relativePath: activation.relativePath,
+    resourcePaths: activation.resourcePaths.map(redactTextForPersistence),
+    digest: activation.digest,
+    trigger: activation.trigger,
+    args: redactTextForPersistence(activation.args),
+    contentSnapshot: redactTextForPersistence(activation.contentSnapshot),
+    activatedAt: activation.activatedAt,
+  };
+  if (
+    redacted.args !== activation.args ||
+    redacted.contentSnapshot !== activation.contentSnapshot ||
+    redacted.resourcePaths.some(
+      (path, index) => path !== activation.resourcePaths[index],
+    )
+  ) {
+    sessionStoreError(
+      `Error: workflow skill ${JSON.stringify(activation.qualifiedName)} cannot be persisted because its snapshot contains secret-like text; remove that text or use an ephemeral session.`,
+    );
+  }
+  return redacted;
+}
+
+function toSessionSkillStateCheckpoint(
+  checkpoint: RawSessionSkillStateCheckpoint,
+): SessionSkillStateCheckpoint {
   return {
-    id: skill.id,
-    packageId: skill.packageId,
-    qualifiedName: skill.qualifiedName,
-    scope: skill.scope,
-    digest: skill.digest,
-    relativePath: skill.relativePath,
-    name: skill.name,
-    resourcePaths: skill.resourcePaths.map(redactTextForPersistence),
-    content: redactTextForPersistence(skill.content),
+    messageOrdinal: checkpoint.messageOrdinal,
+    skillActivations: checkpoint.skillActivations.map(toSkillActivation),
+    activeSkillIds: [...checkpoint.activeSkillIds],
+  };
+}
+
+function redactSessionSkillStateCheckpointForPersistence(
+  checkpoint: SessionSkillStateCheckpoint,
+): SessionSkillStateCheckpoint {
+  return {
+    messageOrdinal: checkpoint.messageOrdinal,
+    skillActivations: checkpoint.skillActivations.map(
+      redactSkillActivationForPersistence,
+    ),
+    activeSkillIds: [...checkpoint.activeSkillIds],
   };
 }
 
@@ -695,9 +777,6 @@ function toSessionHeaderRecord(
     createdAt: record.createdAt,
     workspace: record.workspace,
     graph: copySessionGraphRecord(record.graph),
-    ...(record.workflowSkill !== undefined
-      ? { workflowSkill: copyWorkflowSkill(record.workflowSkill) }
-      : {}),
   };
 }
 
@@ -757,6 +836,10 @@ function appendConsumedInputIds(
   inputIds: readonly string[] | undefined,
 ): BashApprovalsClearedSessionRecord;
 function appendConsumedInputIds(
+  record: SkillStateSessionRecord,
+  inputIds: readonly string[] | undefined,
+): SkillStateSessionRecord;
+function appendConsumedInputIds(
   record:
     | AppendSessionRecord
     | ReplaceSessionRecord
@@ -764,7 +847,8 @@ function appendConsumedInputIds(
     | SessionTitleSessionRecord
     | SessionGoalSessionRecord
     | BashApprovalRevokedSessionRecord
-    | BashApprovalsClearedSessionRecord,
+    | BashApprovalsClearedSessionRecord
+    | SkillStateSessionRecord,
   inputIds: readonly string[] | undefined,
 ):
   | AppendSessionRecord
@@ -773,7 +857,8 @@ function appendConsumedInputIds(
   | SessionTitleSessionRecord
   | SessionGoalSessionRecord
   | BashApprovalRevokedSessionRecord
-  | BashApprovalsClearedSessionRecord {
+  | BashApprovalsClearedSessionRecord
+  | SkillStateSessionRecord {
   if (inputIds === undefined) {
     return record;
   }
@@ -1174,6 +1259,15 @@ function toSessionMutationRecord(
           timestamp: record.timestamp,
           reason: "turn",
           messages: record.messages.map(toStoredMessage),
+          ...(record.skillState !== undefined
+            ? {
+                skillState: {
+                  skillActivations:
+                    record.skillState.skillActivations.map(toSkillActivation),
+                  activeSkillIds: [...record.skillState.activeSkillIds],
+                },
+              }
+            : {}),
         },
         record.consumedInputIds,
       );
@@ -1185,6 +1279,15 @@ function toSessionMutationRecord(
           timestamp: record.timestamp,
           reason: record.reason,
           messages: record.messages.map(toStoredMessage),
+          ...(record.skillState !== undefined
+            ? {
+                skillState: {
+                  skillActivations:
+                    record.skillState.skillActivations.map(toSkillActivation),
+                  activeSkillIds: [...record.skillState.activeSkillIds],
+                },
+              }
+            : {}),
         },
         record.consumedInputIds,
       );
@@ -1273,6 +1376,18 @@ function toSessionMutationRecord(
         },
         record.consumedInputIds,
       );
+    case "skill_state":
+      return appendConsumedInputIds(
+        {
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          type: "skill_state",
+          timestamp: record.timestamp,
+          messageOrdinal: record.messageOrdinal,
+          skillActivations: record.skillActivations.map(toSkillActivation),
+          activeSkillIds: [...record.activeSkillIds],
+        },
+        record.consumedInputIds,
+      );
     case "snapshot":
       return {
         schemaVersion: SESSION_SCHEMA_VERSION,
@@ -1306,8 +1421,47 @@ function toSessionMutationRecord(
               ),
             }
           : {}),
+        skillStateCheckpoints: record.skillStateCheckpoints.map(
+          toSessionSkillStateCheckpoint,
+        ),
       };
   }
+}
+
+function validSkillLifecycleFields(state: {
+  readonly skillActivations: readonly SkillActivation[];
+  readonly activeSkillIds: readonly string[];
+}): boolean {
+  const activeIds = new Set<string>();
+  const activePackages = new Set<string>();
+  for (const id of state.activeSkillIds) {
+    if (activeIds.has(id)) return false;
+    activeIds.add(id);
+    const activation = state.skillActivations.findLast(
+      (candidate) => candidate.descriptorId === id,
+    );
+    if (activation === undefined || activePackages.has(activation.packageId)) {
+      return false;
+    }
+    activePackages.add(activation.packageId);
+  }
+  return true;
+}
+
+function validSessionSkillState(record: SessionMutationRecord): boolean {
+  if (
+    (record.type === "append" || record.type === "replace") &&
+    record.skillState !== undefined
+  ) {
+    return validSkillLifecycleFields(record.skillState);
+  }
+  if (record.type === "skill_state") {
+    return validSkillLifecycleFields(record);
+  }
+  if (record.type === "snapshot") {
+    return record.skillStateCheckpoints.every(validSkillLifecycleFields);
+  }
+  return true;
 }
 
 function parseSessionJsonLine(
@@ -1363,7 +1517,13 @@ function parseSessionMutationRecord(
       `Error: cannot load session ledger ${filePath}: line ${lineNumber} is not a valid session mutation record.`,
     );
   }
-  return toSessionMutationRecord(parsed.data);
+  const record = toSessionMutationRecord(parsed.data);
+  if (!validSessionSkillState(record)) {
+    sessionStoreError(
+      `Error: cannot load session ledger ${filePath}: line ${lineNumber} is not a valid session mutation record.`,
+    );
+  }
+  return record;
 }
 
 function parseSnapshotSessionMutationRecord(
@@ -1381,6 +1541,7 @@ function parseSnapshotSessionMutationRecord(
     return null;
   }
   const record = toSessionMutationRecord(parsed.data);
+  if (!validSessionSkillState(record)) return null;
   return record.type === "snapshot" ? record : null;
 }
 
@@ -1446,8 +1607,8 @@ export {
   copyMessage,
   copySessionForkPointRecord,
   copySessionGraphRecord,
+  copySkillActivation,
   copyStoredMessage,
-  copyWorkflowSkill,
   messagesFromStoredMessages,
   normalizeSessionTitleForPersistence,
   parseProviderVisibleMessages,
@@ -1457,9 +1618,10 @@ export {
   redactBashApprovalGrantForPersistence,
   redactSessionGoalForPersistence,
   redactSessionQueuedInputForPersistence,
+  redactSessionSkillStateCheckpointForPersistence,
   redactSessionTaskProgressCheckpointForPersistence,
   redactSessionTaskProgressForPersistence,
+  redactSkillActivationForPersistence,
   redactStoredMessageForPersistence,
-  redactWorkflowSkillForPersistence,
   validateCompletedTranscript,
 };

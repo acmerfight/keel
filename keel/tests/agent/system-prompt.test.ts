@@ -97,7 +97,7 @@ describe("Agent System Prompt", () => {
       "> Follow the project testing rules before reporting.",
     );
     expect(prompt).toMatch(
-      /Workflow skill[\s\S]*directly selected[\s\S]*current user request/i,
+      /Workflow skill[\s\S]*active for the current session[\s\S]*current user request/i,
     );
   });
 

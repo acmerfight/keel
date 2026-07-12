@@ -57,7 +57,7 @@ requested. Breaking session, report, eval, or provider-config formats is
 acceptable when it simplifies the product model, as long as each merged slice
 remains runnable and safety boundaries stay intact.
 
-## Current State (2026-06)
+## Current State (2026-07)
 
 What a user can do today:
 
@@ -75,7 +75,8 @@ What a user can do today:
   visible `steer/next` / queued-command dispositions, transient provider/tool
   activity, persistent durable Goal status, session intro, `status:` progress
   lines, and an `assistant:` header.
-  Local commands include `/help`, `/undo`, `/model`, `/skill`, `/status`,
+  Local commands include `/help`, `/undo`, `/model`, `/skill`,
+  `/skills active`, `/skill deactivate`, `/skill reload`, `/status`,
   `/approvals`, `/compact`, `/fork`, and `/fork-points`.
 - `keel goal --objective <text> --verify <command> ...` — run one saved,
   command-verified Goal without an interactive terminal. The command prints the
@@ -89,9 +90,9 @@ What a user can do today:
   name, resume, list, and fork interactive transcripts as JSONL session
   ledgers, with schema validation, workspace checks, active-session locks,
   bounded snapshots, replay of queued input that was admitted but not yet
-  consumed, active model switches, workflow skill identity, and independent
-  fork ledgers that continue from completed restored history without copying
-  the source session's pending queued input.
+  consumed, active model switches, durable workflow-skill activation snapshots,
+  and independent fork ledgers that continue from completed restored history
+  without copying the source session's pending queued input.
 - Interactive `/compact [focus]` — manually replace older conversation with
   a model-generated checkpoint summary; automatic compaction also runs before
   oversized requests and retries once after provider context overflow before
@@ -101,13 +102,16 @@ What a user can do today:
   for scoped paths and enforced before mutations in that scope. Instruction
   files have workspace, ignore-policy, file-type, UTF-8, symlink, and size
   checks before content is sent to the provider.
-- `keel skills` / `keel --skill <name>` — list and explicitly bind a local
-  workflow skill from `.agents/skills/<name>/SKILL.md`. Without `--skill`,
-  valid project-skill metadata is exposed through a metadata-only catalog so the
-  model can load one matching body on demand through the `skill` tool. Explicit
-  selection still injects the chosen instructions directly, and bounded
-  resource paths under `references/`, `scripts/`, and `assets/` are not
-  preloaded.
+- `keel skills` / repeatable `keel --skill <name>` — discover workflow skills
+  from repository, user, system, and configured extra roots, resolve
+  collision-safe qualified identities, and explicitly activate one or more
+  skills. `$name` and interactive `/skill name` provide deterministic explicit
+  activation, while eligible metadata is exposed through a bounded catalog so
+  the model can search for and activate matching bodies on demand. Named
+  sessions persist exact activation snapshots across resume, fork, and
+  compaction; `/skills active`, `/skill deactivate`, and `/skill reload` expose
+  and control that lifecycle. Bounded resource paths under `references/`,
+  `scripts/`, and `assets/` remain unloaded until requested.
 - `keel --allow-bash` / `keel --bash-policy trusted` — trusted shell
   mode (all-or-nothing).
 - `keel --bash-policy ask` — expose bash while requiring per-command
@@ -153,11 +157,12 @@ Known limits that shape the priorities below:
 
 - Interactive sessions have a minimal stable terminal display, but no
   full-screen TUI or richer session browser. Persisted sessions restore
-  transcript context, pending queued input, active model switches, and workflow
-  skill identity, and can fork a completed restored history or a restored
-  user-message point into an independent named session. `/fork --pick` provides
-  an interactive fork-point picker, but richer branch browsing and future
-  sub-agent state are still absent. Forks do not copy bash approval grants.
+  transcript context, pending queued input, active model switches, and exact
+  active workflow-skill snapshots, and can fork a completed restored history or
+  a restored user-message point into an independent named session.
+  `/fork --pick` provides an interactive fork-point picker, but richer branch
+  browsing and future sub-agent state are still absent. Forks do not copy bash
+  approval grants.
 - Provider selection supports DeepSeek, Kimi, and Qwen through one-shot and
   interactive `--provider` / `--model` overrides plus environment
   configuration (`KEEL_PROVIDER`, provider-specific API keys, base URLs, and
@@ -197,14 +202,13 @@ Known limits that shape the priorities below:
 - Eval results compare keel across versions; cross-agent comparisons are
   intentionally deferred until the core coding loop is more complete and the
   suite has a larger real-task corpus.
-- Workflow expansion features are not the current bottleneck. Project skills
-  now support both explicit selection and metadata-routed, on-demand activation.
-  User/system scopes, durable multi-skill lifecycle, sub-agents, MCP,
-  marketplaces, and IDE integration should still wait for evidence from daily
-  use or the next accepted skill slice. These features depend on stable tool,
-  permission, session, context, report, and failure-recovery semantics; before
-  that, they multiply unresolved failure modes instead of improving task
-  success.
+- Workflow expansion features are not the current bottleneck. The local Skill
+  runtime now supports scoped discovery, explicit and model-selected activation,
+  bounded search, multiple active Skills, and a durable lifecycle across
+  compaction, resume, and fork. The next Skill work should focus on deterministic
+  security and quality gates, followed by pinned distribution only when routing
+  and task-outcome evals justify it. Sub-agents, MCP, marketplaces, and IDE
+  integration remain deferred.
 
 ## P0 — Blocks daily use or makes the quality goal unfalsifiable
 
@@ -214,7 +218,8 @@ Known limits that shape the priorities below:
    next model request, and local commands cover help, undo, model switching,
    skill status, manual compaction, forking, and fork-point listing. Named
    sessions persist transcripts, compaction replacement records, unconsumed
-   queued input, active model switches, and workflow skill identity;
+   queued input, active model switches, and workflow-skill activation history and
+   active snapshots;
    interactive `--report` records session-level turns, usage, provider/model,
    models used, and cost. Real TTY sessions now have a multiline composer with
    differential redraw, bracketed paste, history draft restoration, and resize
@@ -309,7 +314,8 @@ Codex/Claude Code — or directly moves the eval numbers.
   interactive sessions persist JSONL ledgers and rebuild transcript context on
   `--resume`, including compaction replacement records, active-session locks,
   unconsumed queued input, bounded snapshots, active model switches, and
-  workflow skill identity. `keel --ephemeral` intentionally skips the ledger.
+  workflow-skill activation history and active snapshots. `keel --ephemeral`
+  intentionally skips the ledger.
   `keel sessions fork <source-id> <target-id> [--before-message <id>]`,
   `keel --resume <id> --fork-points`, and interactive
   `/fork [--before-message <id>|--pick]` create independent forks from restored
@@ -332,17 +338,19 @@ Codex/Claude Code — or directly moves the eval numbers.
   `/undo --list` and `/undo --to <index>` let users choose an older listed
   checkpoint and restore through it atomically. Remaining work is broader
   command grouping and richer checkpoint preview/redo controls.
-- **Local workflow skills** — ✅ Partial (2026-07): project skills use strict
-  Agent Skills metadata, appear to the model as a metadata-only catalog, and
-  load their full instructions on demand through the `skill` tool. Existing
-  explicit `keel --skill <name>` selection remains deterministic, while
-  model-selected activations are observable in run reports. Selected explicit
-  skills still persist with named sessions, and bounded resource paths from
-  `references/`, `scripts/`, and `assets/` remain unloaded until activation.
-  Remaining work is user/system scopes, collision-safe identities, richer
-  explicit activation UX, durable model-selected activation lifecycle, and
-  catalog-budget calibration. Marketplace, multi-agent execution, and remote
-  skill installation remain deferred.
+- **Local workflow skills** — ✅ Runtime complete (2026-07): strict Agent Skills
+  packages are discovered across repository, user, system, and configured extra
+  roots with collision-safe qualified identities. Users can explicitly activate
+  multiple Skills through repeatable `--skill`, `$name`, or `/skill name`; the
+  model receives a bounded metadata catalog with search and activates matching
+  bodies through the dedicated `skill` tool. Activation snapshots, arguments,
+  digests, active state, and history persist across compaction, resume, and fork;
+  changed files are diagnosed without silently replacing the session snapshot,
+  and `/skill reload` or `/skill deactivate` provides explicit control. Reports
+  expose activation events and final active state. Remaining work is security
+  lint/doctor policy, catalog-budget and routing calibration through evals, then
+  pinned installation and update. Marketplace, multi-agent execution, and
+  remote installation remain deferred.
 
 ## P2 — After the replacement works
 
