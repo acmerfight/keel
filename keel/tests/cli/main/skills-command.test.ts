@@ -12,13 +12,18 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
-import { requestWithMessagesSchema } from "../../../src/testing/cli-main-schemas.ts";
+import {
+  requestWithMessagesSchema,
+  requestWithToolsSchema,
+} from "../../../src/testing/cli-main-schemas.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   close,
   getPort,
   listen,
   sseTextReplyWithUsage,
+  sseToolCall,
+  sseToolFinish,
 } from "../../../src/testing/provider-sse-fixtures.ts";
 
 interface WriteSkillOptions {
@@ -120,7 +125,13 @@ describe("CLI Main - Skills", () => {
       "Implement one bounded slice.",
       {
         descriptionQuote: "single",
-        extraFrontmatterLines: ["ignored frontmatter prose"],
+        extraFrontmatterLines: [
+          "license: MIT",
+          "compatibility: Requires git.",
+          "allowed-tools: read grep",
+          "metadata:",
+          "  owner: keel",
+        ],
       },
     );
     await writeSkill(
@@ -183,8 +194,67 @@ describe("CLI Main - Skills", () => {
         'Warning: skipped workflow skill "broken":',
       );
       expect(fixture.stderr()).toContain(
-        "must declare non-empty name and description frontmatter",
+        "description: Invalid input: expected string, received undefined",
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      name: "Uppercase",
+      content:
+        "---\nname: Uppercase\ndescription: Invalid uppercase name.\n---\nbody\n",
+      expected: "lowercase letters, numbers, and hyphens",
+    },
+    {
+      name: "unknown-field",
+      content:
+        "---\nname: unknown-field\ndescription: Unknown top-level field.\nowner: keel\n---\nbody\n",
+      expected: "unrecognized key",
+    },
+    {
+      name: "numeric-metadata",
+      content:
+        "---\nname: numeric-metadata\ndescription: Non-string metadata.\nmetadata:\n  version: 1\n---\nbody\n",
+      expected: "metadata.version",
+    },
+    {
+      name: "duplicate-key",
+      content:
+        "---\nname: duplicate-key\ndescription: First.\ndescription: Second.\n---\nbody\n",
+      expected: "duplicate",
+    },
+    {
+      name: "yaml-alias",
+      content:
+        "---\nname: yaml-alias\ndescription: &description Aliased text.\nmetadata:\n  copy: *description\n---\nbody\n",
+      expected: "alias",
+    },
+  ])(`Given a project skill violates the Agent Skills contract for $name,
+    When the user lists project skills,
+    Then Keel skips it with a strict validation diagnostic`, async ({
+    name,
+    content,
+    expected,
+  }) => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-strict-"));
+    await writeRawSkill(workspace, name, content);
+    const fixture = createRuntime(["skills"], { cwd: workspace });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).not.toContain(`${name}:`);
+      expect(fixture.stderr()).toContain(
+        `Warning: skipped workflow skill ${JSON.stringify(name)}:`,
+      );
+      expect(fixture.stderr().toLowerCase()).toContain(expected.toLowerCase());
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -263,6 +333,280 @@ describe("CLI Main - Skills", () => {
         "> Run coverage before declaring ready.",
       );
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project skill matches the user's task,
+    When the user runs Keel without selecting a skill,
+    Then Keel exposes only catalog metadata before activating the skill body on demand`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-auto-"));
+    const reportPath = join(workspace, "run.json");
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request when the user asks for correctness findings.",
+      "Read PR comments first.\nReturn findings ordered by severity.",
+    );
+    await mkdir(join(workspace, ".agents", "skills", "review", "references"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(
+        workspace,
+        ".agents",
+        "skills",
+        "review",
+        "references",
+        "checklist.md",
+      ),
+      "Private checklist body.",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(sseToolCall("call_skill", "skill", { name: "review" }));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Review skill applied."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      ["--report", reportPath, "review pull request 123"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Review skill applied.\n");
+      expect(fixture.stderr()).toBe("Tool: skill review\n");
+      const firstRequest = requestWithMessagesSchema.parse(capturedBodies[0]);
+      const firstSystemPrompt = firstRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(firstSystemPrompt).toContain("Available project skills:");
+      expect(firstSystemPrompt).toContain(
+        'description: "Review a pull request when the user asks for correctness findings."',
+      );
+      expect(firstSystemPrompt).not.toContain("Read PR comments first.");
+      const firstRequestTools = requestWithToolsSchema.parse(
+        capturedBodies[0],
+      ).tools;
+      expect(firstRequestTools?.map((tool) => tool.function?.name)).toContain(
+        "skill",
+      );
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_skill",
+          content: expect.stringContaining("Read PR comments first."),
+        }),
+      );
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_skill",
+          content: expect.stringContaining(
+            "<path>references/checklist.md</path>",
+          ),
+        }),
+      );
+      expect(firstSystemPrompt).not.toContain("Private checklist body.");
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        schemaVersion: 5,
+        skillActivations: [
+          {
+            name: "review",
+            relativePath: ".agents/skills/review/SKILL.md",
+            trigger: "model_selected",
+          },
+        ],
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project skill changes after its metadata enters the catalog,
+    When the model tries to activate that stale catalog entry,
+    Then Keel rejects the body without recording a successful activation`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-atomic-"));
+    const reportPath = join(workspace, "run.json");
+    const skillPath = join(
+      workspace,
+      ".agents",
+      "skills",
+      "review",
+      "SKILL.md",
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "Original trusted instructions.",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", async () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          await writeFile(
+            skillPath,
+            "---\nname: review\ndescription: Review a pull request.\n---\n\nChanged instructions.\n",
+          );
+          res.write(sseToolCall("call_skill", "skill", { name: "review" }));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Continued without stale skill."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      ["--report", reportPath, "review pull request 123"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_skill",
+          content: expect.stringContaining("changed after catalog discovery"),
+        }),
+      );
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        schemaVersion: 5,
+        skillActivations: [],
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a valid project skill expands beyond the generic inline tool-output limit,
+    When the model activates it on demand,
+    Then Keel delivers the complete skill body instead of recording a truncated activation`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-inline-"));
+    const sentinel = "END-OF-SKILL-INSTRUCTIONS";
+    await writeSkill(
+      workspace,
+      "large-review",
+      "Review a large generated manifest when the user requests its full checklist.",
+      `${"&".repeat(11_000)}\n${sentinel}`,
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_large_skill", "skill", {
+              name: "large-review",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Complete skill received."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["review the full generated manifest"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      const activationResult = secondRequest.messages?.find(
+        (message) =>
+          message.role === "tool" &&
+          message.tool_call_id === "call_large_skill",
+      )?.content;
+      expect(activationResult).toContain(sentinel);
+      expect(activationResult).not.toContain("tool output shortened");
+      expect(fixture.stderr()).toBe("Tool: skill large-review\n");
+    } finally {
+      await close(server);
       await rm(workspace, { recursive: true, force: true });
     }
   });
@@ -723,7 +1067,9 @@ describe("CLI Main - Skills", () => {
       // Then
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toContain("workflow skill names may contain");
+      expect(fixture.stderr()).toContain(
+        "skill names may contain only lowercase letters, numbers, and hyphens",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1367,7 +1713,8 @@ describe("CLI Main - Skills", () => {
     {
       name: "missing-description",
       content: "---\nname: missing-description\n---\nbody\n",
-      expected: "must declare non-empty name and description frontmatter",
+      expected:
+        "description: Invalid input: expected string, received undefined",
     },
   ])(`Given a workflow skill has invalid frontmatter for $name,
     When the CLI starts a one-shot run,

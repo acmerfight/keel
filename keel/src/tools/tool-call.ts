@@ -172,9 +172,14 @@ function toOpenAICompatibleToolDefinition(
 
 export function openAICompatibleTools(
   allowBash: boolean,
+  allowSkill = false,
 ): readonly OpenAICompatibleToolDefinition[] {
   return builtinTools
-    .filter((tool) => allowBash || tool.risk.kind !== "trusted-shell")
+    .filter(
+      (tool) =>
+        (allowBash || tool.risk.kind !== "trusted-shell") &&
+        (allowSkill || tool.availability !== "skill-catalog"),
+    )
     .map(toOpenAICompatibleToolDefinition);
 }
 

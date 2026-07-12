@@ -10,6 +10,10 @@ import type {
   BashApprovalGrant,
   SessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
+import {
+  createProjectSkillActivation,
+  discoverProjectSkillCatalog,
+} from "../skills/project.ts";
 import type { CliArgs } from "./args.ts";
 import { USAGE } from "./args.ts";
 import {
@@ -92,7 +96,11 @@ import {
   createInteractiveTerminalDisplay,
   type InteractiveTerminalDisplay,
 } from "./tui/interactive-terminal.ts";
-import { loadWorkflowSkill, WorkflowSkillError } from "./workflow-skills.ts";
+import {
+  formatWorkflowSkillListWarnings,
+  loadWorkflowSkill,
+  WorkflowSkillError,
+} from "./workflow-skills.ts";
 
 type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
 
@@ -656,6 +664,20 @@ async function runSessionCli(
           initialModelSelection = overrideSelection;
         }
       }
+      const projectSkillCatalog =
+        workflowSkill === undefined
+          ? discoverProjectSkillCatalog(workspace)
+          : undefined;
+      if (projectSkillCatalog !== undefined) {
+        runtime.writeStderr(
+          formatWorkflowSkillListWarnings(projectSkillCatalog.warnings),
+        );
+      }
+      const skillActivation =
+        projectSkillCatalog !== undefined &&
+        projectSkillCatalog.skills.length > 0
+          ? createProjectSkillActivation(projectSkillCatalog)
+          : undefined;
       let sessionPersistence:
         | {
             readonly initialMessages: readonly Message[];
@@ -1009,6 +1031,10 @@ async function runSessionCli(
           : {}),
         ...(projectInstructions !== undefined ? { projectInstructions } : {}),
         ...(workflowSkill !== undefined ? { workflowSkill } : {}),
+        ...(projectSkillCatalog !== undefined
+          ? { skillCatalog: projectSkillCatalog.skills }
+          : {}),
+        ...(skillActivation !== undefined ? { skillActivation } : {}),
         ...(sessionPersistence !== undefined ? sessionPersistence : {}),
         ...(initialInputLines.length > 0 ? { initialInputLines } : {}),
         ...(projectBashApprovals !== undefined
@@ -1113,6 +1139,7 @@ async function runSessionCli(
                 },
           durationMs: runtime.now() - startedAt,
           contextCompactions: reportRecorder.contextCompactions(),
+          skillActivations: reportRecorder.skillActivations(),
           ...(goalOutcome !== undefined ? { goalOutcome } : {}),
         });
       }

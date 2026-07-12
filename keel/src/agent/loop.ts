@@ -19,6 +19,7 @@ import type {
   ToolCall,
 } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
+import type { SkillActivationCapability } from "../skills/model.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
 import {
   createProjectInstructionVisibilityState,
@@ -99,6 +100,7 @@ export interface RunAgentOptions {
   readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
   readonly bashPermission?: BashPermissionPolicy;
+  readonly skillActivation?: SkillActivationCapability;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly taskProgress?: SessionTaskProgress;
@@ -119,6 +121,7 @@ export interface RunAgentTurnOptions {
   readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
   readonly bashPermission?: BashPermissionPolicy;
+  readonly skillActivation?: SkillActivationCapability;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly taskProgress?: SessionTaskProgress;
@@ -308,6 +311,10 @@ function settlementPlanByExecutionIndex(
   executions.forEach(({ execution }, index) => {
     const inlineLength =
       execution.artifactContent?.length ?? execution.content.length;
+    if (execution.preserveInlineOutput === true) {
+      estimatedInlineChars += inlineLength;
+      return;
+    }
     if (
       inlineLength - maxInlineChars >=
       MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS
@@ -327,11 +334,13 @@ function settlementPlanByExecutionIndex(
     .map(({ execution }, index) => ({
       index,
       length: execution.artifactContent?.length ?? execution.content.length,
+      preserveInlineOutput: execution.preserveInlineOutput === true,
     }))
     .filter(
-      ({ length }) =>
+      ({ length, preserveInlineOutput }) =>
+        !preserveInlineOutput &&
         length - aggregatePreviewChars >=
-        MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS,
+          MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS,
     )
     .sort((left, right) =>
       right.length === left.length
@@ -506,6 +515,7 @@ export async function* runAgentTurn(
     stopPolicy,
     drainInjectedUserMessages,
   } = options;
+  const allowSkill = options.skillActivation !== undefined;
   let sessionLedger = sessionLedgerFromMessages(messages);
   const applySessionLedger = (next: SessionLedger) => {
     sessionLedger = next;
@@ -613,6 +623,7 @@ export async function* runAgentTurn(
         setLedger: applySessionLedger,
         signal,
         allowBash,
+        allowSkill,
       });
     } catch (error) {
       if (
@@ -684,6 +695,7 @@ export async function* runAgentTurn(
             systemPrompt,
             signal,
             allowBash,
+            allowSkill,
           },
           turnText: turnResult.text,
           turnReasoningContent: turnResult.reasoningContent,
@@ -847,6 +859,9 @@ export async function* runAgentTurn(
           toolCall.status === "completed" &&
           toolCall !== turnResult.toolCalls.at(-1),
         ...(bashPermission !== undefined ? { bashPermission } : {}),
+        ...(options.skillActivation !== undefined
+          ? { skillActivation: options.skillActivation }
+          : {}),
       });
     };
 
@@ -963,6 +978,10 @@ export async function* runAgentTurn(
           }
           const { toolCall, result: execution } = result;
           yield toolEndEvent(toolCall, execution);
+          /* v8 ignore next 3: skill declares global access and cannot execute in a parallel scheduler batch. */
+          if (execution.skillActivation !== undefined) {
+            yield { type: "skill_activated", ...execution.skillActivation };
+          }
           const taskProgressEvent = taskProgressEventFromExecution(execution);
           /* v8 ignore next 3: update_plan uses global tool access and is never scheduled in a parallel batch. */
           if (taskProgressEvent !== null) {
@@ -1020,6 +1039,9 @@ export async function* runAgentTurn(
           return;
         }
         yield toolEndEvent(toolCall, execution);
+        if (execution.skillActivation !== undefined) {
+          yield { type: "skill_activated", ...execution.skillActivation };
+        }
         const taskProgressEvent = taskProgressEventFromExecution(execution);
         if (taskProgressEvent !== null) {
           yield taskProgressEvent;
@@ -1078,6 +1100,9 @@ export async function* runAgent(
       systemPrompt: options.systemPrompt,
       signal: options.signal,
       allowBash: options.allowBash,
+      ...(options.skillActivation !== undefined
+        ? { skillActivation: options.skillActivation }
+        : {}),
       stopPolicy: options.stopPolicy,
       readVisibility,
       projectInstructionVisibility,

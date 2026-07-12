@@ -79,6 +79,9 @@ function requestMetadataForStream(
 ): ContextCompactionRequestMetadata {
   return {
     allowBash: options.allowBash,
+    ...(options.allowSkill !== undefined
+      ? { allowSkill: options.allowSkill }
+      : {}),
     ...(options.toolChoice !== undefined
       ? { toolChoice: options.toolChoice }
       : {}),
@@ -305,6 +308,9 @@ export async function* streamTurnWithOverflowRecovery(
         messages: currentRequestMessages,
         signal: streamOptions.signal,
         allowBash: streamOptions.allowBash,
+        ...(streamOptions.allowSkill !== undefined
+          ? { allowSkill: streamOptions.allowSkill }
+          : {}),
         ...(streamOptions.toolChoice !== undefined
           ? { toolChoice: streamOptions.toolChoice }
           : {}),

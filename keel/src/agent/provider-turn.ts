@@ -36,6 +36,7 @@ export interface StreamTurnOptions {
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
+  readonly allowSkill?: boolean;
   readonly toolChoice?: "none";
   readonly textPrefix?: string;
 }
@@ -82,13 +83,15 @@ function finishAgentTurn(
 export async function* streamAgentTurn(
   options: ProviderTurnOptions,
 ): AsyncGenerator<AgentEvent, AgentTurn> {
-  const { provider, systemPrompt, messages, signal, allowBash } = options;
+  const { provider, systemPrompt, messages, signal, allowBash, allowSkill } =
+    options;
   let textPrefix = options.textPrefix ?? "";
   const stream = provider.stream({
     systemPrompt,
     messages,
     signal,
     ...(allowBash ? { allowBash: true } : {}),
+    ...(allowSkill === true ? { allowSkill: true } : {}),
     ...(options.toolChoice !== undefined
       ? { toolChoice: options.toolChoice }
       : {}),

@@ -19,7 +19,7 @@ export {
   z,
 };
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(4),
+  schemaVersion: z.literal(5),
   turns: z.number().int().nonnegative(),
   stopReason: z.string(),
   usage: z.object({
@@ -33,6 +33,7 @@ export const runReportSchema = z.object({
   costBudgetUsd: z.number().positive().optional(),
   costOvershootUsd: z.number().nonnegative(),
   contextCompactions: z.array(z.unknown()),
+  skillActivations: z.array(z.unknown()),
   modelsUsed: z.array(
     z.object({
       provider: z.string(),

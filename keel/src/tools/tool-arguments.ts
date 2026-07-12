@@ -7,6 +7,14 @@ import { SESSION_GOAL_STATUS_REASON_MAX_LENGTH } from "../core/session-goal.ts";
 import { sessionTaskPlanSchema } from "../core/task-progress.ts";
 import { optionalToolArgument } from "./tool-schema.ts";
 
+export const skillToolArgumentsSchema = z
+  .object({
+    name: z
+      .string()
+      .describe("Exact project skill name from the available skills catalog."),
+  })
+  .strict();
+
 export const readToolArgumentsSchema = z
   .object({
     path: z.string().describe("Workspace-relative file path to read."),

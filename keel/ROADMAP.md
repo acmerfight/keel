@@ -102,9 +102,12 @@ What a user can do today:
   files have workspace, ignore-policy, file-type, UTF-8, symlink, and size
   checks before content is sent to the provider.
 - `keel skills` / `keel --skill <name>` — list and explicitly bind a local
-  workflow skill from `.agents/skills/<name>/SKILL.md`; selected skill
-  instructions are injected into the system prompt with bounded resource-path
-  discovery under `references/`, `scripts/`, and `assets/`.
+  workflow skill from `.agents/skills/<name>/SKILL.md`. Without `--skill`,
+  valid project-skill metadata is exposed through a metadata-only catalog so the
+  model can load one matching body on demand through the `skill` tool. Explicit
+  selection still injects the chosen instructions directly, and bounded
+  resource paths under `references/`, `scripts/`, and `assets/` are not
+  preloaded.
 - `keel --allow-bash` / `keel --bash-policy trusted` — trusted shell
   mode (all-or-nothing).
 - `keel --bash-policy ask` — expose bash while requiring per-command
@@ -194,13 +197,14 @@ Known limits that shape the priorities below:
 - Eval results compare keel across versions; cross-agent comparisons are
   intentionally deferred until the core coding loop is more complete and the
   suite has a larger real-task corpus.
-- Workflow expansion features are not the current bottleneck. The first local
-  explicit workflow skill slices are in place for user-invoked project
-  workflows. Sub-agents, MCP, marketplaces, auto-activation, and IDE
-  integration should still wait until keel is credible as a standalone coding
-  agent. These features depend on stable tool, permission, session, context,
-  report, and failure-recovery semantics; before that, they multiply unresolved
-  failure modes instead of improving task success.
+- Workflow expansion features are not the current bottleneck. Project skills
+  now support both explicit selection and metadata-routed, on-demand activation.
+  User/system scopes, durable multi-skill lifecycle, sub-agents, MCP,
+  marketplaces, and IDE integration should still wait for evidence from daily
+  use or the next accepted skill slice. These features depend on stable tool,
+  permission, session, context, report, and failure-recovery semantics; before
+  that, they multiply unresolved failure modes instead of improving task
+  success.
 
 ## P0 — Blocks daily use or makes the quality goal unfalsifiable
 
@@ -328,15 +332,17 @@ Codex/Claude Code — or directly moves the eval numbers.
   `/undo --list` and `/undo --to <index>` let users choose an older listed
   checkpoint and restore through it atomically. Remaining work is broader
   command grouping and richer checkpoint preview/redo controls.
-- **Local workflow skills** — ✅ Partial (2026-06): explicit, local,
-  user-invoked workflows are available through `keel skills` and
-  `keel --skill <name>` from `.agents/skills/<name>/SKILL.md`. Selected skills
-  are injected into one-shot or interactive prompts, persist with named
-  sessions, are visible in `keel sessions` and interactive `/skill`, and expose
-  bounded resource paths from `references/`, `scripts/`, and `assets/` without
-  preloading resource contents. Remaining work should stay focused on daily-use
-  UX and correctness for explicit local skills. Marketplace, auto-activation,
-  multi-agent execution, and remote skill installation remain deferred.
+- **Local workflow skills** — ✅ Partial (2026-07): project skills use strict
+  Agent Skills metadata, appear to the model as a metadata-only catalog, and
+  load their full instructions on demand through the `skill` tool. Existing
+  explicit `keel --skill <name>` selection remains deterministic, while
+  model-selected activations are observable in run reports. Selected explicit
+  skills still persist with named sessions, and bounded resource paths from
+  `references/`, `scripts/`, and `assets/` remain unloaded until activation.
+  Remaining work is user/system scopes, collision-safe identities, richer
+  explicit activation UX, durable model-selected activation lifecycle, and
+  catalog-budget calibration. Marketplace, multi-agent execution, and remote
+  skill installation remain deferred.
 
 ## P2 — After the replacement works
 
@@ -346,7 +352,7 @@ Not needed to switch; revisit once P0/P1 are done.
 - Sub-agents
 - Plan mode
 - IDE integration
-- Skill marketplace or automatic skill activation
+- Skill marketplace
 - Expanded eval corpus, external agent runners, and cross-agent same-model
   comparisons
 - OS-level sandboxing for bash (Seatbelt on macOS, bubblewrap on Linux —

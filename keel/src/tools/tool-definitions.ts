@@ -10,6 +10,7 @@ import {
   grepToolArgumentsSchema,
   lsToolArgumentsSchema,
   readToolArgumentsSchema,
+  skillToolArgumentsSchema,
   updateGoalToolArgumentsSchema,
   updatePlanToolArgumentsSchema,
   writeToolArgumentsSchema,
@@ -67,6 +68,7 @@ type ParsedToolArguments<Args> =
 
 interface BuiltinTool<Name extends string, Shape extends ToolArgShape> {
   readonly name: Name;
+  readonly availability?: "skill-catalog";
   readonly description: string;
   readonly args: {
     readonly schema: ToolArgsSchema<Shape>;
@@ -215,6 +217,24 @@ const readTool = defineTool({
   output: { kind: "text" },
   display: {
     formatLabel: (args) => `read ${args.path}`,
+  },
+  risk: { kind: "workspace-read" },
+});
+
+const skillTool = defineTool({
+  name: "skill",
+  availability: "skill-catalog",
+  description: [
+    "Activate one project skill whose metadata appears in the available project skills catalog.",
+    "Use when: the current task clearly matches a listed skill description and the skill body has not already been activated.",
+    "Do not use when: no matching project skill is listed, the user explicitly selected a workflow skill at launch, or a skill is already active.",
+    "On failure: use an exact listed name, or continue without a skill if the catalog changed or no longer contains it.",
+  ].join("\n"),
+  args: toolArgs(skillToolArgumentsSchema),
+  permission: { kind: "none" },
+  output: { kind: "text" },
+  display: {
+    formatLabel: (args) => `skill ${args.name}`,
   },
   risk: { kind: "workspace-read" },
 });
@@ -443,6 +463,7 @@ const updateGoalTool = defineTool({
 export const builtinTools = [
   updatePlanTool,
   updateGoalTool,
+  skillTool,
   readTool,
   lsTool,
   globTool,
@@ -458,6 +479,7 @@ export const builtinTools = [
 const rawBuiltinToolCallSchema = z.discriminatedUnion("tool", [
   updatePlanTool.toolCallSchema,
   updateGoalTool.toolCallSchema,
+  skillTool.toolCallSchema,
   readTool.toolCallSchema,
   lsTool.toolCallSchema,
   globTool.toolCallSchema,

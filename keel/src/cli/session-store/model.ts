@@ -1,4 +1,3 @@
-import type { WorkflowSkill } from "../../agent/prompt.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
 import type { SessionGoal } from "../../core/session-goal.ts";
 import type {
@@ -7,6 +6,7 @@ import type {
 } from "../../core/task-progress.ts";
 import type { Message } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
+import type { WorkflowSkill } from "../../skills/model.ts";
 
 export type { WorkflowSkill };
 

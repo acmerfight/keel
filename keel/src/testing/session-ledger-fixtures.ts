@@ -1,6 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { WorkflowSkill } from "../agent/prompt.ts";
 import type {
   SessionQueuedInput,
   SessionTaskProgressCheckpoint,
@@ -8,6 +7,7 @@ import type {
 import type { SessionGoal } from "../core/session-goal.ts";
 import type { SessionTask } from "../core/task-progress.ts";
 import type { Message } from "../llm/types.ts";
+import type { WorkflowSkill } from "../skills/model.ts";
 
 export function appendSessionRecordLine(
   timestamp: string,

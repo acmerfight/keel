@@ -61,7 +61,7 @@ const contextCompactionSchema = z.object({
 });
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(4),
+  schemaVersion: z.literal(5),
   modelsUsed: z.array(
     z.object({
       provider: z.string(),
@@ -85,6 +85,13 @@ export const runReportSchema = z.object({
   costBudgetUsd: z.number().positive().optional(),
   costOvershootUsd: z.number().nonnegative(),
   contextCompactions: z.array(contextCompactionSchema),
+  skillActivations: z.array(
+    z.object({
+      name: z.string(),
+      relativePath: z.string(),
+      trigger: z.literal("model_selected"),
+    }),
+  ),
   goalOutcome: z
     .object({
       sessionId: z.string(),
