@@ -163,6 +163,9 @@ describe("CLI File Editing", () => {
       expect(request.tools?.map((tool) => tool.function?.name)).toEqual([
         "update_plan",
         "update_goal",
+        "skill_resource",
+        "skill_search",
+        "skill",
         "read",
         "ls",
         "glob",

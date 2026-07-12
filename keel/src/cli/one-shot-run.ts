@@ -7,7 +7,6 @@ import {
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { isAbortThrow } from "../core/error.ts";
 import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
-import { undoCheckpointUnavailable } from "../core/undo-protection.ts";
 import type { Message } from "../llm/types.ts";
 import {
   type BashMode,
@@ -247,11 +246,7 @@ export async function runOneShotCli(
 
     const reportRecorder = createAgentEventReportRecorder();
     const writeUndoProtectionWarning = (): void => {
-      const latestCheckpoint = reportRecorder.undoProtection().latestCheckpoint;
-      if (
-        latestCheckpoint !== null &&
-        undoCheckpointUnavailable(latestCheckpoint)
-      ) {
+      if (reportRecorder.undoProtection().status === "unavailable") {
         runtime.writeStderr(`${formatUndoCheckpointWarning()}\n`);
       }
     };
