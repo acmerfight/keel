@@ -27,6 +27,12 @@ import {
   sessionTaskProgressFromPlan,
 } from "../core/task-progress.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
+import { formatSkillActivation } from "../skills/activation.ts";
+import type {
+  SkillActivationCapability,
+  SkillActivationRecord,
+} from "../skills/model.ts";
+import { WorkflowSkillError } from "../skills/model.ts";
 import { executeApplyPatch } from "./apply-patch.ts";
 import { executeBash } from "./bash.ts";
 import { executeEdit } from "./edit.ts";
@@ -55,6 +61,7 @@ import {
 import { executeWrite } from "./write.ts";
 
 type ReadToolCall = Extract<ValidToolCall, { readonly tool: "read" }>;
+type SkillToolCall = Extract<ValidToolCall, { readonly tool: "skill" }>;
 type LsToolCall = Extract<ValidToolCall, { readonly tool: "ls" }>;
 type GlobToolCall = Extract<ValidToolCall, { readonly tool: "glob" }>;
 type GrepToolCall = Extract<ValidToolCall, { readonly tool: "grep" }>;
@@ -83,6 +90,7 @@ interface BuiltinToolExecutionContext {
   readonly workspace: string;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
+  readonly skillActivation?: SkillActivationCapability;
   readonly recordCheckpoints?: boolean;
   readonly bashPermission?: BashPermissionPolicy;
   readonly readBeforeEdit?: {
@@ -115,6 +123,7 @@ interface AssertionGoalCompletionEvaluation {
 export interface ToolExecution {
   readonly content: string;
   readonly ok: boolean;
+  readonly preserveInlineOutput?: boolean;
   readonly sourceTruncated?: boolean;
   readonly artifactContent?: string;
   readonly artifactSourceTruncated?: boolean;
@@ -129,6 +138,7 @@ export interface ToolExecution {
   readonly taskProgressUpdate?: SessionTaskProgress;
   readonly sessionGoalUpdate?: SessionGoal;
   readonly bashCommandEvidence?: BashCommandEvidence;
+  readonly skillActivation?: SkillActivationRecord;
 }
 
 export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
@@ -158,6 +168,36 @@ interface RecoverableToolError extends KeelError {
 
 function disabledBashMessage(): string {
   return "Tool failed: bash failed: shell commands are disabled. Re-run with --bash-policy ask, --bash-policy trusted, or --allow-bash to enable them.";
+}
+
+function executeSkillTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: SkillToolCall,
+): ToolExecution {
+  if (context.skillActivation === undefined) {
+    return {
+      content:
+        "Tool failed: skill activation is unavailable because no valid project skill catalog was exposed.\nRecovery: Continue without a skill.",
+      ok: false,
+    };
+  }
+  try {
+    const activation = context.skillActivation.activate(toolCall.name);
+    return {
+      content: formatSkillActivation(activation.skill),
+      ok: true,
+      preserveInlineOutput: true,
+      skillActivation: activation.record,
+    };
+  } catch (error) {
+    if (!(error instanceof WorkflowSkillError)) {
+      throw error;
+    }
+    return {
+      content: `Tool failed: ${error.message.replace(/^Error: /u, "")}\nRecovery: Use an exact name from the current project skill catalog, or continue without a skill.`,
+      ok: false,
+    };
+  }
 }
 
 function deniedBashMessage(message: string): string {
@@ -703,6 +743,8 @@ function executeBuiltinToolCall(
       return executeUpdatePlanTool(parsed.data);
     case "update_goal":
       return executeUpdateGoalTool(context, parsed.data);
+    case "skill":
+      return executeSkillTool(context, parsed.data);
     case "read":
       return executeReadTool(context, parsed.data);
     case "ls":

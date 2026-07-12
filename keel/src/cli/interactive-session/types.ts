@@ -1,6 +1,6 @@
 import type { ContextCompactionOptions } from "../../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../../agent/events.ts";
-import type { ProjectInstructions, WorkflowSkill } from "../../agent/prompt.ts";
+import type { ProjectInstructions } from "../../agent/prompt.ts";
 import type { ToolOutputArtifactsOptions } from "../../agent/tool-output-artifacts.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";
@@ -14,6 +14,11 @@ import type {
   BashProjectApprovalGrant,
   SessionBashPermissionPolicy,
 } from "../../permissions/bash.ts";
+import type {
+  SkillActivationCapability,
+  SkillDescriptor,
+  WorkflowSkill,
+} from "../../skills/model.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
 import type { ModelSource, ProviderSelection } from "../provider-config.ts";
 import type {
@@ -75,6 +80,8 @@ export interface InteractiveSessionOptions {
   readonly sessionId?: string;
   readonly projectInstructions?: ProjectInstructions;
   readonly workflowSkill?: WorkflowSkill;
+  readonly skillCatalog?: readonly SkillDescriptor[];
+  readonly skillActivation?: SkillActivationCapability;
   readonly initialSessionTitle?: string;
   readonly initialSessionGoal?: SessionGoal;
   readonly initialMessages?: readonly Message[];

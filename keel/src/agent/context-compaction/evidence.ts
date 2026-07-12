@@ -87,6 +87,7 @@ function sourceHandleForToolCall(toolCall: ToolCall): string | null {
     }
     case "update_plan":
     case "update_goal":
+    case "skill":
     case "bash":
     case "edit":
     case "write":

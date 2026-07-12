@@ -1,12 +1,7 @@
+import type { SkillDescriptor, WorkflowSkill } from "../skills/model.ts";
+
 export interface ProjectInstructions {
   readonly relativePath: string;
-  readonly content: string;
-}
-
-export interface WorkflowSkill {
-  readonly relativePath: string;
-  readonly name: string;
-  readonly resourcePaths: readonly string[];
   readonly content: string;
 }
 
@@ -15,6 +10,7 @@ interface BuildAgentSystemPromptOptions {
   readonly platform: string;
   readonly projectInstructions?: ProjectInstructions;
   readonly workflowSkill?: WorkflowSkill;
+  readonly skillCatalog?: readonly SkillDescriptor[];
 }
 
 function quotedInstructionLines(content: string): string {
@@ -41,12 +37,25 @@ function workflowSkillResourceLines(skill: WorkflowSkill): string {
   ].join("\n");
 }
 
+function projectSkillCatalogSection(
+  skills: readonly SkillDescriptor[] | undefined,
+): string {
+  if (skills === undefined || skills.length === 0) {
+    return "";
+  }
+  return `
+Available project skills:
+Only the metadata below is loaded. Before using any task tool, compare the request with these descriptions. When one skill clearly matches, you must call the skill tool with its exact name first; do not skip a clear match because the request looks self-contained. Do not invent skill names or read SKILL.md directly to activate a skill.
+${skills.map((skill) => `- name: ${JSON.stringify(skill.name)}\n  description: ${JSON.stringify(skill.description)}\n  path: ${JSON.stringify(skill.relativePath)}`).join("\n")}`;
+}
+
 export function buildAgentSystemPrompt(
   options: BuildAgentSystemPromptOptions,
 ): string {
   const { workspace, platform } = options;
   const projectInstructions = options.projectInstructions;
   const workflowSkill = options.workflowSkill;
+  const skillCatalogSection = projectSkillCatalogSection(options.skillCatalog);
   const projectInstructionsSection =
     projectInstructions === undefined
       ? ""
@@ -78,6 +87,7 @@ Environment:
 File paths you pass to tools are relative to the workspace root.
 ${projectInstructionsSection}
 ${workflowSkillSection}
+${skillCatalogSection}
 
 Tool strategy:
 - Discover before assuming: use grep to locate code, glob to find files by name, ls to inspect directories. Never invent file paths.

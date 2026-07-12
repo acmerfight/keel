@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { isWorkflowSkillResourcePath } from "../../src/cli/workflow-skill-contract.ts";
+import { isWorkflowSkillResourcePath } from "../../src/skills/resources.ts";
 
 describe("Workflow Skill Resource Contract", () => {
   test(`Given persisted workflow skill resource path candidates,

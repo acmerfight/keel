@@ -1,6 +1,7 @@
 import type { ContextCompactionStats } from "../agent/context-compaction.ts";
 import type { AgentEvent } from "../agent/events.ts";
 import type { ToolOutputArtifactCompactionArtifact } from "../agent/tool-output-artifacts.ts";
+import type { SkillActivationRecord } from "../skills/model.ts";
 
 type ContextCompactionEvent = Extract<
   AgentEvent,
@@ -29,6 +30,7 @@ export interface RunReportContextCompaction extends ContextCompactionStats {
 export interface AgentEventReportRecorder {
   readonly record: (event: AgentEvent) => void;
   readonly contextCompactions: () => readonly RunReportContextCompaction[];
+  readonly skillActivations: () => readonly SkillActivationRecord[];
 }
 
 function providerRequestAction(
@@ -87,12 +89,18 @@ function runReportContextCompaction(
 
 export function createAgentEventReportRecorder(): AgentEventReportRecorder {
   const contextCompactions: RunReportContextCompaction[] = [];
+  const skillActivations: SkillActivationRecord[] = [];
   return {
     record: (event) => {
       if (event.type === "context_compacted") {
         contextCompactions.push(runReportContextCompaction(event));
       }
+      if (event.type === "skill_activated") {
+        const { type: _type, ...activation } = event;
+        skillActivations.push(activation);
+      }
     },
     contextCompactions: () => [...contextCompactions],
+    skillActivations: () => [...skillActivations],
   };
 }

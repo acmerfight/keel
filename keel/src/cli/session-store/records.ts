@@ -31,16 +31,16 @@ import type {
   UserMessageContextCompactionMetadata,
 } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
+import {
+  isWorkflowSkillResourcePath,
+  MAX_WORKFLOW_SKILL_RESOURCE_PATHS,
+} from "../../skills/resources.ts";
 import { toolCallSchema } from "../../tools/tool-call.ts";
 import {
   hasPersistenceRedactionMarker,
   redactMessageForPersistence,
   redactTextForPersistence,
 } from "../persistence-redaction.ts";
-import {
-  isWorkflowSkillResourcePath,
-  MAX_WORKFLOW_SKILL_RESOURCE_PATHS,
-} from "../workflow-skill-contract.ts";
 import { sessionStoreError } from "./errors.ts";
 import {
   type AppendSessionRecord,

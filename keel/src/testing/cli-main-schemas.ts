@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(4),
+  schemaVersion: z.literal(5),
   modelsUsed: z.array(
     z.object({
       provider: z.string(),
@@ -20,6 +20,13 @@ export const runReportSchema = z.object({
   costBudgetUsd: z.number().positive().optional(),
   costOvershootUsd: z.number().nonnegative(),
   contextCompactions: z.array(z.unknown()),
+  skillActivations: z.array(
+    z.object({
+      name: z.string(),
+      relativePath: z.string(),
+      trigger: z.literal("model_selected"),
+    }),
+  ),
 });
 
 export const requestWithMessagesSchema = z

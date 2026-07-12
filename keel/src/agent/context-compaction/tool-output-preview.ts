@@ -1193,6 +1193,7 @@ function projectToolOutputPreview(
     case "apply_patch":
     case "update_plan":
     case "update_goal":
+    case "skill":
     case "unknown":
       return boundedText(text, maxChars);
   }

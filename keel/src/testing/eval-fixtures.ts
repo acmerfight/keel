@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 type EvalTrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
 
 export interface EvalRunReport {
-  readonly schemaVersion: 4;
+  readonly schemaVersion: 5;
   readonly modelsUsed: readonly {
     readonly provider: string;
     readonly model: string;
@@ -33,6 +33,7 @@ export interface EvalRunReport {
   readonly costBudgetUsd?: number;
   readonly costOvershootUsd: number;
   readonly contextCompactions: readonly unknown[];
+  readonly skillActivations: readonly unknown[];
 }
 
 export interface EvalResultLine {
@@ -78,7 +79,7 @@ export function evalRunReport(
   };
   const costUsd = options.costUsd ?? 0.001;
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     modelsUsed: [{ provider: "deepseek", model: "deepseek-v4-flash" }],
     usageByModel: [
       {
@@ -96,6 +97,7 @@ export function evalRunReport(
     costUsd,
     costOvershootUsd: 0,
     contextCompactions: [],
+    skillActivations: [],
   };
 }
 

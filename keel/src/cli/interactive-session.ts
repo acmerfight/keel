@@ -360,6 +360,9 @@ export async function runInteractiveSession(
     ...(options.workflowSkill !== undefined
       ? { workflowSkill: options.workflowSkill }
       : {}),
+    ...(options.skillCatalog !== undefined
+      ? { skillCatalog: options.skillCatalog }
+      : {}),
   });
   const messages: Message[] = [...(options.initialMessages ?? [])];
   let taskProgress = copySessionTaskProgress(
@@ -835,6 +838,9 @@ export async function runInteractiveSession(
           systemPrompt: currentSystemPrompt(),
           signal: turnAbortController.signal,
           allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+          ...(options.skillActivation !== undefined
+            ? { skillActivation: options.skillActivation }
+            : {}),
           stopPolicy: defaultStopPolicy(),
           taskProgress,
           ...(sessionGoal !== undefined ? { sessionGoal } : {}),

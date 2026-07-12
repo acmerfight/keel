@@ -382,6 +382,7 @@ function estimateRequestTokensFromAccounting(
     accounting.systemPrompt !== systemPrompt ||
     accounting.requestMetadata.toolChoice !== currentMetadata.toolChoice ||
     accounting.requestMetadata.allowBash !== currentMetadata.allowBash ||
+    accounting.requestMetadata.allowSkill !== currentMetadata.allowSkill ||
     accounting.messageFingerprintCache.length > messages.length
   ) {
     return null;

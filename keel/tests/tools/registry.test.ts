@@ -201,6 +201,57 @@ function expectProviderParameterMatchesSchema(
 }
 
 describe("tool registry", () => {
+  test(`Given no project skill catalog is available,
+    When builtin execution receives a skill call,
+    Then it fails recoverably without loading instructions`, async () => {
+    const call = toolCallFromParsedArguments("call_skill", "skill", {
+      name: "review",
+    });
+    if (call === null) {
+      throw new Error("Expected skill call to parse");
+    }
+
+    await expect(
+      executeToolCall({
+        workspace: ".",
+        signal: new AbortController().signal,
+        allowBash: false,
+        toolCall: call,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      content: expect.stringContaining("skill activation is unavailable"),
+    });
+  });
+
+  test(`Given a skill activation capability fails unexpectedly,
+    When builtin execution invokes it,
+    Then the unexpected fault remains distinct from a catalog miss`, async () => {
+    const call = toolCallFromParsedArguments("call_skill", "skill", {
+      name: "review",
+    });
+    if (call === null) {
+      throw new Error("Expected skill call to parse");
+    }
+
+    await expect(
+      executeToolCall({
+        workspace: ".",
+        signal: new AbortController().signal,
+        allowBash: false,
+        toolCall: call,
+        skillActivation: {
+          activate: () => {
+            throw new Error("unexpected activation fault");
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      content: expect.stringContaining("unexpected activation fault"),
+    });
+  });
+
   test(`Given apply_patch receives an add-only patch through the builtin registry,
     When the call has no read-before-edit state,
     Then the tool writes the new file and returns every mutated target`, async () => {
@@ -345,6 +396,7 @@ describe("tool registry", () => {
     expect(names).toEqual([
       "update_plan",
       "update_goal",
+      "skill",
       "read",
       "ls",
       "glob",
@@ -383,6 +435,13 @@ describe("tool registry", () => {
         permission: "none",
         output: "text",
         risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "skill",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-read" },
         hasFormatLabel: true,
       },
       {
@@ -637,7 +696,7 @@ describe("tool registry", () => {
     When the registry metadata is inspected,
     Then each tool lists its provider-visible arguments and required fields`, () => {
     const argumentsByTool = Object.fromEntries(
-      openAICompatibleTools(true).map((tool) => [
+      openAICompatibleTools(true, true).map((tool) => [
         tool.function.name,
         {
           fields: Object.keys(tool.function.parameters.properties),
@@ -649,6 +708,7 @@ describe("tool registry", () => {
     expect(argumentsByTool).toEqual({
       update_plan: { fields: ["plan"], required: ["plan"] },
       update_goal: { fields: ["status", "reason"], required: ["status"] },
+      skill: { fields: ["name"], required: ["name"] },
       read: { fields: ["path", "offset", "limit"], required: ["path"] },
       ls: { fields: ["path", "limit"], required: [] },
       glob: { fields: ["pattern", "path"], required: ["pattern"] },
@@ -674,7 +734,7 @@ describe("tool registry", () => {
   test(`Given builtin tools declare arguments in Zod,
     When provider metadata is compared with generated JSON schema,
     Then keys requiredness types and numeric bounds stay equivalent`, () => {
-    const providerTools = openAICompatibleTools(true);
+    const providerTools = openAICompatibleTools(true, true);
 
     for (const tool of builtinTools) {
       const providerTool = providerToolByName(providerTools, tool.name);
@@ -729,22 +789,32 @@ describe("tool registry", () => {
     When builtin metadata is compared with provider tools,
     Then bash filtering matches the explicit trusted shell risk`, () => {
     const allBuiltinToolNames = builtinTools.map((tool) => tool.name);
+    const defaultBuiltinToolNames = builtinTools
+      .filter(
+        (tool) =>
+          tool.risk.kind !== "trusted-shell" &&
+          tool.availability !== "skill-catalog",
+      )
+      .map((tool) => tool.name);
     const nonShellBuiltinToolNames = builtinTools
       .filter((tool) => tool.risk.kind !== "trusted-shell")
       .map((tool) => tool.name);
 
     expect(
       openAICompatibleTools(false).map((tool) => tool.function.name),
+    ).toEqual(defaultBuiltinToolNames);
+    expect(
+      openAICompatibleTools(false, true).map((tool) => tool.function.name),
     ).toEqual(nonShellBuiltinToolNames);
     expect(
-      openAICompatibleTools(true).map((tool) => tool.function.name),
+      openAICompatibleTools(true, true).map((tool) => tool.function.name),
     ).toEqual(allBuiltinToolNames);
   });
 
   test(`Given provider tools are requested,
     When OpenAI-compatible definitions are built,
     Then descriptions match the builtin registry and parameters are strict objects`, () => {
-    const providerTools = openAICompatibleTools(true);
+    const providerTools = openAICompatibleTools(true, true);
 
     expect(
       providerTools.map((tool) => ({

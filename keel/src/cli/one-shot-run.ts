@@ -12,6 +12,10 @@ import {
   bashModeExposesTool,
   createSessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
+import {
+  createProjectSkillActivation,
+  discoverProjectSkillCatalog,
+} from "../skills/project.ts";
 import type { CliArgs } from "./args.ts";
 import {
   BashProjectApprovalsError,
@@ -41,7 +45,11 @@ import {
   newToolOutputArtifactScope,
 } from "./tool-output-artifacts.ts";
 import { writeRunTranscript } from "./transcript.ts";
-import { loadWorkflowSkill, WorkflowSkillError } from "./workflow-skills.ts";
+import {
+  formatWorkflowSkillListWarnings,
+  loadWorkflowSkill,
+  WorkflowSkillError,
+} from "./workflow-skills.ts";
 
 type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
 
@@ -116,6 +124,19 @@ export async function runOneShotCli(
       cliArgs.skillName === undefined
         ? undefined
         : loadWorkflowSkill(workspace, cliArgs.skillName);
+    const projectSkillCatalog =
+      cliArgs.skillName === undefined
+        ? discoverProjectSkillCatalog(workspace)
+        : undefined;
+    if (projectSkillCatalog !== undefined) {
+      runtime.writeStderr(
+        formatWorkflowSkillListWarnings(projectSkillCatalog.warnings),
+      );
+    }
+    const skillActivation =
+      projectSkillCatalog !== undefined && projectSkillCatalog.skills.length > 0
+        ? createProjectSkillActivation(projectSkillCatalog)
+        : undefined;
     const resolved = resolveProvider(userMessage, runtime, {
       ...(cliArgs.providerId !== undefined
         ? { providerId: cliArgs.providerId }
@@ -143,6 +164,9 @@ export async function runOneShotCli(
       platform: runtime.platform,
       ...(projectInstructions !== undefined ? { projectInstructions } : {}),
       ...(workflowSkill !== undefined ? { workflowSkill } : {}),
+      ...(projectSkillCatalog !== undefined
+        ? { skillCatalog: projectSkillCatalog.skills }
+        : {}),
     });
     const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
       resolved.modelMetadata,
@@ -155,6 +179,7 @@ export async function runOneShotCli(
       systemPrompt,
       signal: abortController.signal,
       allowBash: bashModeExposesTool(cliArgs.bashMode),
+      ...(skillActivation !== undefined ? { skillActivation } : {}),
       stopPolicy: defaultStopPolicy(),
       toolOutputArtifacts,
       ...(bashPermission.policy !== undefined
@@ -206,6 +231,7 @@ export async function runOneShotCli(
         end: finalEnd,
         durationMs: runtime.now() - startedAt,
         contextCompactions: reportRecorder.contextCompactions(),
+        skillActivations: reportRecorder.skillActivations(),
       });
     }
     if (

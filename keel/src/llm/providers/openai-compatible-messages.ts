@@ -14,7 +14,10 @@ export function createChatCompletionsBody(
   options: StreamOptions,
   messageOptions: OpenAICompatibleMessageOptions = {},
 ): string {
-  const tools = openAICompatibleTools(options.allowBash === true);
+  const tools = openAICompatibleTools(
+    options.allowBash === true,
+    options.allowSkill === true,
+  );
 
   return JSON.stringify({
     model,

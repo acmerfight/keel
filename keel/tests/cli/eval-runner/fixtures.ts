@@ -25,7 +25,7 @@ export const resultLineSchema = z.object({
   outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
   report: z
     .object({
-      schemaVersion: z.literal(4),
+      schemaVersion: z.literal(5),
       modelsUsed: z.array(
         z.object({
           provider: z.string(),
@@ -39,6 +39,7 @@ export const resultLineSchema = z.object({
         }),
       ),
       contextCompactions: z.array(z.unknown()),
+      skillActivations: z.array(z.unknown()),
       costOvershootUsd: z.number().nonnegative(),
     })
     .optional(),
@@ -124,7 +125,7 @@ export const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 export const VALID_REPORT = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   modelsUsed: [{ provider: "fake", model: "fake" }],
   usageByModel: [
     {
@@ -152,6 +153,7 @@ export const VALID_REPORT = {
   costUsd: 0,
   costOvershootUsd: 0,
   contextCompactions: [],
+  skillActivations: [],
 };
 
 export let previousKeelProvider: string | undefined;

@@ -1,0 +1,32 @@
+[
+  {
+    "id": 41,
+    "kind": "fix",
+    "title": "Preserve queued input",
+    "userFacing": true
+  },
+  {
+    "id": 7,
+    "kind": "feature",
+    "title": "Add project profiles",
+    "userFacing": true
+  },
+  {
+    "id": 19,
+    "kind": "breaking",
+    "title": "Require scoped provider names",
+    "userFacing": true
+  },
+  {
+    "id": 12,
+    "kind": "fix",
+    "title": "Refactor retry helper",
+    "userFacing": false
+  },
+  {
+    "id": 11,
+    "kind": "feature",
+    "title": "Show model cost source",
+    "userFacing": true
+  }
+]

@@ -1,4 +1,4 @@
-import type { WorkflowSkill } from "../agent/prompt.ts";
+import type { WorkflowSkill } from "../skills/model.ts";
 import { type SessionState, SessionStoreError } from "./session-store.ts";
 
 interface ResumedWorkflowSkillOptions {

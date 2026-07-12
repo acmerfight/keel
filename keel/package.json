@@ -38,6 +38,7 @@
     "@earendil-works/pi-tui": "0.80.6",
     "@vscode/ripgrep": "1.18.0",
     "ignore": "7.0.5",
+    "yaml": "2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

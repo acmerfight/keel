@@ -70,6 +70,7 @@ export function createFakeProvider(
           systemPrompt: options.systemPrompt,
           messages: options.messages,
           allowBash: options.allowBash === true,
+          allowSkill: options.allowSkill === true,
           toolChoice: options.toolChoice ?? "auto",
         }),
       ).length;

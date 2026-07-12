@@ -274,6 +274,7 @@ export function toolCallAccesses(
   switch (toolCall.tool) {
     case "update_plan":
     case "update_goal":
+    case "skill":
       return ToolAccesses.all();
     case "read": {
       const path = existingOrRequestedAccessPath(workspace, toolCall.path);
