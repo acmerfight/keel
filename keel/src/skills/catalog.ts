@@ -17,9 +17,7 @@ export function skillCatalogEntry(skill: SkillDescriptor): string {
   return `- name: ${JSON.stringify(skill.qualifiedName)}\n  description: ${JSON.stringify(skill.description)}\n  scope: ${JSON.stringify(skill.scope)}\n  path: ${JSON.stringify(skill.relativePath)}`;
 }
 
-export function skillCatalogBudgetChars(
-  metadata: ModelMetadata | undefined,
-): number {
+function skillCatalogBudgetChars(metadata: ModelMetadata | undefined): number {
   if (metadata?.status !== "known" || metadata.contextWindowTokens === null) {
     return UNKNOWN_MODEL_CATALOG_BUDGET_CHARS;
   }

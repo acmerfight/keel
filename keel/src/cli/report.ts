@@ -18,7 +18,7 @@ interface RunReportInput {
   readonly goalOutcome?: RunReportGoalOutcome;
 }
 
-export interface RunReportSkillCatalog {
+interface RunReportSkillCatalog {
   readonly exposed: number;
   readonly omitted: number;
   readonly total: number;

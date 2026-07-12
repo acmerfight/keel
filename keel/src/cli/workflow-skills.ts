@@ -41,7 +41,7 @@ function configuredRoots(value: string | undefined): readonly string[] {
   );
 }
 
-export function skillDiscoveryOptions(
+function skillDiscoveryOptions(
   runtime: Pick<CliRuntime, "env">,
   workspace: string,
 ): SkillDiscoveryOptions {
