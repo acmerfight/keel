@@ -10,6 +10,8 @@ import {
   grepToolArgumentsSchema,
   lsToolArgumentsSchema,
   readToolArgumentsSchema,
+  skillResourceToolArgumentsSchema,
+  skillSearchToolArgumentsSchema,
   skillToolArgumentsSchema,
   updateGoalToolArgumentsSchema,
   updatePlanToolArgumentsSchema,
@@ -225,16 +227,50 @@ const skillTool = defineTool({
   name: "skill",
   availability: "skill-catalog",
   description: [
-    "Activate one project skill whose metadata appears in the available project skills catalog.",
+    "Activate one eligible workflow skill whose metadata appears in the authoritative scoped catalog or recent skill_search results.",
     "Use when: the current task clearly matches a listed skill description and the skill body has not already been activated.",
     "Do not use when: no matching project skill is listed, the user explicitly selected a workflow skill at launch, or a skill is already active.",
-    "On failure: use an exact listed name, or continue without a skill if the catalog changed or no longer contains it.",
+    "On failure: use an exact qualified listed name, search omitted catalog entries first, or continue without a skill if the catalog changed.",
   ].join("\n"),
   args: toolArgs(skillToolArgumentsSchema),
   permission: { kind: "none" },
   output: { kind: "text" },
   display: {
     formatLabel: (args) => `skill ${args.name}`,
+  },
+  risk: { kind: "workspace-read" },
+});
+
+const skillSearchTool = defineTool({
+  name: "skill_search",
+  availability: "skill-catalog",
+  description: [
+    "Search the complete implicit workflow-skill catalog, including entries omitted from the prompt budget.",
+    "Use when: the visible catalog does not contain a clear match or Keel reported omitted catalog entries.",
+    "Do not use when: a visible skill already clearly matches or the user requested an explicit-only skill.",
+    "On failure: use a shorter query based on the task, then activate an exact qualified name returned by this tool.",
+  ].join("\n"),
+  args: toolArgs(skillSearchToolArgumentsSchema),
+  permission: { kind: "none" },
+  output: { kind: "text" },
+  display: { formatLabel: (args) => `skill_search ${args.query}` },
+  risk: { kind: "workspace-read" },
+});
+
+const skillResourceTool = defineTool({
+  name: "skill_resource",
+  availability: "skill-catalog",
+  description: [
+    "Read one declared text resource belonging to an active workflow skill without widening workspace file access.",
+    "Use when: active skill instructions reference a path listed under references/, scripts/, or assets/.",
+    "Do not use when: the skill is not active, the path was not advertised, or an ordinary workspace file is needed.",
+    "On failure: use the exact qualified skill name and one advertised relative resource path.",
+  ].join("\n"),
+  args: toolArgs(skillResourceToolArgumentsSchema),
+  permission: { kind: "none" },
+  output: { kind: "text" },
+  display: {
+    formatLabel: (args) => `skill_resource ${args.skill} ${args.path}`,
   },
   risk: { kind: "workspace-read" },
 });
@@ -463,6 +499,8 @@ const updateGoalTool = defineTool({
 export const builtinTools = [
   updatePlanTool,
   updateGoalTool,
+  skillResourceTool,
+  skillSearchTool,
   skillTool,
   readTool,
   lsTool,
@@ -479,6 +517,8 @@ export const builtinTools = [
 const rawBuiltinToolCallSchema = z.discriminatedUnion("tool", [
   updatePlanTool.toolCallSchema,
   updateGoalTool.toolCallSchema,
+  skillResourceTool.toolCallSchema,
+  skillSearchTool.toolCallSchema,
   skillTool.toolCallSchema,
   readTool.toolCallSchema,
   lsTool.toolCallSchema,

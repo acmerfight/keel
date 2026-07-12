@@ -241,6 +241,10 @@ describe("tool registry", () => {
         allowBash: false,
         toolCall: call,
         skillActivation: {
+          expose: () => {},
+          registerExplicit: () => {},
+          search: () => [],
+          readResource: () => "",
           activate: () => {
             throw new Error("unexpected activation fault");
           },
@@ -396,6 +400,8 @@ describe("tool registry", () => {
     expect(names).toEqual([
       "update_plan",
       "update_goal",
+      "skill_resource",
+      "skill_search",
       "skill",
       "read",
       "ls",
@@ -435,6 +441,20 @@ describe("tool registry", () => {
         permission: "none",
         output: "text",
         risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "skill_resource",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-read" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "skill_search",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-read" },
         hasFormatLabel: true,
       },
       {
@@ -708,6 +728,11 @@ describe("tool registry", () => {
     expect(argumentsByTool).toEqual({
       update_plan: { fields: ["plan"], required: ["plan"] },
       update_goal: { fields: ["status", "reason"], required: ["status"] },
+      skill_resource: {
+        fields: ["skill", "path"],
+        required: ["skill", "path"],
+      },
+      skill_search: { fields: ["query"], required: ["query"] },
       skill: { fields: ["name"], required: ["name"] },
       read: { fields: ["path", "offset", "limit"], required: ["path"] },
       ls: { fields: ["path", "limit"], required: [] },

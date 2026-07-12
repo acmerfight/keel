@@ -48,6 +48,8 @@ interface ModelCommand {
 
 interface SkillCommand {
   readonly kind: "skill";
+  readonly lookup?: string;
+  readonly arguments?: string;
 }
 
 interface StatusCommand {
@@ -181,7 +183,9 @@ export function formatInteractiveHelp(): string {
     "  /model             Show the active provider/model.",
     "  /model <provider>/<model>",
     "                     Switch the active provider/model for later prompts.",
-    "  /skill             Show the active workflow skill.",
+    "  /skill             Show active workflow skills.",
+    "  /skill <name|scope:name|scope:root-id:name> [task]",
+    "                     Activate a skill, then optionally run a task.",
     "  /status            Show session state and recovery commands.",
     "  /title [text]      Show or set this saved session title.",
     "  /goal [condition]  Show or start a goal with this completion condition.",
@@ -926,13 +930,15 @@ export function parseInteractiveCommand(
   const skillMatch = /^\/skill(?:\s+(.*))?$/u.exec(trimmed);
   if (skillMatch !== null) {
     const extraArgs = skillMatch[1]?.trim();
-    if (extraArgs !== undefined && extraArgs !== "") {
-      return {
-        kind: "invalid",
-        message: "Error: /skill does not accept arguments.",
-      };
-    }
-    return { kind: "skill" };
+    if (extraArgs === undefined || extraArgs === "") return { kind: "skill" };
+    const separator = extraArgs.search(/\s/u);
+    return separator === -1
+      ? { kind: "skill", lookup: extraArgs }
+      : {
+          kind: "skill",
+          lookup: extraArgs.slice(0, separator),
+          arguments: extraArgs.slice(separator).trim(),
+        };
   }
 
   const forkPointsMatch = /^\/fork-points(?:\s+(.*))?$/u.exec(trimmed);

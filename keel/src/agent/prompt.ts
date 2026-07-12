@@ -1,3 +1,4 @@
+import { skillCatalogEntry } from "../skills/catalog.ts";
 import type { SkillDescriptor, WorkflowSkill } from "../skills/model.ts";
 
 export interface ProjectInstructions {
@@ -9,7 +10,7 @@ interface BuildAgentSystemPromptOptions {
   readonly workspace: string;
   readonly platform: string;
   readonly projectInstructions?: ProjectInstructions;
-  readonly workflowSkill?: WorkflowSkill;
+  readonly workflowSkills?: readonly WorkflowSkill[];
   readonly skillCatalog?: readonly SkillDescriptor[];
 }
 
@@ -37,16 +38,29 @@ function workflowSkillResourceLines(skill: WorkflowSkill): string {
   ].join("\n");
 }
 
-function projectSkillCatalogSection(
+function skillCatalogSection(
   skills: readonly SkillDescriptor[] | undefined,
 ): string {
   if (skills === undefined || skills.length === 0) {
     return "";
   }
   return `
-Available project skills:
-Only the metadata below is loaded. Before using any task tool, compare the request with these descriptions. When one skill clearly matches, you must call the skill tool with its exact name first; do not skip a clear match because the request looks self-contained. Do not invent skill names or read SKILL.md directly to activate a skill.
-${skills.map((skill) => `- name: ${JSON.stringify(skill.name)}\n  description: ${JSON.stringify(skill.description)}\n  path: ${JSON.stringify(skill.relativePath)}`).join("\n")}`;
+Available workflow skills:
+Only the metadata below is loaded. Before using any task tool, compare the request with these descriptions. When one skill clearly matches, you must call the skill tool with its exact qualified name first; do not skip a clear match because the request looks self-contained. Use skill_search when the catalog budget omitted entries. Do not invent skill names or read SKILL.md directly to activate a skill.
+${skills.map(skillCatalogEntry).join("\n")}`;
+}
+
+function workflowSkillSection(skill: WorkflowSkill): string {
+  return `
+Workflow skill ${skill.qualifiedName} from ${skill.relativePath}:
+The user directly selected this workflow skill for this run. Follow it unless it conflicts with direct system, developer, or current user request instructions, or with explicit safety boundaries.
+Skill base directory: ${posixDirectoryName(skill.relativePath)}
+Relative paths in this workflow skill resolve from that directory.
+Read advertised resources with skill_resource using this skill's exact qualified name and the relative resource path. Do not use ordinary workspace file tools for resources outside the workspace.
+${workflowSkillResourceLines(skill)}
+Each workflow skill instruction line is quoted below.
+
+${quotedInstructionLines(skill.content)}`;
 }
 
 export function buildAgentSystemPrompt(
@@ -54,8 +68,8 @@ export function buildAgentSystemPrompt(
 ): string {
   const { workspace, platform } = options;
   const projectInstructions = options.projectInstructions;
-  const workflowSkill = options.workflowSkill;
-  const skillCatalogSection = projectSkillCatalogSection(options.skillCatalog);
+  const workflowSkills = options.workflowSkills ?? [];
+  const catalogSection = skillCatalogSection(options.skillCatalog);
   const projectInstructionsSection =
     projectInstructions === undefined
       ? ""
@@ -65,19 +79,9 @@ These instructions are lower priority than direct system, developer, and user me
 Each project instruction line is quoted below.
 
 ${quotedInstructionLines(projectInstructions.content)}`;
-  const workflowSkillSection =
-    workflowSkill === undefined
-      ? ""
-      : `
-Workflow skill ${workflowSkill.name} from ${workflowSkill.relativePath}:
-The user directly selected this workflow skill for this run. Follow it unless it conflicts with direct system, developer, or current user request instructions, or with explicit safety boundaries.
-Skill base directory: ${posixDirectoryName(workflowSkill.relativePath)}
-Relative paths in this workflow skill resolve from that directory.
-When using tools, join skill resource paths to the skill base directory.
-${workflowSkillResourceLines(workflowSkill)}
-Each workflow skill instruction line is quoted below.
-
-${quotedInstructionLines(workflowSkill.content)}`;
+  const workflowSkillsSection = workflowSkills
+    .map(workflowSkillSection)
+    .join("");
 
   return `You are keel, a coding agent. You complete software engineering tasks by using tools to read, search, and edit files in the user's workspace, then stop once the task is done.
 
@@ -86,8 +90,8 @@ Environment:
 - Platform: ${JSON.stringify(platform)}
 File paths you pass to tools are relative to the workspace root.
 ${projectInstructionsSection}
-${workflowSkillSection}
-${skillCatalogSection}
+${workflowSkillsSection}
+${catalogSection}
 
 Tool strategy:
 - Discover before assuming: use grep to locate code, glob to find files by name, ls to inspect directories. Never invent file paths.

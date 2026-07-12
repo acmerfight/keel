@@ -199,6 +199,11 @@ const sessionGraphRecordSchema = z
 
 const workflowSkillSchema = z
   .object({
+    id: z.string(),
+    packageId: z.string(),
+    qualifiedName: z.string(),
+    scope: z.enum(["repo", "user", "system", "extra"]),
+    digest: z.string(),
     relativePath: z.string(),
     name: z.string(),
     resourcePaths: z
@@ -652,6 +657,11 @@ function copySessionGraphRecord(graph: SessionGraphRecord): SessionGraphRecord {
 
 function copyWorkflowSkill(skill: WorkflowSkill): WorkflowSkill {
   return {
+    id: skill.id,
+    packageId: skill.packageId,
+    qualifiedName: skill.qualifiedName,
+    scope: skill.scope,
+    digest: skill.digest,
     relativePath: skill.relativePath,
     name: skill.name,
     resourcePaths: [...skill.resourcePaths],
@@ -663,6 +673,11 @@ function redactWorkflowSkillForPersistence(
   skill: WorkflowSkill,
 ): WorkflowSkill {
   return {
+    id: skill.id,
+    packageId: skill.packageId,
+    qualifiedName: skill.qualifiedName,
+    scope: skill.scope,
+    digest: skill.digest,
     relativePath: skill.relativePath,
     name: skill.name,
     resourcePaths: skill.resourcePaths.map(redactTextForPersistence),

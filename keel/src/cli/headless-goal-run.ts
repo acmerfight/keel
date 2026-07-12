@@ -230,8 +230,8 @@ function headlessGoalRunArgs(
       ? { providerId: cliArgs.providerId }
       : {}),
     ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
-    ...(cliArgs.skillName !== undefined
-      ? { skillName: cliArgs.skillName }
+    ...(cliArgs.skillNames !== undefined
+      ? { skillNames: cliArgs.skillNames }
       : {}),
   };
 }

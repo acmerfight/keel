@@ -8,10 +8,11 @@ import {
 } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
+import { discoverSkillCatalog } from "../../../src/skills/project.ts";
 import {
   requestWithMessagesSchema,
   requestWithToolsSchema,
@@ -48,7 +49,23 @@ async function writeSkill(
   body: string,
   options: WriteSkillOptions = {},
 ): Promise<void> {
-  const skillDir = join(workspace, ".agents", "skills", name);
+  await writeSkillAtRoot(
+    join(workspace, ".agents", "skills"),
+    name,
+    description,
+    body,
+    options,
+  );
+}
+
+async function writeSkillAtRoot(
+  root: string,
+  name: string,
+  description: string,
+  body: string,
+  options: WriteSkillOptions = {},
+): Promise<void> {
+  const skillDir = join(root, name);
   await mkdir(skillDir, { recursive: true });
   await writeFile(
     join(skillDir, "SKILL.md"),
@@ -90,7 +107,7 @@ describe("CLI Main - Skills", () => {
       // Then
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe(
-        "No local workflow skills found in .agents/skills.\n",
+        "No workflow skills found across repo, user, system, or extra scopes.\n",
       );
       expect(fixture.stderr()).toBe("");
     } finally {
@@ -165,6 +182,51 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given workflow skills exist in repo, user, system, and extra scopes,
+    When the user lists skills,
+    Then the authoritative catalog prints every qualified identity`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-skills-all-repo-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-skills-all-home-"));
+    const systemRoot = await mkdtemp(join(tmpdir(), "keel-skills-system-"));
+    const extraRoot = await mkdtemp(join(tmpdir(), "keel-skills-extra-"));
+    await writeSkill(workspace, "review", "Repository review.", "repo");
+    await writeSkillAtRoot(
+      join(home, ".agents", "skills"),
+      "review",
+      "User review.",
+      "user",
+    );
+    await writeSkillAtRoot(systemRoot, "doctor", "System doctor.", "system");
+    await writeSkillAtRoot(extraRoot, "deploy", "Extra deploy.", "extra");
+    const fixture = createRuntime(["skills"], {
+      cwd: workspace,
+      env: {
+        HOME: home,
+        KEEL_SYSTEM_SKILL_ROOTS: systemRoot,
+        KEEL_EXTRA_SKILL_ROOTS: [extraRoot].join(delimiter),
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain("repo:review: Repository review.");
+      expect(fixture.stdout()).toContain("user:review: User review.");
+      expect(fixture.stdout()).toContain("system:doctor: System doctor.");
+      expect(fixture.stdout()).toContain("extra:deploy: Extra deploy.");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+      await rm(systemRoot, { recursive: true, force: true });
+      await rm(extraRoot, { recursive: true, force: true });
+    }
+  });
+
   test(`Given valid and malformed local workflow skills exist,
     When the user lists skills,
     Then the CLI lists the valid skills and warns about skipped malformed ones`, async () => {
@@ -191,7 +253,7 @@ describe("CLI Main - Skills", () => {
       );
       expect(fixture.stdout()).not.toContain("broken");
       expect(fixture.stderr()).toContain(
-        'Warning: skipped workflow skill "broken":',
+        'Warning: skipped workflow skill "repo:broken":',
       );
       expect(fixture.stderr()).toContain(
         "description: Invalid input: expected string, received undefined",
@@ -252,7 +314,7 @@ describe("CLI Main - Skills", () => {
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).not.toContain(`${name}:`);
       expect(fixture.stderr()).toContain(
-        `Warning: skipped workflow skill ${JSON.stringify(name)}:`,
+        `Warning: skipped workflow skill ${JSON.stringify(`repo:${name}`)}:`,
       );
       expect(fixture.stderr().toLowerCase()).toContain(expected.toLowerCase());
     } finally {
@@ -325,7 +387,7 @@ describe("CLI Main - Skills", () => {
       expect(header).toMatchObject({
         type: "transcript",
         systemPrompt: expect.stringContaining(
-          "Workflow skill review from .agents/skills/review/SKILL.md",
+          "Workflow skill repo:review from .agents/skills/review/SKILL.md",
         ),
       });
       expect(header.systemPrompt).toContain("> Read PR comments first.");
@@ -333,6 +395,300 @@ describe("CLI Main - Skills", () => {
         "> Run coverage before declaring ready.",
       );
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given repository and user workflow skills are selected explicitly,
+    When the user repeats --skill in a one-shot run,
+    Then Keel activates both qualified skills once in command-line order`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-scopes-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-skill-home-"));
+    const transcriptPath = join(workspace, "run.jsonl");
+    const reportPath = join(workspace, "run-report.json");
+    await writeSkill(
+      workspace,
+      "review",
+      "Review using repository policy.",
+      "REPOSITORY REVIEW INSTRUCTIONS",
+    );
+    await writeSkillAtRoot(
+      join(home, ".agents", "skills"),
+      "release",
+      "Prepare a release using user policy.",
+      "USER RELEASE INSTRUCTIONS",
+    );
+    const fixture = createRuntime(
+      [
+        "--transcript",
+        transcriptPath,
+        "--report",
+        reportPath,
+        "--skill",
+        "user:release",
+        "--skill",
+        "repo:review",
+        "prepare and review the release",
+      ],
+      {
+        cwd: workspace,
+        env: { HOME: home, KEEL_PROVIDER: "fake" },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(fixture.stderr()).toBe("");
+      expect(exitCode).toBe(0);
+      const [header] = (await readFile(transcriptPath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const prompt = String(header.systemPrompt);
+      expect(prompt.match(/USER RELEASE INSTRUCTIONS/gu)).toHaveLength(1);
+      expect(prompt.match(/REPOSITORY REVIEW INSTRUCTIONS/gu)).toHaveLength(1);
+      expect(prompt.indexOf("USER RELEASE INSTRUCTIONS")).toBeLessThan(
+        prompt.indexOf("REPOSITORY REVIEW INSTRUCTIONS"),
+      );
+      expect(prompt).toContain("Workflow skill user:release");
+      expect(prompt).toContain("Workflow skill repo:review");
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        skillActivations: [
+          {
+            name: "user:release",
+            trigger: "user_explicit",
+          },
+          {
+            name: "repo:review",
+            trigger: "user_explicit",
+          },
+        ],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given repository and user scopes contain the same skill name,
+    When the user invokes that name without a scope,
+    Then Keel rejects the ambiguity and lists both choices before provider spend`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-clash-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-skill-clash-home-"));
+    await writeSkill(
+      workspace,
+      "review",
+      "Repository review policy.",
+      "REPOSITORY REVIEW",
+    );
+    await writeSkillAtRoot(
+      join(home, ".agents", "skills"),
+      "review",
+      "User review policy.",
+      "USER REVIEW",
+    );
+    let providerRequests = 0;
+    const server = createServer((_req, res) => {
+      providerRequests += 1;
+      res.writeHead(500);
+      res.end();
+    });
+    await listen(server);
+    const fixture = createRuntime(["$review review PR 430"], {
+      cwd: workspace,
+      env: {
+        HOME: home,
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(providerRequests).toBe(0);
+      expect(fixture.stderr()).toContain(
+        'workflow skill "review" is ambiguous',
+      );
+      expect(fixture.stderr()).toContain('"repo:review"');
+      expect(fixture.stderr()).toContain('"user:review"');
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a workflow skill is marked explicit only,
+    When Keel routes normally and when the user selects it explicitly,
+    Then the implicit catalog hides it but qualified activation still loads it`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-explicit-"));
+    const implicitTranscript = join(workspace, "implicit.jsonl");
+    const explicitTranscript = join(workspace, "explicit.jsonl");
+    await writeSkill(
+      workspace,
+      "deploy",
+      "Deploy only when the user explicitly selects this workflow.",
+      "EXPLICIT DEPLOY BODY",
+      { extraFrontmatterLines: ["metadata:", "  keel.activation: explicit"] },
+    );
+    const implicitFixture = createRuntime(
+      ["--transcript", implicitTranscript, "deploy now"],
+      { cwd: workspace, env: { KEEL_PROVIDER: "fake" } },
+    );
+    const explicitFixture = createRuntime(
+      [
+        "--transcript",
+        explicitTranscript,
+        "--skill",
+        "repo:deploy",
+        "deploy now",
+      ],
+      { cwd: workspace, env: { KEEL_PROVIDER: "fake" } },
+    );
+
+    try {
+      // When
+      const implicitExit = await runCliMain(implicitFixture.runtime);
+      const explicitExit = await runCliMain(explicitFixture.runtime);
+
+      // Then
+      expect(implicitExit).toBe(0);
+      expect(explicitExit).toBe(0);
+      const [implicitHeader] = (await readFile(implicitTranscript, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const [explicitHeader] = (await readFile(explicitTranscript, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(implicitHeader.systemPrompt).not.toContain("repo:deploy");
+      expect(implicitHeader.systemPrompt).not.toContain("EXPLICIT DEPLOY BODY");
+      expect(explicitHeader.systemPrompt).toContain(
+        "Workflow skill repo:deploy",
+      );
+      expect(explicitHeader.systemPrompt).toContain("EXPLICIT DEPLOY BODY");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the implicit skill catalog exceeds its prompt budget,
+    When the model searches for an omitted workflow and activates the result,
+    Then Keel diagnoses degradation and recovers the skill from the full catalog`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-overflow-"));
+    const reportPath = join(workspace, "overflow-report.json");
+    for (let index = 0; index < 90; index += 1) {
+      const name = index === 89 ? "zebra-audit" : `catalog-${index}`;
+      await writeSkill(
+        workspace,
+        name,
+        `${"metadata ".repeat(110)}entry ${index}`,
+        index === 89 ? "RECOVERED ZEBRA WORKFLOW" : `body ${index}`,
+      );
+    }
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("search_skill", "skill_search", {
+              query: "zebra audit",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (capturedBodies.length === 2) {
+          res.write(
+            sseToolCall("activate_skill", "skill", {
+              name: "repo:zebra-audit",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Recovered omitted skill."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      ["--report", reportPath, "find the specialized workflow"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stderr()).toContain("skill catalog budget exposed");
+      expect(fixture.stderr()).toContain("omitted");
+      const firstRequest = requestWithMessagesSchema.parse(capturedBodies[0]);
+      const firstPrompt = firstRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(firstPrompt).not.toContain("repo:zebra-audit");
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "search_skill",
+          content: expect.stringContaining("repo:zebra-audit"),
+        }),
+      );
+      const thirdRequest = requestWithMessagesSchema.parse(capturedBodies[2]);
+      expect(thirdRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "activate_skill",
+          content: expect.stringContaining("RECOVERED ZEBRA WORKFLOW"),
+        }),
+      );
+      const report = JSON.parse(await readFile(reportPath, "utf8"));
+      expect(report).toMatchObject({
+        skillCatalog: {
+          exposed: expect.any(Number),
+          omitted: expect.any(Number),
+          total: 90,
+          budgetChars: 80000,
+        },
+      });
+      expect(report.skillCatalog.omitted).toBeGreaterThan(0);
+    } finally {
+      await close(server);
       await rm(workspace, { recursive: true, force: true });
     }
   });
@@ -415,7 +771,7 @@ describe("CLI Main - Skills", () => {
       const firstSystemPrompt = firstRequest.messages?.find(
         (message) => message.role === "system",
       )?.content;
-      expect(firstSystemPrompt).toContain("Available project skills:");
+      expect(firstSystemPrompt).toContain("Available workflow skills:");
       expect(firstSystemPrompt).toContain(
         'description: "Review a pull request when the user asks for correctness findings."',
       );
@@ -438,6 +794,15 @@ describe("CLI Main - Skills", () => {
         expect.objectContaining({
           role: "tool",
           tool_call_id: "call_skill",
+          content: expect.stringMatching(
+            /<skill_activation id="repo:review" digest="sha256:[a-f0-9]{64}" trigger="model_selected"/u,
+          ),
+        }),
+      );
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_skill",
           content: expect.stringContaining(
             "<path>references/checklist.md</path>",
           ),
@@ -445,10 +810,10 @@ describe("CLI Main - Skills", () => {
       );
       expect(firstSystemPrompt).not.toContain("Private checklist body.");
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 5,
+        schemaVersion: 6,
         skillActivations: [
           {
-            name: "review",
+            name: "repo:review",
             relativePath: ".agents/skills/review/SKILL.md",
             trigger: "model_selected",
           },
@@ -533,7 +898,7 @@ describe("CLI Main - Skills", () => {
         }),
       );
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 5,
+        schemaVersion: 6,
         skillActivations: [],
       });
     } finally {
@@ -748,6 +1113,96 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given an active user-scoped skill declares an external resource,
+    When the model reads it through skill_resource,
+    Then Keel returns the bounded resource without widening workspace reads`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-user-skill-resource-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-user-skill-resource-home-"),
+    );
+    const userSkillRoot = join(home, ".agents", "skills");
+    await writeSkillAtRoot(
+      userSkillRoot,
+      "resource-reader",
+      "Read the declared marker resource when explicitly selected.",
+      "Read references/marker.txt with skill_resource and return its content.",
+    );
+    await mkdir(join(userSkillRoot, "resource-reader", "references"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(userSkillRoot, "resource-reader", "references", "marker.txt"),
+      "USER-RESOURCE-OK",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("read_skill_resource", "skill_resource", {
+              skill: "user:resource-reader",
+              path: "references/marker.txt",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("USER-RESOURCE-OK"));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      ["--skill", "user:resource-reader", "read the marker"],
+      {
+        cwd: workspace,
+        env: {
+          HOME: home,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("USER-RESOURCE-OK\n");
+      expect(fixture.stderr()).toBe(
+        "Tool: skill_resource user:resource-reader references/marker.txt\n",
+      );
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "read_skill_resource",
+          content: "USER-RESOURCE-OK",
+        }),
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a selected workflow skill has more resource files than the prompt cap,
     When the CLI starts a one-shot run,
     Then the provider-visible system prompt advertises no more than the bounded resource path limit`, async () => {
@@ -837,7 +1292,7 @@ describe("CLI Main - Skills", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(header.systemPrompt).toContain(
-        "Workflow skill review from .agents/skills/review/SKILL.md",
+        "Workflow skill repo:review from .agents/skills/review/SKILL.md",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -874,7 +1329,7 @@ describe("CLI Main - Skills", () => {
       // Then
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe(
-        "Workflow skill: review (.agents/skills/review/SKILL.md)\n",
+        "Workflow skills:\n- repo:review (.agents/skills/review/SKILL.md)\n",
       );
       expect(fixture.stderr()).toBe("");
     } finally {
@@ -914,9 +1369,9 @@ describe("CLI Main - Skills", () => {
     }
   });
 
-  test(`Given the user passes arguments to the interactive skill status command,
+  test(`Given the user activates a missing skill with /skill,
     When the command is read,
-    Then the CLI rejects the arguments without resolving a provider`, async () => {
+    Then the CLI reports the failed explicit lookup without resolving a provider`, async () => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-cli-skill-status-args-"),
@@ -941,7 +1396,7 @@ describe("CLI Main - Skills", () => {
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toBe(
-        "Error: /skill does not accept arguments.\n",
+        'Error: workflow skill "review" was not found.\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -988,7 +1443,7 @@ describe("CLI Main - Skills", () => {
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toBe(
-        'Error: workflow skill "missing" was not found in .agents/skills.\n',
+        'Error: workflow skill "missing" was not found.\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1015,7 +1470,7 @@ describe("CLI Main - Skills", () => {
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toBe(
-        'Error: workflow skill "missing" was not found in .agents/skills.\n',
+        'Error: workflow skill "missing" was not found.\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1043,7 +1498,7 @@ describe("CLI Main - Skills", () => {
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toBe(
-        'Error: workflow skill "missing" was not found in .agents/skills.\n',
+        'Error: workflow skill "missing" was not found.\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1139,12 +1594,80 @@ describe("CLI Main - Skills", () => {
         throw new Error("provider request had no system message");
       }
       expect(system.content).toContain(
-        "Workflow skill review from .agents/skills/review/SKILL.md",
+        "Workflow skill repo:review from .agents/skills/review/SKILL.md",
       );
       expect(system.content).toContain("> Read PR comments first.");
       expect(system.content).toContain(
         "> Run coverage before declaring ready.",
       );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project workflow skill is discoverable interactively,
+    When the user enters /skill with a qualified identity and task arguments,
+    Then Keel activates it before sending only the task to the provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-slash-skill-interactive-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "SLASH ACTIVATED REVIEW BODY",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Reviewed."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.end("/skill repo:review inspect PR 430\n");
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain(
+        "Activated workflow skill repo:review.",
+      );
+      expect(fixture.stdout()).toContain("Reviewed.");
+      const request = requestWithMessagesSchema.parse(capturedBodies[0]);
+      expect(request.messages).toContainEqual({
+        role: "user",
+        content: "inspect PR 430",
+      });
+      const system = request.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(system).toContain("Workflow skill repo:review");
+      expect(system).toContain("SLASH ACTIVATED REVIEW BODY");
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -1247,8 +1770,8 @@ describe("CLI Main - Skills", () => {
   });
 
   test(`Given a named interactive session already has a workflow skill,
-    When the user resumes it with a different workflow skill,
-    Then the CLI rejects the conflicting skill before contacting a provider`, async () => {
+    When the user resumes it with a different explicit workflow skill,
+    Then both validated skills are available for the resumed run`, async () => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-cli-skill-conflict-workspace-"),
@@ -1300,10 +1823,10 @@ describe("CLI Main - Skills", () => {
 
       // Then
       expect(firstExitCode).toBe(0);
-      expect(secondExitCode).toBe(1);
-      expect(secondRun.stdout()).toBe("");
+      expect(secondExitCode).toBe(0);
+      expect(secondRun.stdout()).not.toBe("");
       expect(secondRun.stderr()).toBe(
-        'Error: session "demo" already uses workflow skill "review"; cannot resume it with workflow skill "merge-pr".\n',
+        "Warning: this saved session persists only its first launch-selected workflow skill; additional explicit skills apply to the current run only.\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1360,7 +1883,7 @@ describe("CLI Main - Skills", () => {
       expect(secondExitCode).toBe(1);
       expect(secondRun.stdout()).toBe("");
       expect(secondRun.stderr()).toBe(
-        'Error: session "demo" already uses workflow skill "review"; cannot resume it with workflow skill "merge-pr".\n',
+        'Error: session "demo" already uses workflow skill "repo:review"; cannot resume it with workflow skill "merge-pr".\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1368,9 +1891,95 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given a saved session is forked with an invalid later skill flag,
+    When validation fails before the provider starts,
+    Then no target fork is left behind and the corrected retry can reuse its id`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-fork-validation-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-fork-validation-home-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "Review workflow body.",
+    );
+    const createInput = new PassThrough();
+    createInput.end("remember source\n");
+    const createRun = createRuntime(["--session", "source"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: createInput,
+    });
+
+    try {
+      const createExit = await runCliMain(createRun.runtime);
+      const invalidInput = new PassThrough();
+      invalidInput.end("continue\n");
+      const invalidRun = createRuntime(
+        [
+          "--resume",
+          "source",
+          "--fork",
+          "target",
+          "--skill",
+          "review",
+          "--skill",
+          "missing",
+        ],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "fake",
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+          },
+          input: invalidInput,
+        },
+      );
+
+      // When
+      const invalidExit = await runCliMain(invalidRun.runtime);
+      const retryInput = new PassThrough();
+      retryInput.end("continue\n");
+      const retryRun = createRuntime(
+        ["--resume", "source", "--fork", "target", "--skill", "review"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "fake",
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+          },
+          input: retryInput,
+        },
+      );
+      const retryExit = await runCliMain(retryRun.runtime);
+
+      // Then
+      expect(createExit).toBe(0);
+      expect(invalidExit).toBe(1);
+      expect(invalidRun.stderr()).toContain(
+        'workflow skill "missing" was not found',
+      );
+      expect(retryExit).toBe(0);
+      expect(retryRun.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a named interactive session was created without a workflow skill,
-    When the user resumes it with a workflow skill,
-    Then the CLI rejects adding new workflow guidance to the restored session`, async () => {
+    When the user resumes it with an explicit workflow skill,
+    Then Keel activates the validated skill for the resumed run`, async () => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-cli-skill-missing-session-workspace-"),
@@ -1418,11 +2027,9 @@ describe("CLI Main - Skills", () => {
 
       // Then
       expect(firstExitCode).toBe(0);
-      expect(secondExitCode).toBe(1);
-      expect(secondRun.stdout()).toBe("");
-      expect(secondRun.stderr()).toBe(
-        'Error: session "demo" has no workflow skill; cannot resume it with workflow skill "review".\n',
-      );
+      expect(secondExitCode).toBe(0);
+      expect(secondRun.stdout()).not.toBe("");
+      expect(secondRun.stderr()).toBe("");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -1486,6 +2093,78 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given a saved repository skill gains a same-scope name collision,
+    When the user resumes with that package's new root-qualified alias,
+    Then Keel deduplicates it by stable package identity`, async () => {
+    // Given
+    const project = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-topology-project-"),
+    );
+    const workspace = join(project, "packages", "app");
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-skill-topology-home-"));
+    await mkdir(join(project, ".git"), { recursive: true });
+    await mkdir(workspace, { recursive: true });
+    await writeSkill(
+      project,
+      "review",
+      "Review from the project root.",
+      "Stable project review body.",
+    );
+    const firstInput = new PassThrough();
+    firstInput.end("remember alpha\n");
+    const firstRun = createRuntime(["--session", "demo", "--skill", "review"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input: firstInput,
+    });
+
+    try {
+      const firstExitCode = await runCliMain(firstRun.runtime);
+      await writeSkill(
+        workspace,
+        "review",
+        "Review from the package workspace.",
+        "New colliding review body.",
+      );
+      const projectSkill = discoverSkillCatalog({ workspace }).skills.find(
+        (skill) => skill.rootPriority > 0,
+      );
+      if (projectSkill === undefined) {
+        throw new Error("project-root review skill was not discovered");
+      }
+      const secondInput = new PassThrough();
+      secondInput.end("what did I ask you to remember?\n");
+      const secondRun = createRuntime(
+        ["--resume", "demo", "--skill", projectSkill.qualifiedName],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "fake",
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+          },
+          input: secondInput,
+        },
+      );
+
+      // When
+      const secondExitCode = await runCliMain(secondRun.runtime);
+
+      // Then
+      expect(firstExitCode).toBe(0);
+      expect(secondExitCode).toBe(0);
+      expect(secondRun.stdout()).toBe("Earlier you said: remember alpha\n");
+      expect(secondRun.stderr()).toBe("");
+    } finally {
+      await rm(project, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a workflow skill symlink resolves outside the local skill root,
     When the CLI starts a one-shot run,
     Then it rejects the escaped SKILL.md path before contacting a provider`, async () => {
@@ -1515,7 +2194,7 @@ describe("CLI Main - Skills", () => {
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toBe(
-        "Error: cannot load workflow skill: resolved SKILL.md path escapes .agents/skills.\n",
+        "Error: cannot load workflow skill: resolved SKILL.md path escapes its skill root.\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1767,7 +2446,7 @@ describe("CLI Main - Skills", () => {
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toBe(
-        'Error: workflow skill "review" has mismatched frontmatter name "other".\n',
+        'Error: workflow skill "repo:review" has mismatched frontmatter name "other".\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1795,7 +2474,7 @@ describe("CLI Main - Skills", () => {
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toBe(
-        'Error: workflow skill "folder" must be a regular SKILL.md file.\n',
+        'Error: workflow skill "repo:folder" must be a regular SKILL.md file.\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

@@ -108,6 +108,43 @@ class TestTerminal implements Terminal {
 }
 
 describe("Interactive Terminal Display", () => {
+  test(`Given the TUI receives the authoritative workflow skill catalog,
+    When the user types a /skill argument prefix,
+    Then autocomplete shows the qualified catalog identity`, async () => {
+    // Given
+    const terminal = new TestTerminal();
+    const display = createInteractiveTerminalDisplay(terminal, {
+      inputEchoesToDisplay: true,
+      session: { kind: "ephemeral" },
+      workspace: process.cwd(),
+      skillCompletions: [
+        {
+          id: "user:test:review",
+          packageId: "user:test:review",
+          rootKey: "test",
+          rootPriority: 1000,
+          qualifiedName: "user:review",
+          scope: "user",
+          activationPolicy: "implicit",
+          name: "review",
+          description: "Review using the user's workflow.",
+          relativePath: "~/.agents/skills/review/SKILL.md",
+          digest: "digest",
+        },
+      ],
+      onInterrupt: () => {},
+    });
+    display.start();
+
+    // When
+    terminal.input("/skill user");
+
+    // Then
+    const screen = await terminal.waitForText("user:review");
+    expect(screen).toContain("Review using the user's workflow.");
+    display.stop();
+  });
+
   test(`Given the CLI runs with a real terminal display,
     When the user submits a bracketed multiline paste and interrupts at the next prompt,
     Then the terminal renders one reply and restores terminal state`, async () => {

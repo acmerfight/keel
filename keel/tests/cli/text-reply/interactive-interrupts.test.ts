@@ -217,7 +217,7 @@ describe("CLI Text Reply", () => {
       expect(exit.stdout).toContain("Earlier you said: remember alpha\n");
       expect(exit.stderr).toBe("");
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 5,
+        schemaVersion: 6,
         modelsUsed: [{ provider: "fake", model: "fake" }],
         usageByModel: [
           {

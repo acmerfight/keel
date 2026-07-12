@@ -934,7 +934,7 @@ describe("CLI Main - Session Fork", () => {
     await writeFile(
       join(sessionDir, "ledger.jsonl"),
       `${JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         type: "session",
         id: "empty",
         createdAt: "1970-01-01T00:00:00.000Z",

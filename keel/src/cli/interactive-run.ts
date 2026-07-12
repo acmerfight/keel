@@ -10,10 +10,7 @@ import type {
   BashApprovalGrant,
   SessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
-import {
-  createProjectSkillActivation,
-  discoverProjectSkillCatalog,
-} from "../skills/project.ts";
+import { createSkillActivation } from "../skills/project.ts";
 import type { CliArgs } from "./args.ts";
 import { USAGE } from "./args.ts";
 import {
@@ -97,8 +94,9 @@ import {
   type InteractiveTerminalDisplay,
 } from "./tui/interactive-terminal.ts";
 import {
+  discoverWorkflowSkillCatalog,
   formatWorkflowSkillListWarnings,
-  loadWorkflowSkill,
+  loadWorkflowSkills,
   WorkflowSkillError,
 } from "./workflow-skills.ts";
 
@@ -557,11 +555,11 @@ async function runSessionCli(
       let headlessGoalBashPermission =
         mode.kind === "headless-goal" ? mode.bashPermission : undefined;
       let headlessPreparedSessionGoal: SessionGoal | undefined;
-      let workflowSkill =
+      let workflowSkills =
         (sessionStart.kind === "create" || sessionStart.kind === "ephemeral") &&
-        cliArgs.skillName !== undefined
-          ? loadWorkflowSkill(workspace, cliArgs.skillName)
-          : undefined;
+        cliArgs.skillNames !== undefined
+          ? loadWorkflowSkills(runtime, workspace, cliArgs.skillNames)
+          : [];
       if (sessionStart.kind === "create") {
         activeSessionId = sessionStart.sessionId;
         ensureSessionCanBeCreated({
@@ -583,10 +581,11 @@ async function runSessionCli(
         });
         const resumedWorkflowSkill = resolveResumedWorkflowSkill({
           session: resumedSession,
-          ...(cliArgs.skillName !== undefined
-            ? { requestedSkillName: cliArgs.skillName }
-            : {}),
         });
+        const requestedWorkflowSkills =
+          cliArgs.skillNames === undefined
+            ? []
+            : loadWorkflowSkills(runtime, workspace, cliArgs.skillNames);
         if (sessionStart.kind === "fork") {
           ensureSessionCanBeCreated({
             sessionId: sessionStart.targetSessionId,
@@ -626,7 +625,15 @@ async function runSessionCli(
             headlessGoalBashPermission = preparation.bashPermission;
           }
         }
-        workflowSkill = resumedWorkflowSkill;
+        workflowSkills = [
+          ...(resumedWorkflowSkill === undefined ? [] : [resumedWorkflowSkill]),
+          ...requestedWorkflowSkills,
+        ].filter(
+          (skill, index, skills) =>
+            skills.findIndex(
+              (candidate) => candidate.packageId === skill.packageId,
+            ) === index,
+        );
         activeSessionId = session.id;
         persistedMessages = session.messages;
         initialModelSelection = session.activeModel;
@@ -664,19 +671,18 @@ async function runSessionCli(
           initialModelSelection = overrideSelection;
         }
       }
-      const projectSkillCatalog =
-        workflowSkill === undefined
-          ? discoverProjectSkillCatalog(workspace)
-          : undefined;
-      if (projectSkillCatalog !== undefined) {
+      const skillCatalog = discoverWorkflowSkillCatalog(runtime, workspace);
+      runtime.writeStderr(
+        formatWorkflowSkillListWarnings(skillCatalog.warnings),
+      );
+      if (activeSessionId !== undefined && workflowSkills.length > 1) {
         runtime.writeStderr(
-          formatWorkflowSkillListWarnings(projectSkillCatalog.warnings),
+          "Warning: this saved session persists only its first launch-selected workflow skill; additional explicit skills apply to the current run only.\n",
         );
       }
       const skillActivation =
-        projectSkillCatalog !== undefined &&
-        projectSkillCatalog.skills.length > 0
-          ? createProjectSkillActivation(projectSkillCatalog)
+        skillCatalog.skills.length > 0
+          ? createSkillActivation(skillCatalog)
           : undefined;
       let sessionPersistence:
         | {
@@ -743,7 +749,9 @@ async function runSessionCli(
               sessionId,
               workspace,
               runtime,
-              ...(workflowSkill !== undefined ? { workflowSkill } : {}),
+              ...(workflowSkills[0] !== undefined
+                ? { workflowSkill: workflowSkills[0] }
+                : {}),
             });
             session = activeSession;
             persistedMessages = activeSession.messages;
@@ -985,6 +993,8 @@ async function runSessionCli(
               {
                 inputEchoesToDisplay: true,
                 session: displaySession,
+                workspace,
+                skillCompletions: skillCatalog.skills,
                 onInterrupt: () => {
                   activeSigintHandler?.();
                 },
@@ -1030,11 +1040,13 @@ async function runSessionCli(
             }
           : {}),
         ...(projectInstructions !== undefined ? { projectInstructions } : {}),
-        ...(workflowSkill !== undefined ? { workflowSkill } : {}),
-        ...(projectSkillCatalog !== undefined
-          ? { skillCatalog: projectSkillCatalog.skills }
+        ...(workflowSkills.length > 0 ? { workflowSkills } : {}),
+        ...(workflowSkills.length === 0 &&
+        skillCatalog.implicitSkills.length > 0
+          ? { skillCatalog: skillCatalog.implicitSkills }
           : {}),
         ...(skillActivation !== undefined ? { skillActivation } : {}),
+        activateExplicitSkill: (lookup) => skillCatalog.load(lookup),
         ...(sessionPersistence !== undefined ? sessionPersistence : {}),
         ...(initialInputLines.length > 0 ? { initialInputLines } : {}),
         ...(projectBashApprovals !== undefined
@@ -1139,7 +1151,11 @@ async function runSessionCli(
                 },
           durationMs: runtime.now() - startedAt,
           contextCompactions: reportRecorder.contextCompactions(),
-          skillActivations: reportRecorder.skillActivations(),
+          skillActivations: [
+            ...interactiveResult.report.explicitSkillActivations,
+            ...reportRecorder.skillActivations(),
+          ],
+          skillCatalog: interactiveResult.report.skillCatalog,
           ...(goalOutcome !== undefined ? { goalOutcome } : {}),
         });
       }

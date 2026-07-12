@@ -1,6 +1,7 @@
 import { parseDocument } from "yaml";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
+import type { SkillActivationPolicy } from "./model.ts";
 import { WorkflowSkillError } from "./model.ts";
 
 const skillNameSchema = z
@@ -27,6 +28,7 @@ export interface ParsedSkillDocument {
   readonly name: string;
   readonly description: string;
   readonly content: string;
+  readonly activationPolicy: SkillActivationPolicy;
 }
 
 export function validateSkillName(name: string): void {
@@ -111,5 +113,21 @@ export function parseSkillDocument(
     name: parsed.data.name,
     description: parsed.data.description,
     content: bounds.content,
+    activationPolicy: parseActivationPolicy(parsed.data.metadata),
   };
+}
+
+function parseActivationPolicy(
+  metadata: Readonly<Record<string, string>> | undefined,
+): SkillActivationPolicy {
+  const value = metadata?.["keel.activation"];
+  if (value === undefined || value === "implicit") {
+    return "implicit";
+  }
+  if (value === "explicit") {
+    return "explicit";
+  }
+  throw new WorkflowSkillError(
+    'Error: workflow skill metadata.keel.activation must be "implicit" or "explicit".',
+  );
 }

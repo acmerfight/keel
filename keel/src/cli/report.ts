@@ -14,7 +14,16 @@ interface RunReportInput {
   readonly durationMs: number;
   readonly contextCompactions: readonly RunReportContextCompaction[];
   readonly skillActivations: readonly SkillActivationRecord[];
+  readonly skillCatalog: RunReportSkillCatalog;
   readonly goalOutcome?: RunReportGoalOutcome;
+}
+
+export interface RunReportSkillCatalog {
+  readonly exposed: number;
+  readonly omitted: number;
+  readonly total: number;
+  readonly budgetChars: number;
+  readonly usedChars: number;
 }
 
 export interface RunReportGoalOutcome {
@@ -33,7 +42,7 @@ interface RunReportModelUsage {
 }
 
 interface RunReport {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: 6;
   readonly modelsUsed: readonly {
     readonly provider: string;
     readonly model: string;
@@ -48,6 +57,7 @@ interface RunReport {
   readonly costOvershootUsd: number;
   readonly contextCompactions: readonly RunReportContextCompaction[];
   readonly skillActivations: readonly SkillActivationRecord[];
+  readonly skillCatalog: RunReportSkillCatalog;
   readonly goalOutcome?: RunReportGoalOutcome;
 }
 
@@ -78,7 +88,7 @@ export function assertEndEventHasCost(
 export function writeRunReport(filePath: string, input: RunReportInput): void {
   const cost = input.end.cost;
   const report: RunReport = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     modelsUsed: input.usageByModel.map((entry) => ({
       provider: entry.provider,
       model: entry.model,
@@ -99,6 +109,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     costOvershootUsd: cost.overshootUsd,
     contextCompactions: input.contextCompactions,
     skillActivations: input.skillActivations,
+    skillCatalog: input.skillCatalog,
     ...(input.goalOutcome !== undefined
       ? { goalOutcome: input.goalOutcome }
       : {}),

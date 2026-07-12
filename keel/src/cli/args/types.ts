@@ -142,7 +142,7 @@ export interface RunCliArgs {
   readonly forkPoints?: boolean;
   readonly providerId?: ProviderId;
   readonly model?: string;
-  readonly skillName?: string;
+  readonly skillNames?: readonly string[];
 }
 
 interface GoalCliCommonArgs {
@@ -152,7 +152,7 @@ interface GoalCliCommonArgs {
   readonly reportFile?: string;
   readonly providerId?: ProviderId;
   readonly model?: string;
-  readonly skillName?: string;
+  readonly skillNames?: readonly string[];
 }
 
 type ResumeSessionCliArg =

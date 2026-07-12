@@ -21,7 +21,7 @@ import {
 
 function modelSwitchRecordLine(timestamp: string): string {
   return JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
     type: "model_switch",
     timestamp,
     from: null,
@@ -31,7 +31,7 @@ function modelSwitchRecordLine(timestamp: string): string {
 
 function bashApprovalGrantedRecordLine(timestamp: string, cwd: string): string {
   return JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
     type: "bash_approval_granted",
     timestamp,
     grant: {
@@ -615,6 +615,11 @@ describe("CLI Main - Sessions Command", () => {
         sourceOrdinal: 7,
       }),
       workflowSkill: {
+        id: "repo:test:review",
+        packageId: "repo:test:review",
+        digest: "digest",
+        qualifiedName: "repo:review",
+        scope: "repo",
         name: "review",
         relativePath: ".agents/skills/review/SKILL.md",
         resourcePaths: ["references/checklist.md"],
@@ -699,7 +704,7 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain("title: Fix login timeout\n");
       expect(stdout).toContain("parent: source\n");
       expect(stdout).toContain(
-        "workflow skill: review (.agents/skills/review/SKILL.md)\n",
+        "workflow skill: repo:review (.agents/skills/review/SKILL.md)\n",
       );
       expect(stdout).toContain(
         "fork point: full restored history from source through message source-last-message (message 7)\n",
@@ -717,7 +722,7 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain(`  workspace: ${ledgerWorkspace}\n`);
       expect(stdout).toContain("  active model: qwen/qwen3.7-max\n");
       expect(stdout).toContain(
-        "  workflow skill: review (.agents/skills/review/SKILL.md)\n",
+        "  workflow skill: repo:review (.agents/skills/review/SKILL.md)\n",
       );
       expect(stdout).toContain("  messages: 4\n");
       expect(stdout).toContain("  pending inputs: 1\n");
@@ -901,7 +906,7 @@ describe("CLI Main - Sessions Command", () => {
       }),
       records: [
         JSON.stringify({
-          schemaVersion: 2,
+          schemaVersion: 3,
           type: "append",
           timestamp: "2026-02-05T00:00:01.000Z",
           reason: "turn",
@@ -939,7 +944,7 @@ describe("CLI Main - Sessions Command", () => {
           ],
         }),
         JSON.stringify({
-          schemaVersion: 2,
+          schemaVersion: 3,
           type: "model_switch",
           timestamp: "2026-02-05T00:00:02.000Z",
           from: null,
@@ -1658,6 +1663,11 @@ describe("CLI Main - Sessions Command", () => {
     const ledgerWorkspace = await realpath(workspace);
     const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
     const workflowSkill = {
+      id: "repo:test:review",
+      packageId: "repo:test:review",
+      digest: "digest",
+      qualifiedName: "repo:review",
+      scope: "repo" as const,
       name: "review",
       relativePath: ".agents/skills/review/SKILL.md",
       resourcePaths: ["references/checklist.md"],
@@ -1708,10 +1718,10 @@ describe("CLI Main - Sessions Command", () => {
       expect(exitCode).toBe(0);
       const stdout = fixture.stdout();
       expect(stdout).toContain(
-        "   workflow skill: review (.agents/skills/review/SKILL.md)\n",
+        "   workflow skill: repo:review (.agents/skills/review/SKILL.md)\n",
       );
       expect(stdout).toContain(
-        "     workflow skill: review (.agents/skills/review/SKILL.md)\n",
+        "     workflow skill: repo:review (.agents/skills/review/SKILL.md)\n",
       );
       expect(stdout).not.toContain("Secret review workflow body.");
       expect(fixture.stderr()).toBe("");

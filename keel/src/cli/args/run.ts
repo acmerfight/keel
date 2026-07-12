@@ -50,7 +50,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   let forkPoints = false;
   let providerId: RunCliArgs["providerId"] | undefined;
   let model: string | undefined;
-  let skillName: string | undefined;
+  const skillNames: string[] = [];
   let userMessage: string | undefined;
   const maxCostPrefix = "--max-cost=";
   const reportPrefix = "--report=";
@@ -150,7 +150,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
         RUN_OPTIONS,
       );
       if (!parsed.ok) return parsed;
-      skillName = parsed.value;
+      skillNames.push(parsed.value);
       skipNext = true;
       continue;
     }
@@ -158,7 +158,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     if (arg.startsWith(skillPrefix)) {
       const parsed = parseSkillName(arg.slice(skillPrefix.length));
       if (!parsed.ok) return parsed;
-      skillName = parsed.value;
+      skillNames.push(parsed.value);
       continue;
     }
 
@@ -440,6 +440,6 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     ...(forkPoints ? { forkPoints } : {}),
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
-    ...(skillName !== undefined ? { skillName } : {}),
+    ...(skillNames.length > 0 ? { skillNames } : {}),
   });
 }

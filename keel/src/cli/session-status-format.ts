@@ -14,7 +14,7 @@ import { sanitizeStatusLineText } from "./output.ts";
 import { redactTextForPersistence } from "./persistence-redaction.ts";
 
 interface SessionStatusWorkflowSkill {
-  readonly name: string;
+  readonly qualifiedName: string;
   readonly relativePath: string;
 }
 
@@ -30,6 +30,12 @@ export interface SessionStatusSnapshotOptions {
   readonly activeModel: string;
   readonly goal?: SessionGoal;
   readonly workflowSkill?: SessionStatusWorkflowSkill;
+  readonly skillCatalog?: {
+    readonly exposed: number;
+    readonly omitted: number;
+    readonly total: number;
+    readonly budgetChars: number;
+  };
   readonly messages: readonly Message[];
   readonly messageCount: number;
   readonly pendingInputCount: number;
@@ -109,7 +115,7 @@ function formatWorkflowSkill(
   if (workflowSkill === undefined) {
     return "none";
   }
-  return `${formatStatusText(workflowSkill.name)} (${formatStatusText(workflowSkill.relativePath)})`;
+  return `${formatStatusText(workflowSkill.qualifiedName)} (${formatStatusText(workflowSkill.relativePath)})`;
 }
 
 function formatUndoCheckpointStatus(
@@ -138,6 +144,11 @@ export function formatSessionStatusSnapshot(
     `  workspace: ${formatStatusText(options.workspace)}`,
     `  active model: ${formatStatusText(options.activeModel)}`,
     `  workflow skill: ${formatWorkflowSkill(options.workflowSkill)}`,
+    `  skill catalog: ${
+      options.skillCatalog === undefined
+        ? "not available"
+        : `${options.skillCatalog.exposed}/${options.skillCatalog.total} exposed, ${options.skillCatalog.omitted} omitted (budget ${options.skillCatalog.budgetChars} chars)`
+    }`,
     `  messages: ${options.messageCount}`,
     `  pending inputs: ${options.pendingInputCount}`,
     `  bash approvals: ${options.bashApprovalCount}`,

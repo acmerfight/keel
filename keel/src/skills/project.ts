@@ -18,10 +18,11 @@ import {
   isBinarySample,
 } from "../tools/text-file.ts";
 import type {
-  ProjectSkillCatalog,
   SkillActivationCapability,
+  SkillCatalog,
   SkillCatalogWarning,
   SkillDescriptor,
+  SkillScope,
   WorkflowSkill,
 } from "./model.ts";
 import { WorkflowSkillError } from "./model.ts";
@@ -36,18 +37,29 @@ import { parseSkillDocument, validateSkillName } from "./schema.ts";
 const LOCAL_SKILL_ROOT = join(".agents", "skills");
 const SKILL_FILE = "SKILL.md";
 const MAX_WORKFLOW_SKILL_BYTES = 50 * 1024;
+const QUALIFIED_SKILL_PATTERN = /^(repo|user|system|extra):(.+)$/u;
 
-interface LocalSkillRoot {
+interface SkillRoot {
+  readonly scope: SkillScope;
   readonly rootPath: string;
-  readonly displayBasePath: string;
+  readonly displayRoot: string;
+  readonly displayBasePath?: string;
+  readonly priority: number;
 }
 
-interface ReadProjectSkill {
+interface ReadSkill {
   readonly descriptor: SkillDescriptor;
   readonly skill: WorkflowSkill;
 }
 
-type LocalSkillRootStatus = "missing" | "directory" | "not-directory";
+export interface SkillDiscoveryOptions {
+  readonly workspace: string;
+  readonly userRoot?: string;
+  readonly systemRoots?: readonly string[];
+  readonly extraRoots?: readonly string[];
+}
+
+type SkillRootStatus = "missing" | "directory" | "not-directory";
 
 function toPosixPath(path: string): string {
   return path.replaceAll("\\", "/");
@@ -57,11 +69,9 @@ function pathExists(path: string): boolean {
   return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 }
 
-function localSkillRootStatus(path: string): LocalSkillRootStatus {
+function skillRootStatus(path: string): SkillRootStatus {
   const stat = lstatSync(path, { throwIfNoEntry: false });
-  if (stat === undefined) {
-    return "missing";
-  }
+  if (stat === undefined) return "missing";
   return stat.isDirectory() ? "directory" : "not-directory";
 }
 
@@ -70,80 +80,111 @@ function findProjectRoot(workspace: string): string {
   let projectRoot: string | null = null;
   let current = resolvedWorkspace;
   while (true) {
-    if (pathExists(join(current, ".git"))) {
-      projectRoot = current;
-    }
+    if (pathExists(join(current, ".git"))) projectRoot = current;
     const parent = dirname(current);
-    if (parent === current) {
-      return projectRoot ?? resolvedWorkspace;
-    }
+    if (parent === current) return projectRoot ?? resolvedWorkspace;
     current = parent;
   }
 }
 
-function findLocalSkillRoot(workspace: string): LocalSkillRoot {
+function repositorySkillRoots(workspace: string): readonly SkillRoot[] {
   const projectRoot = findProjectRoot(workspace);
+  const roots: SkillRoot[] = [];
   let current = resolve(workspace);
+  let priority = 0;
   while (true) {
     const rootPath = join(current, LOCAL_SKILL_ROOT);
-    if (localSkillRootStatus(rootPath) !== "missing") {
-      return { rootPath, displayBasePath: current };
+    if (skillRootStatus(rootPath) !== "missing") {
+      roots.push({
+        scope: "repo",
+        rootPath,
+        displayRoot: toPosixPath(relative(workspace, rootPath) || "."),
+        displayBasePath: current,
+        priority,
+      });
     }
-    if (current === projectRoot) {
-      return {
-        rootPath: join(projectRoot, LOCAL_SKILL_ROOT),
-        displayBasePath: projectRoot,
-      };
-    }
+    if (current === projectRoot) return roots;
     current = dirname(current);
+    priority += 1;
   }
 }
 
-function ensureLocalSkillRootDirectory(root: LocalSkillRoot): boolean {
-  const status = localSkillRootStatus(root.rootPath);
-  if (status === "missing") {
-    return false;
-  }
+function configuredSkillRoot(
+  scope: Exclude<SkillScope, "repo">,
+  rootPath: string,
+  priority: number,
+  displayRoot = toPosixPath(resolve(rootPath)),
+): SkillRoot {
+  return { scope, rootPath: resolve(rootPath), displayRoot, priority };
+}
+
+function discoveryRoots(options: SkillDiscoveryOptions): readonly SkillRoot[] {
+  return [
+    ...repositorySkillRoots(options.workspace),
+    ...(options.userRoot === undefined
+      ? []
+      : [
+          configuredSkillRoot(
+            "user",
+            options.userRoot,
+            1_000,
+            "~/.agents/skills",
+          ),
+        ]),
+    ...(options.systemRoots ?? []).map((root, index) =>
+      configuredSkillRoot("system", root, 2_000 + index),
+    ),
+    ...(options.extraRoots ?? []).map((root, index) =>
+      configuredSkillRoot("extra", root, 3_000 + index),
+    ),
+  ];
+}
+
+function ensureSkillRootDirectory(root: SkillRoot): boolean {
+  const status = skillRootStatus(root.rootPath);
+  if (status === "missing") return false;
   if (status === "not-directory") {
     throw new WorkflowSkillError(
-      `Error: ${LOCAL_SKILL_ROOT} must be a local directory to load workflow skills.`,
+      `Error: ${root.displayRoot} must be a local directory to load workflow skills.`,
     );
   }
-  const realBasePath = realpathSync(root.displayBasePath);
-  const expectedRootPath = resolve(realBasePath, LOCAL_SKILL_ROOT);
-  const realRootPath = realpathSync(root.rootPath);
-  if (realRootPath !== expectedRootPath) {
+  const expectedRootPath =
+    root.displayBasePath === undefined
+      ? realpathSync(root.rootPath)
+      : resolve(realpathSync(root.displayBasePath), LOCAL_SKILL_ROOT);
+  if (realpathSync(root.rootPath) !== expectedRootPath) {
     throw new WorkflowSkillError(
-      `Error: ${LOCAL_SKILL_ROOT} must be a local directory to load workflow skills.`,
+      `Error: ${root.displayRoot} must be a local directory to load workflow skills.`,
     );
   }
   return true;
 }
 
-function relativeSkillPath(root: LocalSkillRoot, skillName: string): string {
-  return toPosixPath(
-    relative(root.displayBasePath, join(root.rootPath, skillName, SKILL_FILE)),
-  );
+function skillDisplayPath(root: SkillRoot, skillName: string): string {
+  if (root.displayBasePath !== undefined) {
+    return toPosixPath(
+      relative(
+        root.displayBasePath,
+        join(root.rootPath, skillName, SKILL_FILE),
+      ),
+    );
+  }
+  return toPosixPath(join(root.displayRoot, skillName, SKILL_FILE));
 }
 
 function compareSkillResourcePaths(left: string, right: string): number {
   const leftDirectory = left.slice(0, left.indexOf("/"));
   const rightDirectory = right.slice(0, right.indexOf("/"));
-  const leftDirectoryIndex =
-    WORKFLOW_SKILL_RESOURCE_DIRECTORIES.indexOf(leftDirectory);
-  const rightDirectoryIndex =
+  const directoryDelta =
+    WORKFLOW_SKILL_RESOURCE_DIRECTORIES.indexOf(leftDirectory) -
     WORKFLOW_SKILL_RESOURCE_DIRECTORIES.indexOf(rightDirectory);
-  const directoryDelta = leftDirectoryIndex - rightDirectoryIndex;
   return directoryDelta === 0 ? left.localeCompare(right) : directoryDelta;
 }
 
 function listSkillResourceDirectory(options: {
   readonly currentPath: string;
   readonly relativeParts: readonly string[];
-  readonly state: {
-    readonly resourcePaths: string[];
-    entryVisits: number;
-  };
+  readonly state: { readonly resourcePaths: string[]; entryVisits: number };
 }): void {
   const directory = opendirSync(options.currentPath);
   try {
@@ -156,9 +197,7 @@ function listSkillResourceDirectory(options: {
         return;
       }
       const entry = directory.readSync();
-      if (entry === null) {
-        return;
-      }
+      if (entry === null) return;
       options.state.entryVisits += 1;
       const entryPath = join(options.currentPath, entry.name);
       const entryRelativeParts = [...options.relativeParts, entry.name];
@@ -181,7 +220,7 @@ function listSkillResourceDirectory(options: {
 }
 
 function listSkillResourcePaths(
-  root: LocalSkillRoot,
+  root: SkillRoot,
   skillName: string,
 ): readonly string[] {
   const skillDirectory = join(root.rootPath, skillName);
@@ -197,8 +236,7 @@ function listSkillResourcePaths(
       break;
     }
     const directoryPath = join(skillDirectory, directory);
-    const stat = lstatSync(directoryPath, { throwIfNoEntry: false });
-    if (stat?.isDirectory() === true) {
+    if (lstatSync(directoryPath, { throwIfNoEntry: false })?.isDirectory()) {
       listSkillResourceDirectory({
         currentPath: directoryPath,
         relativeParts: [directory],
@@ -213,12 +251,13 @@ function ensureRealPathInsideRoot(
   rootPath: string,
   skillFilePath: string,
 ): void {
-  const realRoot = realpathSync(rootPath);
-  const realSkillFile = realpathSync(skillFilePath);
-  const relativeRealPath = relative(realRoot, realSkillFile);
+  const relativeRealPath = relative(
+    realpathSync(rootPath),
+    realpathSync(skillFilePath),
+  );
   if (relativeRealPath.startsWith("..") || isAbsolute(relativeRealPath)) {
     throw new WorkflowSkillError(
-      "Error: cannot load workflow skill: resolved SKILL.md path escapes .agents/skills.",
+      "Error: cannot load workflow skill: resolved SKILL.md path escapes its skill root.",
     );
   }
 }
@@ -260,22 +299,29 @@ function skillDigest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function readProjectSkillFile(
-  root: LocalSkillRoot,
+function skillRootKey(root: SkillRoot): string {
+  return createHash("sha256")
+    .update(realpathSync(root.rootPath))
+    .digest("hex")
+    .slice(0, 12);
+}
+
+function readSkillFile(
+  root: SkillRoot,
   skillName: string,
   includeResourcePaths: boolean,
-): ReadProjectSkill {
+): ReadSkill {
   validateSkillName(skillName);
   const skillFilePath = join(root.rootPath, skillName, SKILL_FILE);
   if (!existsSync(skillFilePath)) {
     throw new WorkflowSkillError(
-      `Error: workflow skill "${skillName}" was not found in ${LOCAL_SKILL_ROOT}.`,
+      `Error: workflow skill ${JSON.stringify(`${root.scope}:${skillName}`)} was not found.`,
     );
   }
   ensureRealPathInsideRoot(root.rootPath, skillFilePath);
   if (!statSync(skillFilePath).isFile()) {
     throw new WorkflowSkillError(
-      `Error: workflow skill "${skillName}" must be a regular SKILL.md file.`,
+      `Error: workflow skill ${JSON.stringify(`${root.scope}:${skillName}`)} must be a regular SKILL.md file.`,
     );
   }
   const bytes = readSkillBytes(skillFilePath);
@@ -285,18 +331,35 @@ function readProjectSkillFile(
   );
   if (parsed.name !== skillName) {
     throw new WorkflowSkillError(
-      `Error: workflow skill "${skillName}" has mismatched frontmatter name "${parsed.name}".`,
+      `Error: workflow skill ${JSON.stringify(`${root.scope}:${skillName}`)} has mismatched frontmatter name ${JSON.stringify(parsed.name)}.`,
     );
   }
-  const relativePath = relativeSkillPath(root, skillName);
+  const digest = skillDigest(bytes);
+  const rootKey = skillRootKey(root);
+  const packageId = `${root.scope}:${rootKey}:${parsed.name}`;
+  const id = `${packageId}:${digest}`;
+  const qualifiedName = `${root.scope}:${parsed.name}`;
+  const relativePath = skillDisplayPath(root, skillName);
   return {
     descriptor: {
+      id,
+      packageId,
+      rootKey,
+      rootPriority: root.priority,
+      qualifiedName,
+      scope: root.scope,
+      activationPolicy: parsed.activationPolicy,
       name: parsed.name,
       description: parsed.description,
       relativePath,
-      digest: skillDigest(bytes),
+      digest,
     },
     skill: {
+      id,
+      packageId,
+      qualifiedName,
+      scope: root.scope,
+      digest,
       name: parsed.name,
       relativePath,
       resourcePaths: includeResourcePaths
@@ -307,100 +370,316 @@ function readProjectSkillFile(
   };
 }
 
-export function loadProjectWorkflowSkill(
-  workspace: string,
-  skillName: string,
-): WorkflowSkill {
-  validateSkillName(skillName);
-  const root = findLocalSkillRoot(workspace);
-  if (!ensureLocalSkillRootDirectory(root)) {
+function lookupParts(lookup: string): {
+  readonly scope?: SkillScope;
+  readonly name: string;
+} {
+  const qualified = QUALIFIED_SKILL_PATTERN.exec(lookup);
+  if (qualified === null) {
+    validateSkillName(lookup);
+    return { name: lookup };
+  }
+  const scope = qualified[1];
+  const qualifiedRemainder = qualified[2] ?? "";
+  const segments = qualifiedRemainder.split(":");
+  if (segments.length > 2) {
     throw new WorkflowSkillError(
-      `Error: workflow skill "${skillName}" was not found in ${LOCAL_SKILL_ROOT}.`,
+      "Error: qualified skill names use scope:name or scope:root-id:name.",
     );
   }
-  return readProjectSkillFile(root, skillName, true).skill;
+  const name = segments.at(-1) ?? "";
+  validateSkillName(name);
+  if (
+    scope !== "repo" &&
+    scope !== "user" &&
+    scope !== "system" &&
+    scope !== "extra"
+  ) {
+    throw new WorkflowSkillError(`Error: unknown skill scope ${scope}.`);
+  }
+  return { scope, name };
 }
 
-export function discoverProjectSkillCatalog(
-  workspace: string,
-): ProjectSkillCatalog {
-  const root = findLocalSkillRoot(workspace);
-  if (!ensureLocalSkillRootDirectory(root)) {
-    return {
-      skills: [],
-      warnings: [],
-      load: (name) => {
-        throw new WorkflowSkillError(
-          `Error: workflow skill "${name}" was not found in ${LOCAL_SKILL_ROOT}.`,
-        );
-      },
-    };
+function matchingDescriptors(
+  skills: readonly SkillDescriptor[],
+  lookup: string,
+): readonly SkillDescriptor[] {
+  const parts = lookupParts(lookup);
+  if (parts.scope !== undefined && lookup.split(":").length === 3) {
+    return skills.filter((skill) => skill.qualifiedName === lookup);
   }
+  return skills.filter(
+    (skill) =>
+      skill.name === parts.name &&
+      (parts.scope === undefined || skill.scope === parts.scope),
+  );
+}
 
+function resolveDescriptor(
+  skills: readonly SkillDescriptor[],
+  lookup: string,
+): SkillDescriptor {
+  const matches = matchingDescriptors(skills, lookup);
+  if (matches.length === 0) {
+    throw new WorkflowSkillError(
+      `Error: workflow skill ${JSON.stringify(lookup)} was not found.`,
+    );
+  }
+  if (matches.length > 1) {
+    const choices = matches
+      .map(
+        (skill) =>
+          `${JSON.stringify(skill.qualifiedName)} (${skill.relativePath})`,
+      )
+      .join(", ");
+    throw new WorkflowSkillError(
+      `Error: workflow skill ${JSON.stringify(lookup)} is ambiguous; choose one of: ${choices}.`,
+    );
+  }
+  const descriptor = matches[0];
+  if (descriptor === undefined) {
+    throw new WorkflowSkillError(
+      `Error: workflow skill ${JSON.stringify(lookup)} was not found.`,
+    );
+  }
+  return descriptor;
+}
+
+function searchScore(skill: SkillDescriptor, query: string): number {
+  if (query === "") return 1;
+  const normalized = query.toLowerCase();
+  const terms = normalized.split(/\s+/u).filter((term) => term !== "");
+  const name = skill.name.toLowerCase();
+  const qualifiedName = skill.qualifiedName.toLowerCase();
+  const description = skill.description.toLowerCase();
+  let score = name === normalized || qualifiedName === normalized ? 1_000 : 0;
+  for (const term of terms) {
+    if (name === term) score += 200;
+    else if (name.includes(term)) score += 80;
+    if (qualifiedName.includes(term)) score += 30;
+    if (description.includes(term)) score += 20;
+  }
+  return score;
+}
+
+export function discoverSkillCatalog(
+  options: SkillDiscoveryOptions,
+): SkillCatalog {
+  const rootsById = new Map<string, SkillRoot>();
+  const seenRoots = new Set<string>();
   const skills: SkillDescriptor[] = [];
   const warnings: SkillCatalogWarning[] = [];
-  for (const entry of readdirSync(root.rootPath, { withFileTypes: true })) {
-    if (
-      !entry.isDirectory() ||
-      !existsSync(join(root.rootPath, entry.name, SKILL_FILE))
-    ) {
-      continue;
-    }
-    try {
-      skills.push(readProjectSkillFile(root, entry.name, false).descriptor);
-    } catch (error) {
-      /* v8 ignore next 3: unexpected filesystem/runtime faults must propagate rather than become invalid-skill warnings. */
-      if (!(error instanceof WorkflowSkillError)) {
-        throw error;
+  for (const root of discoveryRoots(options)) {
+    if (!ensureSkillRootDirectory(root)) continue;
+    const rootIdentity = `${root.scope}:${realpathSync(root.rootPath)}`;
+    if (seenRoots.has(rootIdentity)) continue;
+    seenRoots.add(rootIdentity);
+    for (const entry of readdirSync(root.rootPath, { withFileTypes: true })) {
+      if (
+        (!entry.isDirectory() && !entry.isSymbolicLink()) ||
+        !existsSync(join(root.rootPath, entry.name, SKILL_FILE))
+      ) {
+        continue;
       }
-      warnings.push({ name: entry.name, message: error.message });
+      try {
+        const read = readSkillFile(root, entry.name, false);
+        skills.push(read.descriptor);
+        rootsById.set(read.descriptor.id, root);
+      } catch (error) {
+        /* v8 ignore next 3: unexpected filesystem/runtime faults must propagate. */
+        if (!(error instanceof WorkflowSkillError)) throw error;
+        warnings.push({
+          name: `${root.scope}:${entry.name}`,
+          message: error.message,
+        });
+      }
     }
   }
-  const sortedSkills = skills.toSorted((left, right) =>
-    left.name.localeCompare(right.name),
+  const duplicateCounts = new Map<string, number>();
+  for (const skill of skills) {
+    const key = `${skill.scope}:${skill.name}`;
+    duplicateCounts.set(key, (duplicateCounts.get(key) ?? 0) + 1);
+  }
+  const collisionSafeSkills = skills.map((skill) => ({
+    ...skill,
+    qualifiedName:
+      (duplicateCounts.get(`${skill.scope}:${skill.name}`) ?? 0) > 1
+        ? `${skill.scope}:${skill.rootKey}:${skill.name}`
+        : `${skill.scope}:${skill.name}`,
+  }));
+  const sortedSkills = collisionSafeSkills.toSorted(
+    (left, right) =>
+      left.name.localeCompare(right.name) ||
+      left.scope.localeCompare(right.scope) ||
+      left.relativePath.localeCompare(right.relativePath),
   );
-  const descriptorByName = new Map(
-    sortedSkills.map((descriptor) => [descriptor.name, descriptor]),
+  const descriptorById = new Map(
+    sortedSkills.map((descriptor) => [descriptor.id, descriptor]),
   );
+  const loadFrom = (
+    candidates: readonly SkillDescriptor[],
+    lookup: string,
+  ): WorkflowSkill => {
+    const descriptor = resolveDescriptor(candidates, lookup);
+    const root = rootsById.get(descriptor.id);
+    if (root === undefined) {
+      throw new WorkflowSkillError(
+        `Error: workflow skill ${JSON.stringify(lookup)} is no longer available.`,
+      );
+    }
+    const current = readSkillFile(root, descriptor.name, true);
+    if (
+      current.descriptor.digest !== descriptor.digest ||
+      current.descriptor.id !== descriptor.id
+    ) {
+      throw new WorkflowSkillError(
+        `Error: workflow skill ${JSON.stringify(descriptor.qualifiedName)} changed after catalog discovery.`,
+      );
+    }
+    return { ...current.skill, qualifiedName: descriptor.qualifiedName };
+  };
+  const implicitSkills = sortedSkills.filter(
+    (skill) => skill.activationPolicy === "implicit",
+  );
+  const warningForLookup = (
+    lookup: string,
+  ): SkillCatalogWarning | undefined => {
+    const parts = lookupParts(lookup);
+    const matches = warnings.filter((warning) => {
+      const separator = warning.name.indexOf(":");
+      const scope = warning.name.slice(0, separator);
+      const name = warning.name.slice(separator + 1);
+      return (
+        name === parts.name &&
+        (parts.scope === undefined || scope === parts.scope)
+      );
+    });
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  const loadWithWarning = (
+    candidates: readonly SkillDescriptor[],
+    lookup: string,
+  ): WorkflowSkill => {
+    try {
+      return loadFrom(candidates, lookup);
+    } catch (error) {
+      if (
+        error instanceof WorkflowSkillError &&
+        error.message.endsWith("was not found.")
+      ) {
+        const warning = warningForLookup(lookup);
+        if (warning !== undefined)
+          throw new WorkflowSkillError(warning.message);
+      }
+      throw error;
+    }
+  };
   return {
     skills: sortedSkills,
+    implicitSkills,
     warnings,
-    load: (name) => {
-      validateSkillName(name);
-      const descriptor = descriptorByName.get(name);
-      if (descriptor === undefined) {
+    load: (lookup) => loadWithWarning(sortedSkills, lookup),
+    loadImplicit: (lookup) => loadWithWarning(implicitSkills, lookup),
+    search: (query, limit = 20) =>
+      implicitSkills
+        .map((skill) => ({ skill, score: searchScore(skill, query.trim()) }))
+        .filter((result) => result.score > 0)
+        .toSorted(
+          (left, right) =>
+            right.score - left.score ||
+            left.skill.qualifiedName.localeCompare(right.skill.qualifiedName),
+        )
+        .slice(0, Math.max(0, limit))
+        .map((result) => descriptorById.get(result.skill.id) ?? result.skill),
+    readResource: (lookup, path) => {
+      if (!isWorkflowSkillResourcePath(path)) {
         throw new WorkflowSkillError(
-          `Error: workflow skill "${name}" was not found in ${LOCAL_SKILL_ROOT}.`,
+          "Error: skill resource paths must stay under references/, scripts/, or assets/.",
         );
       }
-      const current = readProjectSkillFile(root, name, true);
+      const descriptor = resolveDescriptor(sortedSkills, lookup);
+      const root = rootsById.get(descriptor.id);
+      if (root === undefined) {
+        throw new WorkflowSkillError(
+          `Error: workflow skill ${JSON.stringify(lookup)} is no longer available.`,
+        );
+      }
+      const current = readSkillFile(root, descriptor.name, true);
       if (current.descriptor.digest !== descriptor.digest) {
         throw new WorkflowSkillError(
-          `Error: workflow skill "${name}" changed after catalog discovery.`,
+          `Error: workflow skill ${JSON.stringify(descriptor.qualifiedName)} changed after catalog discovery.`,
         );
       }
-      return current.skill;
+      if (!current.skill.resourcePaths.includes(path)) {
+        throw new WorkflowSkillError(
+          `Error: resource ${JSON.stringify(path)} was not discovered for workflow skill ${JSON.stringify(descriptor.qualifiedName)}.`,
+        );
+      }
+      const resourcePath = join(root.rootPath, descriptor.name, path);
+      ensureRealPathInsideRoot(
+        join(root.rootPath, descriptor.name),
+        resourcePath,
+      );
+      return decodeSkillBytes(resourcePath, readSkillBytes(resourcePath));
     },
   };
 }
 
-export function createProjectSkillActivation(
-  catalog: ProjectSkillCatalog,
+export function createSkillActivation(
+  catalog: SkillCatalog,
 ): SkillActivationCapability {
   let activatedName: string | null = null;
+  const selectableIds = new Set<string>();
+  const activeIds = new Set<string>();
+  const activePackageIds = new Set<string>();
   return {
+    expose: (skills) => {
+      for (const skill of skills) selectableIds.add(skill.id);
+    },
+    registerExplicit: (skills) => {
+      for (const skill of skills) {
+        activeIds.add(skill.id);
+        activePackageIds.add(skill.packageId);
+      }
+    },
+    search: (query) => {
+      const matches = catalog.search(query);
+      for (const skill of matches) selectableIds.add(skill.id);
+      return matches;
+    },
+    readResource: (lookup, path) => {
+      const skill = catalog.load(lookup);
+      if (!activeIds.has(skill.id)) {
+        throw new WorkflowSkillError(
+          `Error: workflow skill ${JSON.stringify(skill.qualifiedName)} must be active before reading its resources.`,
+        );
+      }
+      return catalog.readResource(skill.qualifiedName, path);
+    },
     activate: (name) => {
       if (activatedName !== null) {
         throw new WorkflowSkillError(
-          `Error: workflow skill "${activatedName}" is already active; this run supports one model-selected skill.`,
+          `Error: workflow skill ${JSON.stringify(activatedName)} is already active; this run supports one model-selected skill.`,
         );
       }
-      const skill = catalog.load(name);
-      activatedName = name;
+      const skill = catalog.loadImplicit(name);
+      if (activePackageIds.has(skill.packageId)) {
+        throw new WorkflowSkillError(
+          `Error: workflow skill ${JSON.stringify(skill.qualifiedName)} is already active; do not activate the same package twice.`,
+        );
+      }
+      if (!selectableIds.has(skill.id)) {
+        throw new WorkflowSkillError(
+          `Error: workflow skill ${JSON.stringify(skill.qualifiedName)} is not in the exposed catalog or recent search results; search for it before activation.`,
+        );
+      }
+      activatedName = skill.qualifiedName;
+      activeIds.add(skill.id);
+      activePackageIds.add(skill.packageId);
       return {
         skill,
         record: {
-          name: skill.name,
+          name: skill.qualifiedName,
           relativePath: skill.relativePath,
           trigger: "model_selected",
         },

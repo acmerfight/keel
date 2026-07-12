@@ -48,6 +48,19 @@ import {
   bashApprovalGrantKey,
   bashModeExposesTool,
 } from "../permissions/bash.ts";
+import {
+  exposeSkillCatalog,
+  formatSkillCatalogDegradation,
+} from "../skills/catalog.ts";
+import {
+  type ExplicitSkillInvocation,
+  parseExplicitSkillInvocation,
+} from "../skills/explicit.ts";
+import {
+  explicitSkillActivationRecord,
+  type SkillActivationRecord,
+  type WorkflowSkill,
+} from "../skills/model.ts";
 import { executeGitDiff } from "../tools/git-diff.ts";
 import { executeGitStatus } from "../tools/git-status.ts";
 import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
@@ -154,12 +167,18 @@ function formatConfiguredModelSelection(selection: ProviderSelection): string {
 }
 
 function formatActiveWorkflowSkill(
-  workflowSkill: InteractiveSessionOptions["workflowSkill"],
+  workflowSkills: readonly WorkflowSkill[],
 ): string {
-  if (workflowSkill === undefined) {
+  if (workflowSkills.length === 0) {
     return "No workflow skill selected.\n";
   }
-  return `Workflow skill: ${workflowSkill.name} (${workflowSkill.relativePath})\n`;
+  return [
+    "Workflow skills:",
+    ...workflowSkills.map(
+      (skill) => `- ${skill.qualifiedName} (${skill.relativePath})`,
+    ),
+    "",
+  ].join("\n");
 }
 
 function systemPromptWithSessionGoal(
@@ -351,19 +370,34 @@ export async function runInteractiveSession(
   options: InteractiveSessionOptions,
 ): Promise<InteractiveSessionResult> {
   const now = options.now ?? Date.now;
-  const systemPrompt = buildAgentSystemPrompt({
-    workspace: options.workspace,
-    platform: options.platform,
-    ...(options.projectInstructions !== undefined
-      ? { projectInstructions: options.projectInstructions }
-      : {}),
-    ...(options.workflowSkill !== undefined
-      ? { workflowSkill: options.workflowSkill }
-      : {}),
-    ...(options.skillCatalog !== undefined
-      ? { skillCatalog: options.skillCatalog }
-      : {}),
+  const activeWorkflowSkills: WorkflowSkill[] = [
+    ...(options.workflowSkills ?? []),
+  ];
+  const explicitSkillActivations: SkillActivationRecord[] =
+    activeWorkflowSkills.map(explicitSkillActivationRecord);
+  options.skillActivation?.registerExplicit(activeWorkflowSkills);
+  let latestCatalogExposure = exposeSkillCatalog({
+    skills:
+      activeWorkflowSkills.length === 0 ? (options.skillCatalog ?? []) : [],
+    request: "",
   });
+  let visibleSkillCatalog = latestCatalogExposure.skills;
+  const rebuildSystemPrompt = (): string =>
+    buildAgentSystemPrompt({
+      workspace: options.workspace,
+      platform: options.platform,
+      ...(options.projectInstructions !== undefined
+        ? { projectInstructions: options.projectInstructions }
+        : {}),
+      ...(activeWorkflowSkills.length > 0
+        ? { workflowSkills: activeWorkflowSkills }
+        : {}),
+      ...(visibleSkillCatalog.length > 0
+        ? { skillCatalog: visibleSkillCatalog }
+        : {}),
+    });
+  let systemPrompt = rebuildSystemPrompt();
+  let catalogDiagnosticSignature: string | null = null;
   const messages: Message[] = [...(options.initialMessages ?? [])];
   let taskProgress = copySessionTaskProgress(
     options.initialTaskProgress ?? emptySessionTaskProgress(),
@@ -797,6 +831,27 @@ export async function runInteractiveSession(
     sessionPromptTurnAttempted = true;
     const goalTurnStartedAt = sessionGoal?.status === "active" ? now() : null;
     resolved = resolveActiveProvider(request.userMessage);
+    const exposure = exposeSkillCatalog({
+      skills:
+        activeWorkflowSkills.length === 0 ? (options.skillCatalog ?? []) : [],
+      request: request.userMessage,
+      ...(resolved.modelMetadata !== undefined
+        ? { modelMetadata: resolved.modelMetadata }
+        : {}),
+    });
+    latestCatalogExposure = exposure;
+    options.skillActivation?.expose(exposure.skills);
+    visibleSkillCatalog = exposure.skills;
+    systemPrompt = rebuildSystemPrompt();
+    const diagnostic = formatSkillCatalogDegradation(exposure);
+    const diagnosticSignature = `${exposure.total}:${exposure.omitted}:${exposure.budgetChars}`;
+    if (
+      diagnostic !== "" &&
+      diagnosticSignature !== catalogDiagnosticSignature
+    ) {
+      options.writeStderr(diagnostic);
+      catalogDiagnosticSignature = diagnosticSignature;
+    }
     const messagesBeforeTurn = messages.slice();
     const taskProgressBeforeTurn = copySessionTaskProgress(taskProgress);
     const sessionGoalBeforeTurn =
@@ -1231,12 +1286,49 @@ export async function runInteractiveSession(
       }
       options.acceptInput?.();
       const rawLine = rawInput.line;
-      const userMessage = rawLine.trim();
+      let userMessage = rawLine.trim();
       if (userMessage === "") {
         consumeQueuedInputLines([rawInput]);
         continue;
       }
-      const interactiveCommand = parseInteractiveCommand(rawLine);
+      let explicitInvocation: ExplicitSkillInvocation | null;
+      try {
+        explicitInvocation = parseExplicitSkillInvocation(userMessage);
+      } catch (error) {
+        options.writeStderr(formatInteractiveCommandFailure(error));
+        consumeQueuedInputLines([rawInput]);
+        continue;
+      }
+      if (explicitInvocation !== null) {
+        try {
+          const skill = options.activateExplicitSkill?.(
+            explicitInvocation.lookup,
+          );
+          if (skill === undefined) {
+            throw new Error("explicit skill activation is unavailable");
+          }
+          if (
+            !activeWorkflowSkills.some(
+              (active) => active.packageId === skill.packageId,
+            )
+          ) {
+            activeWorkflowSkills.push(skill);
+            explicitSkillActivations.push(explicitSkillActivationRecord(skill));
+            options.skillActivation?.registerExplicit([skill]);
+          }
+          systemPrompt = rebuildSystemPrompt();
+          userMessage =
+            explicitInvocation.arguments === ""
+              ? "Apply the explicitly selected workflow skill."
+              : explicitInvocation.arguments;
+        } catch (error) {
+          options.writeStderr(formatInteractiveCommandFailure(error));
+          consumeQueuedInputLines([rawInput]);
+          continue;
+        }
+      }
+      const interactiveCommand =
+        explicitInvocation === null ? parseInteractiveCommand(rawLine) : null;
       if (interactiveCommand?.kind === "help") {
         options.writeStdout(formatInteractiveHelp());
         consumeQueuedInputLines([rawInput]);
@@ -1250,9 +1342,15 @@ export async function runInteractiveSession(
             workspace: options.workspace,
             activeModel: activeModelStatus(),
             ...(sessionGoal !== undefined ? { goal: sessionGoal } : {}),
-            ...(options.workflowSkill !== undefined
-              ? { workflowSkill: options.workflowSkill }
+            ...(activeWorkflowSkills[0] !== undefined
+              ? { workflowSkill: activeWorkflowSkills[0] }
               : {}),
+            skillCatalog: {
+              exposed: latestCatalogExposure.skills.length,
+              omitted: latestCatalogExposure.omitted,
+              total: latestCatalogExposure.total,
+              budgetChars: latestCatalogExposure.budgetChars,
+            },
             messages,
             messageCount: messages.length,
             pendingInputCount: lineReader.pendingInputCount(),
@@ -1934,7 +2032,48 @@ export async function runInteractiveSession(
         continue;
       }
       if (interactiveCommand?.kind === "skill") {
-        options.writeStdout(formatActiveWorkflowSkill(options.workflowSkill));
+        if (interactiveCommand.lookup === undefined) {
+          options.writeStdout(formatActiveWorkflowSkill(activeWorkflowSkills));
+          consumeQueuedInputLines([rawInput]);
+          continue;
+        }
+        try {
+          const skill = options.activateExplicitSkill?.(
+            interactiveCommand.lookup,
+          );
+          if (skill === undefined) {
+            throw new Error("explicit skill activation is unavailable");
+          }
+          if (
+            !activeWorkflowSkills.some(
+              (active) => active.packageId === skill.packageId,
+            )
+          ) {
+            activeWorkflowSkills.push(skill);
+            explicitSkillActivations.push(explicitSkillActivationRecord(skill));
+            options.skillActivation?.registerExplicit([skill]);
+          }
+          systemPrompt = rebuildSystemPrompt();
+          options.writeStdout(
+            `Activated workflow skill ${skill.qualifiedName}.\n`,
+          );
+          if (interactiveCommand.arguments !== undefined) {
+            const turnResult = await runPromptTurn({
+              userMessage: interactiveCommand.arguments,
+              consumedInputLines: [rawInput],
+            });
+            if (turnResult.budgetExceeded) break;
+            if (
+              !turnResult.aborted &&
+              (await runAutomaticGoalContinuations())
+            ) {
+              break;
+            }
+            continue;
+          }
+        } catch (error) {
+          options.writeStderr(formatInteractiveCommandFailure(error));
+        }
         consumeQueuedInputLines([rawInput]);
         continue;
       }
@@ -2091,6 +2230,14 @@ export async function runInteractiveSession(
         })),
         usageByModel: [...reportUsageByModel.values()],
         end: reportEnd,
+        skillCatalog: {
+          exposed: latestCatalogExposure.skills.length,
+          omitted: latestCatalogExposure.omitted,
+          total: latestCatalogExposure.total,
+          budgetChars: latestCatalogExposure.budgetChars,
+          usedChars: latestCatalogExposure.usedChars,
+        },
+        explicitSkillActivations,
       },
     };
   }

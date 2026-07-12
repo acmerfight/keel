@@ -260,12 +260,19 @@ describe("Interactive Session - Lifecycle", () => {
       workspace,
       platform: process.platform,
       sessionId: "status-detail",
-      workflowSkill: {
-        name: "review",
-        relativePath: ".agents/skills/review/SKILL.md",
-        resourcePaths: ["references/checklist.md"],
-        content: "Review workflow instructions.",
-      },
+      workflowSkills: [
+        {
+          id: "repo:test:review",
+          packageId: "repo:test:review",
+          digest: "digest",
+          qualifiedName: "repo:review",
+          scope: "repo",
+          name: "review",
+          relativePath: ".agents/skills/review/SKILL.md",
+          resourcePaths: ["references/checklist.md"],
+          content: "Review workflow instructions.",
+        },
+      ],
       initialMessages: [{ role: "user", content: "remember prior context" }],
       initialModelSelection: {
         providerId: "qwen",
@@ -319,7 +326,7 @@ describe("Interactive Session - Lifecycle", () => {
       expect(stdout).toContain(`  workspace: ${workspace}\n`);
       expect(stdout).toContain("  active model: qwen/qwen3.7-max\n");
       expect(stdout).toContain(
-        "  workflow skill: review (.agents/skills/review/SKILL.md)\n",
+        "  workflow skill: repo:review (.agents/skills/review/SKILL.md)\n",
       );
       expect(stdout).toContain("  messages: 1\n");
       expect(stdout).toContain("  pending inputs: 0\n");

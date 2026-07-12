@@ -42,7 +42,7 @@ function sessionCatalogEntryLines(
       : []),
     ...(entry.workflowSkill !== undefined
       ? [
-          `${detailIndent}workflow skill: ${entry.workflowSkill.name} (${entry.workflowSkill.relativePath})`,
+          `${detailIndent}workflow skill: ${entry.workflowSkill.qualifiedName} (${entry.workflowSkill.relativePath})`,
         ]
       : []),
     ...(entry.graph.forkPoint !== null
@@ -376,7 +376,7 @@ export function formatSessionDetail(options: {
       : []),
     ...(options.entry.workflowSkill !== undefined
       ? [
-          `workflow skill: ${options.entry.workflowSkill.name} (${options.entry.workflowSkill.relativePath})`,
+          `workflow skill: ${options.entry.workflowSkill.qualifiedName} (${options.entry.workflowSkill.relativePath})`,
         ]
       : []),
     ...(options.entry.graph.forkPoint !== null

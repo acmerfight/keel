@@ -91,7 +91,7 @@ function parseGoalLaunchArgs(
   let bashMode: GoalCliArgs["bashMode"] = "disabled";
   let providerId: GoalCliArgs["providerId"] | undefined;
   let model: string | undefined;
-  let skillName: string | undefined;
+  const skillNames: string[] = [];
   let maxCostUsd: number | undefined;
   let reportFile: string | undefined;
   let sessionId: string | undefined;
@@ -107,7 +107,8 @@ function parseGoalLaunchArgs(
     if (!GOAL_OPTIONS.includes(option)) {
       return parseError(`Error: unknown goal option "${arg}".`);
     }
-    if (seen.has(option)) return duplicateOption(option);
+    if (seen.has(option) && option !== "--skill")
+      return duplicateOption(option);
     seen.add(option);
 
     if (option === "--allow-bash") {
@@ -183,7 +184,7 @@ function parseGoalLaunchArgs(
       continue;
     }
     if (option === "--skill") {
-      skillName = value;
+      skillNames.push(value);
       continue;
     }
     if (option === "--max-cost") {
@@ -259,7 +260,7 @@ function parseGoalLaunchArgs(
     bashMode,
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
-    ...(skillName !== undefined ? { skillName } : {}),
+    ...(skillNames.length > 0 ? { skillNames } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(reportFile !== undefined ? { reportFile } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
@@ -274,7 +275,7 @@ function parseGoalResumeArgs(
   let bashMode: GoalCliArgs["bashMode"] = "disabled";
   let providerId: GoalCliArgs["providerId"] | undefined;
   let model: string | undefined;
-  let skillName: string | undefined;
+  const skillNames: string[] = [];
   let maxCostUsd: number | undefined;
   let reportFile: string | undefined;
   const budget: {
@@ -302,7 +303,8 @@ function parseGoalResumeArgs(
     if (!GOAL_RESUME_OPTIONS.includes(option)) {
       return parseError(`Error: unknown goal resume option "${option}".`);
     }
-    if (seen.has(option)) return duplicateOption(option);
+    if (seen.has(option) && option !== "--skill")
+      return duplicateOption(option);
     seen.add(option);
 
     if (option === "--last" || option === "--allow-bash") {
@@ -368,7 +370,7 @@ function parseGoalResumeArgs(
       continue;
     }
     if (option === "--skill") {
-      skillName = value;
+      skillNames.push(value);
       continue;
     }
     if (option === "--max-cost") {
@@ -398,7 +400,7 @@ function parseGoalResumeArgs(
     bashMode,
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
-    ...(skillName !== undefined ? { skillName } : {}),
+    ...(skillNames.length > 0 ? { skillNames } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(reportFile !== undefined ? { reportFile } : {}),
   });

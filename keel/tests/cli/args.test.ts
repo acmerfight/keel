@@ -568,7 +568,7 @@ describe("CLI Args", () => {
         bashMode: "trusted",
         providerId: "fake",
         model: "test-model",
-        skillName: "release",
+        skillNames: ["release"],
         maxCostUsd: 1.25,
         reportFile: "goal.json",
         sessionId: "checkout",
@@ -665,7 +665,9 @@ describe("CLI Args", () => {
           : {},
         ...(args.includes("--provider=fake") ? { providerId: "fake" } : {}),
         ...(args.includes("--model=test-model") ? { model: "test-model" } : {}),
-        ...(args.includes("--skill=release") ? { skillName: "release" } : {}),
+        ...(args.includes("--skill=release")
+          ? { skillNames: ["release"] }
+          : {}),
         ...(args.includes("--max-cost=1.25") ? { maxCostUsd: 1.25 } : {}),
         ...(args.includes("--report=goal.json")
           ? { reportFile: "goal.json" }

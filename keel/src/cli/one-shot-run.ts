@@ -13,9 +13,12 @@ import {
   createSessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
 import {
-  createProjectSkillActivation,
-  discoverProjectSkillCatalog,
-} from "../skills/project.ts";
+  exposeSkillCatalog,
+  formatSkillCatalogDegradation,
+} from "../skills/catalog.ts";
+import { parseExplicitSkillInvocation } from "../skills/explicit.ts";
+import { explicitSkillActivationRecord } from "../skills/model.ts";
+import { createSkillActivation } from "../skills/project.ts";
 import type { CliArgs } from "./args.ts";
 import {
   BashProjectApprovalsError,
@@ -46,8 +49,8 @@ import {
 } from "./tool-output-artifacts.ts";
 import { writeRunTranscript } from "./transcript.ts";
 import {
+  discoverWorkflowSkillCatalog,
   formatWorkflowSkillListWarnings,
-  loadWorkflowSkill,
   WorkflowSkillError,
 } from "./workflow-skills.ts";
 
@@ -110,7 +113,7 @@ function oneShotBashPermissionPolicy(
 export async function runOneShotCli(
   cliArgs: RunCliArgs,
   runtime: CliRuntime,
-  userMessage: string,
+  originalUserMessage: string,
 ): Promise<number> {
   const abortController = new AbortController();
   const abort = () => {
@@ -120,29 +123,43 @@ export async function runOneShotCli(
   try {
     const workspace = runtime.cwd();
     const projectInstructions = loadProjectInstructions(workspace);
-    const workflowSkill =
-      cliArgs.skillName === undefined
-        ? undefined
-        : loadWorkflowSkill(workspace, cliArgs.skillName);
-    const projectSkillCatalog =
-      cliArgs.skillName === undefined
-        ? discoverProjectSkillCatalog(workspace)
-        : undefined;
-    if (projectSkillCatalog !== undefined) {
-      runtime.writeStderr(
-        formatWorkflowSkillListWarnings(projectSkillCatalog.warnings),
+    const invocation = parseExplicitSkillInvocation(originalUserMessage);
+    const userMessage =
+      invocation === null || invocation.arguments !== ""
+        ? (invocation?.arguments ?? originalUserMessage)
+        : "Apply the explicitly selected workflow skill.";
+    const catalog = discoverWorkflowSkillCatalog(runtime, workspace);
+    const explicitLookups = [
+      ...(cliArgs.skillNames ?? []),
+      ...(invocation === null ? [] : [invocation.lookup]),
+    ];
+    const workflowSkills = explicitLookups
+      .map((lookup) => catalog.load(lookup))
+      .filter(
+        (skill, index, skills) =>
+          skills.findIndex(
+            (candidate) => candidate.packageId === skill.packageId,
+          ) === index,
       );
-    }
-    const skillActivation =
-      projectSkillCatalog !== undefined && projectSkillCatalog.skills.length > 0
-        ? createProjectSkillActivation(projectSkillCatalog)
-        : undefined;
+    runtime.writeStderr(formatWorkflowSkillListWarnings(catalog.warnings));
     const resolved = resolveProvider(userMessage, runtime, {
       ...(cliArgs.providerId !== undefined
         ? { providerId: cliArgs.providerId }
         : {}),
       ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
     });
+    const catalogExposure = exposeSkillCatalog({
+      skills: workflowSkills.length === 0 ? catalog.implicitSkills : [],
+      request: userMessage,
+      ...(resolved.modelMetadata !== undefined
+        ? { modelMetadata: resolved.modelMetadata }
+        : {}),
+    });
+    runtime.writeStderr(formatSkillCatalogDegradation(catalogExposure));
+    const skillActivation =
+      catalog.skills.length > 0 ? createSkillActivation(catalog) : undefined;
+    skillActivation?.expose(catalogExposure.skills);
+    skillActivation?.registerExplicit(workflowSkills);
     runtime.onSigint(abort);
 
     const startedAt = runtime.now();
@@ -163,9 +180,9 @@ export async function runOneShotCli(
       workspace,
       platform: runtime.platform,
       ...(projectInstructions !== undefined ? { projectInstructions } : {}),
-      ...(workflowSkill !== undefined ? { workflowSkill } : {}),
-      ...(projectSkillCatalog !== undefined
-        ? { skillCatalog: projectSkillCatalog.skills }
+      ...(workflowSkills.length > 0 ? { workflowSkills } : {}),
+      ...(catalogExposure.skills.length > 0
+        ? { skillCatalog: catalogExposure.skills }
         : {}),
     });
     const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
@@ -231,7 +248,17 @@ export async function runOneShotCli(
         end: finalEnd,
         durationMs: runtime.now() - startedAt,
         contextCompactions: reportRecorder.contextCompactions(),
-        skillActivations: reportRecorder.skillActivations(),
+        skillActivations: [
+          ...workflowSkills.map(explicitSkillActivationRecord),
+          ...reportRecorder.skillActivations(),
+        ],
+        skillCatalog: {
+          exposed: catalogExposure.skills.length,
+          omitted: catalogExposure.omitted,
+          total: catalogExposure.total,
+          budgetChars: catalogExposure.budgetChars,
+          usedChars: catalogExposure.usedChars,
+        },
       });
     }
     if (
