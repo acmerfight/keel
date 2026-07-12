@@ -3,6 +3,7 @@ import {
   restoreLastEditCheckpoint,
   restoreUndoCheckpointsThrough,
 } from "../core/git.ts";
+import { formatSkillCatalogDegradation } from "../skills/catalog.ts";
 import type { CliArgs } from "./args.ts";
 import {
   BashProjectApprovalsError,
@@ -145,12 +146,12 @@ export function runUndoCommand(
 
 export function runSkillsCommand(runtime: CliRuntime): number {
   try {
-    const result = listWorkflowSkills(runtime.cwd());
+    const result = listWorkflowSkills(runtime, runtime.cwd());
     runtime.writeStdout(formatWorkflowSkillList(result.skills));
     const warningText = formatWorkflowSkillListWarnings(result.warnings);
-    if (warningText !== "") {
-      runtime.writeStderr(warningText);
-    }
+    runtime.writeStderr(
+      `${warningText}${formatSkillCatalogDegradation(result.exposure)}`,
+    );
     return 0;
   } catch (error) {
     /* v8 ignore next 3: unexpected workflow skill listing failures are allowed to escape. */

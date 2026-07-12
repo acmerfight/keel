@@ -22,8 +22,8 @@ export function runForkPointsCommand(
     });
     ensureResumedWorkflowSkillMatchesRequest({
       session,
-      ...(cliArgs.skillName !== undefined
-        ? { requestedSkillName: cliArgs.skillName }
+      ...(cliArgs.skillNames?.[0] !== undefined
+        ? { requestedSkillName: cliArgs.skillNames[0] }
         : {}),
     });
     runtime.writeStdout(

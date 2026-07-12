@@ -60,6 +60,11 @@ describe("Agent System Prompt", () => {
     Then it includes the skill as explicit workflow guidance for this run`, () => {
     // Given
     const workflowSkill = {
+      id: "repo:test:review",
+      packageId: "repo:test:review",
+      digest: "digest",
+      qualifiedName: "repo:review",
+      scope: "repo" as const,
       relativePath: ".agents/skills/review/SKILL.md",
       name: "review",
       resourcePaths: ["references/checklist.md", "scripts/verify.ts"],
@@ -71,19 +76,19 @@ describe("Agent System Prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspace: "/tmp/project-with-skill",
       platform: "linux",
-      workflowSkill,
+      workflowSkills: [workflowSkill],
     });
 
     // Then
     expect(prompt).toContain(
-      "Workflow skill review from .agents/skills/review/SKILL.md",
+      "Workflow skill repo:review from .agents/skills/review/SKILL.md",
     );
     expect(prompt).toContain("Skill base directory: .agents/skills/review");
     expect(prompt).toContain(
       "Relative paths in this workflow skill resolve from that directory.",
     );
     expect(prompt).toContain(
-      "When using tools, join skill resource paths to the skill base directory.",
+      "Read advertised resources with skill_resource using this skill's exact qualified name",
     );
     expect(prompt).toContain("- references/checklist.md");
     expect(prompt).toContain("- scripts/verify.ts");
@@ -101,6 +106,11 @@ describe("Agent System Prompt", () => {
     Then the skill base directory falls back to the workspace root`, () => {
     // Given
     const workflowSkill = {
+      id: "repo:test:review",
+      packageId: "repo:test:review",
+      digest: "digest",
+      qualifiedName: "repo:review",
+      scope: "repo" as const,
       relativePath: "SKILL.md",
       name: "review",
       resourcePaths: [],
@@ -111,7 +121,7 @@ describe("Agent System Prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspace: "/tmp/project-with-restored-skill",
       platform: "linux",
-      workflowSkill,
+      workflowSkills: [workflowSkill],
     });
 
     // Then

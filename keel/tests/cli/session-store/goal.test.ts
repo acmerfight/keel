@@ -89,7 +89,7 @@ describe("Session Store Goal", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerRecords.at(-1)).toEqual({
-        schemaVersion: 2,
+        schemaVersion: 3,
         type: "session_goal",
         timestamp: "1970-01-01T00:00:00.002Z",
         goal: {
@@ -217,7 +217,7 @@ describe("Session Store Goal", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerRecords.at(-1)).toEqual({
-        schemaVersion: 2,
+        schemaVersion: 3,
         type: "session_goal",
         timestamp: "1970-01-01T00:00:00.001Z",
         goal: {

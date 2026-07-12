@@ -299,11 +299,11 @@ function sessionCatalogEntry(records: SessionRecords): SessionCatalogEntry {
 }
 
 function sessionCatalogWorkflowSkill(skill: {
-  readonly name: string;
+  readonly qualifiedName: string;
   readonly relativePath: string;
 }): SessionCatalogWorkflowSkill {
   return {
-    name: skill.name,
+    qualifiedName: skill.qualifiedName,
     relativePath: skill.relativePath,
   };
 }

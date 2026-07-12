@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
+import { WorkflowSkillError } from "../../src/skills/model.ts";
 import { executeToolCall } from "../../src/tools/execution.ts";
 import type {
   OpenAICompatibleToolDefinition,
@@ -241,6 +242,10 @@ describe("tool registry", () => {
         allowBash: false,
         toolCall: call,
         skillActivation: {
+          expose: () => {},
+          registerExplicit: () => {},
+          search: () => [],
+          readResource: () => "",
           activate: () => {
             throw new Error("unexpected activation fault");
           },
@@ -249,6 +254,125 @@ describe("tool registry", () => {
     ).resolves.toMatchObject({
       ok: false,
       content: expect.stringContaining("unexpected activation fault"),
+    });
+  });
+
+  test(`Given search and resource tools run with unavailable, empty, successful, and failing capabilities,
+    When builtin execution dispatches each call,
+    Then every Skill tool result remains recoverable and structured`, async () => {
+    const searchCall = toolCallFromParsedArguments(
+      "search_skills",
+      "skill_search",
+      { query: "review" },
+    );
+    const resourceCall = toolCallFromParsedArguments(
+      "read_skill_resource",
+      "skill_resource",
+      { skill: "repo:review", path: "references/checklist.md" },
+    );
+    if (searchCall === null || resourceCall === null) {
+      throw new Error("Expected Skill support calls to parse");
+    }
+    const base = {
+      workspace: ".",
+      signal: new AbortController().signal,
+      allowBash: false,
+    } as const;
+    const capability = {
+      expose: () => {},
+      registerExplicit: () => {},
+      search: () => [],
+      readResource: () => "RESOURCE-OK",
+      activate: () => {
+        throw new Error("not used");
+      },
+    };
+
+    await expect(
+      executeToolCall({ ...base, toolCall: searchCall }),
+    ).resolves.toMatchObject({
+      ok: false,
+      content: expect.stringContaining("catalog search is unavailable"),
+    });
+    await expect(
+      executeToolCall({
+        ...base,
+        toolCall: searchCall,
+        skillActivation: capability,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      content: "No matching implicit workflow skills found.",
+    });
+    await expect(
+      executeToolCall({
+        ...base,
+        toolCall: searchCall,
+        skillActivation: {
+          ...capability,
+          search: () => [
+            {
+              id: "repo:root:review:digest",
+              packageId: "repo:root:review",
+              rootKey: "root",
+              rootPriority: 0,
+              qualifiedName: "repo:review",
+              scope: "repo",
+              activationPolicy: "implicit",
+              name: "review",
+              description: "Review changes.",
+              relativePath: ".agents/skills/review/SKILL.md",
+              digest: "digest",
+            },
+          ],
+        },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      content: "repo:review: Review changes. (.agents/skills/review/SKILL.md)",
+    });
+    await expect(
+      executeToolCall({ ...base, toolCall: resourceCall }),
+    ).resolves.toMatchObject({
+      ok: false,
+      content: expect.stringContaining("resource access is unavailable"),
+    });
+    await expect(
+      executeToolCall({
+        ...base,
+        toolCall: resourceCall,
+        skillActivation: capability,
+      }),
+    ).resolves.toEqual({ ok: true, content: "RESOURCE-OK" });
+    await expect(
+      executeToolCall({
+        ...base,
+        toolCall: resourceCall,
+        skillActivation: {
+          ...capability,
+          readResource: () => {
+            throw new WorkflowSkillError("Error: resource denied");
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      content: expect.stringContaining("resource denied"),
+    });
+    await expect(
+      executeToolCall({
+        ...base,
+        toolCall: resourceCall,
+        skillActivation: {
+          ...capability,
+          readResource: () => {
+            throw new Error("resource crashed");
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      content: expect.stringContaining("resource crashed"),
     });
   });
 
@@ -396,6 +520,8 @@ describe("tool registry", () => {
     expect(names).toEqual([
       "update_plan",
       "update_goal",
+      "skill_resource",
+      "skill_search",
       "skill",
       "read",
       "ls",
@@ -435,6 +561,20 @@ describe("tool registry", () => {
         permission: "none",
         output: "text",
         risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "skill_resource",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-read" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "skill_search",
+        permission: "none",
+        output: "text",
+        risk: { kind: "workspace-read" },
         hasFormatLabel: true,
       },
       {
@@ -708,6 +848,11 @@ describe("tool registry", () => {
     expect(argumentsByTool).toEqual({
       update_plan: { fields: ["plan"], required: ["plan"] },
       update_goal: { fields: ["status", "reason"], required: ["status"] },
+      skill_resource: {
+        fields: ["skill", "path"],
+        required: ["skill", "path"],
+      },
+      skill_search: { fields: ["query"], required: ["query"] },
       skill: { fields: ["name"], required: ["name"] },
       read: { fields: ["path", "offset", "limit"], required: ["path"] },
       ls: { fields: ["path", "limit"], required: [] },

@@ -547,6 +547,14 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         stopReason: "completed",
         cost: { spentUsd: 2, budgetLimited: false, overshootUsd: 0 },
       },
+      skillCatalog: {
+        exposed: 0,
+        omitted: 0,
+        total: 0,
+        budgetChars: 8000,
+        usedChars: 0,
+      },
+      explicitSkillActivations: [],
     });
     expect(stdout).toContain("Model switched to qwen/tiny");
     expect(stderr).toContain("Context compacted: model switch");

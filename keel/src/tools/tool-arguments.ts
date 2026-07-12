@@ -15,6 +15,28 @@ export const skillToolArgumentsSchema = z
   })
   .strict();
 
+export const skillSearchToolArgumentsSchema = z
+  .object({
+    query: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .describe("Words describing the workflow skill to find."),
+  })
+  .strict();
+
+export const skillResourceToolArgumentsSchema = z
+  .object({
+    skill: z.string().describe("Exact qualified name of an active skill."),
+    path: z
+      .string()
+      .describe(
+        "Skill-relative resource path under references/, scripts/, or assets/.",
+      ),
+  })
+  .strict();
+
 export const readToolArgumentsSchema = z
   .object({
     path: z.string().describe("Workspace-relative file path to read."),

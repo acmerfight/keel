@@ -1,17 +1,24 @@
-import type { WorkflowSkill } from "../skills/model.ts";
+import { homedir } from "node:os";
+import { delimiter, join } from "node:path";
 import {
-  discoverProjectSkillCatalog,
-  loadProjectWorkflowSkill,
+  exposeSkillCatalog,
+  type SkillCatalogExposure,
+} from "../skills/catalog.ts";
+import type { SkillCatalog, WorkflowSkill } from "../skills/model.ts";
+import {
+  discoverSkillCatalog,
+  type SkillDiscoveryOptions,
 } from "../skills/project.ts";
-
-const LOCAL_SKILL_ROOT = ".agents/skills";
+import type { CliRuntime } from "./runtime.ts";
 
 export { WorkflowSkillError } from "../skills/model.ts";
 
 export interface WorkflowSkillSummary {
+  readonly qualifiedName: string;
   readonly name: string;
   readonly description: string;
   readonly relativePath: string;
+  readonly activationPolicy: "implicit" | "explicit";
 }
 
 export interface WorkflowSkillListWarning {
@@ -22,24 +29,84 @@ export interface WorkflowSkillListWarning {
 export interface WorkflowSkillListResult {
   readonly skills: readonly WorkflowSkillSummary[];
   readonly warnings: readonly WorkflowSkillListWarning[];
+  readonly exposure: SkillCatalogExposure;
 }
 
-export function loadWorkflowSkill(
+function configuredRoots(value: string | undefined): readonly string[] {
+  return (
+    value
+      ?.split(delimiter)
+      .map((root) => root.trim())
+      .filter((root) => root !== "") ?? []
+  );
+}
+
+function skillDiscoveryOptions(
+  runtime: Pick<CliRuntime, "env">,
   workspace: string,
-  skillName: string,
-): WorkflowSkill {
-  return loadProjectWorkflowSkill(workspace, skillName);
+): SkillDiscoveryOptions {
+  const home = runtime.env("HOME") ?? runtime.env("USERPROFILE") ?? homedir();
+  const keelHome = runtime.env("KEEL_HOME") ?? join(home, ".keel");
+  return {
+    workspace,
+    userRoot: join(home, ".agents", "skills"),
+    systemRoots: [
+      join(keelHome, "skills", ".system"),
+      ...configuredRoots(runtime.env("KEEL_SYSTEM_SKILL_ROOTS")),
+    ],
+    extraRoots: configuredRoots(runtime.env("KEEL_EXTRA_SKILL_ROOTS")),
+  };
 }
 
-export function listWorkflowSkills(workspace: string): WorkflowSkillListResult {
-  const catalog = discoverProjectSkillCatalog(workspace);
+export function discoverWorkflowSkillCatalog(
+  runtime: Pick<CliRuntime, "env">,
+  workspace: string,
+): SkillCatalog {
+  return discoverSkillCatalog(skillDiscoveryOptions(runtime, workspace));
+}
+
+export function loadWorkflowSkills(
+  runtime: Pick<CliRuntime, "env">,
+  workspace: string,
+  lookups: readonly string[],
+): readonly WorkflowSkill[] {
+  const catalog = discoverWorkflowSkillCatalog(runtime, workspace);
+  return lookups
+    .map((lookup) => catalog.load(lookup))
+    .filter(
+      (skill, index, skills) =>
+        skills.findIndex(
+          (candidate) => candidate.packageId === skill.packageId,
+        ) === index,
+    );
+}
+
+export function listWorkflowSkills(
+  runtime: Pick<CliRuntime, "env">,
+  workspace: string,
+): WorkflowSkillListResult {
+  const catalog = discoverWorkflowSkillCatalog(runtime, workspace);
   return {
-    skills: catalog.skills.map(({ name, description, relativePath }) => ({
-      name,
-      description,
-      relativePath,
-    })),
+    skills: catalog.skills.map(
+      ({
+        qualifiedName,
+        name,
+        description,
+        relativePath,
+        activationPolicy,
+      }) => ({
+        qualifiedName,
+        name,
+        description,
+        relativePath,
+        activationPolicy,
+      }),
+    ),
     warnings: catalog.warnings,
+    exposure: exposeSkillCatalog({
+      skills: catalog.implicitSkills,
+      request: "",
+    }),
   };
 }
 
@@ -47,11 +114,16 @@ export function formatWorkflowSkillList(
   skills: readonly WorkflowSkillSummary[],
 ): string {
   if (skills.length === 0) {
-    return `No local workflow skills found in ${LOCAL_SKILL_ROOT}.\n`;
+    return "No workflow skills found across repo, user, system, or extra scopes.\n";
   }
   return [
-    "Local workflow skills:",
-    ...skills.map((skill) => `- ${skill.name}: ${skill.description}`),
+    "Workflow skills:",
+    ...skills.map(
+      (skill) =>
+        `- ${skill.qualifiedName}: ${skill.description}${
+          skill.activationPolicy === "explicit" ? " [explicit only]" : ""
+        }`,
+    ),
     "",
   ].join("\n");
 }

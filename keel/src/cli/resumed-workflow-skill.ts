@@ -18,9 +18,12 @@ export function ensureResumedWorkflowSkillMatchesRequest(
       `Error: session "${options.session.id}" has no workflow skill; cannot resume it with workflow skill "${options.requestedSkillName}".`,
     );
   }
-  if (workflowSkill.name !== options.requestedSkillName) {
+  if (
+    workflowSkill.name !== options.requestedSkillName &&
+    workflowSkill.qualifiedName !== options.requestedSkillName
+  ) {
     throw new SessionStoreError(
-      `Error: session "${options.session.id}" already uses workflow skill "${workflowSkill.name}"; cannot resume it with workflow skill "${options.requestedSkillName}".`,
+      `Error: session "${options.session.id}" already uses workflow skill "${workflowSkill.qualifiedName}"; cannot resume it with workflow skill "${options.requestedSkillName}".`,
     );
   }
 }

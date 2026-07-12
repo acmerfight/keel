@@ -1,13 +1,16 @@
 import { EventEmitter } from "node:events";
 import {
+  CombinedAutocompleteProvider,
   Editor,
   type EditorTheme,
   Key,
   matchesKey,
+  type SlashCommand,
   type Terminal,
   Text,
   TUI,
 } from "@earendil-works/pi-tui";
+import type { SkillDescriptor } from "../../skills/model.ts";
 import type {
   StableInteractiveDisplay,
   StableInteractiveDisplayOptions,
@@ -95,6 +98,8 @@ export function createInteractiveTerminalDisplay(
   terminal: Terminal,
   options: StableInteractiveDisplayOptions & {
     readonly onInterrupt: () => void;
+    readonly workspace?: string;
+    readonly skillCompletions?: readonly SkillDescriptor[];
   },
 ): InteractiveTerminalDisplay {
   const tui = new TUI(terminal, true);
@@ -103,6 +108,41 @@ export function createInteractiveTerminalDisplay(
   const goalStatus = new Text();
   const prompt = new Text("keel>");
   const editor = new Editor(tui, EDITOR_THEME);
+  const commands: SlashCommand[] = [
+    { name: "help", description: "Show interactive help." },
+    { name: "undo", description: "Restore an undo checkpoint." },
+    { name: "model", description: "Show or switch the active model." },
+    {
+      name: "skill",
+      description: "Show or activate workflow skills.",
+      argumentHint: "<name|scope:name|scope:root-id:name> [task]",
+      getArgumentCompletions: (prefix) => {
+        const normalizedPrefix = prefix.trimStart().toLowerCase();
+        if (normalizedPrefix.includes(" ")) return null;
+        return (options.skillCompletions ?? [])
+          .filter((skill) =>
+            skill.qualifiedName.toLowerCase().includes(normalizedPrefix),
+          )
+          .map((skill) => ({
+            value: skill.qualifiedName,
+            label: skill.qualifiedName,
+            description: skill.description,
+          }));
+      },
+    },
+    { name: "status", description: "Show current session state." },
+    { name: "title", description: "Show or set the session title." },
+    { name: "goal", description: "Show or update the session goal." },
+    { name: "tasks", description: "Show current task progress." },
+    { name: "diff", description: "Show current git changes." },
+    { name: "approvals", description: "Manage active Bash approvals." },
+    { name: "compact", description: "Compact older conversation context." },
+    { name: "fork", description: "Fork the saved session." },
+    { name: "fork-points", description: "List valid session fork points." },
+  ];
+  editor.setAutocompleteProvider(
+    new CombinedAutocompleteProvider(commands, options.workspace ?? "."),
+  );
   const composerHint = new Text();
   const lineInput = new TerminalLineInput();
   let transcriptText = "";

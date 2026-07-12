@@ -62,6 +62,14 @@ import { executeWrite } from "./write.ts";
 
 type ReadToolCall = Extract<ValidToolCall, { readonly tool: "read" }>;
 type SkillToolCall = Extract<ValidToolCall, { readonly tool: "skill" }>;
+type SkillSearchToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "skill_search" }
+>;
+type SkillResourceToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "skill_resource" }
+>;
 type LsToolCall = Extract<ValidToolCall, { readonly tool: "ls" }>;
 type GlobToolCall = Extract<ValidToolCall, { readonly tool: "glob" }>;
 type GrepToolCall = Extract<ValidToolCall, { readonly tool: "grep" }>;
@@ -177,7 +185,7 @@ function executeSkillTool(
   if (context.skillActivation === undefined) {
     return {
       content:
-        "Tool failed: skill activation is unavailable because no valid project skill catalog was exposed.\nRecovery: Continue without a skill.",
+        "Tool failed: skill activation is unavailable because no valid workflow skill catalog was exposed.\nRecovery: Continue without a skill.",
       ok: false,
     };
   }
@@ -194,7 +202,61 @@ function executeSkillTool(
       throw error;
     }
     return {
-      content: `Tool failed: ${error.message.replace(/^Error: /u, "")}\nRecovery: Use an exact name from the current project skill catalog, or continue without a skill.`,
+      content: `Tool failed: ${error.message.replace(/^Error: /u, "")}\nRecovery: Use an exact qualified name from the current scoped catalog, search omitted entries first, or continue without a skill.`,
+      ok: false,
+    };
+  }
+}
+
+function executeSkillSearchTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: SkillSearchToolCall,
+): ToolExecution {
+  if (context.skillActivation === undefined) {
+    return {
+      content:
+        "Tool failed: skill catalog search is unavailable.\nRecovery: Continue without a skill.",
+      ok: false,
+    };
+  }
+  const matches = context.skillActivation.search(toolCall.query);
+  return {
+    content:
+      matches.length === 0
+        ? "No matching implicit workflow skills found."
+        : matches
+            .map(
+              (skill) =>
+                `${skill.qualifiedName}: ${skill.description} (${skill.relativePath})`,
+            )
+            .join("\n"),
+    ok: true,
+  };
+}
+
+function executeSkillResourceTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: SkillResourceToolCall,
+): ToolExecution {
+  if (context.skillActivation === undefined) {
+    return {
+      content:
+        "Tool failed: skill resource access is unavailable.\nRecovery: Continue without the resource.",
+      ok: false,
+    };
+  }
+  try {
+    return {
+      content: context.skillActivation.readResource(
+        toolCall.skill,
+        toolCall.path,
+      ),
+      ok: true,
+    };
+  } catch (error) {
+    if (!(error instanceof WorkflowSkillError)) throw error;
+    return {
+      content: `Tool failed: ${error.message.replace(/^Error: /u, "")}\nRecovery: Use an exact active qualified skill name and one advertised resource path.`,
       ok: false,
     };
   }
@@ -743,6 +805,10 @@ function executeBuiltinToolCall(
       return executeUpdatePlanTool(parsed.data);
     case "update_goal":
       return executeUpdateGoalTool(context, parsed.data);
+    case "skill_resource":
+      return executeSkillResourceTool(context, parsed.data);
+    case "skill_search":
+      return executeSkillSearchTool(context, parsed.data);
     case "skill":
       return executeSkillTool(context, parsed.data);
     case "read":

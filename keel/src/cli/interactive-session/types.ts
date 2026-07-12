@@ -16,6 +16,7 @@ import type {
 } from "../../permissions/bash.ts";
 import type {
   SkillActivationCapability,
+  SkillActivationRecord,
   SkillDescriptor,
   WorkflowSkill,
 } from "../../skills/model.ts";
@@ -79,9 +80,10 @@ export interface InteractiveSessionOptions {
   readonly platform: NodeJS.Platform;
   readonly sessionId?: string;
   readonly projectInstructions?: ProjectInstructions;
-  readonly workflowSkill?: WorkflowSkill;
+  readonly workflowSkills?: readonly WorkflowSkill[];
   readonly skillCatalog?: readonly SkillDescriptor[];
   readonly skillActivation?: SkillActivationCapability;
+  readonly activateExplicitSkill?: (lookup: string) => WorkflowSkill;
   readonly initialSessionTitle?: string;
   readonly initialSessionGoal?: SessionGoal;
   readonly initialMessages?: readonly Message[];
@@ -195,5 +197,13 @@ export interface InteractiveSessionResult {
     }[];
     readonly usageByModel: readonly InteractiveReportModelUsage[];
     readonly end: EndEventWithCost;
+    readonly skillCatalog: {
+      readonly exposed: number;
+      readonly omitted: number;
+      readonly total: number;
+      readonly budgetChars: number;
+      readonly usedChars: number;
+    };
+    readonly explicitSkillActivations: readonly SkillActivationRecord[];
   };
 }

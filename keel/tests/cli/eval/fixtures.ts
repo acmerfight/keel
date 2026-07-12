@@ -24,7 +24,7 @@ export {
   z,
 };
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(5),
+  schemaVersion: z.literal(6),
   modelsUsed: z.array(
     z.object({
       provider: z.string(),

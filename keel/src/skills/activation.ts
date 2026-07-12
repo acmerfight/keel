@@ -22,7 +22,7 @@ export function formatSkillActivation(skill: WorkflowSkill): string {
           .map((path) => `    <path>${escapeXml(path)}</path>`)
           .join("\n");
   return [
-    `<skill_activation name="${escapeXml(skill.name)}" source="${escapeXml(skill.relativePath)}">`,
+    `<skill_activation id="${escapeXml(skill.qualifiedName)}" digest="sha256:${escapeXml(skill.digest)}" trigger="model_selected" source="${escapeXml(skill.relativePath)}">`,
     `  <base_directory>${escapeXml(skillBaseDirectory(skill.relativePath))}</base_directory>`,
     "  <instructions>",
     escapeXml(skill.content),

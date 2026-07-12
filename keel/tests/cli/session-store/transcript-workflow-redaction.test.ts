@@ -152,6 +152,11 @@ describe("Session Store Transcript Workflow Redaction", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const workflowSkill = {
+      id: "repo:test:review",
+      packageId: "repo:test:review",
+      digest: "digest",
+      qualifiedName: "repo:review",
+      scope: "repo" as const,
       name: "review",
       relativePath: ".agents/skills/review/SKILL.md",
       resourcePaths: ["references/checklist.md"],
@@ -200,6 +205,11 @@ describe("Session Store Transcript Workflow Redaction", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const workflowSkill = {
+      id: "repo:test:review",
+      packageId: "repo:test:review",
+      digest: "digest",
+      qualifiedName: "repo:review",
+      scope: "repo" as const,
       name: "review",
       relativePath: ".agents/skills/review/SKILL.md",
       resourcePaths: [
@@ -251,6 +261,11 @@ describe("Session Store Transcript Workflow Redaction", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const workflowSkill = {
+      id: "repo:test:review",
+      packageId: "repo:test:review",
+      digest: "digest",
+      qualifiedName: "repo:review",
+      scope: "repo" as const,
       name: "review",
       relativePath: ".agents/skills/review/SKILL.md",
       resourcePaths: [],
@@ -297,13 +312,18 @@ describe("Session Store Transcript Workflow Redaction", () => {
       await writeFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 2,
+          schemaVersion: 3,
           type: "session",
           id: session.id,
           createdAt: "1970-01-01T00:00:00.000Z",
           workspace: session.workspace,
           graph: rootGraph(session.id),
           workflowSkill: {
+            id: "repo:test:review",
+            packageId: "repo:test:review",
+            digest: "digest",
+            qualifiedName: "repo:review",
+            scope: "repo",
             name: "review",
             relativePath: ".agents/skills/review/SKILL.md",
             resourcePaths: ["../secret.md"],

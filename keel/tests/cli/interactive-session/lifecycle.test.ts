@@ -79,6 +79,19 @@ async function runInteractiveLocalCommand(
 }
 
 describe("Interactive Session - Lifecycle", () => {
+  test.each([
+    "$review inspect",
+    "/skill review",
+  ])(`Given explicit activation is unavailable in a direct interactive session,
+    When user enters %s,
+    Then Keel reports the capability failure without starting a model turn`, async (command) => {
+    const result = await runInteractiveLocalCommand(command, process.cwd());
+
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("explicit skill activation is unavailable\n");
+    expect(result.providerResolved).toBe(false);
+  });
+
   test(`Given staged unstaged and untracked workspace changes,
     When user enters /diff,
     Then Keel prints current git changes without starting a model turn`, async () => {
@@ -260,12 +273,19 @@ describe("Interactive Session - Lifecycle", () => {
       workspace,
       platform: process.platform,
       sessionId: "status-detail",
-      workflowSkill: {
-        name: "review",
-        relativePath: ".agents/skills/review/SKILL.md",
-        resourcePaths: ["references/checklist.md"],
-        content: "Review workflow instructions.",
-      },
+      workflowSkills: [
+        {
+          id: "repo:test:review",
+          packageId: "repo:test:review",
+          digest: "digest",
+          qualifiedName: "repo:review",
+          scope: "repo",
+          name: "review",
+          relativePath: ".agents/skills/review/SKILL.md",
+          resourcePaths: ["references/checklist.md"],
+          content: "Review workflow instructions.",
+        },
+      ],
       initialMessages: [{ role: "user", content: "remember prior context" }],
       initialModelSelection: {
         providerId: "qwen",
@@ -319,7 +339,7 @@ describe("Interactive Session - Lifecycle", () => {
       expect(stdout).toContain(`  workspace: ${workspace}\n`);
       expect(stdout).toContain("  active model: qwen/qwen3.7-max\n");
       expect(stdout).toContain(
-        "  workflow skill: review (.agents/skills/review/SKILL.md)\n",
+        "  workflow skill: repo:review (.agents/skills/review/SKILL.md)\n",
       );
       expect(stdout).toContain("  messages: 1\n");
       expect(stdout).toContain("  pending inputs: 0\n");

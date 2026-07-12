@@ -19,7 +19,7 @@ export {
   z,
 };
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(5),
+  schemaVersion: z.literal(6),
   turns: z.number().int().nonnegative(),
   stopReason: z.string(),
   usage: z.object({
