@@ -555,6 +555,12 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         usedChars: 0,
       },
       explicitSkillActivations: [],
+      undoProtection: {
+        status: "not_applicable",
+        checkpointsWritten: 0,
+        failures: [],
+        latestCheckpoint: null,
+      },
     });
     expect(stdout).toContain("Model switched to qwen/tiny");
     expect(stderr).toContain("Context compacted: model switch");

@@ -140,7 +140,10 @@ describe("Git Checkpoint Race Handling", () => {
       const result = record(gitModule, workspace, filePath);
 
       // Then
-      expect(result).toEqual({ written: false });
+      expect(result).toEqual({
+        written: false,
+        reason: "checkpoint_write_failed",
+      });
     });
   });
 
@@ -173,7 +176,10 @@ describe("Git Checkpoint Race Handling", () => {
       });
 
       // Then
-      expect(result).toEqual({ written: false });
+      expect(result).toEqual({
+        written: false,
+        reason: "checkpoint_write_failed",
+      });
     });
   });
 

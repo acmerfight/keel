@@ -21,6 +21,12 @@ describe("CLI Session Status Format", () => {
       taskProgress: emptySessionTaskProgress(),
       modelSwitchCount: 0,
       undoCheckpoints: [],
+      undoProtection: {
+        status: "available",
+        checkpointsWritten: 1,
+        failures: [],
+        latestCheckpoint: { written: true },
+      },
       recoveryActions: [],
     });
 
@@ -30,6 +36,9 @@ describe("CLI Session Status Format", () => {
       "  continue: send follow-ups or corrections here until the task is done\n",
     );
     expect(formatted).not.toContain("recovery:\n");
+    expect(formatted).toContain(
+      "  undo protection: available overall (latest: available; 0 failed, 1 written)\n",
+    );
   });
 
   test(`Given a session goal is present,

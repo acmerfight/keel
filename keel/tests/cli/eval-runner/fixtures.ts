@@ -25,7 +25,7 @@ export const resultLineSchema = z.object({
   outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
   report: z
     .object({
-      schemaVersion: z.literal(7),
+      schemaVersion: z.literal(8),
       modelsUsed: z.array(
         z.object({
           provider: z.string(),
@@ -41,6 +41,12 @@ export const resultLineSchema = z.object({
       contextCompactions: z.array(z.unknown()),
       skillActivations: z.array(z.unknown()),
       costOvershootUsd: z.number().nonnegative(),
+      undoProtection: z.object({
+        status: z.enum(["available", "not_applicable", "unavailable"]),
+        checkpointsWritten: z.number().int().nonnegative(),
+        failures: z.array(z.unknown()),
+        latestCheckpoint: z.unknown().nullable(),
+      }),
     })
     .optional(),
   transcriptPath: z.string().optional(),
@@ -125,7 +131,7 @@ export const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 export const VALID_REPORT = {
-  schemaVersion: 7,
+  schemaVersion: 8,
   modelsUsed: [{ provider: "fake", model: "fake" }],
   usageByModel: [
     {
@@ -161,6 +167,12 @@ export const VALID_REPORT = {
     total: 0,
     budgetChars: 8000,
     usedChars: 0,
+  },
+  undoProtection: {
+    status: "not_applicable",
+    checkpointsWritten: 0,
+    failures: [],
+    latestCheckpoint: null,
   },
 };
 

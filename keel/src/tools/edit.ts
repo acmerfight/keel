@@ -4,6 +4,7 @@ import {
   type RecordLastBatchCheckpointOperation,
   recordLastEditCheckpoint,
 } from "../core/git.ts";
+import type { RecordUndoCheckpointResult } from "../core/undo-protection.ts";
 import { writeTextFileAtomically } from "./atomic-write.ts";
 import {
   type EditMatchSpan,
@@ -45,6 +46,7 @@ interface ExecuteEditOptions {
 interface EditToolResult extends ToolResult {
   readonly targetPath: string;
   readonly checkpointOperation: RecordLastBatchCheckpointOperation;
+  readonly undoCheckpoint?: RecordUndoCheckpointResult;
 }
 
 const MAX_EDIT_FILE_BYTES = 10 * 1024 * 1024;
@@ -607,14 +609,15 @@ function executeEditBatch(
       findWorkspacePathsByIdentity(workspacePath, identity),
   });
   const finalTargetPath = publishedTargetPath;
-  if (options.recordCheckpoint !== false) {
-    recordLastEditCheckpoint({
-      workspace: workspacePath,
-      filePath: finalTargetPath,
-      beforeContent,
-      afterContent,
-    });
-  }
+  const undoCheckpoint =
+    options.recordCheckpoint === false
+      ? undefined
+      : recordLastEditCheckpoint({
+          workspace: workspacePath,
+          filePath: finalTargetPath,
+          beforeContent,
+          afterContent,
+        });
 
   return {
     content: `Edited ${filePath}`,
@@ -625,6 +628,7 @@ function executeEditBatch(
       beforeContent,
       afterContent,
     },
+    ...(undoCheckpoint !== undefined ? { undoCheckpoint } : {}),
   };
 }
 

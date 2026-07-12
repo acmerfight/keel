@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(7),
+  schemaVersion: z.literal(8),
   modelsUsed: z.array(
     z.object({
       provider: z.string(),
@@ -41,6 +41,33 @@ export const runReportSchema = z.object({
     total: z.number().int().nonnegative(),
     budgetChars: z.number().int().nonnegative(),
     usedChars: z.number().int().nonnegative(),
+  }),
+  undoProtection: z.object({
+    status: z.enum(["available", "not_applicable", "unavailable"]),
+    checkpointsWritten: z.number().int().nonnegative(),
+    failures: z.array(
+      z.object({
+        reason: z.enum([
+          "checkpoint_write_failed",
+          "git_workspace_unavailable",
+          "target_unavailable",
+        ]),
+        count: z.number().int().positive(),
+      }),
+    ),
+    latestCheckpoint: z
+      .discriminatedUnion("written", [
+        z.object({ written: z.literal(true) }),
+        z.object({
+          written: z.literal(false),
+          reason: z.enum([
+            "checkpoint_write_failed",
+            "git_workspace_unavailable",
+            "target_unavailable",
+          ]),
+        }),
+      ])
+      .nullable(),
   }),
 });
 

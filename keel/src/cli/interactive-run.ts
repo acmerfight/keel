@@ -1213,6 +1213,7 @@ async function runSessionCli(
           ],
           activeSkills: reportActiveSkills(skillActivation.activeStatuses()),
           skillCatalog: interactiveResult.report.skillCatalog,
+          undoProtection: interactiveResult.report.undoProtection,
           ...(goalOutcome !== undefined ? { goalOutcome } : {}),
         });
       }

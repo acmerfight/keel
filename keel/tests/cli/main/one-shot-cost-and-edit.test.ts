@@ -1,8 +1,10 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { z } from "zod";
 import { runCliMain } from "../../../src/cli/index.ts";
 import {
   createRuntime,
@@ -13,9 +15,163 @@ import {
   getPort,
   listen,
   sseTextReplyWithUsage,
+  sseToolCall,
+  sseToolFinish,
 } from "../../../src/testing/provider-sse-fixtures.ts";
 
 describe("CLI Main - One Shot Cost And Edit", () => {
+  test(`Given a provider fails after changing a workspace with unavailable undo protection,
+    When the one-shot stream terminates with that error,
+    Then the change remains and one separated warning is shown before the terminal error`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-undo-error-"));
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        requestCount += 1;
+        if (requestCount === 1) {
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.write(
+            sseToolCall("write_generated", "write", {
+              path: "generated.txt",
+              content: "generated\n",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "provider failed" } }));
+      });
+    });
+    await listen(server);
+    let terminal = "";
+    const fixture = createRuntime(["create generated.txt"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      onStdout: (text) => {
+        terminal += text;
+      },
+      onStderr: (text) => {
+        terminal += text;
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(await readFile(join(workspace, "generated.txt"), "utf8")).toBe(
+        "generated\n",
+      );
+      expect(
+        fixture
+          .stderr()
+          .match(
+            /Warning: change applied; undo checkpoint unavailable for this task\./gu,
+          ),
+      ).toHaveLength(1);
+      expect(fixture.stderr()).toContain("provider failed");
+      const warningIndex = terminal.indexOf(
+        "Warning: change applied; undo checkpoint unavailable for this task.",
+      );
+      expect(warningIndex).toBeGreaterThan(
+        terminal.indexOf("Tool: write generated.txt\n"),
+      );
+      expect(terminal.indexOf("provider failed")).toBeGreaterThan(warningIndex);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a task changes a Git workspace whose undo checkpoint cannot be written,
+    When the one-shot run completes with a report,
+    Then the change succeeds and the user sees one unavailable-protection warning recorded in the report`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-undo-warning-"));
+    execFileSync("git", ["init"], { cwd: workspace, stdio: "ignore" });
+    await mkdir(join(workspace, ".git", "keel", "undo-checkpoints.json"), {
+      recursive: true,
+    });
+    const reportPath = join(workspace, "run.json");
+    let terminal = "";
+    const fixture = createRuntime(
+      ["--report", reportPath, "create generated.json"],
+      {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "fake" },
+        onStdout: (text) => {
+          terminal += text;
+        },
+        onStderr: (text) => {
+          terminal += text;
+        },
+      },
+    );
+    const reportSchema = z.object({
+      undoProtection: z.object({
+        status: z.literal("unavailable"),
+        checkpointsWritten: z.literal(0),
+        failures: z.array(
+          z.object({
+            reason: z.literal("checkpoint_write_failed"),
+            count: z.literal(1),
+          }),
+        ),
+        latestCheckpoint: z.object({
+          written: z.literal(false),
+          reason: z.literal("checkpoint_write_failed"),
+        }),
+      }),
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(await readFile(join(workspace, "generated.json"), "utf8")).toBe(
+        '{"created":true}\n',
+      );
+      expect(fixture.stdout()).toBe("Created generated.json\n");
+      expect(fixture.stderr()).toBe(
+        "Tool: write generated.json\nWarning: change applied; undo checkpoint unavailable for this task.\n",
+      );
+      expect(terminal).toBe(
+        "Tool: write generated.json\nCreated generated.json\nWarning: change applied; undo checkpoint unavailable for this task.\n",
+      );
+      expect(
+        reportSchema.parse(JSON.parse(await readFile(reportPath, "utf8"))),
+      ).toEqual({
+        undoProtection: {
+          status: "unavailable",
+          checkpointsWritten: 0,
+          failures: [{ reason: "checkpoint_write_failed", count: 1 }],
+          latestCheckpoint: {
+            written: false,
+            reason: "checkpoint_write_failed",
+          },
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a one-shot provider request is interrupted,
     When the CLI main receives SIGINT,
     Then it aborts the request and returns the interrupted exit code`, async () => {
@@ -297,7 +453,9 @@ describe("CLI Main - One Shot Cost And Edit", () => {
         '{"created":true}\n',
       );
       expect(fixture.stdout()).toBe("Created generated.json\n");
-      expect(fixture.stderr()).toBe("Tool: write generated.json\n");
+      expect(fixture.stderr()).toBe(
+        "Tool: write generated.json\nWarning: change applied; undo checkpoint unavailable for this task.\n",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

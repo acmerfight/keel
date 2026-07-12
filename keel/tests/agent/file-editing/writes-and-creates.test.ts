@@ -3,12 +3,14 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { runAgent } from "../../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
+import { restoreLastEditCheckpoint } from "../../../src/core/git.ts";
 import {
   createFakeProvider,
   fakeResponse,
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import { createGitWorkspace } from "../../../src/testing/cli-harness.ts";
 import {
   collect,
   createWorkspace,
@@ -16,9 +18,50 @@ import {
 } from "../../../src/testing/file-editing-fixtures.ts";
 
 describe("File Editing Writes And Creates", () => {
+  test(`Given a consumer stops reading after the assistant text for a file-changing task,
+    When the agent stream closes before its terminal event,
+    Then the task checkpoint is still available for undo`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-agent-early-close-");
+    const provider = createFakeProvider([
+      fakeToolResponse("write", {
+        path: "config.json",
+        content: '{"created":true}\n',
+      }),
+      fakeResponse("Created config.json."),
+    ]);
+
+    try {
+      // When
+      for await (const event of runAgent({
+        workspace,
+        provider,
+        userMessage: "create config.json",
+        systemPrompt: "You are a helpful assistant.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+      })) {
+        if (event.type === "text") break;
+      }
+      const restored = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(restored).toEqual({
+        status: "restored",
+        restoredLabel: "config.json",
+      });
+      await expect(
+        readFile(join(workspace, "config.json"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the assistant requests a new workspace file,
     When the agent handles the write tool call,
-    Then the file is created before the assistant replies`, async () => {
+    Then the file is created and one unavailable checkpoint event precedes the terminal end`, async () => {
     // Given
     const workspace = await createWorkspace();
     const provider = createFakeProvider([
@@ -51,6 +94,21 @@ describe("File Editing Writes And Creates", () => {
         type: "text",
         text: "Created config.json.",
       });
+      expect(
+        events.filter((event) => event.type === "undo_checkpoint"),
+      ).toEqual([
+        {
+          type: "undo_checkpoint",
+          written: false,
+          reason: "git_workspace_unavailable",
+        },
+      ]);
+      expect(events.at(-2)).toEqual({
+        type: "undo_checkpoint",
+        written: false,
+        reason: "git_workspace_unavailable",
+      });
+      expect(events.at(-1)).toMatchObject({ type: "end" });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

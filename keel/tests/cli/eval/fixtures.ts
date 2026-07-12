@@ -24,7 +24,7 @@ export {
   z,
 };
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(7),
+  schemaVersion: z.literal(8),
   modelsUsed: z.array(
     z.object({
       provider: z.string(),
@@ -59,6 +59,12 @@ export const runReportSchema = z.object({
   costOvershootUsd: z.number().nonnegative(),
   contextCompactions: z.array(z.unknown()),
   skillActivations: z.array(z.unknown()),
+  undoProtection: z.object({
+    status: z.enum(["available", "not_applicable", "unavailable"]),
+    checkpointsWritten: z.number().int().nonnegative(),
+    failures: z.array(z.unknown()),
+    latestCheckpoint: z.unknown().nullable(),
+  }),
 });
 
 export const resultLineSchema = z.object({

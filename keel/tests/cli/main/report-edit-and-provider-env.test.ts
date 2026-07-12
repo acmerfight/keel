@@ -40,7 +40,7 @@ describe("CLI Main - Report Edit And Provider Env", () => {
         JSON.parse(await readFile(reportPath, "utf8")),
       );
       expect(report).toMatchObject({
-        schemaVersion: 7,
+        schemaVersion: 8,
         modelsUsed: [{ provider: "fake", model: "fake" }],
         usageByModel: [
           {
@@ -52,6 +52,12 @@ describe("CLI Main - Report Edit And Provider Env", () => {
         ],
         costUsd: 0,
         contextCompactions: [],
+        undoProtection: {
+          status: "not_applicable",
+          checkpointsWritten: 0,
+          failures: [],
+          latestCheckpoint: null,
+        },
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -113,7 +119,7 @@ describe("CLI Main - Report Edit And Provider Env", () => {
       );
       expect(fixture.stdout()).toBe("Edited note.txt\n");
       expect(fixture.stderr()).toBe(
-        "Tool: read note.txt\nTool: edit note.txt\n",
+        "Tool: read note.txt\nTool: edit note.txt\nWarning: change applied; undo checkpoint unavailable for this task.\n",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

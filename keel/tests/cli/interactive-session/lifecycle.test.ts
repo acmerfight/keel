@@ -1,11 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
+import {
+  createFakeProvider,
+  fakeResponse,
+  fakeToolResponse,
+} from "../../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   ForcedExit,
@@ -578,6 +583,78 @@ describe("Interactive Session - Lifecycle", () => {
     expect(turnCount).toBe(1);
     expect(stderr).toBe("");
     expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given an interactive task changes a Git workspace whose checkpoint cannot be written,
+    When user enters /status after the task,
+    Then the warning is emitted once and status reports unavailable undo protection`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-status-undo-");
+    await writeFile(join(workspace, ".git", "keel"), "blocks directory\n");
+    const provider = createFakeProvider([
+      fakeToolResponse("write", {
+        path: "generated.txt",
+        content: "generated\n",
+      }),
+      fakeResponse("Created."),
+    ]);
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") stdout += event.text;
+          if (event.type === "end") finalEnd = event;
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      // When
+      input.end("create a file\n/status\n");
+      await session;
+
+      // Then
+      expect(await readFile(join(workspace, "generated.txt"), "utf8")).toBe(
+        "generated\n",
+      );
+      expect(stderr).toBe(
+        "Warning: change applied; undo checkpoint unavailable for this task.\n",
+      );
+      expect(stdout).toContain(
+        "  undo protection: unavailable overall (latest: unavailable - git workspace unavailable; 1 failed, 0 written)\n",
+      );
+      expect(stdout).toContain("  undo checkpoints: 0\n");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test(`Given the user passes arguments to /status,

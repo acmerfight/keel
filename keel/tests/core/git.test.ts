@@ -74,7 +74,10 @@ describe("Git Checkpoints", () => {
       const checkpoints = listUndoCheckpoints(workspace);
 
       // Then
-      expect(record).toEqual({ written: false });
+      expect(record).toEqual({
+        written: false,
+        reason: "git_workspace_unavailable",
+      });
       expect(checkpoints).toEqual([]);
       expect(restore).toEqual({
         status: "none",
@@ -101,7 +104,7 @@ describe("Git Checkpoints", () => {
       const restore = restoreLastEditCheckpoint(workspace);
 
       // Then
-      expect(result).toEqual({ written: false });
+      expect(result).toEqual({ written: false, reason: "no_changes" });
       expect(restore).toEqual({
         status: "none",
         message:
@@ -1754,7 +1757,10 @@ describe("Git Checkpoints", () => {
       });
 
       // Then
-      expect(result).toEqual({ written: false });
+      expect(result).toEqual({
+        written: false,
+        reason: "git_workspace_unavailable",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1778,7 +1784,10 @@ describe("Git Checkpoints", () => {
       });
 
       // Then
-      expect(result).toEqual({ written: false });
+      expect(result).toEqual({
+        written: false,
+        reason: "target_unavailable",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(outsideDirectory, { recursive: true, force: true });
@@ -1801,7 +1810,10 @@ describe("Git Checkpoints", () => {
       });
 
       // Then
-      expect(result).toEqual({ written: false });
+      expect(result).toEqual({
+        written: false,
+        reason: "target_unavailable",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1823,7 +1835,10 @@ describe("Git Checkpoints", () => {
       });
 
       // Then
-      expect(result).toEqual({ written: false });
+      expect(result).toEqual({
+        written: false,
+        reason: "target_unavailable",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -2181,7 +2196,7 @@ describe("Git Checkpoints", () => {
       const restore = restoreLastEditCheckpoint(workspace);
 
       // Then
-      expect(record).toEqual({ written: false });
+      expect(record).toEqual({ written: false, reason: "no_changes" });
       expect(restore).toEqual({
         status: "none",
         message:
@@ -2635,7 +2650,10 @@ describe("Git Checkpoints", () => {
       });
 
       // Then
-      expect(result).toEqual({ written: false });
+      expect(result).toEqual({
+        written: false,
+        reason: "target_unavailable",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(outsideDirectory, { recursive: true, force: true });
@@ -2656,7 +2674,7 @@ describe("Git Checkpoints", () => {
       });
 
       // Then
-      expect(result).toEqual({ written: false });
+      expect(result).toEqual({ written: false, reason: "no_changes" });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -2801,7 +2819,10 @@ describe("Git Checkpoints", () => {
       });
 
       // Then
-      expect(result).toEqual({ written: false });
+      expect(result).toEqual({
+        written: false,
+        reason: "target_unavailable",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(outsideDirectory, { recursive: true, force: true });
@@ -2826,7 +2847,10 @@ describe("Git Checkpoints", () => {
       });
 
       // Then
-      expect(result).toEqual({ written: false });
+      expect(result).toEqual({
+        written: false,
+        reason: "target_unavailable",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(outsideDirectory, { recursive: true, force: true });
@@ -2848,7 +2872,10 @@ describe("Git Checkpoints", () => {
       });
 
       // Then
-      expect(result).toEqual({ written: false });
+      expect(result).toEqual({
+        written: false,
+        reason: "target_unavailable",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -2878,7 +2905,10 @@ describe("Git Checkpoints", () => {
       const restore = restoreLastEditCheckpoint(workspace);
 
       // Then
-      expect(record).toEqual({ written: false });
+      expect(record).toEqual({
+        written: false,
+        reason: "target_unavailable",
+      });
       expect(restore).toEqual({
         status: "none",
         message:
@@ -2917,7 +2947,10 @@ describe("Git Checkpoints", () => {
       });
 
       // Then
-      expect(record).toEqual({ written: false });
+      expect(record).toEqual({
+        written: false,
+        reason: "target_unavailable",
+      });
       expect(debugOutput).toContain("undo checkpoint write skipped");
       expect(debugOutput).toContain(`workspace=${workspace}`);
       expect(debugOutput).toContain(`filePath=${filePath}`);
@@ -2962,7 +2995,10 @@ describe("Git Checkpoints", () => {
       });
 
       // Then
-      expect(record).toEqual({ written: false });
+      expect(record).toEqual({
+        written: false,
+        reason: "git_workspace_unavailable",
+      });
       expect(debugOutput).toContain("undo checkpoint write skipped");
       expect(debugOutput).toContain(`workspace=${workspace}`);
       expect(debugOutput).toContain(`filePath=${filePath}`);

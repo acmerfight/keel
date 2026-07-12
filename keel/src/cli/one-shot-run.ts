@@ -7,6 +7,7 @@ import {
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { isAbortThrow } from "../core/error.ts";
 import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
+import { undoCheckpointUnavailable } from "../core/undo-protection.ts";
 import type { Message } from "../llm/types.ts";
 import {
   type BashMode,
@@ -34,7 +35,11 @@ import {
 } from "./bash-project-approvals.ts";
 import { createPromptedBashPermissionPolicy } from "./interactive-session/bash-approval.ts";
 import { createLineReader } from "./interactive-session/line-reader.ts";
-import { formatCostReport, printAgentEvents } from "./output.ts";
+import {
+  formatCostReport,
+  formatUndoCheckpointWarning,
+  printAgentEvents,
+} from "./output.ts";
 import {
   loadProjectInstructions,
   ProjectInstructionsError,
@@ -241,8 +246,28 @@ export async function runOneShotCli(
     });
 
     const reportRecorder = createAgentEventReportRecorder();
-    const finalEnd = await printAgentEvents(stream, runtime, reportRecorder);
+    const writeUndoProtectionWarning = (): void => {
+      const latestCheckpoint = reportRecorder.undoProtection().latestCheckpoint;
+      if (
+        latestCheckpoint !== null &&
+        undoCheckpointUnavailable(latestCheckpoint)
+      ) {
+        runtime.writeStderr(`${formatUndoCheckpointWarning()}\n`);
+      }
+    };
+    let finalEnd: Awaited<ReturnType<typeof printAgentEvents>>;
+    try {
+      finalEnd = await printAgentEvents(stream, runtime, reportRecorder);
+    } catch (error) {
+      if (reportRecorder.undoProtection().latestCheckpoint !== null) {
+        runtime.writeStdout("\n");
+        writeUndoProtectionWarning();
+      }
+      throw error;
+    }
     runtime.writeStdout("\n");
+    const undoProtection = reportRecorder.undoProtection();
+    writeUndoProtectionWarning();
     if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
       runtime.writeStderr(formatCostReport(finalEnd.cost, cliArgs.maxCostUsd));
     }
@@ -275,6 +300,7 @@ export async function runOneShotCli(
           budgetChars: catalogExposure.budgetChars,
           usedChars: catalogExposure.usedChars,
         },
+        undoProtection,
       });
     }
     if (

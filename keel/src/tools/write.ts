@@ -3,6 +3,7 @@ import {
   type RecordLastBatchCheckpointOperation,
   recordLastCreateCheckpoint,
 } from "../core/git.ts";
+import type { RecordUndoCheckpointResult } from "../core/undo-protection.ts";
 import { createTextFileAtomically } from "./atomic-write.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ProjectInstructionVisibilityState } from "./scoped-project-instructions.ts";
@@ -21,6 +22,7 @@ import {
 interface WriteToolResult extends ToolResult {
   readonly targetPath: string;
   readonly checkpointOperation: RecordLastBatchCheckpointOperation;
+  readonly undoCheckpoint?: RecordUndoCheckpointResult;
 }
 
 interface WriteToolOptions {
@@ -126,13 +128,14 @@ export function executeWrite(
     });
 
     const createdPath = publishedTargetPath;
-    if (options.recordCheckpoint !== false) {
-      recordLastCreateCheckpoint({
-        workspace: workspacePath,
-        filePath: createdPath,
-        afterContent: content,
-      });
-    }
+    const undoCheckpoint =
+      options.recordCheckpoint === false
+        ? undefined
+        : recordLastCreateCheckpoint({
+            workspace: workspacePath,
+            filePath: createdPath,
+            afterContent: content,
+          });
 
     return {
       content: `Wrote ${filePath}`,
@@ -142,6 +145,7 @@ export function executeWrite(
         filePath: createdPath,
         afterContent: content,
       },
+      ...(undoCheckpoint !== undefined ? { undoCheckpoint } : {}),
     };
   } catch (error) {
     rollbackWorkspaceParentDirectoriesBestEffort(createdParentDirectories);

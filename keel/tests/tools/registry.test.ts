@@ -414,6 +414,10 @@ describe("tool registry", () => {
             afterContent: "created\n",
           },
         ],
+        undoCheckpoint: {
+          written: false,
+          reason: "git_workspace_unavailable",
+        },
       });
       expect(await readFile(join(workspace, "note.txt"), "utf8")).toBe(
         "created\n",

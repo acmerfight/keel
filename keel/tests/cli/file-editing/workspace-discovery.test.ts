@@ -95,7 +95,9 @@ describe("CLI File Editing", () => {
         "hello new world\n",
       );
       expect(result.stdout).toBe("Done.\n");
-      expect(result.stderr).toBe("Tool: read note.txt\nTool: edit note.txt\n");
+      expect(result.stderr).toBe(
+        "Tool: read note.txt\nTool: edit note.txt\nWarning: change applied; undo checkpoint unavailable for this task.\n",
+      );
       expect(capturedBodies).toHaveLength(3);
 
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);

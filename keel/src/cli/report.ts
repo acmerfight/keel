@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { errorMessage } from "../core/error.ts";
+import type { UndoProtectionSummary } from "../core/undo-protection.ts";
 import type {
   ActiveSkillStatus,
   SkillActivationRecord,
@@ -19,6 +20,7 @@ interface RunReportInput {
   readonly skillActivations: readonly SkillActivationRecord[];
   readonly activeSkills: readonly RunReportActiveSkill[];
   readonly skillCatalog: RunReportSkillCatalog;
+  readonly undoProtection: UndoProtectionSummary;
   readonly goalOutcome?: RunReportGoalOutcome;
 }
 
@@ -53,7 +55,7 @@ interface RunReportModelUsage {
 }
 
 interface RunReport {
-  readonly schemaVersion: 7;
+  readonly schemaVersion: 8;
   readonly modelsUsed: readonly {
     readonly provider: string;
     readonly model: string;
@@ -70,6 +72,7 @@ interface RunReport {
   readonly skillActivations: readonly SkillActivationRecord[];
   readonly activeSkills: readonly RunReportActiveSkill[];
   readonly skillCatalog: RunReportSkillCatalog;
+  readonly undoProtection: UndoProtectionSummary;
   readonly goalOutcome?: RunReportGoalOutcome;
 }
 
@@ -100,7 +103,7 @@ export function assertEndEventHasCost(
 export function writeRunReport(filePath: string, input: RunReportInput): void {
   const cost = input.end.cost;
   const report: RunReport = {
-    schemaVersion: 7,
+    schemaVersion: 8,
     modelsUsed: input.usageByModel.map((entry) => ({
       provider: entry.provider,
       model: entry.model,
@@ -123,6 +126,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     skillActivations: input.skillActivations,
     activeSkills: input.activeSkills,
     skillCatalog: input.skillCatalog,
+    undoProtection: input.undoProtection,
     ...(input.goalOutcome !== undefined
       ? { goalOutcome: input.goalOutcome }
       : {}),

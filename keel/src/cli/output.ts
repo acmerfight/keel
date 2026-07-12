@@ -207,6 +207,10 @@ export function formatToolOutputArtifactNotice(
   )}; output is lossy; rerun with narrower parameters if needed`;
 }
 
+export function formatUndoCheckpointWarning(): string {
+  return "Warning: change applied; undo checkpoint unavailable for this task.";
+}
+
 export function formatCostReport(cost: CostReport, maxUsd: number): string {
   const spent = `$${formatUsd(cost.spentUsd)}`;
   const budget = `$${formatUsd(maxUsd)}`;

@@ -42,7 +42,9 @@ describe("CLI File Editing", () => {
         "hello new world\n",
       );
       expect(result.stdout).toBe("Edited note.txt\n");
-      expect(result.stderr).toBe("Tool: read note.txt\nTool: edit note.txt\n");
+      expect(result.stderr).toBe(
+        "Tool: read note.txt\nTool: edit note.txt\nWarning: change applied; undo checkpoint unavailable for this task.\n",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -71,7 +73,9 @@ describe("CLI File Editing", () => {
         "hello new world\n",
       );
       expect(result.stdout).toBe("Edited note.txt\n");
-      expect(result.stderr).toBe("Tool: read note.txt\nTool: edit note.txt\n");
+      expect(result.stderr).toBe(
+        "Tool: read note.txt\nTool: edit note.txt\nWarning: change applied; undo checkpoint unavailable for this task.\n",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -141,7 +145,9 @@ describe("CLI File Editing", () => {
         "hello new world\n",
       );
       expect(result.stdout).toBe("Done.\n");
-      expect(result.stderr).toBe("Tool: read note.txt\nTool: edit note.txt\n");
+      expect(result.stderr).toBe(
+        "Tool: read note.txt\nTool: edit note.txt\nWarning: change applied; undo checkpoint unavailable for this task.\n",
+      );
 
       const request = JSON.parse(capturedBody);
       expect(
@@ -227,7 +233,9 @@ describe("CLI File Editing", () => {
         '{"created":true}\n',
       );
       expect(result.stdout).toBe("Created config.json.\n");
-      expect(result.stderr).toBe("Tool: write config.json\n");
+      expect(result.stderr).toBe(
+        "Tool: write config.json\nWarning: change applied; undo checkpoint unavailable for this task.\n",
+      );
       expect(capturedBodies).toHaveLength(2);
 
       const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);

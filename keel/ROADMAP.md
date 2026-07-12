@@ -135,7 +135,8 @@ What a user can do today:
   post-response accounting.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with turns, stop reason, token usage, duration,
-  provider/model, and cost when tracked.
+  provider/model, cost when tracked, and whether changed files received an
+  undo checkpoint.
 - `keel --transcript <file>` — write provider-visible one-shot messages as
   schema-versioned JSONL.
 - `keel eval [--check] [--trials <n>]` — run a repeatable harness eval suite
@@ -336,8 +337,11 @@ Codex/Claude Code — or directly moves the eval numbers.
 - **Whole-task undo** — ✅ Partial (2026-07): `/undo` restores the last edit,
   created file, apply_patch batch, or multi-file task checkpoint, while
   `/undo --list` and `/undo --to <index>` let users choose an older listed
-  checkpoint and restore through it atomically. Remaining work is broader
-  command grouping and richer checkpoint preview/redo controls.
+  checkpoint and restore through it atomically. A task whose checkpoint cannot
+  be written now keeps the applied change but emits one visible warning;
+  interactive `/status` and run reports expose the unavailable protection.
+  Remaining work is broader command grouping and richer checkpoint preview/redo
+  controls.
 - **Local workflow skills** — ✅ Runtime complete (2026-07): strict Agent Skills
   packages are discovered across repository, user, system, and configured extra
   roots with collision-safe qualified identities. Users can explicitly activate

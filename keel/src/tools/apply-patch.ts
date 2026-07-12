@@ -1,5 +1,6 @@
 import type { RecordLastBatchCheckpointOperation } from "../core/git.ts";
 import { recordLastBatchCheckpoint } from "../core/git.ts";
+import type { RecordUndoCheckpointResult } from "../core/undo-protection.ts";
 import {
   appliedTargetPaths,
   checkpointOperationsFor,
@@ -27,6 +28,7 @@ export { parsePatch } from "./apply-patch/parser.ts";
 interface ApplyPatchToolResult extends ToolResult {
   readonly targetPaths: readonly string[];
   readonly checkpointOperations: readonly RecordLastBatchCheckpointOperation[];
+  readonly undoCheckpoint?: RecordUndoCheckpointResult;
 }
 
 export function executeApplyPatch(
@@ -49,15 +51,17 @@ export function executeApplyPatch(
           verifyAppliedOperation(appliedOperation);
       }
       const operations = appliedOperations.flatMap(checkpointOperationsFor);
-      if (options.recordCheckpoint !== false) {
-        recordLastBatchCheckpoint({
-          workspace,
-          operations,
-        });
-      }
+      const undoCheckpoint =
+        options.recordCheckpoint === false
+          ? undefined
+          : recordLastBatchCheckpoint({
+              workspace,
+              operations,
+            });
       return {
         checkpointOperations: operations,
         targetPaths: appliedOperations.flatMap(appliedTargetPaths),
+        ...(undoCheckpoint !== undefined ? { undoCheckpoint } : {}),
       };
     },
   });
@@ -66,5 +70,8 @@ export function executeApplyPatch(
     content: ["Applied patch:", ...prepared.map(summaryLine)].join("\n"),
     targetPaths: applyResult.targetPaths,
     checkpointOperations: applyResult.checkpointOperations,
+    ...(applyResult.undoCheckpoint !== undefined
+      ? { undoCheckpoint: applyResult.undoCheckpoint }
+      : {}),
   };
 }
