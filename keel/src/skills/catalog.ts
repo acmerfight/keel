@@ -50,7 +50,7 @@ function relevanceScore(skill: SkillDescriptor, request: string): number {
 export function exposeSkillCatalog(options: {
   readonly skills: readonly SkillDescriptor[];
   readonly request: string;
-  readonly modelMetadata?: ModelMetadata;
+  readonly modelMetadata?: ModelMetadata | undefined;
 }): SkillCatalogExposure {
   const budgetChars = skillCatalogBudgetChars(options.modelMetadata);
   const ranked = options.skills.toSorted(

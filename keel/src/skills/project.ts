@@ -98,7 +98,7 @@ function repositorySkillRoots(workspace: string): readonly SkillRoot[] {
       roots.push({
         scope: "repo",
         rootPath,
-        displayRoot: toPosixPath(relative(workspace, rootPath) || "."),
+        displayRoot: toPosixPath(relative(workspace, rootPath)),
         displayBasePath: current,
         priority,
       });
@@ -380,23 +380,32 @@ function lookupParts(lookup: string): {
     return { name: lookup };
   }
   const scope = qualified[1];
-  const qualifiedRemainder = qualified[2] ?? "";
-  const segments = qualifiedRemainder.split(":");
-  if (segments.length > 2) {
-    throw new WorkflowSkillError(
-      "Error: qualified skill names use scope:name or scope:root-id:name.",
-    );
-  }
-  const name = segments.at(-1) ?? "";
-  validateSkillName(name);
+  /* v8 ignore next -- QUALIFIED_SKILL_PATTERN restricts the captured scope. */
   if (
     scope !== "repo" &&
     scope !== "user" &&
     scope !== "system" &&
     scope !== "extra"
   ) {
-    throw new WorkflowSkillError(`Error: unknown skill scope ${scope}.`);
+    throw new WorkflowSkillError("Error: qualified skill scope is invalid.");
   }
+  const qualifiedRemainder = qualified[2];
+  /* v8 ignore next 3 -- QUALIFIED_SKILL_PATTERN requires a non-empty remainder. */
+  if (qualifiedRemainder === undefined) {
+    throw new WorkflowSkillError("Error: qualified skill name is incomplete.");
+  }
+  const segments = qualifiedRemainder.split(":");
+  if (segments.length > 2) {
+    throw new WorkflowSkillError(
+      "Error: qualified skill names use scope:name or scope:root-id:name.",
+    );
+  }
+  const name = segments.at(-1);
+  /* v8 ignore next 3 -- splitting a defined string always yields one segment. */
+  if (name === undefined) {
+    throw new WorkflowSkillError("Error: qualified skill name is incomplete.");
+  }
+  validateSkillName(name);
   return { scope, name };
 }
 
@@ -437,10 +446,9 @@ function resolveDescriptor(
     );
   }
   const descriptor = matches[0];
+  /* v8 ignore next 3 -- the zero-match case returns above. */
   if (descriptor === undefined) {
-    throw new WorkflowSkillError(
-      `Error: workflow skill ${JSON.stringify(lookup)} was not found.`,
-    );
+    throw new WorkflowSkillError("Error: resolved workflow skill disappeared.");
   }
   return descriptor;
 }
@@ -503,9 +511,9 @@ export function discoverSkillCatalog(
   const collisionSafeSkills = skills.map((skill) => ({
     ...skill,
     qualifiedName:
-      (duplicateCounts.get(`${skill.scope}:${skill.name}`) ?? 0) > 1
-        ? `${skill.scope}:${skill.rootKey}:${skill.name}`
-        : `${skill.scope}:${skill.name}`,
+      duplicateCounts.get(`${skill.scope}:${skill.name}`) === 1
+        ? `${skill.scope}:${skill.name}`
+        : `${skill.scope}:${skill.rootKey}:${skill.name}`,
   }));
   const sortedSkills = collisionSafeSkills.toSorted(
     (left, right) =>
@@ -513,15 +521,13 @@ export function discoverSkillCatalog(
       left.scope.localeCompare(right.scope) ||
       left.relativePath.localeCompare(right.relativePath),
   );
-  const descriptorById = new Map(
-    sortedSkills.map((descriptor) => [descriptor.id, descriptor]),
-  );
   const loadFrom = (
     candidates: readonly SkillDescriptor[],
     lookup: string,
   ): WorkflowSkill => {
     const descriptor = resolveDescriptor(candidates, lookup);
     const root = rootsById.get(descriptor.id);
+    /* v8 ignore next 4 -- descriptors and roots are populated atomically above. */
     if (root === undefined) {
       throw new WorkflowSkillError(
         `Error: workflow skill ${JSON.stringify(lookup)} is no longer available.`,
@@ -590,7 +596,7 @@ export function discoverSkillCatalog(
             left.skill.qualifiedName.localeCompare(right.skill.qualifiedName),
         )
         .slice(0, Math.max(0, limit))
-        .map((result) => descriptorById.get(result.skill.id) ?? result.skill),
+        .map((result) => result.skill),
     readResource: (lookup, path) => {
       if (!isWorkflowSkillResourcePath(path)) {
         throw new WorkflowSkillError(
@@ -599,6 +605,7 @@ export function discoverSkillCatalog(
       }
       const descriptor = resolveDescriptor(sortedSkills, lookup);
       const root = rootsById.get(descriptor.id);
+      /* v8 ignore next 4 -- descriptors and roots are populated atomically above. */
       if (root === undefined) {
         throw new WorkflowSkillError(
           `Error: workflow skill ${JSON.stringify(lookup)} is no longer available.`,

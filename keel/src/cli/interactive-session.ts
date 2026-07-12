@@ -2037,6 +2037,7 @@ export async function runInteractiveSession(
           consumeQueuedInputLines([rawInput]);
           continue;
         }
+        let skillTaskShouldRun = false;
         try {
           const skill = options.activateExplicitSkill?.(
             interactiveCommand.lookup,
@@ -2058,24 +2059,16 @@ export async function runInteractiveSession(
             `Activated workflow skill ${skill.qualifiedName}.\n`,
           );
           if (interactiveCommand.arguments !== undefined) {
-            const turnResult = await runPromptTurn({
-              userMessage: interactiveCommand.arguments,
-              consumedInputLines: [rawInput],
-            });
-            if (turnResult.budgetExceeded) break;
-            if (
-              !turnResult.aborted &&
-              (await runAutomaticGoalContinuations())
-            ) {
-              break;
-            }
-            continue;
+            userMessage = interactiveCommand.arguments;
+            skillTaskShouldRun = true;
           }
         } catch (error) {
           options.writeStderr(formatInteractiveCommandFailure(error));
         }
-        consumeQueuedInputLines([rawInput]);
-        continue;
+        if (!skillTaskShouldRun) {
+          consumeQueuedInputLines([rawInput]);
+          continue;
+        }
       }
       if (interactiveCommand?.kind === "fork-points") {
         if (options.listForkPoints === undefined) {

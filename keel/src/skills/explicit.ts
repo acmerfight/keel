@@ -20,6 +20,7 @@ export function parseExplicitSkillInvocation(
     );
   }
   const lookup = match[1];
+  /* v8 ignore next 3 -- the accepted pattern has a mandatory first capture. */
   if (lookup === undefined) {
     throw new WorkflowSkillError("Error: $skill requires a skill name.");
   }

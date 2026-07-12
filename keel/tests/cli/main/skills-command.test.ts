@@ -527,6 +527,34 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given one repository Skill matches a dollar invocation without arguments,
+    When the one-shot run starts,
+    Then Keel uses the explicit fallback task and activates that Skill`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-dollar-skill-no-args-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review repository changes.",
+      "Review the current diff.",
+    );
+    const fixture = createRuntime(["$repo:review"], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    try {
+      const exitCode = await runCliMain(fixture.runtime);
+
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).not.toBe("");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a workflow skill is marked explicit only,
     When Keel routes normally and when the user selects it explicitly,
     Then the implicit catalog hides it but qualified activation still loads it`, async () => {
@@ -555,15 +583,21 @@ describe("CLI Main - Skills", () => {
       ],
       { cwd: workspace, env: { KEEL_PROVIDER: "fake" } },
     );
+    const listFixture = createRuntime(["skills"], { cwd: workspace });
 
     try {
       // When
       const implicitExit = await runCliMain(implicitFixture.runtime);
       const explicitExit = await runCliMain(explicitFixture.runtime);
+      const listExit = await runCliMain(listFixture.runtime);
 
       // Then
       expect(implicitExit).toBe(0);
       expect(explicitExit).toBe(0);
+      expect(listExit).toBe(0);
+      expect(listFixture.stdout()).toContain(
+        "repo:deploy: Deploy only when the user explicitly selects this workflow. [explicit only]",
+      );
       const [implicitHeader] = (await readFile(implicitTranscript, "utf8"))
         .trimEnd()
         .split("\n")
@@ -1369,6 +1403,41 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given an interactive session already has one explicit Skill,
+    When /skill selects the same qualified package without a task,
+    Then Keel acknowledges it without duplicating the activation`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-duplicate-interactive-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "Review workflow body.",
+    );
+    const input = new PassThrough();
+    input.end("/skill repo:review\n");
+    const fixture = createRuntime(["--skill", "review"], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_PROVIDER: "deepseek",
+        DEEPSEEK_API_KEY: "",
+      },
+      input,
+    });
+
+    try {
+      const exitCode = await runCliMain(fixture.runtime);
+
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Activated workflow skill repo:review.\n");
+      expect(fixture.stderr()).toBe("");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the user activates a missing skill with /skill,
     When the command is read,
     Then the CLI reports the failed explicit lookup without resolving a provider`, async () => {
@@ -1674,6 +1743,122 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given a project workflow skill is discoverable interactively,
+    When dollar activation selects it twice with empty and non-empty arguments,
+    Then Keel injects one package body and runs both requested turns`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-dollar-skill-interactive-"),
+    );
+    const reportPath = join(workspace, "report.json");
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "DOLLAR ACTIVATED REVIEW BODY",
+    );
+    const input = new PassThrough();
+    input.end("$repo:review\n$repo:review inspect PR 430\n");
+    const fixture = createRuntime(["--report", reportPath], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_PROVIDER: "fake",
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).not.toBe("");
+      expect(fixture.stderr()).toBe("");
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        skillActivations: [{ name: "repo:review", trigger: "user_explicit" }],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given interactive dollar activation has invalid syntax or a missing package,
+    When both inputs are read,
+    Then Keel reports each failure without starting a provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-dollar-skill-invalid-"),
+    );
+    const input = new PassThrough();
+    input.end("$Review\n$missing inspect\n");
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_PROVIDER: "deepseek",
+        DEEPSEEK_API_KEY: "",
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain("invalid $skill invocation");
+      expect(fixture.stderr()).toContain(
+        'workflow skill "missing" was not found',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive implicit catalog exceeds its fallback budget,
+    When the user starts a model turn,
+    Then Keel emits one loud catalog degradation warning`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-interactive-skill-overflow-"),
+    );
+    for (let index = 0; index < 20; index++) {
+      await writeSkill(
+        workspace,
+        `catalog-${index}`,
+        `${String(index).padStart(2, "0")} ${"x".repeat(1_000)}`,
+        `catalog ${index}`,
+      );
+    }
+    const input = new PassThrough();
+    input.end("summarize the workspace\n");
+    const fixture = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_PROVIDER: "fake",
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(
+        fixture.stderr().match(/skill catalog budget exposed/gu),
+      ).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a named interactive session starts with a workflow skill,
     When the session is resumed after the skill file changes,
     Then the resumed provider-visible system prompt reuses the persisted skill body`, async () => {
@@ -1864,6 +2049,17 @@ describe("CLI Main - Skills", () => {
 
     try {
       const firstExitCode = await runCliMain(firstRun.runtime);
+      const sameRun = createRuntime(
+        ["--resume", "demo", "--fork-points", "--skill", "repo:review"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_PROVIDER: "fake",
+            KEEL_HOME: home,
+          },
+        },
+      );
+      const sameExitCode = await runCliMain(sameRun.runtime);
       const secondRun = createRuntime(
         ["--resume", "demo", "--fork-points", "--skill", "merge-pr"],
         {
@@ -1880,10 +2076,63 @@ describe("CLI Main - Skills", () => {
 
       // Then
       expect(firstExitCode).toBe(0);
+      expect(sameExitCode).toBe(0);
+      expect(sameRun.stderr()).toBe("");
       expect(secondExitCode).toBe(1);
       expect(secondRun.stdout()).toBe("");
       expect(secondRun.stderr()).toBe(
         'Error: session "demo" already uses workflow skill "repo:review"; cannot resume it with workflow skill "merge-pr".\n',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a saved session has no workflow skill,
+    When fork-point listing requests an explicit skill,
+    Then Keel rejects the incompatible request before formatting points`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-fork-points-empty-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-fork-points-empty-home-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "Review workflow body.",
+    );
+    const input = new PassThrough();
+    input.end("remember source\n");
+    const firstRun = createRuntime(["--session", "demo"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+      },
+      input,
+    });
+
+    try {
+      const firstExitCode = await runCliMain(firstRun.runtime);
+      const secondRun = createRuntime(
+        ["--resume", "demo", "--fork-points", "--skill", "review"],
+        {
+          cwd: workspace,
+          env: { KEEL_PROVIDER: "fake", KEEL_HOME: home },
+        },
+      );
+
+      const secondExitCode = await runCliMain(secondRun.runtime);
+
+      expect(firstExitCode).toBe(0);
+      expect(secondExitCode).toBe(1);
+      expect(secondRun.stdout()).toBe("");
+      expect(secondRun.stderr()).toBe(
+        'Error: session "demo" has no workflow skill; cannot resume it with workflow skill "review".\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

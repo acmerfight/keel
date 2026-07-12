@@ -142,6 +142,24 @@ describe("Interactive Terminal Display", () => {
     // Then
     const screen = await terminal.waitForText("user:review");
     expect(screen).toContain("Review using the user's workflow.");
+    terminal.input(" review");
+    display.stop();
+  });
+
+  test(`Given the TUI has no Skill completions,
+    When the user types an unmatched /skill prefix,
+    Then autocomplete handles the empty authoritative catalog`, () => {
+    const terminal = new TestTerminal();
+    const display = createInteractiveTerminalDisplay(terminal, {
+      inputEchoesToDisplay: true,
+      session: { kind: "ephemeral" },
+      workspace: process.cwd(),
+      onInterrupt: () => {},
+    });
+    display.start();
+
+    terminal.input("/skill missing");
+
     display.stop();
   });
 

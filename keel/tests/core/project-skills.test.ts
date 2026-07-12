@@ -200,4 +200,119 @@ describe("project skills catalog", () => {
       await rm(extraRoot, { recursive: true, force: true });
     }
   });
+
+  test(`Given a cataloged skill becomes invalid or disappears after discovery,
+    When lookup requests it,
+    Then Keel returns the actionable validation or atomicity failure`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-skill-invalid-load-"));
+    const skillDirectory = join(workspace, ".agents", "skills", "review");
+    await mkdir(skillDirectory, { recursive: true });
+    const skillPath = join(skillDirectory, "SKILL.md");
+    await writeFile(
+      skillPath,
+      "---\nname: review\ndescription: Review changes.\nmetadata:\n  keel.activation: sometimes\n---\nreview\n",
+    );
+
+    try {
+      const invalidCatalog = discoverSkillCatalog({ workspace });
+      expect(() => invalidCatalog.load("repo:review")).toThrow(
+        'metadata.keel.activation must be "implicit" or "explicit"',
+      );
+      await writeFile(
+        skillPath,
+        "---\nname: review\ndescription: Review changes.\n---\nreview\n",
+      );
+      const catalog = discoverSkillCatalog({ workspace });
+      await rm(skillPath);
+      expect(() => catalog.load("repo:review")).toThrow(
+        'workflow skill "repo:review" was not found',
+      );
+      expect(() => catalog.load("repo:a:b:c")).toThrow(
+        "qualified skill names use scope:name or scope:root-id:name",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a skill advertises one resource,
+    When callers use inactive, invalid, missing, valid, and stale resource paths,
+    Then every resource authorization boundary fails closed`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-skill-resources-"));
+    const skillDirectory = join(workspace, ".agents", "skills", "review");
+    const references = join(skillDirectory, "references");
+    await mkdir(references, { recursive: true });
+    const skillPath = join(skillDirectory, "SKILL.md");
+    await writeFile(
+      skillPath,
+      "---\nname: review\ndescription: Review changes.\n---\nread marker\n",
+    );
+    await writeFile(join(references, "marker.txt"), "RESOURCE-OK");
+
+    try {
+      const catalog = discoverSkillCatalog({ workspace });
+      const activation = createSkillActivation(catalog);
+      expect(() =>
+        activation.readResource("repo:review", "references/marker.txt"),
+      ).toThrow("must be active before reading its resources");
+      expect(() => catalog.readResource("repo:review", "notes.md")).toThrow(
+        "must stay under references/, scripts/, or assets/",
+      );
+      expect(() =>
+        catalog.readResource("repo:review", "references/missing.txt"),
+      ).toThrow("was not discovered");
+      activation.registerExplicit([catalog.load("repo:review")]);
+      expect(
+        activation.readResource("repo:review", "references/marker.txt"),
+      ).toBe("RESOURCE-OK");
+      await writeFile(
+        skillPath,
+        "---\nname: review\ndescription: Review changes.\n---\nchanged\n",
+      );
+      expect(() =>
+        catalog.readResource("repo:review", "references/marker.txt"),
+      ).toThrow("changed after catalog discovery");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given searchable skills vary by scope, name, description, and root,
+    When the full catalog is searched with blank and bounded queries,
+    Then deterministic ranking and limits cover every relevance path`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-skill-search-rank-"));
+    const userRoot = await mkdtemp(join(tmpdir(), "keel-skill-search-user-"));
+    for (const [root, name, description] of [
+      [join(workspace, ".agents", "skills"), "review", "Inspect code"],
+      [join(workspace, ".agents", "skills"), "deploy", "Review releases"],
+      [userRoot, "release", "Ship code"],
+    ] as const) {
+      const directory = join(root, name);
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        join(directory, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${description}.\n---\n${name}\n`,
+      );
+    }
+
+    try {
+      const catalog = discoverSkillCatalog({ workspace, userRoot });
+      expect(catalog.search("", -1)).toEqual([]);
+      expect(catalog.search("repo:review")[0]?.qualifiedName).toBe(
+        "repo:review",
+      );
+      expect(catalog.search("review").map((skill) => skill.name)).toEqual([
+        "review",
+        "deploy",
+      ]);
+      expect(catalog.search("r").map((skill) => skill.name)).toEqual([
+        "review",
+        "release",
+        "deploy",
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(userRoot, { recursive: true, force: true });
+    }
+  });
 });

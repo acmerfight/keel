@@ -151,9 +151,7 @@ export async function runOneShotCli(
     const catalogExposure = exposeSkillCatalog({
       skills: workflowSkills.length === 0 ? catalog.implicitSkills : [],
       request: userMessage,
-      ...(resolved.modelMetadata !== undefined
-        ? { modelMetadata: resolved.modelMetadata }
-        : {}),
+      modelMetadata: resolved.modelMetadata,
     });
     runtime.writeStderr(formatSkillCatalogDegradation(catalogExposure));
     const skillActivation =
