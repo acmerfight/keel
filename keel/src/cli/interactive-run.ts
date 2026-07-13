@@ -113,6 +113,7 @@ import {
   type InteractiveTerminalDisplay,
 } from "./tui/interactive-terminal.ts";
 import {
+  disabledWorkflowSkillWorkspacePaths,
   discoverWorkflowSkillCatalog,
   filterWorkflowSkillCatalog,
   formatWorkflowSkillListWarnings,
@@ -753,6 +754,14 @@ async function runSessionCli(
               rawSkillCatalog,
               skillPolicy.disabledPackageIds,
             );
+      const hiddenWorkspacePaths =
+        rawSkillCatalog === undefined
+          ? repositoryWorkflowSkillRootPaths(workspace)
+          : disabledWorkflowSkillWorkspacePaths(
+              workspace,
+              rawSkillCatalog,
+              skillPolicy.disabledPackageIds,
+            );
       if (discoveredSkillCatalog !== undefined) {
         runtime.writeStderr(
           formatWorkflowSkillListWarnings(discoveredSkillCatalog.warnings),
@@ -1206,11 +1215,7 @@ async function runSessionCli(
       const interactiveSessionOptions: InteractiveSessionOptions = {
         cliArgs,
         workspace,
-        ...(!cliArgs.skillsEnabled
-          ? {
-              hiddenWorkspacePaths: repositoryWorkflowSkillRootPaths(workspace),
-            }
-          : {}),
+        ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
         platform: runtime.platform,
         ...(mode.kind === "headless-goal" ? { exitOnTurnAbort: true } : {}),
         ...(mode.kind === "headless-goal" &&

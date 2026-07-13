@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
@@ -5,6 +6,7 @@ import {
   rm,
   stat,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -14,6 +16,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { discoverSkillCatalog } from "../../../src/skills/project.ts";
+import { runCli } from "../../../src/testing/cli-harness.ts";
 import {
   requestWithMessagesSchema,
   requestWithToolsSchema,
@@ -128,6 +131,16 @@ describe("CLI Main - Skills", () => {
       req.on("end", () => {
         capturedBodies.push(JSON.parse(body));
         res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("read_globally_disabled_skill", "read", {
+              path: ".agents/skills/review/SKILL.md",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
         res.end(sseTextReplyWithUsage("GLOBAL_CONTROL_SAFE"));
       });
     });
@@ -162,7 +175,7 @@ describe("CLI Main - Skills", () => {
       }
       expect(disabledExitCode).toBe(0);
       expect(disabledRun.stdout()).toBe("GLOBAL_CONTROL_SAFE\n");
-      expect(capturedBodies).toHaveLength(1);
+      expect(capturedBodies).toHaveLength(2);
       const disabledRequest = requestWithMessagesSchema.parse(
         capturedBodies[0],
       );
@@ -179,6 +192,11 @@ describe("CLI Main - Skills", () => {
       expect(disabledTools).not.toContain("skill");
       expect(disabledTools).not.toContain("skill_search");
       expect(disabledTools).not.toContain("skill_resource");
+      const disabledFollowup = JSON.stringify(
+        requestWithMessagesSchema.parse(capturedBodies[1]).messages,
+      );
+      expect(disabledFollowup).toContain("ignored path");
+      expect(disabledFollowup).not.toContain("GLOBAL_CONTROL_REVIEW_BODY");
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
         skillPolicy: { mode: "globally_disabled", disabledPackages: 0 },
       });
@@ -197,7 +215,7 @@ describe("CLI Main - Skills", () => {
       });
       expect(await runCliMain(explicitFlag.runtime)).toBe(1);
       expect(explicitFlag.stderr()).toBe(explicitDollar.stderr());
-      expect(capturedBodies).toHaveLength(1);
+      expect(capturedBodies).toHaveLength(2);
 
       const interactiveInput = new PassThrough();
       interactiveInput.end();
@@ -211,7 +229,7 @@ describe("CLI Main - Skills", () => {
       );
       expect(await runCliMain(interactiveExplicit.runtime)).toBe(1);
       expect(interactiveExplicit.stderr()).toBe(explicitDollar.stderr());
-      expect(capturedBodies).toHaveLength(1);
+      expect(capturedBodies).toHaveLength(2);
 
       const disabledList = createRuntime(["skills"], {
         cwd: workspace,
@@ -282,6 +300,24 @@ describe("CLI Main - Skills", () => {
       req.on("end", () => {
         capturedBodies.push(JSON.parse(body));
         res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("read_disabled_review", "read", {
+              path: ".agents/skills/review/SKILL.md",
+            }),
+          );
+          res.write(
+            sseToolCall(
+              "read_enabled_qa",
+              "read",
+              { path: ".agents/skills/qa/SKILL.md" },
+              { index: 1 },
+            ),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
         res.end(sseTextReplyWithUsage("INDIVIDUAL_CONTROL_SAFE"));
       });
     });
@@ -340,7 +376,7 @@ describe("CLI Main - Skills", () => {
         "repo:qa: Run quality assurance.",
       );
       expect(filteredExitCode).toBe(0);
-      expect(capturedBodies).toHaveLength(1);
+      expect(capturedBodies).toHaveLength(2);
       const filteredRequest = requestWithMessagesSchema.parse(
         capturedBodies[0],
       );
@@ -353,6 +389,15 @@ describe("CLI Main - Skills", () => {
         "INDIVIDUAL_CONTROL_CHANGED_REVIEW_BODY",
       );
       expect(filteredSystem).toContain("repo:qa");
+      const filteredFollowup = JSON.stringify(
+        requestWithMessagesSchema.parse(capturedBodies[1]).messages,
+      );
+      expect(filteredFollowup).toContain("ignored path");
+      expect(filteredFollowup).not.toContain("INDIVIDUAL_CONTROL_REVIEW_BODY");
+      expect(filteredFollowup).not.toContain(
+        "INDIVIDUAL_CONTROL_CHANGED_REVIEW_BODY",
+      );
+      expect(filteredFollowup).toContain("INDIVIDUAL_CONTROL_QA_BODY");
       const filteredTools =
         requestWithToolsSchema
           .parse(capturedBodies[0])
@@ -373,16 +418,16 @@ describe("CLI Main - Skills", () => {
       expect(explicitDisabled.stderr()).toBe(
         'Error: workflow skill "repo:review" is disabled by user configuration; run keel skills enable repo:review to enable it.\n',
       );
-      expect(capturedBodies).toHaveLength(1);
+      expect(capturedBodies).toHaveLength(2);
 
       const explicitEnabled = createRuntime(["$qa inspect this"], {
         cwd: workspace,
         env: providerEnv,
       });
       expect(await runCliMain(explicitEnabled.runtime)).toBe(0);
-      expect(capturedBodies).toHaveLength(2);
+      expect(capturedBodies).toHaveLength(3);
       const enabledSystem = requestWithMessagesSchema
-        .parse(capturedBodies[1])
+        .parse(capturedBodies[2])
         .messages?.find((message) => message.role === "system")?.content;
       expect(enabledSystem).toContain("INDIVIDUAL_CONTROL_QA_BODY");
       expect(enabledSystem).not.toContain("INDIVIDUAL_CONTROL_REVIEW_BODY");
@@ -407,6 +452,129 @@ describe("CLI Main - Skills", () => {
       );
     } finally {
       await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given several Skill controls share one user configuration,
+    When separate Keel processes disable them concurrently,
+    Then every successful update remains persisted`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-concurrent-control-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-concurrent-control-home-"),
+    );
+    const names = ["alpha", "beta"];
+    for (const name of names) {
+      await writeSkill(workspace, name, `Control ${name}.`, `BODY_${name}`);
+    }
+    const existingDisabledPackageIds = Array.from(
+      { length: 9_000 },
+      (_, index) => `repo:existing:${index}`,
+    );
+    await writeFile(
+      join(home, "skills.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        enabled: true,
+        disabledPackageIds: existingDisabledPackageIds,
+      })}\n`,
+    );
+
+    try {
+      // When
+      const results = await Promise.all(
+        names.map((name) =>
+          runCli(["skills", "disable", name], {
+            cwd: workspace,
+            env: { KEEL_HOME: home },
+          }),
+        ),
+      );
+      const config = JSON.parse(
+        await readFile(join(home, "skills.json"), "utf8"),
+      );
+
+      // Then
+      expect(results.map((result) => result.exitCode)).toEqual(
+        names.map(() => 0),
+      );
+      expect(config.disabledPackageIds).toHaveLength(
+        existingDisabledPackageIds.length + names.length,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a prior Skill control process crashed while holding the config lock,
+    When the user changes a Skill control,
+    Then Keel reclaims the stale lock and persists the update`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-stale-lock-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-stale-lock-home-"),
+    );
+    await writeSkill(workspace, "review", "Review changes.", "REVIEW_BODY");
+    const lockPath = join(home, "skills.lock");
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      `${JSON.stringify({ pid: 2_147_483_647, token: randomUUID() })}\n`,
+    );
+    const fixture = createRuntime(["skills", "disable", "review"], {
+      cwd: workspace,
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Disabled workflow skill repo:review.\n");
+      expect(
+        JSON.parse(await readFile(join(home, "skills.json"), "utf8"))
+          .disabledPackageIds,
+      ).toHaveLength(1);
+      await expect(stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+      await mkdir(lockPath);
+      await writeFile(join(lockPath, "owner.json"), "{}");
+      const oldTime = new Date(Date.now() - 60_000);
+      await utimes(lockPath, oldTime, oldTime);
+      const recoverOwnerless = createRuntime(["skills", "enable", "review"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(recoverOwnerless.runtime)).toBe(0);
+      expect(
+        JSON.parse(await readFile(join(home, "skills.json"), "utf8"))
+          .disabledPackageIds,
+      ).toEqual([]);
+      await expect(stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+      await mkdir(lockPath);
+      await writeFile(join(lockPath, "owner.json"), "malformed");
+      await utimes(lockPath, oldTime, oldTime);
+      const recoverMalformed = createRuntime(["skills", "disable", "review"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(recoverMalformed.runtime)).toBe(0);
+      expect(
+        JSON.parse(await readFile(join(home, "skills.json"), "utf8"))
+          .disabledPackageIds,
+      ).toHaveLength(1);
+      await expect(stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }

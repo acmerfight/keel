@@ -1,5 +1,14 @@
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import {
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { redactSecretLikeText } from "../core/secret-text.ts";
 import type { SkillPackageAudit } from "../skills/audit.ts";
 import {
@@ -76,6 +85,33 @@ export function discoverWorkflowSkillCatalog(
   workspace: string,
 ): SkillCatalog {
   return discoverSkillCatalog(skillDiscoveryOptions(runtime, workspace));
+}
+
+export function disabledWorkflowSkillWorkspacePaths(
+  workspace: string,
+  catalog: SkillCatalog,
+  disabledPackageIds: readonly string[],
+): readonly string[] {
+  const workspacePath = realpathSync(workspace);
+  const disabled = new Set(disabledPackageIds);
+  return [
+    ...new Set(
+      catalog.skills
+        .filter(
+          (skill) => skill.scope === "repo" && disabled.has(skill.packageId),
+        )
+        .map((skill) => resolve(workspacePath, dirname(skill.relativePath)))
+        .filter((skillPath) => {
+          const relativePath = relative(workspacePath, skillPath);
+          return (
+            relativePath === "" ||
+            (!relativePath.startsWith(`..${sep}`) &&
+              relativePath !== ".." &&
+              !isAbsolute(relativePath))
+          );
+        }),
+    ),
+  ];
 }
 
 function disabledSkillMessage(qualifiedName: string): string {

@@ -69,6 +69,7 @@ import {
 } from "./tool-output-artifacts.ts";
 import { writeRunTranscript } from "./transcript.ts";
 import {
+  disabledWorkflowSkillWorkspacePaths,
   discoverWorkflowSkillCatalog,
   filterWorkflowSkillCatalog,
   formatWorkflowSkillListWarnings,
@@ -143,9 +144,6 @@ export async function runOneShotCli(
   let closeBashApprovalInput: (() => void) | undefined;
   try {
     const workspace = runtime.cwd();
-    const hiddenWorkspacePaths = cliArgs.skillsEnabled
-      ? []
-      : repositoryWorkflowSkillRootPaths(workspace);
     const projectInstructions = loadProjectInstructions(workspace);
     const skillPolicy = resolveSkillRuntimePolicy(
       runtime,
@@ -162,12 +160,24 @@ export async function runOneShotCli(
       invocation === null || invocation.arguments !== ""
         ? (invocation?.arguments ?? originalUserMessage)
         : "Apply the explicitly selected workflow skill.";
-    const catalog = skillPolicy.enabled
-      ? filterWorkflowSkillCatalog(
-          discoverWorkflowSkillCatalog(runtime, workspace),
-          skillPolicy.disabledPackageIds,
-        )
+    const rawCatalog = skillPolicy.enabled
+      ? discoverWorkflowSkillCatalog(runtime, workspace)
       : undefined;
+    const catalog =
+      rawCatalog === undefined
+        ? undefined
+        : filterWorkflowSkillCatalog(
+            rawCatalog,
+            skillPolicy.disabledPackageIds,
+          );
+    const hiddenWorkspacePaths =
+      rawCatalog === undefined
+        ? repositoryWorkflowSkillRootPaths(workspace)
+        : disabledWorkflowSkillWorkspacePaths(
+            workspace,
+            rawCatalog,
+            skillPolicy.disabledPackageIds,
+          );
     const explicitLookups = [
       ...(cliArgs.skillNames ?? []),
       ...(invocation === null ? [] : [invocation.lookup]),
