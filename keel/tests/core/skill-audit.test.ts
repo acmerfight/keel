@@ -14,6 +14,7 @@ describe("skill package audit", () => {
       skillDirectory: "/unused",
       skillRelativePath: ".agents/skills/review/SKILL.md",
       content: `Review${String.fromCodePoint(codePoint)}concealed`,
+      description: "Review the requested change.",
       resourcePaths: [],
       inventoryFindings: [],
     });
@@ -39,6 +40,7 @@ describe("skill package audit", () => {
         skillDirectory,
         skillRelativePath: skillPath,
         content: `Credential: ghp_${"a".repeat(36)}`,
+        description: "Review the requested change.",
         resourcePaths: [],
         inventoryFindings: [
           {
@@ -75,6 +77,7 @@ describe("skill package audit", () => {
         skillDirectory,
         skillRelativePath: ".agents/skills/review/SKILL.md",
         content: "Review the change.",
+        description: "Review the requested change.",
         resourcePaths: ["references/disappeared.md"],
         inventoryFindings: [],
       });
