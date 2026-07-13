@@ -60,6 +60,7 @@ interface AuditSkillPackageOptions {
   readonly skillRelativePath: string;
   readonly content: string;
   readonly description: string;
+  readonly descriptionSource: string;
   readonly allowedTools?: string;
   readonly compatibility?: string;
   readonly resourcePaths: readonly string[];
@@ -332,6 +333,10 @@ export function auditSkillPackage(
     ...options.inventoryFindings,
     ...auditText(options.skillRelativePath, options.content),
     ...auditText(options.skillRelativePath, options.description),
+    ...auditSkillDescription(
+      options.skillRelativePath,
+      options.descriptionSource,
+    ),
     ...auditSkillDescription(options.skillRelativePath, options.description),
   ];
   for (const resourcePath of options.resourcePaths) {

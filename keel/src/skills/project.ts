@@ -517,6 +517,7 @@ function readSkillFileFromDisk(
     skillRelativePath: relativePath,
     content: decoded,
     description: parsed.description,
+    descriptionSource: parsed.descriptionSource,
     resourcePaths: inventory.resourcePaths,
     inventoryFindings: inventory.findings,
     ...(parsed.allowedTools !== undefined
