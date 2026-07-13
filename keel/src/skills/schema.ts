@@ -1,4 +1,4 @@
-import { parseDocument } from "yaml";
+import { isScalar, parseDocument } from "yaml";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import type { SkillActivationPolicy } from "./model.ts";
@@ -27,6 +27,7 @@ const skillFrontmatterSchema = z
 export interface ParsedSkillDocument {
   readonly name: string;
   readonly description: string;
+  readonly descriptionSource: string;
   readonly content: string;
   readonly activationPolicy: SkillActivationPolicy;
   readonly allowedTools?: string;
@@ -68,7 +69,13 @@ function frontmatterBounds(
   };
 }
 
-function frontmatterValue(skillFilePath: string, yaml: string): unknown {
+function frontmatterValue(
+  skillFilePath: string,
+  yaml: string,
+): {
+  readonly value: unknown;
+  readonly descriptionSource: string;
+} {
   const document = parseDocument(yaml, {
     schema: "core",
     strict: true,
@@ -81,7 +88,14 @@ function frontmatterValue(skillFilePath: string, yaml: string): unknown {
     );
   }
   try {
-    return document.toJS({ maxAliasCount: 0 });
+    const descriptionNode = document.get("description", true);
+    return {
+      value: document.toJS({ maxAliasCount: 0 }),
+      descriptionSource:
+        isScalar(descriptionNode) && descriptionNode.range != null
+          ? yaml.slice(descriptionNode.range[0], descriptionNode.range[1])
+          : "",
+    };
   } catch (error) {
     throw new WorkflowSkillError(
       `Error: workflow skill ${skillFilePath} has invalid YAML frontmatter: ${errorMessage(error)}.`,
@@ -104,9 +118,8 @@ export function parseSkillDocument(
 ): ParsedSkillDocument {
   const normalized = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
   const bounds = frontmatterBounds(skillFilePath, normalized);
-  const parsed = skillFrontmatterSchema.safeParse(
-    frontmatterValue(skillFilePath, bounds.yaml),
-  );
+  const frontmatter = frontmatterValue(skillFilePath, bounds.yaml);
+  const parsed = skillFrontmatterSchema.safeParse(frontmatter.value);
   if (!parsed.success) {
     throw new WorkflowSkillError(
       `Error: workflow skill ${skillFilePath} has invalid Agent Skills frontmatter: ${frontmatterErrorText(parsed.error)}.`,
@@ -115,6 +128,7 @@ export function parseSkillDocument(
   return {
     name: parsed.data.name,
     description: parsed.data.description,
+    descriptionSource: frontmatter.descriptionSource,
     content: bounds.content,
     activationPolicy: parseActivationPolicy(parsed.data.metadata),
     ...(parsed.data["allowed-tools"] !== undefined

@@ -516,6 +516,8 @@ function readSkillFileFromDisk(
     skillDirectory: join(root.rootPath, skillName),
     skillRelativePath: relativePath,
     content: decoded,
+    description: parsed.description,
+    descriptionSource: parsed.descriptionSource,
     resourcePaths: inventory.resourcePaths,
     inventoryFindings: inventory.findings,
     ...(parsed.allowedTools !== undefined
