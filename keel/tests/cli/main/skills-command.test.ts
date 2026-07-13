@@ -560,6 +560,40 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given the workspace is inside a repository Skill root,
+    When the user runs Keel with --no-skills,
+    Then it rejects the conflicting workspace before calling a provider`, async () => {
+    // Given
+    const repository = await mkdtemp(
+      join(tmpdir(), "keel-cli-no-skills-inside-root-"),
+    );
+    const workspace = join(repository, ".agents", "skills", "review");
+    await mkdir(join(repository, ".git"), { recursive: true });
+    await mkdir(workspace, { recursive: true });
+    await writeFile(
+      join(workspace, "SKILL.md"),
+      "---\nname: review\ndescription: Review changes\n---\n\nPRIVATE_REVIEW_BODY\n",
+    );
+    const fixture = createRuntime(["--no-skills", "inspect this workspace"], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Error: workflow skills cannot be disabled while the workspace is inside a repository Skill root; run Keel from a workspace outside .agents/skills.\n",
+      );
+    } finally {
+      await rm(repository, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the user explicitly invokes a Skill while Skills are disabled,
     When Keel parses the one-shot request,
     Then it rejects the invocation before resolving or spending a provider`, async () => {
