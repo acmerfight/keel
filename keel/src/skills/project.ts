@@ -434,7 +434,12 @@ function readSkillResourceText(
       Math.min(reportedSize, BINARY_SAMPLE_BYTES),
     );
     const sampleBytesRead = readSync(fd, sample, 0, sample.length, 0);
-    if (isBinaryContentSample(sample.subarray(0, sampleBytesRead))) {
+    if (
+      isBinaryContentSample(
+        sample.subarray(0, sampleBytesRead),
+        sampleBytesRead === reportedSize,
+      )
+    ) {
       throw binarySkillResourceError(relativePath);
     }
     /* v8 ignore next 4 -- the package is re-audited immediately before this read; only concurrent growth can cross the text limit here. */
@@ -756,17 +761,12 @@ export function discoverSkillCatalog(
   const rootsById = new Map<string, SkillRoot>();
   const seenRoots = new Set<string>();
   const skills: SkillDescriptor[] = [];
-  const warnings: SkillCatalogWarning[] = [];
   const discoveredAudits: DiscoveredSkillAudit[] = [];
   const recordInvalidPackage = (
     root: SkillRoot,
     skillName: string,
     auditMessage: string,
   ): void => {
-    warnings.push({
-      name: `${root.scope}:${skillName}`,
-      message: invalidPackageErrorMessage(root, skillName, auditMessage),
-    });
     discoveredAudits.push({
       scope: root.scope,
       name: skillName,
@@ -816,13 +816,6 @@ export function discoverSkillCatalog(
         });
         const blocker = firstSkillAuditBlocker(read.findings);
         if (blocker !== undefined) {
-          warnings.push({
-            name: `${root.scope}:${entry.name}`,
-            message: skillAuditErrorMessage(
-              `${root.scope}:${entry.name}`,
-              blocker,
-            ),
-          });
           continue;
         }
         skills.push(read.descriptor);
@@ -855,12 +848,29 @@ export function discoverSkillCatalog(
     const key = `${audit.scope}:${audit.name}`;
     auditDuplicateCounts.set(key, (auditDuplicateCounts.get(key) ?? 0) + 1);
   }
-  const audits: readonly SkillPackageAudit[] = discoveredAudits
+  const identifiedAudits = discoveredAudits.map((audit) => ({
+    ...audit,
+    qualifiedName:
+      auditDuplicateCounts.get(`${audit.scope}:${audit.name}`) === 1
+        ? `${audit.scope}:${audit.name}`
+        : `${audit.scope}:${audit.rootKey}:${audit.name}`,
+  }));
+  const warnings: readonly SkillCatalogWarning[] = identifiedAudits.flatMap(
+    (audit) => {
+      const blocker = firstSkillAuditBlocker(audit.findings);
+      return blocker === undefined
+        ? []
+        : [
+            {
+              name: audit.qualifiedName,
+              message: skillAuditErrorMessage(audit.qualifiedName, blocker),
+            },
+          ];
+    },
+  );
+  const audits: readonly SkillPackageAudit[] = identifiedAudits
     .map((audit) => ({
-      qualifiedName:
-        auditDuplicateCounts.get(`${audit.scope}:${audit.name}`) === 1
-          ? `${audit.scope}:${audit.name}`
-          : `${audit.scope}:${audit.rootKey}:${audit.name}`,
+      qualifiedName: audit.qualifiedName,
       relativePath: audit.relativePath,
       findings: audit.findings,
     }))
@@ -904,10 +914,13 @@ export function discoverSkillCatalog(
     lookup: string,
   ): SkillCatalogWarning | undefined => {
     const parts = lookupParts(lookup);
+    if (parts.scope !== undefined && lookup.split(":").length === 3) {
+      return warnings.find((warning) => warning.name === lookup);
+    }
     const matches = warnings.filter((warning) => {
-      const separator = warning.name.indexOf(":");
-      const scope = warning.name.slice(0, separator);
-      const name = warning.name.slice(separator + 1);
+      const warningParts = warning.name.split(":");
+      const scope = warningParts[0];
+      const name = warningParts.at(-1);
       return (
         name === parts.name &&
         (parts.scope === undefined || scope === parts.scope)

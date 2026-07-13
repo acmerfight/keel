@@ -69,7 +69,7 @@ function isEnvironmentKeyCharacterAt(text: string, index: number): boolean {
 function isEnvironmentAssignmentWhitespace(
   character: string | undefined,
 ): boolean {
-  return character !== undefined && /\s/u.test(character);
+  return character === " " || character === "\t";
 }
 
 function isEnvironmentSecretKey(key: string): boolean {

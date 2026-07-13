@@ -267,6 +267,67 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given safe and blocked repository roots contain the same Skill name,
+    When the user lists Skills from the nested workspace,
+    Then the available Skill and skipped package have distinct identities`, async () => {
+    const project = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-blocked-collision-project-"),
+    );
+    const workspace = join(project, "packages", "app");
+    await mkdir(join(project, ".git"), { recursive: true });
+    await mkdir(workspace, { recursive: true });
+    await writeSkill(
+      project,
+      "shared",
+      "Safe project-root workflow.",
+      "Use the safe workflow.",
+    );
+    await writeSkill(
+      workspace,
+      "shared",
+      "Blocked nested workflow.",
+      `Credential: ghp_${"q".repeat(36)}`,
+    );
+    const fixture = createRuntime(["skills"], { cwd: workspace });
+
+    try {
+      expect(await runCliMain(fixture.runtime)).toBe(0);
+      expect(fixture.stdout()).toContain(
+        "repo:shared: Safe project-root workflow.",
+      );
+      const warning =
+        /Warning: skipped workflow skill "(repo:[a-f0-9]{12}:shared)": workflow skill "\1" is blocked by deterministic audit/u.exec(
+          fixture.stderr(),
+        );
+      expect(warning).not.toBeNull();
+      expect(fixture.stderr()).not.toContain(
+        'skipped workflow skill "repo:shared"',
+      );
+      const blockedIdentity = warning?.[1];
+      if (blockedIdentity === undefined) {
+        throw new Error("blocked root-qualified identity was not rendered");
+      }
+      const blocked = createRuntime(
+        ["--skill", blockedIdentity, "use the workflow"],
+        { cwd: workspace, env: { KEEL_PROVIDER: "fake" } },
+      );
+      const wrongRoot = createRuntime(
+        ["--skill", `repo:${"0".repeat(12)}:shared`, "use the workflow"],
+        { cwd: workspace, env: { KEEL_PROVIDER: "fake" } },
+      );
+      expect(await runCliMain(blocked.runtime)).toBe(1);
+      expect(blocked.stderr()).toContain(
+        `workflow skill "${blockedIdentity}" is blocked by deterministic audit`,
+      );
+      expect(await runCliMain(wrongRoot.runtime)).toBe(1);
+      expect(wrongRoot.stderr()).toContain(
+        `workflow skill "repo:${"0".repeat(12)}:shared" was not found`,
+      );
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an invalid package directory contains a bidi control,
     When the user lists skills,
     Then the skipped-package warning renders the package name visibly on one line`, async () => {
@@ -1358,7 +1419,7 @@ describe("CLI Main - Skills", () => {
     }
   });
 
-  test(`Given an active Skill advertises a normal binary asset,
+  test(`Given an active Skill advertises an unknown-format binary asset,
     When the model tries to read it through the text-only skill_resource tool,
     Then Keel explains the binary boundary without misidentifying the asset as SKILL.md`, async () => {
     // Given
@@ -1379,8 +1440,7 @@ describe("CLI Main - Skills", () => {
       "assets",
     );
     await mkdir(assets, { recursive: true });
-    const image = new Uint8Array(256 * 1024);
-    image.set([0x89, 0x50, 0x4e, 0x47]);
+    const image = new Uint8Array(256 * 1024).fill(0x80);
     await writeFile(join(assets, "image.png"), image);
     const capturedBodies: unknown[] = [];
     const server = createServer((req, res) => {

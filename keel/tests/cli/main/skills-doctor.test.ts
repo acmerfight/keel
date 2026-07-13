@@ -86,6 +86,9 @@ describe("CLI Main - Skills Doctor", () => {
         "Use ACCESS_TOKEN=your-access-token in instructions.",
         "Leave ACCESS_TOKEN= empty until provisioning.",
         "ACCESS_TOKEN=",
+        "documentationwordthatislong",
+        "ACCESS_TOKEN",
+        "=anotherdocumentationword",
       ].join("\n"),
     });
     await writeSkill({
@@ -257,9 +260,9 @@ describe("CLI Main - Skills Doctor", () => {
     }
   });
 
-  test(`Given a normal image, an oversized binary asset, and text disguised as an image,
+  test(`Given known and unknown binary assets, an oversized asset, and text disguised as an image,
     When the user audits or lists the Skill packages,
-    Then Keel accepts the normal image but blocks oversized and disguised assets`, async () => {
+    Then Keel accepts binary content but blocks oversized and disguised assets`, async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-skills-doctor-binary-asset-size-"),
     );
@@ -275,6 +278,18 @@ describe("CLI Main - Skills Doctor", () => {
       description: "Use an oversized packaged image.",
       body: "Use assets/image.png when needed.",
     });
+    const opaque = await writeSkill({
+      workspace,
+      name: "opaque-binary",
+      description: "Use an unknown-format packaged binary asset.",
+      body: "Use assets/model.bin when needed.",
+    });
+    const utf8 = await writeSkill({
+      workspace,
+      name: "utf8-reference",
+      description: "Use a valid UTF-8 text reference.",
+      body: "Use references/guide.md when needed.",
+    });
     const disguised = await writeSkill({
       workspace,
       name: "disguised-script",
@@ -288,9 +303,19 @@ describe("CLI Main - Skills Doctor", () => {
     oversizedImage.set(pngHeader);
     await mkdir(join(normal, "assets"));
     await mkdir(join(oversized, "assets"));
+    await mkdir(join(opaque, "assets"));
+    await mkdir(join(utf8, "references"));
     await mkdir(join(disguised, "assets"));
     await writeFile(join(normal, "assets", "image.png"), normalImage);
     await writeFile(join(oversized, "assets", "image.png"), oversizedImage);
+    await writeFile(
+      join(opaque, "assets", "model.bin"),
+      new Uint8Array(256 * 1024).fill(0x80),
+    );
+    await writeFile(
+      join(utf8, "references", "guide.md"),
+      `${"a".repeat(4095)}€ remains valid UTF-8 text.\n`,
+    );
     await writeFile(
       join(disguised, "assets", "helper.png"),
       `#!/bin/sh\n# credential ghp_${"q".repeat(36)}\n`,
@@ -303,12 +328,16 @@ describe("CLI Main - Skills Doctor", () => {
       expect(await runCliMain(doctor.runtime)).toBe(1);
       expect(await runCliMain(list.runtime)).toBe(0);
       expect(doctor.stdout()).toContain("- repo:normal-image: ok");
+      expect(doctor.stdout()).toContain("- repo:opaque-binary: ok");
+      expect(doctor.stdout()).toContain("- repo:utf8-reference: ok");
       expect(doctor.stdout()).toContain("- repo:oversized-image: blocked");
       expect(doctor.stdout()).toContain("- repo:disguised-script: blocked");
       expect(doctor.stdout()).toContain("[embedded_secret]");
       expect(doctor.stdout()).toContain("[resource_too_large]");
       expect(doctor.stdout()).toContain("10485760-byte binary asset limit");
       expect(list.stdout()).toContain("repo:normal-image");
+      expect(list.stdout()).toContain("repo:opaque-binary");
+      expect(list.stdout()).toContain("repo:utf8-reference");
       expect(list.stdout()).not.toContain("repo:oversized-image");
       expect(list.stdout()).not.toContain("repo:disguised-script");
     } finally {
@@ -827,6 +856,12 @@ describe("CLI Main - Skills Doctor", () => {
         join(asset, "assets", "late-binary.txt"),
         lateBinaryAsset,
       );
+      const lateInvalidUtf8Asset = new Uint8Array(4097).fill(0x61);
+      lateInvalidUtf8Asset[4096] = 0x80;
+      await writeFile(
+        join(asset, "assets", "late-invalid-utf8.txt"),
+        lateInvalidUtf8Asset,
+      );
 
       const binaryReference = await writeSkill({
         workspace,
@@ -848,6 +883,12 @@ describe("CLI Main - Skills Doctor", () => {
       await writeFile(
         join(binaryReference, "references", "late-binary.txt"),
         lateBinaryReference,
+      );
+      const lateInvalidUtf8Reference = new Uint8Array(4097).fill(0x61);
+      lateInvalidUtf8Reference[4096] = 0x80;
+      await writeFile(
+        join(binaryReference, "references", "late-invalid-utf8.txt"),
+        lateInvalidUtf8Reference,
       );
 
       const linked = await writeSkill({

@@ -199,7 +199,7 @@ function auditResource(options: {
     const sample = readResourceSample(absolutePath, stat.size);
     // Classification must precede size enforcement: binary assets are opaque,
     // sampled resources, while provider-visible text must be audited completely.
-    const binary = isBinaryContentSample(sample);
+    const binary = isBinaryContentSample(sample, sample.length === stat.size);
     if (binary) {
       if (!options.relativePath.startsWith("assets/")) {
         findings.push({
