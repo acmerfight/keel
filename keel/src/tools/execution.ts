@@ -260,7 +260,7 @@ function executeSkillResourceTool(
   } catch (error) {
     if (!(error instanceof WorkflowSkillError)) throw error;
     return {
-      content: `Tool failed: ${error.message.replace(/^Error: /u, "")}\nRecovery: Use an exact active qualified skill name and one advertised resource path.`,
+      content: `Tool failed: ${error.message.replace(/^Error: /u, "")}\nRecovery: For text, use an exact active qualified skill name and advertised resource path; for a binary asset, use its Skill-relative path with an approved binary-capable tool.`,
       ok: false,
     };
   }

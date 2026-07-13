@@ -13,7 +13,7 @@ import {
 import {
   BINARY_SAMPLE_BYTES,
   hasBinaryControlBytes,
-  isBinarySample,
+  isBinaryContentSample,
 } from "../tools/text-file.ts";
 import {
   hasForbiddenSkillTextCharacter,
@@ -199,7 +199,7 @@ function auditResource(options: {
     const sample = readResourceSample(absolutePath, stat.size);
     // Classification must precede size enforcement: binary assets are opaque,
     // sampled resources, while provider-visible text must be audited completely.
-    const binary = isBinarySample(options.relativePath, sample);
+    const binary = isBinaryContentSample(sample);
     if (binary) {
       if (!options.relativePath.startsWith("assets/")) {
         findings.push({

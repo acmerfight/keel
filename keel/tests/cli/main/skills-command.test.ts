@@ -1358,6 +1358,104 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given an active Skill advertises a normal binary asset,
+    When the model tries to read it through the text-only skill_resource tool,
+    Then Keel explains the binary boundary without misidentifying the asset as SKILL.md`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-binary-resource-workspace-"),
+    );
+    await writeSkill(
+      workspace,
+      "image-reader",
+      "Use the packaged image when explicitly selected.",
+      "Use assets/image.png when the task needs the image.",
+    );
+    const assets = join(
+      workspace,
+      ".agents",
+      "skills",
+      "image-reader",
+      "assets",
+    );
+    await mkdir(assets, { recursive: true });
+    const image = new Uint8Array(256 * 1024);
+    image.set([0x89, 0x50, 0x4e, 0x47]);
+    await writeFile(join(assets, "image.png"), image);
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("read_binary_asset", "skill_resource", {
+              skill: "repo:image-reader",
+              path: "assets/image.png",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Handled binary asset guidance."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      ["--skill", "image-reader", "inspect the image"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Handled binary asset guidance.\n");
+      expect(fixture.stderr()).toContain(
+        "Tool: skill_resource repo:image-reader assets/image.png\n",
+      );
+      expect(fixture.stderr()).toContain(
+        "Tool failed: skill_resource repo:image-reader assets/image.png\n",
+      );
+      const firstRequest = requestWithMessagesSchema.parse(capturedBodies[0]);
+      const systemPrompt = firstRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(systemPrompt).toContain(
+        "Binary assets cannot be read as text with skill_resource",
+      );
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      const toolResult = secondRequest.messages?.find(
+        (message) => message.role === "tool",
+      )?.content;
+      expect(toolResult).toContain(
+        'workflow skill resource "assets/image.png" is a binary asset and cannot be read as text with skill_resource',
+      );
+      expect(toolResult).not.toContain("SKILL.md");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a selected workflow skill has more resource files than the prompt cap,
     When the CLI starts a one-shot run,
     Then the provider-visible system prompt advertises no more than the bounded resource path limit`, async () => {

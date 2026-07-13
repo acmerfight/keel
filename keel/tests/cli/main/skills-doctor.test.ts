@@ -75,6 +75,16 @@ describe("CLI Main - Skills Doctor", () => {
         "The service returns a Bearer token.",
         "Use ACCESS_TOKEN=abc123 in examples.",
         "Use ACCESS_TOKEN=$" + "{ACCESS_TOKEN} in shell templates.",
+        "Use ACCESS_TOKEN={{ACCESS_TOKEN}} in template engines.",
+        "Use ACCESS_TOKEN=<ACCESS_TOKEN> in generic documentation.",
+        "Use ACCESS_TOKEN=[ACCESS_TOKEN] in notation examples.",
+        "Use ACCESS_TOKEN=example-secret-value-435 in examples.",
+        "Use ACCESS_TOKEN=sample_secret_value_435 in samples.",
+        "Use ACCESS_TOKEN=placeholder-value-435 in placeholders.",
+        "Use ACCESS_TOKEN=redacted-value-435 in sanitized output.",
+        "Use ACCESS_TOKEN=changeme-value-435 in setup docs.",
+        "Use ACCESS_TOKEN=your-access-token in instructions.",
+        "Leave ACCESS_TOKEN= empty until provisioning.",
       ].join("\n"),
     });
     await writeSkill({
@@ -144,9 +154,111 @@ describe("CLI Main - Skills Doctor", () => {
     }
   });
 
-  test(`Given a normal binary image and an oversized binary asset,
+  test(`Given a quoted passphrase and a credential-shaped resource path,
+    When the user audits, lists, or persists the Skill packages,
+    Then Keel blocks both credentials before provider or ledger exposure`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skills-doctor-structured-secrets-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skills-doctor-structured-secrets-home-"),
+    );
+    const passphrase = "qa live passphrase 435";
+    const pathCredential = "ACCESS_TOKEN=qa-live-resource-token-435";
+    await writeSkill({
+      workspace,
+      name: "quoted-secret",
+      description: "Unsafe quoted passphrase example.",
+      body: `DB_PASSWORD="${passphrase}"`,
+    });
+    const pathSkill = await writeSkill({
+      workspace,
+      name: "path-secret",
+      description: "Unsafe credential path example.",
+      body: `Read references/${pathCredential}.md when needed.`,
+    });
+    await mkdir(join(pathSkill, "references"));
+    await writeFile(
+      join(pathSkill, "references", `${pathCredential}.md`),
+      "Safe reference body.\n",
+    );
+
+    try {
+      const doctor = createRuntime(["skills", "doctor"], { cwd: workspace });
+      const list = createRuntime(["skills"], { cwd: workspace });
+      const input = new PassThrough();
+      input.end("use the quoted Skill\n");
+      const persisted = createRuntime(
+        ["--session", "quoted-secret", "--skill", "quoted-secret"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+            KEEL_PROVIDER: "fake",
+          },
+          input,
+        },
+      );
+      const transcriptPath = join(workspace, "path-secret.jsonl");
+      const provider = createRuntime(
+        [
+          "--provider",
+          "fake",
+          "--skill",
+          "path-secret",
+          "--transcript",
+          transcriptPath,
+          "use the path Skill",
+        ],
+        { cwd: workspace },
+      );
+
+      expect(await runCliMain(doctor.runtime)).toBe(1);
+      expect(await runCliMain(list.runtime)).toBe(0);
+      expect(await runCliMain(persisted.runtime)).toBe(1);
+      expect(await runCliMain(provider.runtime)).toBe(1);
+      expect(doctor.stdout()).toContain("- repo:quoted-secret: blocked");
+      expect(doctor.stdout()).toContain("- repo:path-secret: blocked");
+      expect(doctor.stdout()).toContain("[embedded_secret]");
+      expect(doctor.stdout()).toContain(
+        "references/ACCESS_TOKEN=[REDACTED_SECRET]",
+      );
+      expect(list.stdout()).not.toContain("repo:quoted-secret");
+      expect(list.stdout()).not.toContain("repo:path-secret");
+      expect(persisted.stderr()).toContain("[embedded_secret]");
+      expect(provider.stderr()).toContain("[embedded_secret]");
+      await expect(
+        readFile(
+          join(home, "sessions", "quoted-secret", "ledger.jsonl"),
+          "utf8",
+        ),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(transcriptPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      for (const output of [
+        doctor.stdout(),
+        doctor.stderr(),
+        list.stdout(),
+        list.stderr(),
+        persisted.stdout(),
+        persisted.stderr(),
+        provider.stdout(),
+        provider.stderr(),
+      ]) {
+        expect(output).not.toContain(passphrase);
+        expect(output).not.toContain(pathCredential);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a normal image, an oversized binary asset, and text disguised as an image,
     When the user audits or lists the Skill packages,
-    Then Keel accepts the normal image and rejects only the asset above its binary limit`, async () => {
+    Then Keel accepts the normal image but blocks oversized and disguised assets`, async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-skills-doctor-binary-asset-size-"),
     );
@@ -162,6 +274,12 @@ describe("CLI Main - Skills Doctor", () => {
       description: "Use an oversized packaged image.",
       body: "Use assets/image.png when needed.",
     });
+    const disguised = await writeSkill({
+      workspace,
+      name: "disguised-script",
+      description: "Use a packaged helper.",
+      body: "Run `bash assets/helper.png` when needed.",
+    });
     const pngHeader = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
     const normalImage = new Uint8Array(256 * 1024);
     normalImage.set(pngHeader);
@@ -169,8 +287,13 @@ describe("CLI Main - Skills Doctor", () => {
     oversizedImage.set(pngHeader);
     await mkdir(join(normal, "assets"));
     await mkdir(join(oversized, "assets"));
+    await mkdir(join(disguised, "assets"));
     await writeFile(join(normal, "assets", "image.png"), normalImage);
     await writeFile(join(oversized, "assets", "image.png"), oversizedImage);
+    await writeFile(
+      join(disguised, "assets", "helper.png"),
+      `#!/bin/sh\n# credential ghp_${"q".repeat(36)}\n`,
+    );
 
     try {
       const doctor = createRuntime(["skills", "doctor"], { cwd: workspace });
@@ -180,10 +303,13 @@ describe("CLI Main - Skills Doctor", () => {
       expect(await runCliMain(list.runtime)).toBe(0);
       expect(doctor.stdout()).toContain("- repo:normal-image: ok");
       expect(doctor.stdout()).toContain("- repo:oversized-image: blocked");
+      expect(doctor.stdout()).toContain("- repo:disguised-script: blocked");
+      expect(doctor.stdout()).toContain("[embedded_secret]");
       expect(doctor.stdout()).toContain("[resource_too_large]");
       expect(doctor.stdout()).toContain("10485760-byte binary asset limit");
       expect(list.stdout()).toContain("repo:normal-image");
       expect(list.stdout()).not.toContain("repo:oversized-image");
+      expect(list.stdout()).not.toContain("repo:disguised-script");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -285,6 +411,14 @@ describe("CLI Main - Skills Doctor", () => {
     {
       name: "environment-secret",
       body: "MY_SECRET_TOKEN=live-opaque-value-435",
+    },
+    {
+      name: "hyphenated-environment-keys",
+      body: [
+        "SERVICE_API-KEY=live-opaque-value-435",
+        "SERVICE_ACCESS-KEY=live-opaque-value-435",
+        "SERVICE_PRIVATE-KEY=live-opaque-value-435",
+      ].join("\n"),
     },
     {
       name: "github-token",

@@ -16,6 +16,7 @@ import { redactSecretLikeText } from "../core/secret-text.ts";
 import {
   BINARY_SAMPLE_BYTES,
   hasBinaryControlBytes,
+  isBinaryContentSample,
   isBinarySample,
 } from "../tools/text-file.ts";
 import {
@@ -36,6 +37,7 @@ import {
   isWorkflowSkillResourcePath,
   MAX_WORKFLOW_SKILL_RESOURCE_ENTRY_VISITS,
   MAX_WORKFLOW_SKILL_RESOURCE_PATHS,
+  MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES,
   WORKFLOW_SKILL_RESOURCE_DIRECTORIES,
 } from "./resources.ts";
 import { parseSkillDocument, validateSkillName } from "./schema.ts";
@@ -408,6 +410,52 @@ function decodeSkillBytes(skillFilePath: string, bytes: Uint8Array): string {
     throw new WorkflowSkillError(
       "Error: workflow skill SKILL.md is binary or not valid UTF-8 text.",
     );
+  }
+}
+
+function binarySkillResourceError(relativePath: string): WorkflowSkillError {
+  const kind = relativePath.startsWith("assets/")
+    ? "binary asset"
+    : "binary resource";
+  return new WorkflowSkillError(
+    `Error: workflow skill resource ${JSON.stringify(redactSecretLikeText(relativePath))} is a ${kind} and cannot be read as text with skill_resource; use its advertised Skill-relative path with an approved binary-capable tool.`,
+  );
+}
+
+function readSkillResourceText(
+  resourcePath: string,
+  relativePath: string,
+): string {
+  const fd = openSync(resourcePath, "r");
+  try {
+    const reportedSize = fstatSync(fd).size;
+    const sample = Buffer.allocUnsafe(
+      Math.min(reportedSize, BINARY_SAMPLE_BYTES),
+    );
+    const sampleBytesRead = readSync(fd, sample, 0, sample.length, 0);
+    if (isBinaryContentSample(sample.subarray(0, sampleBytesRead))) {
+      throw binarySkillResourceError(relativePath);
+    }
+    if (reportedSize > MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES) {
+      throw new WorkflowSkillError(
+        `Error: workflow skill resource ${JSON.stringify(redactSecretLikeText(relativePath))} is too large to read as text (${reportedSize} bytes; limit ${MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES} bytes).`,
+      );
+    }
+    const bytes = Buffer.allocUnsafe(reportedSize);
+    const bytesRead = readSync(fd, bytes, 0, bytes.length, 0);
+    const content = bytes.subarray(0, bytesRead);
+    if (hasBinaryControlBytes(content)) {
+      throw binarySkillResourceError(relativePath);
+    }
+    try {
+      return new TextDecoder("utf-8", { fatal: true })
+        .decode(content)
+        .trimEnd();
+    } catch {
+      throw binarySkillResourceError(relativePath);
+    }
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -942,7 +990,7 @@ export function discoverSkillCatalog(
         join(root.rootPath, descriptor.name),
         resourcePath,
       );
-      return decodeSkillBytes(resourcePath, readSkillBytes(resourcePath));
+      return readSkillResourceText(resourcePath, path);
     },
     readPackageResource: (packageId, digest, path) => {
       if (!isWorkflowSkillResourcePath(path)) {
@@ -982,7 +1030,7 @@ export function discoverSkillCatalog(
         join(root.rootPath, descriptor.name),
         resourcePath,
       );
-      return decodeSkillBytes(resourcePath, readSkillBytes(resourcePath));
+      return readSkillResourceText(resourcePath, path);
     },
   };
 }

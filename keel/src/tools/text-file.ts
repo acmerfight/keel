@@ -141,11 +141,14 @@ export function hasBinaryControlBytes(bytes: Uint8Array): boolean {
   return nonPrintable / bytes.length > 0.3;
 }
 
+export function isBinaryContentSample(sample: Uint8Array): boolean {
+  return hasMagicBinaryHeader(sample) || hasBinaryControlBytes(sample);
+}
+
 export function isBinarySample(filePath: string, sample: Uint8Array): boolean {
   return (
     BINARY_EXTENSIONS.has(extname(filePath).toLowerCase()) ||
-    hasMagicBinaryHeader(sample) ||
-    hasBinaryControlBytes(sample)
+    isBinaryContentSample(sample)
   );
 }
 
