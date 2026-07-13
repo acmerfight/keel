@@ -152,6 +152,7 @@ export async function restorePostCompactionReads(options: {
   readonly messages: Message[];
   readonly nextToolCallId: () => string;
 }): Promise<void> {
+  const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const skippedReadTargets = compactedCurrentReadRestoreTargets({
     workspace: options.workspace,
     messages: options.messages,
@@ -236,9 +237,7 @@ export async function restorePostCompactionReads(options: {
       toolCall,
       signal: options.signal,
       allowBash: false,
-      ...(options.hiddenWorkspacePaths !== undefined
-        ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
-        : {}),
+      hiddenWorkspacePaths,
       projectInstructions: options.projectInstructionVisibility,
     });
     if (

@@ -672,9 +672,7 @@ async function executeGitDiffTool(
       : {}),
     ...(toolCall.paths !== undefined ? { paths: toolCall.paths } : {}),
     signal,
-    ...(hiddenWorkspacePaths !== undefined
-      ? { hiddenPaths: hiddenWorkspacePaths }
-      : {}),
+    hiddenPaths: hiddenWorkspacePaths ?? [],
   });
   return {
     content: result.content,
@@ -690,9 +688,7 @@ async function executeGitStatusTool(
   const result = await executeGitStatus(workspace, {
     ...(toolCall.paths !== undefined ? { paths: toolCall.paths } : {}),
     signal,
-    ...(hiddenWorkspacePaths !== undefined
-      ? { hiddenPaths: hiddenWorkspacePaths }
-      : {}),
+    hiddenPaths: hiddenWorkspacePaths ?? [],
   });
   return {
     content: result.content,

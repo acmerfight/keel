@@ -331,17 +331,15 @@ function formatInteractiveDiffOutput(
 
 async function inspectInteractiveDiff(
   workspace: string,
-  hiddenPaths?: readonly string[],
+  hiddenPaths: readonly string[],
 ): Promise<InteractiveDiffInspection> {
-  const status = await executeGitStatus(workspace, {
-    ...(hiddenPaths !== undefined ? { hiddenPaths } : {}),
-  });
+  const status = await executeGitStatus(workspace, { hiddenPaths });
   if (!status.inGitWorkTree) {
     return { kind: "non-git", message: NON_GIT_DIFF_MESSAGE };
   }
   const diff = await executeGitDiff(workspace, {
     mode: "all",
-    ...(hiddenPaths !== undefined ? { hiddenPaths } : {}),
+    hiddenPaths,
   });
   if (!diff.hasChanges) {
     return { kind: "status-only", statusOutput: status.content };
@@ -391,6 +389,7 @@ export async function runInteractiveSession(
   options: InteractiveSessionOptions,
 ): Promise<InteractiveSessionResult> {
   const now = options.now ?? Date.now;
+  const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const undoProtection = createUndoProtectionTracker();
   const activeWorkflowSkills: WorkflowSkill[] =
     options.skillActivation === undefined
@@ -945,9 +944,7 @@ export async function runInteractiveSession(
           systemPrompt: baseSystemPromptWithGoal(),
           signal: turnAbortController.signal,
           allowBash: bashModeExposesTool(options.cliArgs.bashMode),
-          ...(options.hiddenWorkspacePaths !== undefined
-            ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
-            : {}),
+          hiddenWorkspacePaths,
           ...(options.skillActivation !== undefined
             ? { skillActivation: options.skillActivation }
             : {}),
@@ -1892,7 +1889,7 @@ export async function runInteractiveSession(
             formatInteractiveDiffOutput(
               await inspectInteractiveDiff(
                 options.workspace,
-                options.hiddenWorkspacePaths,
+                hiddenWorkspacePaths,
               ),
             ),
           );

@@ -496,6 +496,17 @@ describe("CLI Main - Skills", () => {
               { index: 3 },
             ),
           );
+          res.write(
+            sseToolCall(
+              "status_without_skills",
+              "git_status",
+              {},
+              { index: 4 },
+            ),
+          );
+          res.write(
+            sseToolCall("diff_without_skills", "git_diff", {}, { index: 5 }),
+          );
           res.write(sseToolFinish());
           res.end("data: [DONE]\n\n");
           return;

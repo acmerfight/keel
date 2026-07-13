@@ -526,6 +526,7 @@ export async function* runAgentTurn(
     stopPolicy,
     drainInjectedUserMessages,
   } = options;
+  const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const allowSkill = options.skillActivation !== undefined;
   let sessionLedger = sessionLedgerFromMessages(messages);
   const applySessionLedger = (next: SessionLedger) => {
@@ -594,9 +595,7 @@ export async function* runAgentTurn(
         await restorePostCompactionReads({
           workspace,
           signal,
-          ...(options.hiddenWorkspacePaths !== undefined
-            ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
-            : {}),
+          hiddenWorkspacePaths,
           readVisibility,
           projectInstructionVisibility,
           messages: targetMessages,
@@ -836,9 +835,7 @@ export async function* runAgentTurn(
         toolCall,
         signal,
         allowBash,
-        ...(options.hiddenWorkspacePaths !== undefined
-          ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
-          : {}),
+        hiddenWorkspacePaths,
         recordCheckpoints: options.recordCheckpointOperations === undefined,
         readBeforeEdit: {
           hasRead: readVisibility.hasRead,
@@ -1142,9 +1139,7 @@ export async function* runAgent(
         systemPrompt: options.systemPrompt,
         signal: options.signal,
         allowBash: options.allowBash,
-        ...(options.hiddenWorkspacePaths !== undefined
-          ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
-          : {}),
+        hiddenWorkspacePaths: options.hiddenWorkspacePaths ?? [],
         ...(options.skillActivation !== undefined
           ? { skillActivation: options.skillActivation }
           : {}),
