@@ -37,6 +37,7 @@ const GOAL_OPTIONS = [
   "--provider",
   "--model",
   "--skill",
+  "--no-skills",
   "--max-cost",
   "--report",
   "--session",
@@ -52,6 +53,7 @@ const GOAL_RESUME_OPTIONS = [
   "--provider",
   "--model",
   "--skill",
+  "--no-skills",
   "--max-cost",
   "--report",
 ];
@@ -92,6 +94,7 @@ function parseGoalLaunchArgs(
   let providerId: GoalCliArgs["providerId"] | undefined;
   let model: string | undefined;
   const skillNames: string[] = [];
+  let skillsEnabled = true;
   let maxCostUsd: number | undefined;
   let reportFile: string | undefined;
   let sessionId: string | undefined;
@@ -111,9 +114,13 @@ function parseGoalLaunchArgs(
       return duplicateOption(option);
     seen.add(option);
 
-    if (option === "--allow-bash") {
+    if (option === "--allow-bash" || option === "--no-skills") {
       if (inlineValue !== undefined) {
-        return parseError("Error: --allow-bash does not accept a value.");
+        return parseError(`Error: ${option} does not accept a value.`);
+      }
+      if (option === "--no-skills") {
+        skillsEnabled = false;
+        continue;
       }
       if (seen.has("--bash-policy")) {
         return parseError(
@@ -242,6 +249,9 @@ function parseGoalLaunchArgs(
       `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
     );
   }
+  if (!skillsEnabled && skillNames.length > 0) {
+    return parseError("Error: --no-skills cannot be combined with --skill.");
+  }
 
   return parseOk({
     command: "goal",
@@ -258,6 +268,7 @@ function parseGoalLaunchArgs(
       : { kind: "assertion", assertion: completionCriterion },
     budget: budget satisfies SessionGoalBudget,
     bashMode,
+    skillsEnabled,
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(skillNames.length > 0 ? { skillNames } : {}),
@@ -276,6 +287,7 @@ function parseGoalResumeArgs(
   let providerId: GoalCliArgs["providerId"] | undefined;
   let model: string | undefined;
   const skillNames: string[] = [];
+  let skillsEnabled = true;
   let maxCostUsd: number | undefined;
   let reportFile: string | undefined;
   const budget: {
@@ -307,12 +319,20 @@ function parseGoalResumeArgs(
       return duplicateOption(option);
     seen.add(option);
 
-    if (option === "--last" || option === "--allow-bash") {
+    if (
+      option === "--last" ||
+      option === "--allow-bash" ||
+      option === "--no-skills"
+    ) {
       if (inlineValue !== undefined) {
         return parseError(`Error: ${option} does not accept a value.`);
       }
       if (option === "--last") {
         useLast = true;
+        continue;
+      }
+      if (option === "--no-skills") {
+        skillsEnabled = false;
         continue;
       }
       if (seen.has("--bash-policy")) {
@@ -390,6 +410,9 @@ function parseGoalResumeArgs(
   if (sessionId === undefined && !useLast) {
     return parseError("Error: goal resume requires <session-id> or --last.");
   }
+  if (!skillsEnabled && skillNames.length > 0) {
+    return parseError("Error: --no-skills cannot be combined with --skill.");
+  }
 
   return parseOk({
     command: "goal",
@@ -398,6 +421,7 @@ function parseGoalResumeArgs(
       sessionId === undefined ? { kind: "latest" } : { kind: "id", sessionId },
     budget: budget satisfies SessionGoalBudget,
     bashMode,
+    skillsEnabled,
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(skillNames.length > 0 ? { skillNames } : {}),

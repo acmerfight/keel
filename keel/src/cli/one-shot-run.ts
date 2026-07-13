@@ -138,24 +138,34 @@ export async function runOneShotCli(
     const workspace = runtime.cwd();
     const projectInstructions = loadProjectInstructions(workspace);
     const invocation = parseExplicitSkillInvocation(originalUserMessage);
+    if (!cliArgs.skillsEnabled && invocation !== null) {
+      throw new WorkflowSkillError(
+        "Error: workflow skills are disabled for this run by --no-skills.",
+      );
+    }
     const userMessage =
       invocation === null || invocation.arguments !== ""
         ? (invocation?.arguments ?? originalUserMessage)
         : "Apply the explicitly selected workflow skill.";
-    const catalog = discoverWorkflowSkillCatalog(runtime, workspace);
+    const catalog = cliArgs.skillsEnabled
+      ? discoverWorkflowSkillCatalog(runtime, workspace)
+      : undefined;
     const explicitLookups = [
       ...(cliArgs.skillNames ?? []),
       ...(invocation === null ? [] : [invocation.lookup]),
     ];
     const workflowSkills = explicitLookups
-      .map((lookup) => catalog.load(lookup))
+      .map((lookup) => catalog?.load(lookup))
+      .filter((skill) => skill !== undefined)
       .filter(
         (skill, index, skills) =>
           skills.findIndex(
             (candidate) => candidate.packageId === skill.packageId,
           ) === index,
       );
-    runtime.writeStderr(formatWorkflowSkillListWarnings(catalog.warnings));
+    if (catalog !== undefined) {
+      runtime.writeStderr(formatWorkflowSkillListWarnings(catalog.warnings));
+    }
     const resolved = resolveProvider(userMessage, runtime, {
       ...(cliArgs.providerId !== undefined
         ? { providerId: cliArgs.providerId }
@@ -163,7 +173,7 @@ export async function runOneShotCli(
       ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
     });
     const catalogExposure = exposeSkillCatalog({
-      skills: catalog.implicitSkills.filter(
+      skills: (catalog?.implicitSkills ?? []).filter(
         (descriptor) =>
           !workflowSkills.some(
             (active) => active.packageId === descriptor.packageId,
@@ -174,7 +184,9 @@ export async function runOneShotCli(
     });
     runtime.writeStderr(formatSkillCatalogDegradation(catalogExposure));
     const skillActivation =
-      catalog.skills.length > 0 ? createSkillActivation(catalog) : undefined;
+      catalog !== undefined && catalog.skills.length > 0
+        ? createSkillActivation(catalog)
+        : undefined;
     skillActivation?.expose(catalogExposure.skills);
     skillActivation?.registerExplicit(workflowSkills);
     skillActivation?.beginTurn();

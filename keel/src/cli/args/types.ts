@@ -130,6 +130,7 @@ export type ApprovalsCliArgs =
 export interface RunCliArgs {
   readonly command: "run";
   readonly bashMode: BashMode;
+  readonly skillsEnabled: boolean;
   readonly userMessage?: string;
   readonly maxCostUsd?: number;
   readonly reportFile?: string;
@@ -148,6 +149,7 @@ export interface RunCliArgs {
 interface GoalCliCommonArgs {
   readonly command: "goal";
   readonly bashMode: BashMode;
+  readonly skillsEnabled: boolean;
   readonly maxCostUsd?: number;
   readonly reportFile?: string;
   readonly providerId?: ProviderId;

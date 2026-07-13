@@ -16,6 +16,10 @@ import {
   SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
 } from "../../../src/core/session-goal.ts";
 import {
+  requestWithMessagesSchema,
+  requestWithToolsSchema,
+} from "../../../src/testing/cli-main-schemas.ts";
+import {
   createRuntime,
   type SigintCapture,
 } from "../../../src/testing/cli-runtime-fixtures.ts";
@@ -33,6 +37,240 @@ import {
 } from "../../../src/testing/session-ledger-fixtures.ts";
 
 describe("CLI Main - Headless Goal", () => {
+  test(`Given a headless Goal matches an installed Skill,
+    When the launch uses --no-skills,
+    Then the shared Goal runtime exposes no Skill metadata, body, or tools`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-headless-no-skills-workspace-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-headless-no-skills-home-"));
+    const reportPath = join(workspace, "no-skills-report.json");
+    const skillDirectory = join(workspace, ".agents", "skills", "review");
+    await mkdir(skillDirectory, { recursive: true });
+    await writeFile(
+      join(skillDirectory, "SKILL.md"),
+      "---\nname: review\ndescription: Review release changes\n---\n\nHEADLESS_NO_SKILLS_BODY\n",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("complete_without_skills", "update_goal", {
+              status: "completed",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        res.end(
+          sseTextReplyWithUsage(
+            JSON.stringify({ completed: true, reason: "Complete." }),
+          ),
+        );
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "goal",
+        "--objective=Review the release",
+        "--done-when=the release review is complete",
+        "--session=headless-no-skills",
+        "--provider=deepseek",
+        "--no-skills",
+        `--report=${reportPath}`,
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        activeSkills: [],
+      });
+      expect(capturedBodies).toHaveLength(3);
+      for (const body of capturedBodies) {
+        const request = requestWithMessagesSchema.parse(body);
+        const systemPrompt = request.messages?.find(
+          (message) => message.role === "system",
+        )?.content;
+        expect(systemPrompt).not.toContain("Available workflow skills:");
+        expect(systemPrompt).not.toContain("repo:review");
+        expect(systemPrompt).not.toContain("HEADLESS_NO_SKILLS_BODY");
+        const toolNames =
+          requestWithToolsSchema
+            .parse(body)
+            .tools?.map((tool) => tool.function?.name) ?? [];
+        expect(toolNames).not.toContain("skill");
+        expect(toolNames).not.toContain("skill_search");
+        expect(toolNames).not.toContain("skill_resource");
+      }
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a resumable headless Goal has an active Skill snapshot,
+    When one resume uses --no-skills and a later resume does not,
+    Then the disabled run exposes no Skill surface without erasing the Goal's activation`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-no-skills-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-headless-resume-no-skills-home-"),
+    );
+    const disabledReportPath = join(workspace, "disabled-resume-report.json");
+    const skillDirectory = join(workspace, ".agents", "skills", "review");
+    await mkdir(skillDirectory, { recursive: true });
+    await writeFile(
+      join(skillDirectory, "SKILL.md"),
+      "---\nname: review\ndescription: Review release changes\n---\n\nHEADLESS_RESUME_SKILL_SNAPSHOT\n",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length <= 2) {
+          res.end(sseTextReplyWithUsage("Still working."));
+          return;
+        }
+        if (capturedBodies.length === 3) {
+          res.write(
+            sseToolCall("complete_restored_goal", "update_goal", {
+              status: "completed",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Completed with restored Skill."));
+      });
+    });
+    await listen(server);
+    const runtimeOptions = {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    } as const;
+    const launch = createRuntime(
+      [
+        "goal",
+        "--objective=Review the resumable release",
+        "--verify=true",
+        "--turns=1",
+        "--tokens=10000",
+        "--time=1m",
+        "--session=headless-resume-no-skills",
+        "--bash-policy=trusted",
+        "--provider=deepseek",
+        "--skill=review",
+      ],
+      runtimeOptions,
+    );
+    const disabledResume = createRuntime(
+      [
+        "goal",
+        "resume",
+        "headless-resume-no-skills",
+        "--turns=2",
+        "--bash-policy=trusted",
+        "--provider=deepseek",
+        "--no-skills",
+        `--report=${disabledReportPath}`,
+      ],
+      runtimeOptions,
+    );
+    const restoredResume = createRuntime(
+      [
+        "goal",
+        "resume",
+        "headless-resume-no-skills",
+        "--turns=4",
+        "--bash-policy=trusted",
+        "--provider=deepseek",
+      ],
+      runtimeOptions,
+    );
+
+    try {
+      expect(await runCliMain(launch.runtime)).toBe(4);
+
+      // When
+      const disabledExitCode = await runCliMain(disabledResume.runtime);
+      const restoredExitCode = await runCliMain(restoredResume.runtime);
+
+      // Then
+      expect(disabledExitCode).toBe(4);
+      expect(restoredExitCode).toBe(0);
+      expect(capturedBodies).toHaveLength(4);
+      const launchSystem = requestWithMessagesSchema
+        .parse(capturedBodies[0])
+        .messages?.find((message) => message.role === "system")?.content;
+      expect(launchSystem).toContain("HEADLESS_RESUME_SKILL_SNAPSHOT");
+      const disabledRequest = requestWithMessagesSchema.parse(
+        capturedBodies[1],
+      );
+      const disabledSystem = disabledRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(disabledSystem).not.toContain("Available workflow skills:");
+      expect(disabledSystem).not.toContain("repo:review");
+      expect(disabledSystem).not.toContain("HEADLESS_RESUME_SKILL_SNAPSHOT");
+      const disabledTools =
+        requestWithToolsSchema
+          .parse(capturedBodies[1])
+          .tools?.map((tool) => tool.function?.name) ?? [];
+      expect(disabledTools).not.toContain("skill");
+      expect(disabledTools).not.toContain("skill_search");
+      expect(disabledTools).not.toContain("skill_resource");
+      expect(
+        JSON.parse(await readFile(disabledReportPath, "utf8")),
+      ).toMatchObject({ activeSkills: [] });
+      for (const body of capturedBodies.slice(2)) {
+        const restoredSystem = requestWithMessagesSchema
+          .parse(body)
+          .messages?.find((message) => message.role === "system")?.content;
+        expect(restoredSystem).toContain("HEADLESS_RESUME_SKILL_SNAPSHOT");
+      }
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an assertion-backed objective,
     When the acting model proposes completion and a fresh evaluator approves it,
     Then headless execution completes without Bash authorization and reports evaluator evidence`, async () => {

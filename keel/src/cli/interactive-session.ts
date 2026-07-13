@@ -67,11 +67,12 @@ import {
   skillLifecycleStatesEqual,
   workflowSkillFromActivation,
 } from "../skills/lifecycle.ts";
-import type {
-  ActiveSkillStatus,
-  SkillActivationRecord,
-  SkillLifecycleState,
-  WorkflowSkill,
+import {
+  type ActiveSkillStatus,
+  type SkillActivationRecord,
+  type SkillLifecycleState,
+  type WorkflowSkill,
+  WorkflowSkillError,
 } from "../skills/model.ts";
 import { executeGitDiff } from "../tools/git-diff.ts";
 import { executeGitStatus } from "../tools/git-status.ts";
@@ -1375,6 +1376,9 @@ export async function runInteractiveSession(
       if (explicitInvocation !== null) {
         let stateBeforeActivation: SkillLifecycleState | undefined;
         try {
+          if (options.skillUnavailableReason !== undefined) {
+            throw new WorkflowSkillError(options.skillUnavailableReason);
+          }
           const skill = options.activateExplicitSkill?.(
             explicitInvocation.lookup,
           );
@@ -1383,7 +1387,10 @@ export async function runInteractiveSession(
           }
           /* v8 ignore next 3 -- the CLI installs activation lookup and lifecycle ownership together. */
           if (options.skillActivation === undefined) {
-            throw new Error("explicit skill activation is unavailable");
+            throw new WorkflowSkillError(
+              options.skillUnavailableReason ??
+                "explicit skill activation is unavailable",
+            );
           }
           stateBeforeActivation = options.skillActivation.state();
           const activation = options.skillActivation.activateExplicit(
@@ -2136,7 +2143,10 @@ export async function runInteractiveSession(
         let stateBeforeCommand: SkillLifecycleState | undefined;
         try {
           if (options.skillActivation === undefined) {
-            throw new Error("explicit skill activation is unavailable");
+            throw new WorkflowSkillError(
+              options.skillUnavailableReason ??
+                "explicit skill activation is unavailable",
+            );
           }
           stateBeforeCommand = options.skillActivation.state();
           let successMessage: string;

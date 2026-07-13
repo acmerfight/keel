@@ -85,6 +85,7 @@ export interface InteractiveSessionOptions {
   readonly workflowSkills?: readonly WorkflowSkill[];
   readonly skillCatalog?: readonly SkillDescriptor[];
   readonly skillActivation?: SkillActivationCapability;
+  readonly skillUnavailableReason?: string;
   readonly initialSkillActivationRecords?: readonly SkillActivationRecord[];
   readonly activateExplicitSkill?: (lookup: string) => WorkflowSkill;
   readonly initialSessionTitle?: string;

@@ -6,7 +6,10 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { runCliMain } from "../../../src/cli/index.ts";
-import { requestWithMessagesSchema } from "../../../src/testing/cli-main-schemas.ts";
+import {
+  requestWithMessagesSchema,
+  requestWithToolsSchema,
+} from "../../../src/testing/cli-main-schemas.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   close,
@@ -56,6 +59,163 @@ function isSummaryRequest(body: unknown): boolean {
 }
 
 describe("CLI Main - Skill Lifecycle", () => {
+  test(`Given a named session has an active Skill,
+    When one resume uses --no-skills and a later resume does not,
+    Then the middle run exposes no Skill surface without erasing the persisted activation`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skill-temporary-disable-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skill-temporary-disable-home-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "TEMPORARY_DISABLE_REVIEW_SNAPSHOT",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(sseTextReplyWithUsage("Done."));
+      });
+    });
+    await listen(server);
+    const runtimeOptions = {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    } as const;
+    const firstInput = new PassThrough();
+    firstInput.end("start review\n");
+    const firstRun = createRuntime(
+      ["--session", "temporary-disable", "--skill", "review"],
+      { ...runtimeOptions, input: firstInput },
+    );
+    const disabledInput = new PassThrough();
+    disabledInput.end(
+      "/skills active\n/skill review\n$review forbidden\ncontinue without skills\n",
+    );
+    const disabledRun = createRuntime(
+      ["--resume", "temporary-disable", "--no-skills"],
+      { ...runtimeOptions, input: disabledInput },
+    );
+    const restoredInput = new PassThrough();
+    restoredInput.end("continue normally\n");
+    const restoredRun = createRuntime(["--resume", "temporary-disable"], {
+      ...runtimeOptions,
+      input: restoredInput,
+    });
+    const disabledForkInput = new PassThrough();
+    disabledForkInput.end("continue in a disabled fork\n");
+    const disabledForkRun = createRuntime(
+      [
+        "--resume",
+        "temporary-disable",
+        "--fork",
+        "temporary-disable-fork",
+        "--no-skills",
+      ],
+      { ...runtimeOptions, input: disabledForkInput },
+    );
+    const restoredForkInput = new PassThrough();
+    restoredForkInput.end("continue in the restored fork\n");
+    const restoredForkRun = createRuntime(
+      ["--resume", "temporary-disable-fork"],
+      { ...runtimeOptions, input: restoredForkInput },
+    );
+
+    try {
+      expect(await runCliMain(firstRun.runtime)).toBe(0);
+
+      // When
+      const disabledExitCode = await runCliMain(disabledRun.runtime);
+      const restoredExitCode = await runCliMain(restoredRun.runtime);
+      const disabledForkExitCode = await runCliMain(disabledForkRun.runtime);
+      const restoredForkExitCode = await runCliMain(restoredForkRun.runtime);
+
+      // Then
+      expect(disabledExitCode).toBe(0);
+      expect(restoredExitCode).toBe(0);
+      expect(disabledForkExitCode).toBe(0);
+      expect(restoredForkExitCode).toBe(0);
+      expect(capturedBodies).toHaveLength(5);
+      expect(disabledRun.stdout()).toContain("No active workflow skills.");
+      expect(
+        occurrences(
+          disabledRun.stderr(),
+          "Error: workflow skills are disabled for this run by --no-skills.",
+        ),
+      ).toBe(2);
+      expect(disabledRun.stderr()).not.toContain(
+        "explicit skill activation is unavailable",
+      );
+      const disabledRequest = requestWithMessagesSchema.parse(
+        capturedBodies[1],
+      );
+      const disabledSystem = disabledRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(disabledSystem).not.toContain("Available workflow skills:");
+      expect(disabledSystem).not.toContain("repo:review");
+      expect(disabledSystem).not.toContain("TEMPORARY_DISABLE_REVIEW_SNAPSHOT");
+      const disabledTools =
+        requestWithToolsSchema
+          .parse(capturedBodies[1])
+          .tools?.map((tool) => tool.function?.name) ?? [];
+      expect(disabledTools).not.toContain("skill");
+      expect(disabledTools).not.toContain("skill_search");
+      expect(disabledTools).not.toContain("skill_resource");
+      const restoredRequest = requestWithMessagesSchema.parse(
+        capturedBodies[2],
+      );
+      const restoredSystem = restoredRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(restoredSystem).toContain("TEMPORARY_DISABLE_REVIEW_SNAPSHOT");
+      const disabledForkRequest = requestWithMessagesSchema.parse(
+        capturedBodies[3],
+      );
+      const disabledForkSystem = disabledForkRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(disabledForkSystem).not.toContain("Available workflow skills:");
+      expect(disabledForkSystem).not.toContain("repo:review");
+      expect(disabledForkSystem).not.toContain(
+        "TEMPORARY_DISABLE_REVIEW_SNAPSHOT",
+      );
+      const disabledForkTools =
+        requestWithToolsSchema
+          .parse(capturedBodies[3])
+          .tools?.map((tool) => tool.function?.name) ?? [];
+      expect(disabledForkTools).not.toContain("skill");
+      expect(disabledForkTools).not.toContain("skill_search");
+      expect(disabledForkTools).not.toContain("skill_resource");
+      const restoredForkRequest = requestWithMessagesSchema.parse(
+        capturedBodies[4],
+      );
+      const restoredForkSystem = restoredForkRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(restoredForkSystem).toContain("TEMPORARY_DISABLE_REVIEW_SNAPSHOT");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an ephemeral interactive run has a local Skill,
     When the user activates and lists it without naming a saved session,
     Then lifecycle controls work without creating persistence`, async () => {

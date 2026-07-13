@@ -195,6 +195,36 @@ describe("Interactive Terminal Display", () => {
     expect(fixture.stderr()).toBe("");
   });
 
+  test(`Given the CLI runs with --no-skills in a real terminal,
+    When the terminal initializes Skill completion and the user requests activation,
+    Then it uses an empty completion catalog and reports the per-run disable`, async () => {
+    // Given
+    const terminal = new TestTerminal();
+    const fixture = createRuntime(["--ephemeral", "--no-skills"], {
+      env: { KEEL_PROVIDER: "fake" },
+      input: new PassThrough(),
+      inputIsTTY: true,
+      stdoutIsTTY: true,
+      stderrIsTTY: true,
+      createInteractiveTerminal: () => terminal,
+    });
+    const run = runCliMain(fixture.runtime);
+    await terminal.waitForText("keel>");
+
+    // When
+    terminal.input("/skill review");
+    terminal.input("\r");
+
+    // Then
+    const screen = await terminal.waitForText(
+      "workflow skills are disabled for this run by --no-skills",
+    );
+    expect(screen).not.toContain("repo:review");
+    terminal.input("\x03");
+    await expect(run).resolves.toBe(130);
+    expect(terminal.stopCount).toBe(1);
+  });
+
   test(`Given a terminal display receives transcript and status output,
     When it starts and later closes twice through normal cleanup,
     Then it renders every output class and closes its input once`, async () => {

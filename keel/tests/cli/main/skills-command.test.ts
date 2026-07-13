@@ -442,6 +442,104 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given a project Skill matches the task,
+    When the user runs Keel with --no-skills,
+    Then the provider receives no Skill metadata, instructions, or tools`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-no-skills-"));
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request when the user asks for correctness findings.",
+      "NO_SKILLS_MUST_HIDE_THIS_BODY",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(sseTextReplyWithUsage("Completed without Skills."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["--no-skills", "review pull request 437"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Completed without Skills.\n");
+      expect(fixture.stderr()).toBe("");
+      expect(capturedBodies).toHaveLength(1);
+      const request = requestWithMessagesSchema.parse(capturedBodies[0]);
+      const systemPrompt = request.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(systemPrompt).not.toContain("Available workflow skills:");
+      expect(systemPrompt).not.toContain("repo:review");
+      expect(systemPrompt).not.toContain("NO_SKILLS_MUST_HIDE_THIS_BODY");
+      const toolNames =
+        requestWithToolsSchema
+          .parse(capturedBodies[0])
+          .tools?.map((tool) => tool.function?.name) ?? [];
+      expect(toolNames).not.toContain("skill");
+      expect(toolNames).not.toContain("skill_search");
+      expect(toolNames).not.toContain("skill_resource");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user explicitly invokes a Skill while Skills are disabled,
+    When Keel parses the one-shot request,
+    Then it rejects the invocation before resolving or spending a provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-no-skills-explicit-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "NO_SKILLS_EXPLICIT_BODY",
+    );
+    const fixture = createRuntime(["--no-skills", "$review inspect this"], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Error: workflow skills are disabled for this run by --no-skills.\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a local workflow skill is selected for a one-shot run,
     When the CLI starts the agent,
     Then the provider-visible system prompt includes that skill body`, async () => {
