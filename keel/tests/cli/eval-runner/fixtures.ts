@@ -25,7 +25,16 @@ export const resultLineSchema = z.object({
   outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
   report: z
     .object({
-      schemaVersion: z.literal(8),
+      schemaVersion: z.literal(9),
+      skillPolicy: z.object({
+        mode: z.enum([
+          "enabled",
+          "cli_disabled",
+          "globally_disabled",
+          "filtered",
+        ]),
+        disabledPackages: z.number().int().nonnegative(),
+      }),
       modelsUsed: z.array(
         z.object({
           provider: z.string(),
@@ -131,7 +140,7 @@ export const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 export const VALID_REPORT = {
-  schemaVersion: 8,
+  schemaVersion: 9,
   modelsUsed: [{ provider: "fake", model: "fake" }],
   usageByModel: [
     {
@@ -168,6 +177,7 @@ export const VALID_REPORT = {
     budgetChars: 8000,
     usedChars: 0,
   },
+  skillPolicy: { mode: "enabled", disabledPackages: 0 },
   undoProtection: {
     status: "not_applicable",
     checkpointsWritten: 0,

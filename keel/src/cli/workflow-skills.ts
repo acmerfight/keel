@@ -1,20 +1,36 @@
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import {
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { redactSecretLikeText } from "../core/secret-text.ts";
 import type { SkillPackageAudit } from "../skills/audit.ts";
 import {
   exposeSkillCatalog,
   type SkillCatalogExposure,
 } from "../skills/catalog.ts";
-import type { SkillCatalog, WorkflowSkill } from "../skills/model.ts";
+import {
+  type SkillCatalog,
+  type SkillDescriptor,
+  type WorkflowSkill,
+  WorkflowSkillError,
+} from "../skills/model.ts";
 import {
   discoverSkillCatalog,
+  resolveSkillDescriptor,
   type SkillDiscoveryOptions,
 } from "../skills/project.ts";
 import { sanitizeStatusLineText } from "./output.ts";
 import type { CliRuntime } from "./runtime.ts";
+import { readUserSkillConfig } from "./skill-user-config.ts";
 
-export { WorkflowSkillError } from "../skills/model.ts";
+export { WorkflowSkillError };
 
 export interface WorkflowSkillSummary {
   readonly qualifiedName: string;
@@ -22,6 +38,7 @@ export interface WorkflowSkillSummary {
   readonly description: string;
   readonly relativePath: string;
   readonly activationPolicy: "implicit" | "explicit";
+  readonly disabled: boolean;
 }
 
 export interface WorkflowSkillListWarning {
@@ -34,6 +51,7 @@ export interface WorkflowSkillListResult {
   readonly warnings: readonly WorkflowSkillListWarning[];
   readonly audits: readonly SkillPackageAudit[];
   readonly exposure: SkillCatalogExposure;
+  readonly globallyEnabled: boolean;
 }
 
 function configuredRoots(value: string | undefined): readonly string[] {
@@ -69,12 +87,150 @@ export function discoverWorkflowSkillCatalog(
   return discoverSkillCatalog(skillDiscoveryOptions(runtime, workspace));
 }
 
+export function disabledWorkflowSkillWorkspacePaths(
+  workspace: string,
+  catalog: SkillCatalog,
+  disabledPackageIds: readonly string[],
+): readonly string[] {
+  const workspacePath = realpathSync(workspace);
+  const disabled = new Set(disabledPackageIds);
+  return [
+    ...new Set(
+      catalog.skills
+        .filter(
+          (skill) => skill.scope === "repo" && disabled.has(skill.packageId),
+        )
+        .flatMap((skill) => {
+          const requestedPackagePath = resolve(
+            workspacePath,
+            dirname(skill.relativePath),
+          );
+          let resolvedPackagePath: string;
+          try {
+            resolvedPackagePath = realpathSync(requestedPackagePath);
+          } catch {
+            throw new WorkflowSkillError(
+              `Error: cannot enforce the disabled workflow skill boundary for ${JSON.stringify(skill.qualifiedName)} because its canonical package path is unavailable.`,
+            );
+          }
+          return [requestedPackagePath, resolvedPackagePath];
+        })
+        .filter((skillPath) => {
+          const relativePath = relative(workspacePath, skillPath);
+          return (
+            relativePath === "" ||
+            (!relativePath.startsWith(`..${sep}`) &&
+              relativePath !== ".." &&
+              !isAbsolute(relativePath))
+          );
+        }),
+    ),
+  ];
+}
+
+function disabledSkillMessage(qualifiedName: string): string {
+  return `Error: workflow skill ${JSON.stringify(qualifiedName)} is disabled by user configuration; run keel skills enable ${qualifiedName} to enable it.`;
+}
+
+export function filterWorkflowSkillCatalog(
+  catalog: SkillCatalog,
+  disabledPackageIds: readonly string[],
+): SkillCatalog {
+  if (disabledPackageIds.length === 0) return catalog;
+  const disabled = new Set(disabledPackageIds);
+  const enabledSkills = catalog.skills.filter(
+    (skill) => !disabled.has(skill.packageId),
+  );
+  const enabledImplicitSkills = catalog.implicitSkills.filter(
+    (skill) => !disabled.has(skill.packageId),
+  );
+  const resolveEnabled = (
+    enabledCandidates: readonly SkillDescriptor[],
+    allCandidates: readonly SkillDescriptor[],
+    lookup: string,
+    rawLoad: (lookup: string) => WorkflowSkill,
+  ): SkillDescriptor => {
+    try {
+      return resolveSkillDescriptor(enabledCandidates, lookup);
+    } catch (enabledError) {
+      let rawDescriptor: SkillDescriptor;
+      try {
+        rawDescriptor = resolveSkillDescriptor(allCandidates, lookup);
+      } catch {
+        rawLoad(lookup);
+        /* v8 ignore next -- the raw loader either returns the descriptor represented by the raw candidate set or throws its richer audit/ambiguity error. */
+        throw enabledError;
+      }
+      throw new WorkflowSkillError(
+        disabledSkillMessage(rawDescriptor.qualifiedName),
+      );
+    }
+  };
+  const assertPackageEnabled = (packageId: string): void => {
+    if (!disabled.has(packageId)) return;
+    const descriptor = catalog.skills.find(
+      (skill) => skill.packageId === packageId,
+    );
+    throw new WorkflowSkillError(
+      disabledSkillMessage(descriptor?.qualifiedName ?? packageId),
+    );
+  };
+  return {
+    skills: enabledSkills,
+    implicitSkills: enabledImplicitSkills,
+    warnings: catalog.warnings,
+    audits: catalog.audits,
+    load: (lookup) => {
+      const descriptor = resolveEnabled(
+        enabledSkills,
+        catalog.skills,
+        lookup,
+        catalog.load,
+      );
+      return catalog.load(descriptor.qualifiedName);
+    },
+    loadImplicit: (lookup) => {
+      const descriptor = resolveEnabled(
+        enabledImplicitSkills,
+        catalog.implicitSkills,
+        lookup,
+        catalog.loadImplicit,
+      );
+      return catalog.loadImplicit(descriptor.qualifiedName);
+    },
+    loadPackage: (packageId) =>
+      disabled.has(packageId) ? undefined : catalog.loadPackage(packageId),
+    search: (query, limit = 20) =>
+      catalog
+        .search(query, catalog.implicitSkills.length)
+        .filter((skill) => !disabled.has(skill.packageId))
+        .slice(0, Math.max(0, limit)),
+    readResource: (lookup, path) => {
+      const descriptor = resolveEnabled(
+        enabledSkills,
+        catalog.skills,
+        lookup,
+        catalog.load,
+      );
+      return catalog.readResource(descriptor.qualifiedName, path);
+    },
+    readPackageResource: (packageId, digest, path) => {
+      assertPackageEnabled(packageId);
+      return catalog.readPackageResource(packageId, digest, path);
+    },
+  };
+}
+
 export function loadWorkflowSkills(
   runtime: Pick<CliRuntime, "env">,
   workspace: string,
   lookups: readonly string[],
+  disabledPackageIds: readonly string[] = [],
 ): readonly WorkflowSkill[] {
-  const catalog = discoverWorkflowSkillCatalog(runtime, workspace);
+  const catalog = filterWorkflowSkillCatalog(
+    discoverWorkflowSkillCatalog(runtime, workspace),
+    disabledPackageIds,
+  );
   return lookups
     .map((lookup) => catalog.load(lookup))
     .filter(
@@ -88,8 +244,14 @@ export function loadWorkflowSkills(
 export function listWorkflowSkills(
   runtime: Pick<CliRuntime, "env">,
   workspace: string,
+  options: { readonly includeUserControls?: boolean } = {},
 ): WorkflowSkillListResult {
   const catalog = discoverWorkflowSkillCatalog(runtime, workspace);
+  const config =
+    options.includeUserControls === false
+      ? { enabled: true, disabledPackageIds: [] }
+      : readUserSkillConfig(runtime);
+  const disabled = new Set(config.disabledPackageIds);
   return {
     skills: catalog.skills.map(
       ({
@@ -98,12 +260,14 @@ export function listWorkflowSkills(
         description,
         relativePath,
         activationPolicy,
+        packageId,
       }) => ({
         qualifiedName,
         name,
         description,
         relativePath,
         activationPolicy,
+        disabled: disabled.has(packageId),
       }),
     ),
     warnings: catalog.warnings,
@@ -112,6 +276,7 @@ export function listWorkflowSkills(
       skills: catalog.implicitSkills,
       request: "",
     }),
+    globallyEnabled: config.enabled,
   };
 }
 
@@ -161,17 +326,22 @@ export function formatWorkflowSkillDiagnostics(
 
 export function formatWorkflowSkillList(
   skills: readonly WorkflowSkillSummary[],
+  options: { readonly globallyEnabled?: boolean } = {},
 ): string {
   if (skills.length === 0) {
-    return "No workflow skills found across repo, user, system, or extra scopes.\n";
+    return options.globallyEnabled === false
+      ? "Workflow skills are globally disabled.\nNo workflow skills found across repo, user, system, or extra scopes.\n"
+      : "No workflow skills found across repo, user, system, or extra scopes.\n";
   }
   return [
-    "Workflow skills:",
+    options.globallyEnabled === false
+      ? "Workflow skills (globally disabled):"
+      : "Workflow skills:",
     ...skills.map(
       (skill) =>
         `- ${sanitizeWorkflowSkillOutputText(skill.qualifiedName)}: ${sanitizeWorkflowSkillOutputText(skill.description)}${
           skill.activationPolicy === "explicit" ? " [explicit only]" : ""
-        }`,
+        }${skill.disabled ? " [disabled by user]" : ""}`,
     ),
     "",
   ].join("\n");

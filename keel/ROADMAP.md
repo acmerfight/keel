@@ -110,8 +110,11 @@ What a user can do today:
   the model can search for and activate matching bodies on demand. Named
   sessions persist exact activation snapshots across resume, fork, and
   compaction; `/skills active`, `/skill deactivate`, and `/skill reload` expose
-  and control that lifecycle. Bounded resource paths under `references/`,
-  `scripts/`, and `assets/` remain unloaded until requested.
+  lifecycle state. `--no-skills` suppresses the entire Skill surface for one
+  run, while `keel skills enable|disable <name|--all>` persists reversible
+  global and per-package controls without rewriting saved session snapshots.
+  Bounded resource paths under `references/`, `scripts/`, and `assets/` remain
+  unloaded until requested.
 - `keel --allow-bash` / `keel --bash-policy trusted` — trusted shell
   mode (all-or-nothing).
 - `keel --bash-policy ask` — expose bash while requiring per-command
@@ -352,8 +355,12 @@ Codex/Claude Code — or directly moves the eval numbers.
   digests, active state, and history persist across compaction, resume, and fork;
   changed files are diagnosed without silently replacing the session snapshot,
   and `/skill reload` or `/skill deactivate` provides explicit control. Reports
-  expose activation events and final active state. Deterministic audit blocks
-  invalid, obfuscated, secret-bearing, unreadable, or incompletely scanned
+  expose activation events, final active state, and the effective Skill policy.
+  `--no-skills` provides an absolute one-run shutdown; persisted global and
+  per-package enable/disable controls filter discovery, tools, explicit
+  activation, and restored snapshots without erasing session history.
+  Deterministic audit blocks invalid, obfuscated, secret-bearing, unreadable,
+  or incompletely scanned
   packages before routing or activation; `keel skills doctor` reports blockers
   and advisory portability, script, authority, and dangerous-instruction
   findings without executing package code. Remaining work is catalog-budget and

@@ -11,6 +11,7 @@ import { parseRunArgs } from "./args/run.ts";
 import { parseSessionsArgs } from "./args/sessions.ts";
 import { parseSetupArgs } from "./args/setup.ts";
 import { type ParseResult, parseError, parseOk } from "./args/shared.ts";
+import { parseSkillsArgs } from "./args/skills.ts";
 import type { CliArgs } from "./args/types.ts";
 import { USAGE } from "./args/usage.ts";
 
@@ -113,13 +114,7 @@ export function parseCliArgs(args: readonly string[]): CliArgsParseResult {
   }
 
   if (args[0] === "skills") {
-    if (args.length === 1) {
-      return parseOk({ command: "skills", mode: "list" });
-    }
-    if (args.length === 2 && args[1] === "doctor") {
-      return parseOk({ command: "skills", mode: "doctor" });
-    }
-    return parseError(`Error: unknown skills option "${args[1]}"`);
+    return parseSkillsArgs(args.slice(1));
   }
 
   if (args[0] === "eval") {

@@ -22,8 +22,14 @@ import {
   runSetupCommand as runProviderSetupCommand,
 } from "./provider-setup-command.ts";
 import type { CliRuntime } from "./runtime.ts";
+import {
+  SkillUserConfigError,
+  setAllWorkflowSkillsEnabled,
+  setWorkflowSkillEnabled,
+} from "./skill-user-config.ts";
 import { showToolOutputArtifact } from "./tool-output-artifacts.ts";
 import {
+  discoverWorkflowSkillCatalog,
   formatWorkflowSkillDiagnostics,
   formatWorkflowSkillList,
   formatWorkflowSkillListWarnings,
@@ -150,7 +156,35 @@ export function runSkillsCommand(
   runtime: CliRuntime,
 ): number {
   try {
-    const result = listWorkflowSkills(runtime, runtime.cwd());
+    if (cliArgs.mode === "configure") {
+      if (cliArgs.target.kind === "all") {
+        setAllWorkflowSkillsEnabled(runtime, cliArgs.action === "enable");
+        runtime.writeStdout(
+          cliArgs.action === "enable"
+            ? "Enabled all workflow skills.\n"
+            : "Disabled all workflow skills globally.\n",
+        );
+        return 0;
+      }
+      const skill = discoverWorkflowSkillCatalog(runtime, runtime.cwd()).load(
+        cliArgs.target.lookup,
+      );
+      const result = setWorkflowSkillEnabled(
+        runtime,
+        skill.packageId,
+        cliArgs.action === "enable",
+      );
+      const action = cliArgs.action === "enable" ? "Enabled" : "Disabled";
+      runtime.writeStdout(
+        result.changed
+          ? `${action} workflow skill ${skill.qualifiedName}.\n`
+          : `Workflow skill ${skill.qualifiedName} is already ${cliArgs.action === "enable" ? "enabled" : "disabled"}.\n`,
+      );
+      return 0;
+    }
+    const result = listWorkflowSkills(runtime, runtime.cwd(), {
+      includeUserControls: cliArgs.mode === "list",
+    });
     if (cliArgs.mode === "doctor") {
       runtime.writeStdout(formatWorkflowSkillDiagnostics(result.audits));
       return result.audits.some((audit) =>
@@ -159,7 +193,11 @@ export function runSkillsCommand(
         ? 1
         : 0;
     }
-    runtime.writeStdout(formatWorkflowSkillList(result.skills));
+    runtime.writeStdout(
+      formatWorkflowSkillList(result.skills, {
+        globallyEnabled: result.globallyEnabled,
+      }),
+    );
     const warningText = formatWorkflowSkillListWarnings(result.warnings);
     runtime.writeStderr(
       `${warningText}${formatSkillCatalogDegradation(result.exposure)}`,
@@ -167,7 +205,10 @@ export function runSkillsCommand(
     return 0;
   } catch (error) {
     /* v8 ignore next 3: unexpected workflow skill listing failures are allowed to escape. */
-    if (!(error instanceof WorkflowSkillError)) {
+    if (
+      !(error instanceof WorkflowSkillError) &&
+      !(error instanceof SkillUserConfigError)
+    ) {
       throw error;
     }
     runtime.writeStderr(`${error.message}\n`);

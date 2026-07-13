@@ -8,6 +8,7 @@ import type {
 } from "../skills/model.ts";
 import type { EndEvent } from "./output.ts";
 import type { RunReportContextCompaction } from "./report-events.ts";
+import type { SkillPolicyReport } from "./skill-user-config.ts";
 
 // The report schema is consumed by external tooling (the eval runner and any
 // script comparing runs across keel versions). Bump schemaVersion on any
@@ -20,6 +21,7 @@ interface RunReportInput {
   readonly skillActivations: readonly SkillActivationRecord[];
   readonly activeSkills: readonly RunReportActiveSkill[];
   readonly skillCatalog: RunReportSkillCatalog;
+  readonly skillPolicy: SkillPolicyReport;
   readonly undoProtection: UndoProtectionSummary;
   readonly goalOutcome?: RunReportGoalOutcome;
 }
@@ -55,7 +57,7 @@ interface RunReportModelUsage {
 }
 
 interface RunReport {
-  readonly schemaVersion: 8;
+  readonly schemaVersion: 9;
   readonly modelsUsed: readonly {
     readonly provider: string;
     readonly model: string;
@@ -72,6 +74,7 @@ interface RunReport {
   readonly skillActivations: readonly SkillActivationRecord[];
   readonly activeSkills: readonly RunReportActiveSkill[];
   readonly skillCatalog: RunReportSkillCatalog;
+  readonly skillPolicy: SkillPolicyReport;
   readonly undoProtection: UndoProtectionSummary;
   readonly goalOutcome?: RunReportGoalOutcome;
 }
@@ -103,7 +106,7 @@ export function assertEndEventHasCost(
 export function writeRunReport(filePath: string, input: RunReportInput): void {
   const cost = input.end.cost;
   const report: RunReport = {
-    schemaVersion: 8,
+    schemaVersion: 9,
     modelsUsed: input.usageByModel.map((entry) => ({
       provider: entry.provider,
       model: entry.model,
@@ -126,6 +129,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     skillActivations: input.skillActivations,
     activeSkills: input.activeSkills,
     skillCatalog: input.skillCatalog,
+    skillPolicy: input.skillPolicy,
     undoProtection: input.undoProtection,
     ...(input.goalOutcome !== undefined
       ? { goalOutcome: input.goalOutcome }
