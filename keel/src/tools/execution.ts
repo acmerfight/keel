@@ -26,7 +26,6 @@ import {
   type SessionTaskProgress,
   sessionTaskProgressFromPlan,
 } from "../core/task-progress.ts";
-import type { RecordUndoCheckpointResult } from "../core/undo-protection.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import type {
   SkillActivationCapability,
@@ -145,7 +144,6 @@ export interface ToolExecution {
   readonly mutatedTargetPaths?: readonly string[];
   readonly visibleProjectInstructionPaths?: readonly string[];
   readonly checkpointOperations?: readonly RecordLastBatchCheckpointOperation[];
-  readonly undoCheckpoint?: RecordUndoCheckpointResult;
   readonly taskProgressUpdate?: SessionTaskProgress;
   readonly sessionGoalUpdate?: SessionGoal;
   readonly bashCommandEvidence?: BashCommandEvidence;
@@ -701,9 +699,6 @@ function executeEditTool(
     ok: true,
     mutatedTargetPath: result.targetPath,
     checkpointOperations: [result.checkpointOperation],
-    ...(result.undoCheckpoint !== undefined
-      ? { undoCheckpoint: result.undoCheckpoint }
-      : {}),
   };
 }
 
@@ -735,9 +730,6 @@ function executeWriteTool(
     ok: true,
     mutatedTargetPath: result.targetPath,
     checkpointOperations: [result.checkpointOperation],
-    ...(result.undoCheckpoint !== undefined
-      ? { undoCheckpoint: result.undoCheckpoint }
-      : {}),
   };
 }
 
@@ -760,9 +752,6 @@ function executeApplyPatchTool(
     ok: true,
     mutatedTargetPaths: result.targetPaths,
     checkpointOperations: result.checkpointOperations,
-    ...(result.undoCheckpoint !== undefined
-      ? { undoCheckpoint: result.undoCheckpoint }
-      : {}),
   };
 }
 
