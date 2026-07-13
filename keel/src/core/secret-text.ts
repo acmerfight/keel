@@ -9,6 +9,15 @@ interface SecretTextRule {
   readonly redactionKind: SecretRedactionKind;
 }
 
+// Assignment and Bearer rules intentionally require a credential-shaped value:
+// prose nouns, short examples, and common placeholders must remain documentable.
+// Audit and persistence both consume this registry so an accepted Skill snapshot
+// cannot later fail solely because persistence recognizes a broader secret class.
+const ENVIRONMENT_SECRET_ASSIGNMENT_PATTERN =
+  /(^|[\s("'`])([A-Z0-9_]*(?:SECRET|TOKEN|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|PASSWORD)[A-Z0-9_]*\s*=\s*)(["']?)(?!(?:\$\{|\{\{|<|\[|(?:example|sample|placeholder|redacted|changeme|your(?:[_-][A-Z0-9]+)*)\b))([^\s"'`#]{12,})\3/giu;
+const BEARER_SECRET_PATTERN =
+  /\bBearer[ \t]+(?!(?:token|tokens|authentication|authorization|credential|credentials|value|example|placeholder|redacted|your[_-](?:access[_-])?token)\b)[-._~+/=A-Za-z0-9]{12,}/giu;
+
 const SECRET_TEXT_RULES: readonly SecretTextRule[] = [
   {
     label: "private key",
@@ -19,13 +28,12 @@ const SECRET_TEXT_RULES: readonly SecretTextRule[] = [
   },
   {
     label: "environment secret assignment",
-    redactionPattern:
-      /(^|[\r\n])([A-Z0-9_]*(?:SECRET|TOKEN|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|PASSWORD)[A-Z0-9_]*\s*=\s*)([^\r\n#]+)/giu,
+    redactionPattern: ENVIRONMENT_SECRET_ASSIGNMENT_PATTERN,
     redactionKind: "environment",
   },
   {
     label: "bearer token",
-    redactionPattern: /\bBearer[ \t]+[-._~+/=A-Za-z0-9]+/gu,
+    redactionPattern: BEARER_SECRET_PATTERN,
     redactionKind: "bearer",
   },
   {
@@ -78,8 +86,8 @@ function redactWithRule(text: string, rule: SecretTextRule): string {
   if (rule.redactionKind === "environment") {
     return text.replace(
       rule.redactionPattern,
-      (_match, lineStart: string, keyPrefix: string) =>
-        `${lineStart}${keyPrefix}${SECRET_REDACTION_MARKER}`,
+      (_match, boundary: string, keyPrefix: string, quote: string) =>
+        `${boundary}${keyPrefix}${quote}${SECRET_REDACTION_MARKER}${quote}`,
     );
   }
   if (rule.redactionKind === "bearer") {

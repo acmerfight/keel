@@ -1,6 +1,9 @@
 export const MAX_WORKFLOW_SKILL_RESOURCE_PATHS = 50;
 export const MAX_WORKFLOW_SKILL_RESOURCE_ENTRY_VISITS = 500;
-export const MAX_WORKFLOW_SKILL_RESOURCE_BYTES = 50 * 1024;
+// Text is loaded completely for deterministic audit. Binary assets are sampled,
+// then bounded separately so normal media does not inherit the text-read limit.
+export const MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES = 50 * 1024;
+export const MAX_WORKFLOW_SKILL_BINARY_ASSET_BYTES = 10 * 1024 * 1024;
 
 export const WORKFLOW_SKILL_RESOURCE_DIRECTORIES = [
   "references",

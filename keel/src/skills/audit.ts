@@ -1,4 +1,10 @@
-import { lstatSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   redactSecretLikeText,
@@ -11,7 +17,8 @@ import {
 } from "../tools/text-file.ts";
 import {
   hasForbiddenSkillTextCharacter,
-  MAX_WORKFLOW_SKILL_RESOURCE_BYTES,
+  MAX_WORKFLOW_SKILL_BINARY_ASSET_BYTES,
+  MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES,
 } from "./resources.ts";
 
 type SkillAuditSeverity = "blocker" | "warning";
@@ -147,6 +154,17 @@ function auditText(
   return findings;
 }
 
+function readResourceSample(path: string, reportedSize: number): Uint8Array {
+  const bytes = Buffer.allocUnsafe(Math.min(reportedSize, BINARY_SAMPLE_BYTES));
+  const fd = openSync(path, "r");
+  try {
+    const bytesRead = readSync(fd, bytes, 0, bytes.length, 0);
+    return bytes.subarray(0, bytesRead);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function auditResource(options: {
   readonly skillDirectory: string;
   readonly relativePath: string;
@@ -155,6 +173,17 @@ function auditResource(options: {
   try {
     const stat = lstatSync(absolutePath);
     const findings: SkillAuditFinding[] = [];
+    /* v8 ignore next 10 -- the bounded inventory admits only regular files; this fail-closed branch protects a concurrent replacement. */
+    if (!stat.isFile()) {
+      return [
+        {
+          severity: "blocker",
+          code: "resource_unreadable",
+          relativePath: options.relativePath,
+          message: "is no longer a regular file and cannot be audited safely",
+        },
+      ];
+    }
     if (
       options.relativePath.startsWith("scripts/") &&
       (stat.mode & 0o111) !== 0
@@ -167,22 +196,40 @@ function auditResource(options: {
           "is executable; discovery does not run it, and execution still requires ordinary Keel tool permission",
       });
     }
-    if (stat.size > MAX_WORKFLOW_SKILL_RESOURCE_BYTES) {
+    const sample = readResourceSample(absolutePath, stat.size);
+    // Classification must precede size enforcement: binary assets are opaque,
+    // sampled resources, while provider-visible text must be audited completely.
+    const binary = isBinarySample(options.relativePath, sample);
+    if (binary) {
+      if (!options.relativePath.startsWith("assets/")) {
+        findings.push({
+          severity: "blocker",
+          code: "binary_text_resource",
+          relativePath: options.relativePath,
+          message:
+            "is binary but scripts and references must be auditable text",
+        });
+      } else if (stat.size > MAX_WORKFLOW_SKILL_BINARY_ASSET_BYTES) {
+        findings.push({
+          severity: "blocker",
+          code: "resource_too_large",
+          relativePath: options.relativePath,
+          message: `exceeds the ${MAX_WORKFLOW_SKILL_BINARY_ASSET_BYTES}-byte binary asset limit`,
+        });
+      }
+      return findings;
+    }
+    if (stat.size > MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES) {
       findings.push({
         severity: "blocker",
         code: "resource_too_large",
         relativePath: options.relativePath,
-        message: `exceeds the ${MAX_WORKFLOW_SKILL_RESOURCE_BYTES}-byte deterministic audit limit`,
+        message: `exceeds the ${MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES}-byte text audit limit`,
       });
       return findings;
     }
     const bytes = readFileSync(absolutePath);
-    const binary =
-      isBinarySample(
-        options.relativePath,
-        bytes.subarray(0, BINARY_SAMPLE_BYTES),
-      ) || hasBinaryControlBytes(bytes);
-    if (binary) {
+    if (hasBinaryControlBytes(bytes)) {
       if (!options.relativePath.startsWith("assets/")) {
         findings.push({
           severity: "blocker",

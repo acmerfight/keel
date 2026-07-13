@@ -58,6 +58,137 @@ describe("CLI Main - Skills Doctor", () => {
     }
   });
 
+  test(`Given ordinary authentication prose, template assignments, and an inline opaque credential,
+    When the user audits, lists, or persists the Skill packages,
+    Then Keel preserves documentation examples but blocks the high-confidence assignment before persistence`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skills-doctor-auth-prose-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skills-doctor-auth-prose-home-"),
+    );
+    await writeSkill({
+      workspace,
+      name: "auth-guide",
+      description: "Explain service authentication.",
+      body: [
+        "The service returns a Bearer token.",
+        "Use ACCESS_TOKEN=abc123 in examples.",
+        "Use ACCESS_TOKEN=$" + "{ACCESS_TOKEN} in shell templates.",
+      ].join("\n"),
+    });
+    await writeSkill({
+      workspace,
+      name: "inline-secret",
+      description: "Unsafe inline credential example.",
+      body: "Use the ACCESS_TOKEN=live-opaque-value-435 shown by the operator.",
+    });
+
+    try {
+      const doctor = createRuntime(["skills", "doctor"], { cwd: workspace });
+      const list = createRuntime(["skills"], { cwd: workspace });
+      const safeInput = new PassThrough();
+      safeInput.end("use the guide\n");
+      const safeActivation = createRuntime(
+        ["--session", "safe-auth", "--skill", "auth-guide"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+            KEEL_PROVIDER: "fake",
+          },
+          input: safeInput,
+        },
+      );
+      const unsafeInput = new PassThrough();
+      unsafeInput.end("use the credential\n");
+      const unsafeActivation = createRuntime(
+        ["--session", "unsafe-auth", "--skill", "inline-secret"],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+            KEEL_PROVIDER: "fake",
+          },
+          input: unsafeInput,
+        },
+      );
+
+      expect(await runCliMain(doctor.runtime)).toBe(1);
+      expect(await runCliMain(list.runtime)).toBe(0);
+      expect(await runCliMain(safeActivation.runtime)).toBe(0);
+      expect(await runCliMain(unsafeActivation.runtime)).toBe(1);
+      expect(doctor.stdout()).toContain("- repo:auth-guide: ok");
+      expect(doctor.stdout()).toContain("- repo:inline-secret: blocked");
+      expect(doctor.stdout()).toContain("[embedded_secret]");
+      expect(list.stdout()).toContain("repo:auth-guide");
+      expect(list.stdout()).not.toContain("repo:inline-secret");
+      expect(list.stderr()).toContain("repo:inline-secret");
+      expect(safeActivation.stderr()).toContain(
+        'Warning: skipped workflow skill "repo:inline-secret"',
+      );
+      expect(safeActivation.stderr()).not.toContain("SessionStoreError");
+      expect(unsafeActivation.stderr()).toContain("[embedded_secret]");
+      expect(unsafeActivation.stderr()).not.toContain("UNCAUGHT");
+      await expect(
+        readFile(join(home, "sessions", "safe-auth", "ledger.jsonl"), "utf8"),
+      ).resolves.toContain("repo:auth-guide");
+      await expect(
+        readFile(join(home, "sessions", "unsafe-auth", "ledger.jsonl"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a normal binary image and an oversized binary asset,
+    When the user audits or lists the Skill packages,
+    Then Keel accepts the normal image and rejects only the asset above its binary limit`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skills-doctor-binary-asset-size-"),
+    );
+    const normal = await writeSkill({
+      workspace,
+      name: "normal-image",
+      description: "Use a normal packaged image.",
+      body: "Use assets/image.png when needed.",
+    });
+    const oversized = await writeSkill({
+      workspace,
+      name: "oversized-image",
+      description: "Use an oversized packaged image.",
+      body: "Use assets/image.png when needed.",
+    });
+    const pngHeader = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const normalImage = new Uint8Array(256 * 1024);
+    normalImage.set(pngHeader);
+    const oversizedImage = new Uint8Array(10 * 1024 * 1024 + 1);
+    oversizedImage.set(pngHeader);
+    await mkdir(join(normal, "assets"));
+    await mkdir(join(oversized, "assets"));
+    await writeFile(join(normal, "assets", "image.png"), normalImage);
+    await writeFile(join(oversized, "assets", "image.png"), oversizedImage);
+
+    try {
+      const doctor = createRuntime(["skills", "doctor"], { cwd: workspace });
+      const list = createRuntime(["skills"], { cwd: workspace });
+
+      expect(await runCliMain(doctor.runtime)).toBe(1);
+      expect(await runCliMain(list.runtime)).toBe(0);
+      expect(doctor.stdout()).toContain("- repo:normal-image: ok");
+      expect(doctor.stdout()).toContain("- repo:oversized-image: blocked");
+      expect(doctor.stdout()).toContain("[resource_too_large]");
+      expect(doctor.stdout()).toContain("10485760-byte binary asset limit");
+      expect(list.stdout()).toContain("repo:normal-image");
+      expect(list.stdout()).not.toContain("repo:oversized-image");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given malformed YAML contains a credential in its parser error source line,
     When the user lists or explicitly selects the Skill through every public surface,
     Then every diagnostic uses the safe invalid-package reason without exposing the credential`, async () => {
@@ -153,7 +284,7 @@ describe("CLI Main - Skills Doctor", () => {
     },
     {
       name: "environment-secret",
-      body: "MY_SECRET_TOKEN=example-secret-435",
+      body: "MY_SECRET_TOKEN=live-opaque-value-435",
     },
     {
       name: "github-token",
@@ -555,6 +686,12 @@ describe("CLI Main - Skills Doctor", () => {
         join(asset, "assets", "invalid-utf8.txt"),
         new Uint8Array([0xc3, 0x28]),
       );
+      const lateBinaryAsset = new Uint8Array(4097).fill(0x61);
+      lateBinaryAsset[4096] = 0;
+      await writeFile(
+        join(asset, "assets", "late-binary.txt"),
+        lateBinaryAsset,
+      );
 
       const binaryReference = await writeSkill({
         workspace,
@@ -570,6 +707,12 @@ describe("CLI Main - Skills Doctor", () => {
       await writeFile(
         join(binaryReference, "references", "invalid-utf8.txt"),
         new Uint8Array([0xc3, 0x28]),
+      );
+      const lateBinaryReference = new Uint8Array(4097).fill(0x61);
+      lateBinaryReference[4096] = 0;
+      await writeFile(
+        join(binaryReference, "references", "late-binary.txt"),
+        lateBinaryReference,
       );
 
       const linked = await writeSkill({
