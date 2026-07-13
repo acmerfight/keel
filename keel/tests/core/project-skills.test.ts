@@ -700,6 +700,9 @@ describe("project skills catalog", () => {
           "references/marker.txt",
         ),
       ).toThrow("is no longer available");
+      expect(catalog.readResource("repo:review", "references/marker.txt")).toBe(
+        "RESOURCE-OK",
+      );
       activation.registerExplicit([catalog.load("repo:review")]);
       expect(
         activation.readResource("repo:review", "references/marker.txt"),

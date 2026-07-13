@@ -85,6 +85,7 @@ describe("CLI Main - Skills Doctor", () => {
         "Use ACCESS_TOKEN=changeme-value-435 in setup docs.",
         "Use ACCESS_TOKEN=your-access-token in instructions.",
         "Leave ACCESS_TOKEN= empty until provisioning.",
+        "ACCESS_TOKEN=",
       ].join("\n"),
     });
     await writeSkill({

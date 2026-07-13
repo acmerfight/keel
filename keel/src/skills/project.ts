@@ -414,6 +414,7 @@ function decodeSkillBytes(skillFilePath: string, bytes: Uint8Array): string {
 }
 
 function binarySkillResourceError(relativePath: string): WorkflowSkillError {
+  /* v8 ignore next 2 -- audit blocks non-assets binaries; the fallback wording only protects a concurrent replacement after re-audit. */
   const kind = relativePath.startsWith("assets/")
     ? "binary asset"
     : "binary resource";
@@ -436,6 +437,7 @@ function readSkillResourceText(
     if (isBinaryContentSample(sample.subarray(0, sampleBytesRead))) {
       throw binarySkillResourceError(relativePath);
     }
+    /* v8 ignore next 4 -- the package is re-audited immediately before this read; only concurrent growth can cross the text limit here. */
     if (reportedSize > MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES) {
       throw new WorkflowSkillError(
         `Error: workflow skill resource ${JSON.stringify(redactSecretLikeText(relativePath))} is too large to read as text (${reportedSize} bytes; limit ${MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES} bytes).`,
@@ -444,6 +446,7 @@ function readSkillResourceText(
     const bytes = Buffer.allocUnsafe(reportedSize);
     const bytesRead = readSync(fd, bytes, 0, bytes.length, 0);
     const content = bytes.subarray(0, bytesRead);
+    /* v8 ignore next 3 -- the package is re-audited immediately before this read; only concurrent replacement can introduce later binary bytes. */
     if (hasBinaryControlBytes(content)) {
       throw binarySkillResourceError(relativePath);
     }
@@ -452,6 +455,7 @@ function readSkillResourceText(
         .decode(content)
         .trimEnd();
     } catch {
+      /* v8 ignore next 1 -- the package is re-audited immediately before this read; only concurrent replacement can introduce invalid UTF-8. */
       throw binarySkillResourceError(relativePath);
     }
   } finally {
