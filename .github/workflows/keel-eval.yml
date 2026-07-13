@@ -78,37 +78,9 @@ jobs:
       - name: Summarize eval results
         if: always()
         run: |
-          node --input-type=commonjs <<'NODE'
-          const fs = require("node:fs");
-          const { z } = require("zod");
-
-          const resultLineSchema = z.object({
-            schemaVersion: z.literal(1),
-            timestamp: z.string(),
-            keelVersion: z.string(),
-            taskId: z.string(),
-            trial: z.number().int().positive(),
-            pass: z.boolean(),
-            outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
-            wallMs: z.number().nonnegative(),
-            report: z
-              .object({
-                schemaVersion: z.literal(1),
-                provider: z.string(),
-                model: z.string(),
-                turns: z.number().int().positive(),
-                stopReason: z.string(),
-                usage: z.object({
-                  inputTokens: z.number(),
-                  cachedInputTokens: z.number(),
-                  uncachedInputTokens: z.number(),
-                  outputTokens: z.number(),
-                }),
-                durationMs: z.number().nonnegative(),
-                costUsd: z.number(),
-              })
-              .optional(),
-          });
+          node --experimental-strip-types --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { evalResultLineSchema } from "./src/eval/result.ts";
 
           const summaryPath = process.env.GITHUB_STEP_SUMMARY;
           if (!summaryPath) process.exit(0);

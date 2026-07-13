@@ -1,0 +1,9 @@
+{
+  "prompt": "Try the command-line app the way a user would. Check malformed arguments and recovery, then list anything broken with reproduction steps.",
+  "timeoutMs": 120000,
+  "allowBash": true,
+  "maxCostUsd": 0.02,
+  "skillRouting": {
+    "expectedActivations": ["repo:qa"]
+  }
+}

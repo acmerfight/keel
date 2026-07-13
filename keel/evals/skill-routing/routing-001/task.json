@@ -1,0 +1,8 @@
+{
+  "prompt": "Can this pull request merge safely? Focus on bugs that users can actually hit.",
+  "timeoutMs": 120000,
+  "maxCostUsd": 0.02,
+  "skillRouting": {
+    "expectedActivations": ["repo:code-review"]
+  }
+}

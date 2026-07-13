@@ -5,6 +5,7 @@ import {
   modelCostModel,
   modelMetadata,
 } from "../core/model-metadata.ts";
+import type { ProviderId } from "../core/provider-id.ts";
 import { createDeepseekProvider } from "../llm/providers/deepseek.ts";
 import { createKimiProvider } from "../llm/providers/kimi.ts";
 import { createQwenProvider } from "../llm/providers/qwen.ts";
@@ -72,6 +73,52 @@ export type ResolvedProvider =
   | ResolvedApiProvider<"deepseek">
   | ResolvedApiProvider<"kimi">
   | ResolvedApiProvider<"qwen">;
+
+export interface ProviderSubprocessConfig {
+  readonly providerId: ProviderId;
+  readonly model: string;
+  readonly environment: Readonly<Record<string, string>>;
+}
+
+export function resolveProviderSubprocessConfig(
+  runtime: ProviderConfigRuntime,
+  selection?: ProviderSelection,
+): ProviderSubprocessConfig {
+  const providerId = selectedProviderId(runtime, selection);
+  if (providerId === "fake") {
+    return { providerId, model: "fake", environment: {} };
+  }
+
+  const profile = providerProfile(providerId);
+  const model = selectedModelFromProfile(
+    runtime,
+    selection,
+    providerId,
+    profile,
+  ).model;
+  const baseUrl = selectedConfiguredBaseUrlFromProfile(
+    runtime,
+    providerId,
+    profile,
+  ).value;
+  const apiKey = requireApiKey(runtime, providerId, profile);
+  const apiKeyEnvKey = profile.apiKeyEnvKeys[0];
+  /* v8 ignore next 3: every non-fake provider profile requires an API-key env key. */
+  if (apiKeyEnvKey === undefined) {
+    providerConfigError(
+      `Error: provider ${providerId} has no API-key env key.`,
+    );
+  }
+  return {
+    providerId,
+    model,
+    environment: {
+      [apiKeyEnvKey]: apiKey,
+      [profile.modelEnvKey]: model,
+      [profile.baseUrlEnvKey]: baseUrl,
+    },
+  };
+}
 
 export function resolveProvider(
   userMessage: string,

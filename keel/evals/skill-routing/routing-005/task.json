@@ -1,0 +1,9 @@
+{
+  "prompt": "Run the repository's existing unit test command and tell me whether it passes.",
+  "timeoutMs": 120000,
+  "allowBash": true,
+  "maxCostUsd": 0.02,
+  "skillRouting": {
+    "expectedActivations": []
+  }
+}

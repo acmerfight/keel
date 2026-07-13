@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   appendFileSync,
   closeSync,
@@ -18,6 +17,11 @@ import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import { type RunReport, runReportSchema } from "./report-schema.ts";
+import type {
+  EvalResultLine as ResultLine,
+  SkillRoutingResult,
+  TrialOutcome,
+} from "./result.ts";
 import { type EvalTask, loadEvalTasks } from "./task.ts";
 
 const transcriptHeaderSchema = z.object({
@@ -40,8 +44,6 @@ function keelVersion(): string {
 
 // Trial outcomes separate harness failures (timeout, crashed) from graded
 // failures (verify_failed) so a broken environment never reads as a bad agent.
-type TrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
-
 interface TrialResult {
   readonly outcome: TrialOutcome;
   readonly wallMs: number;
@@ -57,6 +59,19 @@ interface ProcessResult {
 }
 
 const STDERR_TAIL_CHARS = 400;
+const PROVIDER_CONNECTION_ENV_KEYS = [
+  "KEEL_PROVIDER",
+  "DEEPSEEK_API_KEY",
+  "DEEPSEEK_MODEL",
+  "DEEPSEEK_BASE_URL",
+  "KIMI_API_KEY",
+  "KIMI_MODEL",
+  "KIMI_BASE_URL",
+  "DASHSCOPE_API_KEY",
+  "QWEN_API_KEY",
+  "QWEN_MODEL",
+  "QWEN_BASE_URL",
+] as const;
 
 function killProcessGroup(child: ReturnType<typeof spawn>): void {
   const pid = child.pid;
@@ -81,13 +96,17 @@ function killProcessGroup(child: ReturnType<typeof spawn>): void {
 function runProcess(
   command: string,
   args: readonly string[],
-  options: { readonly cwd: string; readonly timeoutMs: number },
+  options: {
+    readonly cwd: string;
+    readonly timeoutMs: number;
+    readonly env?: NodeJS.ProcessEnv;
+  },
 ): Promise<ProcessResult> {
   return new Promise((resolve) => {
     const child = spawn(command, [...args], {
       cwd: options.cwd,
       detached: process.platform !== "win32",
-      env: process.env,
+      env: options.env ?? process.env,
       stdio: ["ignore", "ignore", "pipe"],
     });
     const stderrChunks: Buffer[] = [];
@@ -141,7 +160,7 @@ function withTrialWorkspace<T>(
   // Every trial starts from a fresh copy of the fixture in a throwaway
   // directory: no state can leak between trials. The report file lives
   // outside the workspace so neither the agent nor the verifier can see it.
-  const workDir = mkdtempSync(join(tmpdir(), `keel-eval-${task.id}-`));
+  const workDir = mkdtempSync(join(tmpdir(), "keel-eval-workspace-"));
   const metaDir = mkdtempSync(join(tmpdir(), "keel-eval-meta-"));
   cpSync(task.workspaceDir, workDir, { recursive: true });
   return action(workDir, metaDir).finally(() => {
@@ -171,12 +190,6 @@ function readableTranscriptResult(transcriptPath: string | undefined): {
   return { transcriptPath };
 }
 
-function artifactName(value: string): string {
-  const name = value.replace(/[^A-Za-z0-9._-]/gu, "_");
-  const digest = createHash("sha256").update(value).digest("hex").slice(0, 12);
-  return `${name}-${digest}`;
-}
-
 function isReadableTranscript(transcriptPath: string): boolean {
   try {
     if (!statSync(transcriptPath).isFile()) return false;
@@ -188,6 +201,28 @@ function isReadableTranscript(transcriptPath: string): boolean {
   }
 }
 
+function evalChildEnvironment(
+  selection: EvalProviderSelection,
+  homeDir: string,
+  keelHomeDir: string,
+): NodeJS.ProcessEnv {
+  const environment = { ...process.env };
+  if (selection.environment !== undefined) {
+    for (const key of PROVIDER_CONNECTION_ENV_KEYS) {
+      delete environment[key];
+    }
+  }
+  return {
+    ...environment,
+    ...selection.environment,
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+    KEEL_HOME: keelHomeDir,
+    KEEL_SYSTEM_SKILL_ROOTS: "",
+    KEEL_EXTRA_SKILL_ROOTS: "",
+  };
+}
+
 async function runTrial(
   task: EvalTask,
   cliEntry: string,
@@ -196,6 +231,10 @@ async function runTrial(
 ): Promise<TrialResult> {
   return withTrialWorkspace(task, async (workDir, metaDir) => {
     const reportPath = join(metaDir, "report.json");
+    const homeDir = join(metaDir, "home");
+    const keelHomeDir = join(metaDir, "keel-home");
+    mkdirSync(homeDir, { recursive: true });
+    mkdirSync(keelHomeDir, { recursive: true });
     const cliArgs = [
       ...process.execArgv,
       cliEntry,
@@ -217,6 +256,7 @@ async function runTrial(
     const run = await runProcess(process.execPath, cliArgs, {
       cwd: workDir,
       timeoutMs: task.timeoutMs,
+      env: evalChildEnvironment(selection, homeDir, keelHomeDir),
     });
     const wallMs = Date.now() - startedAt;
 
@@ -285,22 +325,60 @@ async function checkTask(task: EvalTask): Promise<boolean> {
   });
 }
 
-interface ResultLine {
-  readonly schemaVersion: 1;
-  readonly timestamp: string;
-  readonly keelVersion: string;
-  readonly taskId: string;
-  readonly trial: number;
-  readonly pass: boolean;
-  readonly outcome: TrialOutcome;
-  readonly wallMs: number;
-  readonly report?: RunReport;
-  readonly transcriptPath?: string;
+function evaluateSkillRouting(
+  task: EvalTask,
+  report: RunReport | undefined,
+): SkillRoutingResult | undefined {
+  const expectation = task.skillRouting;
+  if (expectation === undefined) return undefined;
+
+  const expectedActivations = [...expectation.expectedActivations];
+  const actualActivations =
+    report === undefined
+      ? []
+      : [
+          ...new Set(
+            report.skillActivations.map((activation) => activation.name),
+          ),
+        ];
+  const expected = new Set(expectedActivations);
+  const actual = new Set(actualActivations);
+  const truePositives = expectedActivations.filter((name) =>
+    actual.has(name),
+  ).length;
+  const falsePositives = actualActivations.filter(
+    (name) => !expected.has(name),
+  ).length;
+  const falseNegatives = expectedActivations.filter(
+    (name) => !actual.has(name),
+  ).length;
+  return {
+    expectedActivations,
+    actualActivations,
+    truePositives,
+    falsePositives,
+    falseNegatives,
+    evaluated: report !== undefined,
+    exact: report !== undefined && falsePositives === 0 && falseNegatives === 0,
+    ...(expectation.pair !== undefined
+      ? { pair: { ...expectation.pair } }
+      : {}),
+  };
+}
+
+function routingAwareOutcome(
+  outcome: TrialOutcome,
+  routing: SkillRoutingResult | undefined,
+): TrialOutcome {
+  return outcome === "verified" && routing?.exact === false
+    ? "routing_failed"
+    : outcome;
 }
 
 interface EvalProviderSelection {
   readonly providerId?: ProviderId;
   readonly model?: string;
+  readonly environment?: Readonly<Record<string, string>>;
 }
 
 function ensureResultOutputDirectory(outFile: string): boolean {
@@ -361,6 +439,7 @@ export interface EvalCommandArgs {
   readonly taskId?: string;
   readonly providerId?: ProviderId;
   readonly model?: string;
+  readonly resolveProviderSelection?: () => EvalProviderSelection;
   readonly check: boolean;
   readonly cliEntry: string;
   readonly transcriptDir?: string;
@@ -391,6 +470,147 @@ async function runCheck(tasks: readonly EvalTask[]): Promise<number> {
   return broken === 0 ? 0 : 1;
 }
 
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatSigned(value: number, digits: number): string {
+  const rounded = Number(value.toFixed(digits));
+  return `${rounded >= 0 ? "+" : ""}${rounded.toFixed(digits)}`;
+}
+
+function formatSignedUsd(value: number): string {
+  const rounded = Number(value.toFixed(6));
+  const sign = rounded >= 0 ? "+" : "-";
+  return `${sign}$${Math.abs(rounded).toFixed(6)}`;
+}
+
+function renderSkillRoutingSummary(lines: readonly ResultLine[]): string {
+  const routing = lines.flatMap((line) =>
+    line.skillRouting?.evaluated === true ? [line.skillRouting] : [],
+  );
+  if (routing.length === 0) return "";
+
+  const exact = routing.filter((result) => result.exact).length;
+  const truePositives = routing.reduce(
+    (sum, result) => sum + result.truePositives,
+    0,
+  );
+  const falsePositives = routing.reduce(
+    (sum, result) => sum + result.falsePositives,
+    0,
+  );
+  const falseNegatives = routing.reduce(
+    (sum, result) => sum + result.falseNegatives,
+    0,
+  );
+  const precisionDenominator = truePositives + falsePositives;
+  const recallDenominator = truePositives + falseNegatives;
+  const precision =
+    precisionDenominator === 0
+      ? "n/a"
+      : formatPercent(truePositives / precisionDenominator);
+  const recall =
+    recallDenominator === 0
+      ? "n/a"
+      : formatPercent(truePositives / recallDenominator);
+  const negativeCases = routing.filter(
+    (result) => result.expectedActivations.length === 0,
+  );
+  const abstained = negativeCases.filter(
+    (result) => result.actualActivations.length === 0,
+  ).length;
+  const abstention =
+    negativeCases.length === 0
+      ? "n/a"
+      : `${abstained}/${negativeCases.length} (${formatPercent(
+          abstained / negativeCases.length,
+        )})`;
+  return `skill routing: ${exact}/${routing.length} exact; precision ${precision}; recall ${recall}; no-Skill abstention ${abstention}\n`;
+}
+
+function taskOutcomePassed(line: ResultLine): boolean {
+  return line.outcome === "verified" || line.outcome === "routing_failed";
+}
+
+function averageReportMetric(
+  lines: readonly ResultLine[],
+  read: (report: RunReport) => number,
+): number | null {
+  const values = lines.flatMap((line) =>
+    line.report === undefined ? [] : [read(line.report)],
+  );
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function renderSkillValueSummary(lines: readonly ResultLine[]): string {
+  const pairs = new Map<
+    string,
+    {
+      readonly withSkill: ResultLine[];
+      readonly withoutSkill: ResultLine[];
+    }
+  >();
+  for (const line of lines) {
+    const pair = line.skillRouting?.pair;
+    if (pair === undefined) continue;
+    const group = pairs.get(pair.id) ?? {
+      withSkill: [],
+      withoutSkill: [],
+    };
+    if (pair.condition === "with_skill") {
+      group.withSkill.push(line);
+    } else {
+      group.withoutSkill.push(line);
+    }
+    pairs.set(pair.id, group);
+  }
+
+  const output: string[] = [];
+  for (const [pairId, group] of [...pairs.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (group.withSkill.length === 0 || group.withoutSkill.length === 0) {
+      continue;
+    }
+    const withoutPasses = group.withoutSkill.filter(taskOutcomePassed).length;
+    const withPasses = group.withSkill.filter(taskOutcomePassed).length;
+    const withoutPassRate = withoutPasses / group.withoutSkill.length;
+    const withPassRate = withPasses / group.withSkill.length;
+    const withoutTurns = averageReportMetric(
+      group.withoutSkill,
+      (report) => report.turns,
+    );
+    const withTurns = averageReportMetric(
+      group.withSkill,
+      (report) => report.turns,
+    );
+    const withoutCost = averageReportMetric(
+      group.withoutSkill,
+      (report) => report.costUsd,
+    );
+    const withCost = averageReportMetric(
+      group.withSkill,
+      (report) => report.costUsd,
+    );
+    output.push(
+      `skill value ${pairId}: task pass ${withoutPasses}/${group.withoutSkill.length} (${formatPercent(withoutPassRate)}) -> ${withPasses}/${group.withSkill.length} (${formatPercent(withPassRate)}) (${formatSigned((withPassRate - withoutPassRate) * 100, 1)}pp)`,
+    );
+    if (withoutTurns !== null && withTurns !== null) {
+      output.push(
+        `  turns avg ${withoutTurns.toFixed(1)} -> ${withTurns.toFixed(1)} (${formatSigned(withTurns - withoutTurns, 1)})`,
+      );
+    }
+    if (withoutCost !== null && withCost !== null) {
+      output.push(
+        `  cost avg $${withoutCost.toFixed(6)} -> $${withCost.toFixed(6)} (${formatSignedUsd(withCost - withoutCost)})`,
+      );
+    }
+  }
+  return output.length === 0 ? "" : `${output.join("\n")}\n`;
+}
+
 export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
   let tasks: readonly EvalTask[];
   try {
@@ -404,6 +624,13 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
   if (args.check) {
     return runCheck(tasks);
   }
+
+  const providerSelection =
+    args.resolveProviderSelection?.() ??
+    ({
+      ...(args.providerId !== undefined ? { providerId: args.providerId } : {}),
+      ...(args.model !== undefined ? { model: args.model } : {}),
+    } satisfies EvalProviderSelection);
 
   const version = keelVersion();
   const transcriptRunDir =
@@ -421,7 +648,8 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
 
   let passingTasks = 0;
   let passingTrials = 0;
-  for (const task of tasks) {
+  const resultLines: ResultLine[] = [];
+  for (const [taskIndex, task] of tasks.entries()) {
     let passes = 0;
     for (let trial = 1; trial <= args.trials; trial++) {
       const transcriptPath =
@@ -429,38 +657,38 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
           ? undefined
           : join(
               transcriptRunDir,
-              `${artifactName(task.id)}-trial-${trial}.jsonl`,
+              `task-${taskIndex + 1}-trial-${trial}.jsonl`,
             );
       const result = await runTrial(
         task,
         args.cliEntry,
-        {
-          ...(args.providerId !== undefined
-            ? { providerId: args.providerId }
-            : {}),
-          ...(args.model !== undefined ? { model: args.model } : {}),
-        },
+        providerSelection,
         transcriptPath,
       );
-      const pass = result.outcome === "verified";
+      const skillRouting = evaluateSkillRouting(task, result.report);
+      const outcome = routingAwareOutcome(result.outcome, skillRouting);
+      const pass = outcome === "verified";
       if (pass) passes++;
-      const appended = appendResultLine(args.outFile, {
+      const resultLine: ResultLine = {
         schemaVersion: 1,
         timestamp: new Date().toISOString(),
         keelVersion: version,
         taskId: task.id,
         trial,
         pass,
-        outcome: result.outcome,
+        outcome,
         wallMs: result.wallMs,
+        ...(skillRouting !== undefined ? { skillRouting } : {}),
         ...(result.report !== undefined ? { report: result.report } : {}),
         ...(result.transcriptPath !== undefined
           ? { transcriptPath: result.transcriptPath }
           : {}),
-      });
+      };
+      const appended = appendResultLine(args.outFile, resultLine);
       if (!appended) return 1;
+      resultLines.push(resultLine);
       process.stderr.write(
-        `[${task.id}] trial ${trial}: ${result.outcome} (${result.wallMs}ms)\n`,
+        `[${task.id}] trial ${trial}: ${outcome} (${result.wallMs}ms)\n`,
       );
     }
     if (passes === args.trials) passingTasks++;
@@ -472,6 +700,8 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
   process.stdout.write(
     `suite: ${passingTasks}/${tasks.length} tasks pass (${passingTrials}/${totalTrials} trials)\n`,
   );
+  process.stdout.write(renderSkillRoutingSummary(resultLines));
+  process.stdout.write(renderSkillValueSummary(resultLines));
   process.stdout.write(`results: ${args.outFile}\n`);
   return passingTrials === totalTrials ? 0 : 1;
 }

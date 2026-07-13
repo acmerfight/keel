@@ -1,0 +1,5 @@
+[
+  { "id": 4, "kind": "fix", "title": "Keep queued input", "userFacing": true },
+  { "id": 2, "kind": "feature", "title": "Add profiles", "userFacing": true },
+  { "id": 3, "kind": "fix", "title": "Refactor parser", "userFacing": false }
+]

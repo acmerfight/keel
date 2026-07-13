@@ -1,0 +1,8 @@
+{
+  "prompt": "Summarize the user-facing changes in this pull request in three sentences.",
+  "timeoutMs": 120000,
+  "maxCostUsd": 0.02,
+  "skillRouting": {
+    "expectedActivations": []
+  }
+}

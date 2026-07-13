@@ -1,25 +1,12 @@
 import { readFileSync } from "node:fs";
-import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
-import { type RunReport, runReportSchema } from "./report-schema.ts";
-
-const outcomes = ["verified", "verify_failed", "timeout", "crashed"] as const;
-
-const evalResultLineSchema = z.object({
-  schemaVersion: z.literal(1),
-  timestamp: z.string(),
-  keelVersion: z.string(),
-  taskId: z.string(),
-  trial: z.number().int().positive(),
-  pass: z.boolean(),
-  outcome: z.enum(outcomes),
-  wallMs: z.number().nonnegative(),
-  report: runReportSchema.optional(),
-  transcriptPath: z.string().optional(),
-});
-
-type ResultLine = z.infer<typeof evalResultLineSchema>;
-type TrialOutcome = z.infer<typeof evalResultLineSchema>["outcome"];
+import type { RunReport } from "./report-schema.ts";
+import {
+  evalResultLineSchema,
+  type EvalResultLine as ResultLine,
+  type TrialOutcome,
+  trialOutcomes,
+} from "./result.ts";
 
 interface MetricSummary {
   readonly count: number;
@@ -128,7 +115,7 @@ function summarizeTask(
   lines: readonly ResultLine[],
 ): TaskSummary {
   const passes = lines.filter((line) => line.pass).length;
-  const outcomesForTask = outcomes.map((outcome) => ({
+  const outcomesForTask = trialOutcomes.map((outcome) => ({
     outcome,
     count: lines.filter((line) => line.outcome === outcome).length,
   }));

@@ -155,8 +155,8 @@ describe("Eval Runner", () => {
       expect(lines).toMatchObject([
         { taskId: "records-transcript", pass: true, outcome: "verified" },
       ]);
-      expect(lines[0]?.transcriptPath).toContain("records-transcript-");
-      expect(lines[0]?.transcriptPath).toContain("-trial-1");
+      expect(lines[0]?.transcriptPath).toContain("task-1-trial-1");
+      expect(lines[0]?.transcriptPath).not.toContain("records-transcript");
       expect(isAbsolute(lines[0]?.transcriptPath ?? "")).toBe(true);
       await expect(
         readFile(lines[0]?.transcriptPath ?? "", "utf8"),
@@ -166,9 +166,9 @@ describe("Eval Runner", () => {
     }
   });
 
-  test(`Given task ids collide after filename sanitization,
+  test(`Given multiple tasks have user-authored ids,
     When the eval runner writes trial transcripts,
-    Then each result points at a distinct transcript artifact`, async () => {
+    Then each result points at a distinct opaque transcript artifact`, async () => {
     // Given
     const { root, suiteDir, outFile } = await createEvalDir();
     const transcriptDir = join(root, "transcripts");
@@ -229,6 +229,13 @@ describe("Eval Runner", () => {
       expect(transcriptPaths).toHaveLength(2);
       expect(transcriptPaths.every((path) => path !== undefined)).toBe(true);
       expect(new Set(transcriptPaths).size).toBe(2);
+      expect(
+        transcriptPaths.every(
+          (path) =>
+            path?.includes("name one") === false &&
+            path.includes("name_one") === false,
+        ),
+      ).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

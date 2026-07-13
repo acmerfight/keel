@@ -1,0 +1,8 @@
+{
+  "prompt": "Turn changes.json into RELEASE_NOTES.md, grouping only user-facing entries by kind.",
+  "timeoutMs": 120000,
+  "maxCostUsd": 0.02,
+  "skillRouting": {
+    "expectedActivations": ["repo:release-notes"]
+  }
+}

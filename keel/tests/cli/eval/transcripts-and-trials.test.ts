@@ -40,8 +40,8 @@ describe("CLI Eval", () => {
 
       const lines = await readResultLines(outFile);
       const transcriptPath = lines[0]?.transcriptPath;
-      expect(transcriptPath).toContain("fix-note-");
-      expect(transcriptPath).toContain("-trial-1");
+      expect(transcriptPath).toContain("task-1-trial-1");
+      expect(transcriptPath).not.toContain("fix-note");
 
       const records = (await readFile(transcriptPath ?? "", "utf8"))
         .trimEnd()

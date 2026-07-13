@@ -1,0 +1,13 @@
+diff --git a/cli.mjs b/cli.mjs
+index 72ef66c..7295448 100644
+--- a/cli.mjs
++++ b/cli.mjs
+@@ -5,7 +5,7 @@ if (command === "--help") {
+ }
+ if (command === "parse") {
+   const parsed = Number(value);
+-  if (!Number.isFinite(parsed)) {
++  if (Number.isNaN(parsed)) {
+     process.stderr.write("value must be a number\n");
+     process.exit(2);
+   }

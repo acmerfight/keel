@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -13,6 +13,7 @@ import {
   requireKnownCostModel,
   resolveInteractiveProvider,
   resolveProvider,
+  resolveProviderSubprocessConfig,
 } from "../../src/cli/provider-config.ts";
 import type { LLMEvent } from "../../src/llm/types.ts";
 
@@ -31,6 +32,56 @@ function runtime(env: Record<string, string>): ProviderConfigRuntime {
 }
 
 describe("Provider Config", () => {
+  test(`Given eval provider defaults and credentials are stored under KEEL_HOME,
+    When the parent resolves an isolated eval subprocess configuration,
+    Then it forwards only the selected provider connection without forwarding KEEL_HOME`, async () => {
+    // Given
+    const parent = await mkdtemp(join(tmpdir(), "keel-eval-provider-config-"));
+    const keelHome = join(parent, "keel-home");
+    await mkdir(keelHome, { recursive: true });
+    await writeFile(
+      join(keelHome, "config.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        provider: {
+          id: "qwen",
+          model: "qwen-eval-model",
+          baseUrl: "https://qwen.example.test/v1",
+        },
+      }),
+      "utf8",
+    );
+    await writeFile(
+      join(keelHome, "auth.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        providers: { qwen: { apiKey: "stored-qwen-key" } },
+      }),
+      "utf8",
+    );
+
+    try {
+      // When
+      const resolved = resolveProviderSubprocessConfig(
+        runtime({ KEEL_HOME: keelHome }),
+      );
+
+      // Then
+      expect(resolved).toEqual({
+        providerId: "qwen",
+        model: "qwen-eval-model",
+        environment: {
+          DASHSCOPE_API_KEY: "stored-qwen-key",
+          QWEN_BASE_URL: "https://qwen.example.test/v1",
+          QWEN_MODEL: "qwen-eval-model",
+        },
+      });
+      expect(resolved.environment).not.toHaveProperty("KEEL_HOME");
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
   test(`Given optional provider config lives below a non-directory KEEL_HOME,
     When provider selection falls back to environment credentials,
     Then the missing optional config does not block the default provider`, async () => {

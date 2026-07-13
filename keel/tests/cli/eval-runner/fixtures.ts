@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { afterEach, beforeEach } from "vitest";
 import { z } from "zod";
 import { runEvalCommand } from "../../../src/eval/run.ts";
@@ -22,7 +22,30 @@ export const resultLineSchema = z.object({
   taskId: z.string(),
   trial: z.number().int().positive(),
   pass: z.boolean(),
-  outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
+  outcome: z.enum([
+    "verified",
+    "verify_failed",
+    "routing_failed",
+    "timeout",
+    "crashed",
+  ]),
+  skillRouting: z
+    .object({
+      expectedActivations: z.array(z.string()),
+      actualActivations: z.array(z.string()),
+      truePositives: z.number().int().nonnegative(),
+      falsePositives: z.number().int().nonnegative(),
+      falseNegatives: z.number().int().nonnegative(),
+      evaluated: z.boolean(),
+      exact: z.boolean(),
+      pair: z
+        .object({
+          id: z.string(),
+          condition: z.enum(["with_skill", "without_skill"]),
+        })
+        .optional(),
+    })
+    .optional(),
   report: z
     .object({
       schemaVersion: z.literal(9),
@@ -70,6 +93,13 @@ export interface TaskFixture {
   readonly scriptTimeoutMs?: number;
   readonly allowBash?: boolean;
   readonly maxCostUsd?: number;
+  readonly skillRouting?: {
+    readonly expectedActivations: readonly string[];
+    readonly pair?: {
+      readonly id: string;
+      readonly condition: "with_skill" | "without_skill";
+    };
+  };
 }
 
 export async function createEvalDir(): Promise<{
@@ -106,10 +136,16 @@ export async function createTask(
       ...(fixture.maxCostUsd !== undefined
         ? { maxCostUsd: fixture.maxCostUsd }
         : {}),
+      ...(fixture.skillRouting !== undefined
+        ? { skillRouting: fixture.skillRouting }
+        : {}),
     }),
     "utf8",
   );
   for (const [name, content] of Object.entries(fixture.files ?? {})) {
+    await mkdir(dirname(join(taskDir, "workspace", name)), {
+      recursive: true,
+    });
     await writeFile(join(taskDir, "workspace", name), content, "utf8");
   }
   await writeFile(join(taskDir, "verify.sh"), fixture.verify, "utf8");

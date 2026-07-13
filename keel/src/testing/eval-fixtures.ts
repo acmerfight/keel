@@ -1,6 +1,11 @@
 import { writeFile } from "node:fs/promises";
 
-type EvalTrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
+type EvalTrialOutcome =
+  | "verified"
+  | "verify_failed"
+  | "routing_failed"
+  | "timeout"
+  | "crashed";
 
 export interface EvalRunReport {
   readonly schemaVersion: 9;
@@ -78,8 +83,23 @@ export interface EvalResultLine {
   readonly pass: boolean;
   readonly outcome: EvalTrialOutcome;
   readonly wallMs: number;
+  readonly skillRouting?: EvalSkillRoutingResult;
   readonly report?: EvalRunReport;
   readonly transcriptPath?: string;
+}
+
+interface EvalSkillRoutingResult {
+  readonly expectedActivations: readonly string[];
+  readonly actualActivations: readonly string[];
+  readonly truePositives: number;
+  readonly falsePositives: number;
+  readonly falseNegatives: number;
+  readonly evaluated: boolean;
+  readonly exact: boolean;
+  readonly pair?: {
+    readonly id: string;
+    readonly condition: "with_skill" | "without_skill";
+  };
 }
 
 export interface EvalRunReportOptions {
@@ -96,6 +116,7 @@ export interface EvalResultLineOptions {
   readonly pass: boolean;
   readonly outcome?: EvalTrialOutcome;
   readonly wallMs?: number;
+  readonly skillRouting?: EvalSkillRoutingResult;
   readonly report?: EvalRunReport;
   readonly transcriptPath?: string;
 }
@@ -160,6 +181,9 @@ export function evalResultLine(options: EvalResultLineOptions): EvalResultLine {
     outcome:
       options.outcome ?? (options.pass === true ? "verified" : "verify_failed"),
     wallMs: options.wallMs ?? 1000,
+    ...(options.skillRouting !== undefined
+      ? { skillRouting: options.skillRouting }
+      : {}),
     ...(options.report !== undefined ? { report: options.report } : {}),
     ...(options.transcriptPath !== undefined
       ? { transcriptPath: options.transcriptPath }

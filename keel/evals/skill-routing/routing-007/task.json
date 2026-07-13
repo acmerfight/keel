@@ -1,0 +1,9 @@
+{
+  "prompt": "Tell me whether this patch is safe to merge, then try its command-line app with normal and malformed arguments and report bugs you can reproduce.",
+  "timeoutMs": 120000,
+  "allowBash": true,
+  "maxCostUsd": 0.03,
+  "skillRouting": {
+    "expectedActivations": ["repo:code-review", "repo:qa"]
+  }
+}

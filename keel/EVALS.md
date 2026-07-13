@@ -22,6 +22,9 @@ keel eval --check
 # Run the full suite against the configured provider (spends real money).
 DEEPSEEK_API_KEY=... keel eval --trials 3 --out evals/results/$(date +%Y%m%d-%H%M%S).jsonl
 
+# Measure model-selected Skill routing on hidden labels.
+DEEPSEEK_API_KEY=... keel eval --suite evals/skill-routing --trials 3 --out /tmp/skill-routing.jsonl
+
 # Run the same suite with Kimi K2.6.
 KIMI_API_KEY=... keel eval --provider kimi --model kimi-k2.6 --trials 3 --out evals/results/$(date +%Y%m%d-%H%M%S).jsonl
 
@@ -43,7 +46,8 @@ Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
 run creates a unique subdirectory under `<dir>` and writes one
 schema-versioned JSONL transcript per trial.
 
-Exit code is non-zero when any trial fails to verify, times out, or crashes.
+Exit code is non-zero when any trial fails to verify or Skill-route exactly,
+times out, or crashes.
 `keel eval compare` is report-only: it exits non-zero for unreadable or
 invalid inputs, but regressions are printed rather than used as a failure
 gate.
@@ -126,9 +130,15 @@ Each trial appends one JSON line:
 ```
 
 - `outcome` separates harness failures from graded failures: `verified` /
-  `verify_failed` are the agent's score; `timeout` / `crashed` mean the
-  environment or harness broke and the trial must not be read as agent
-  quality.
+  `verify_failed` / `routing_failed` are the agent's score; `timeout` /
+  `crashed` mean the environment or harness broke and the trial must not be
+  read as agent quality. A routing task can therefore distinguish a correct
+  final workspace reached through the wrong Skill choice from an ordinary
+  verifier failure.
+- Routing tasks add `skillRouting` with private expected activations, observed
+  activations, true/false-positive and false-negative counts, and exact-match
+  status. The suite summary aggregates activation precision, recall, exact
+  match, and no-Skill abstention.
 - `wallMs` is measured around the spawned agent CLI run. It excludes the
   later verifier step, so read it as agent wall time rather than full
   trial wall time.
@@ -155,7 +165,7 @@ A task is a directory under `evals/tasks/`:
 
 ```
 evals/tasks/<task-id>/
-  task.json       # { "prompt", "timeoutMs"?, "scriptTimeoutMs"?, "allowBash"?, "maxCostUsd"? }
+  task.json       # prompt/budgets plus optional private skillRouting gold
   workspace/      # fixture files copied into a fresh temp dir per trial
   verify.sh       # runs in the workspace after the agent; exit 0 = pass
   solution.sh     # reference solution applied without an LLM; required
@@ -174,6 +184,33 @@ Execution model (mirrors Terminal-Bench/Harbor):
 - `verify.sh` grades only the final workspace state, never the agent's
   path to it. Any approach that produces the right outcome passes.
 
+## Skill routing and marginal-value tasks
+
+`evals/skill-routing/` is the baseline corpus for implicit model selection.
+Its task prompts are ordinary user requests: they must not mention Skills,
+activation syntax, or the expected package name. Expected activations live
+only in `task.json` under `skillRouting.expectedActivations`; the runner never
+copies that file into the trial workspace or passes the label in provider
+arguments. Trial directory names are opaque as well. Each agent subprocess uses
+an isolated HOME, KEEL_HOME, and configured-root set, so user/system Skills and
+persisted policy cannot contaminate the catalog. Before isolation, the parent
+resolves provider flags, environment variables, and stored provider config/auth,
+then forwards only the selected provider, model, base URL, and credential.
+Transcript artifact names are opaque too. `--check` rejects common
+answer-leaking prompt forms before provider spend.
+
+The corpus includes positive requests, negative near misses, abstention cases,
+and a multi-activation request. Run at least three trials before treating its
+precision or recall as stable. This seed corpus establishes measurement; it is
+not yet a production routing threshold or a statistically broad benchmark.
+
+For marginal task value, give two tasks the same `skillRouting.pair.id`, with
+conditions `with_skill` and `without_skill`. They must have the exact same
+natural prompt, budgets, verifier, solution, and workspace contents except for
+packages beneath `workspace/.agents/skills`. The runner rejects confounded
+pairs and prints without-to-with deltas for task success, turns, and cost. This
+keeps “the Skill activated” separate from “the Skill improved the task.”
+
 ## Writing good tasks
 
 Drawn from the Terminal-Bench and Anthropic eval guidance; `--check`
@@ -189,7 +226,8 @@ enforces the mechanical parts:
 3. **Deterministic verifiers only.** Exit codes from `grep`/`node`, no
    timing, no randomness, no LLM judges.
 4. **Don't leak the answer.** No comments in fixtures pointing at the
-   bug; the agent should do the work the prompt describes.
+   bug; the agent should do the work the prompt describes. For routing tasks,
+   keep relevance labels private and phrase prompts exactly as a user would.
 5. **One capability per task.** Prefer more small tasks over one
    mega-task; the suite distribution should track what daily use actually
    demands.

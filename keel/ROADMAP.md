@@ -144,8 +144,11 @@ What a user can do today:
   schema-versioned JSONL.
 - `keel eval [--check] [--trials <n>]` — run a repeatable harness eval suite
   from `evals/tasks`, with per-trial JSONL results and reference-solution
-  verifier checks. `--transcript-dir <dir>` keeps one readable transcript
-  artifact per trial and links it from the result JSONL when produced.
+  verifier checks. Skill-routing suites keep expected activations private,
+  report precision/recall and no-Skill abstention, and support controlled
+  with/without-Skill pairs for task-success, turn, and cost deltas.
+  `--transcript-dir <dir>` keeps one readable transcript artifact per trial and
+  links it from the result JSONL when produced.
   `keel eval compare --base <old.jsonl> --head <new.jsonl>` compares two
   result files by task, including pass, outcome, turn, token, cost, wall-time,
   harness-failure, and regression transcript-path deltas.
@@ -363,8 +366,11 @@ Codex/Claude Code — or directly moves the eval numbers.
   or incompletely scanned
   packages before routing or activation; `keel skills doctor` reports blockers
   and advisory portability, script, authority, and dangerous-instruction
-  findings without executing package code. Remaining work is catalog-budget and
-  routing calibration through evals, then pinned installation and update.
+  findings without executing package code. A hidden-gold baseline now measures
+  positive, near-miss, abstention, and multi-Skill routing, while controlled
+  with/without-Skill pairs expose marginal task-success and efficiency deltas.
+  Remaining work is broadening the routing corpus and setting provider-specific
+  regression thresholds, then pinned installation and update.
   Marketplace, multi-agent execution, and remote installation remain deferred.
 
 ## P2 — After the replacement works

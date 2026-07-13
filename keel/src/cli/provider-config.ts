@@ -18,6 +18,7 @@ export {
   requireKnownCostModel,
   resolveInteractiveProvider,
   resolveProvider,
+  resolveProviderSubprocessConfig,
 } from "./provider-resolver.ts";
 export {
   ProviderConfigError,

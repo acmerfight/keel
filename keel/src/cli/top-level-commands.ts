@@ -16,6 +16,7 @@ import {
   revokeBashProjectApprovalGrant,
 } from "./bash-project-approvals.ts";
 import { formatUndoCheckpointList } from "./output.ts";
+import { resolveProviderSubprocessConfig } from "./provider-config.ts";
 import {
   runAuthCommand as runProviderAuthCommand,
   runConfigCommand as runProviderConfigCommand,
@@ -118,6 +119,13 @@ export async function runEvalCommand(
       ? { providerId: cliArgs.providerId }
       : {}),
     ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
+    resolveProviderSelection: () =>
+      resolveProviderSubprocessConfig(runtime, {
+        ...(cliArgs.providerId !== undefined
+          ? { providerId: cliArgs.providerId }
+          : {}),
+        ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
+      }),
     check: cliArgs.check,
     cliEntry: runtime.cliEntry,
   });

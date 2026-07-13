@@ -194,6 +194,69 @@ describe("CLI Eval", () => {
     }
   });
 
+  test(`Given a current eval result records a routing failure,
+    When user compares it with a routing-correct baseline,
+    Then the CLI accepts the shared result schema and reports the routing regression`, async () => {
+    // Given
+    const root = await mkdtemp(join(tmpdir(), "keel-eval-routing-compare-"));
+    const baseFile = join(root, "base.jsonl");
+    const headFile = join(root, "head.jsonl");
+    await writeResultFile(baseFile, [
+      resultLine({
+        taskId: "route-review",
+        trial: 1,
+        pass: true,
+        outcome: "verified",
+        skillRouting: {
+          expectedActivations: ["repo:code-review"],
+          actualActivations: ["repo:code-review"],
+          truePositives: 1,
+          falsePositives: 0,
+          falseNegatives: 0,
+          evaluated: true,
+          exact: true,
+        },
+        report: runReport(),
+      }),
+    ]);
+    await writeResultFile(headFile, [
+      resultLine({
+        taskId: "route-review",
+        trial: 1,
+        pass: false,
+        outcome: "routing_failed",
+        skillRouting: {
+          expectedActivations: ["repo:code-review"],
+          actualActivations: [],
+          truePositives: 0,
+          falsePositives: 0,
+          falseNegatives: 1,
+          evaluated: true,
+          exact: false,
+        },
+        report: runReport(),
+      }),
+    ]);
+
+    try {
+      // When
+      const result = await runCli(
+        ["eval", "compare", "--base", baseFile, "--head", headFile],
+        { cwd: root, env: { KEEL_PROVIDER: "unknown" } },
+      );
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("status: REGRESSION");
+      expect(result.stdout).toContain(
+        "outcomes: verified=1 -> routing_failed=1",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an eval result contains an obsolete v1 run report,
     When user compares it with a current result file,
     Then the CLI rejects the old report schema`, async () => {

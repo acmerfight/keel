@@ -1,0 +1,8 @@
+{
+  "prompt": "Rename the timeout field in config.json and update the two code references that read it.",
+  "timeoutMs": 120000,
+  "maxCostUsd": 0.02,
+  "skillRouting": {
+    "expectedActivations": []
+  }
+}
