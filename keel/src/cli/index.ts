@@ -72,7 +72,7 @@ async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
   }
 
   if (cliArgs.command === "skills") {
-    return runSkillsCommand(runtime);
+    return runSkillsCommand(cliArgs, runtime);
   }
 
   if (cliArgs.command === "approvals") {

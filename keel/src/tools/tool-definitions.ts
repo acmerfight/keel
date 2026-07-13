@@ -262,9 +262,9 @@ const skillResourceTool = defineTool({
   availability: "skill-catalog",
   description: [
     "Read one declared text resource belonging to an active workflow skill without widening workspace file access.",
-    "Use when: active skill instructions reference a path listed under references/, scripts/, or assets/.",
-    "Do not use when: the skill is not active, the path was not advertised, or an ordinary workspace file is needed.",
-    "On failure: use the exact qualified skill name and one advertised relative resource path.",
+    "Use when: active skill instructions reference an advertised text file under references/, scripts/, or assets/.",
+    "Do not use when: the skill is not active, the path was not advertised, the resource is a binary asset, or an ordinary workspace file is needed.",
+    "On failure: use the exact qualified skill name and one advertised text-resource path; use binary assets only through an approved binary-capable tool.",
   ].join("\n"),
   args: toolArgs(skillResourceToolArgumentsSchema),
   permission: { kind: "none" },

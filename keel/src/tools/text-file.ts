@@ -141,11 +141,35 @@ export function hasBinaryControlBytes(bytes: Uint8Array): boolean {
   return nonPrintable / bytes.length > 0.3;
 }
 
+function hasInvalidUtf8(
+  sample: Uint8Array,
+  sampleIsComplete: boolean,
+): boolean {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(sample, {
+      stream: !sampleIsComplete,
+    });
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+export function isBinaryContentSample(
+  sample: Uint8Array,
+  sampleIsComplete = false,
+): boolean {
+  return (
+    hasMagicBinaryHeader(sample) ||
+    hasBinaryControlBytes(sample) ||
+    hasInvalidUtf8(sample, sampleIsComplete)
+  );
+}
+
 export function isBinarySample(filePath: string, sample: Uint8Array): boolean {
   return (
     BINARY_EXTENSIONS.has(extname(filePath).toLowerCase()) ||
-    hasMagicBinaryHeader(sample) ||
-    hasBinaryControlBytes(sample)
+    isBinaryContentSample(sample)
   );
 }
 

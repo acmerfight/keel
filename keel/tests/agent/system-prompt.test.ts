@@ -88,7 +88,10 @@ describe("Agent System Prompt", () => {
       "Relative paths in this workflow skill resolve from that directory.",
     );
     expect(prompt).toContain(
-      "Read advertised resources with skill_resource using this skill's exact qualified name",
+      "Read advertised text resources with skill_resource using this skill's exact qualified name",
+    );
+    expect(prompt).toContain(
+      "Binary assets cannot be read as text with skill_resource",
     );
     expect(prompt).toContain("- references/checklist.md");
     expect(prompt).toContain("- scripts/verify.ts");

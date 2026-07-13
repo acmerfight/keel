@@ -1,5 +1,7 @@
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import { redactSecretLikeText } from "../core/secret-text.ts";
+import type { SkillPackageAudit } from "../skills/audit.ts";
 import {
   exposeSkillCatalog,
   type SkillCatalogExposure,
@@ -9,6 +11,7 @@ import {
   discoverSkillCatalog,
   type SkillDiscoveryOptions,
 } from "../skills/project.ts";
+import { sanitizeStatusLineText } from "./output.ts";
 import type { CliRuntime } from "./runtime.ts";
 
 export { WorkflowSkillError } from "../skills/model.ts";
@@ -29,6 +32,7 @@ export interface WorkflowSkillListWarning {
 export interface WorkflowSkillListResult {
   readonly skills: readonly WorkflowSkillSummary[];
   readonly warnings: readonly WorkflowSkillListWarning[];
+  readonly audits: readonly SkillPackageAudit[];
   readonly exposure: SkillCatalogExposure;
 }
 
@@ -103,11 +107,56 @@ export function listWorkflowSkills(
       }),
     ),
     warnings: catalog.warnings,
+    audits: catalog.audits,
     exposure: exposeSkillCatalog({
       skills: catalog.implicitSkills,
       request: "",
     }),
   };
+}
+
+function plural(count: number, singular: string, pluralValue: string): string {
+  return count === 1 ? singular : pluralValue;
+}
+
+function sanitizeWorkflowSkillOutputText(text: string): string {
+  return sanitizeStatusLineText(redactSecretLikeText(text));
+}
+
+export function formatWorkflowSkillDiagnostics(
+  audits: readonly SkillPackageAudit[],
+): string {
+  if (audits.length === 0) {
+    return "No workflow skill packages found to audit.\n";
+  }
+  const lines = ["Workflow skill diagnostics:"];
+  let blockedPackages = 0;
+  let warningCount = 0;
+  for (const audit of audits) {
+    const blocker = audit.findings.some(
+      (finding) => finding.severity === "blocker",
+    );
+    const warnings = audit.findings.filter(
+      (finding) => finding.severity === "warning",
+    );
+    if (blocker) blockedPackages += 1;
+    warningCount += warnings.length;
+    const status = blocker ? "blocked" : warnings.length > 0 ? "warning" : "ok";
+    lines.push(
+      `- ${sanitizeWorkflowSkillOutputText(audit.qualifiedName)}: ${status}`,
+    );
+    for (const finding of audit.findings) {
+      const severity = finding.severity === "blocker" ? "BLOCK" : "WARN";
+      lines.push(
+        `  - ${severity} [${finding.code}] ${sanitizeWorkflowSkillOutputText(finding.relativePath)}: ${sanitizeWorkflowSkillOutputText(finding.message)}`,
+      );
+    }
+  }
+  lines.push(
+    `Summary: ${audits.length} ${plural(audits.length, "package", "packages")}, ${blockedPackages} blocked, ${warningCount} ${plural(warningCount, "warning", "warnings")}.`,
+    "",
+  );
+  return lines.join("\n");
 }
 
 export function formatWorkflowSkillList(
@@ -120,7 +169,7 @@ export function formatWorkflowSkillList(
     "Workflow skills:",
     ...skills.map(
       (skill) =>
-        `- ${skill.qualifiedName}: ${skill.description}${
+        `- ${sanitizeWorkflowSkillOutputText(skill.qualifiedName)}: ${sanitizeWorkflowSkillOutputText(skill.description)}${
           skill.activationPolicy === "explicit" ? " [explicit only]" : ""
         }`,
     ),
@@ -129,7 +178,7 @@ export function formatWorkflowSkillList(
 }
 
 function formatWorkflowSkillWarningMessage(message: string): string {
-  return message.replace(/^Error: /u, "");
+  return sanitizeWorkflowSkillOutputText(message.replace(/^Error: /u, ""));
 }
 
 export function formatWorkflowSkillListWarnings(
@@ -138,7 +187,7 @@ export function formatWorkflowSkillListWarnings(
   return warnings
     .map(
       (warning) =>
-        `Warning: skipped workflow skill ${JSON.stringify(warning.name)}: ${formatWorkflowSkillWarningMessage(warning.message)}\n`,
+        `Warning: skipped workflow skill ${sanitizeWorkflowSkillOutputText(JSON.stringify(warning.name))}: ${formatWorkflowSkillWarningMessage(warning.message)}\n`,
     )
     .join("");
 }

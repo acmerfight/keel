@@ -29,6 +29,9 @@ export interface ParsedSkillDocument {
   readonly description: string;
   readonly content: string;
   readonly activationPolicy: SkillActivationPolicy;
+  readonly allowedTools?: string;
+  readonly compatibility?: string;
+  readonly license?: string;
 }
 
 export function validateSkillName(name: string): void {
@@ -114,6 +117,15 @@ export function parseSkillDocument(
     description: parsed.data.description,
     content: bounds.content,
     activationPolicy: parseActivationPolicy(parsed.data.metadata),
+    ...(parsed.data["allowed-tools"] !== undefined
+      ? { allowedTools: parsed.data["allowed-tools"] }
+      : {}),
+    ...(parsed.data.compatibility !== undefined
+      ? { compatibility: parsed.data.compatibility }
+      : {}),
+    ...(parsed.data.license !== undefined
+      ? { license: parsed.data.license }
+      : {}),
   };
 }
 

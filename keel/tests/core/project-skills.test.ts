@@ -50,6 +50,7 @@ function inMemoryCatalog(
     skills: [],
     implicitSkills: [],
     warnings: [],
+    audits: [],
     load: () => {
       throw new WorkflowSkillError("not configured");
     },
@@ -544,6 +545,9 @@ describe("project skills catalog", () => {
           /^repo:[a-f0-9]{12}:review$/u.test(identity),
         ),
       ).toBe(true);
+      expect(
+        catalog.audits.map((audit) => audit.qualifiedName).toSorted(),
+      ).toEqual(identities.toSorted());
       expect(() => catalog.load("repo:review")).toThrow(
         expect.objectContaining({
           message: expect.stringContaining(identities[0] ?? "missing"),
@@ -609,13 +613,54 @@ describe("project skills catalog", () => {
         "---\nname: review\ndescription: Review changes.\n---\nreview\n",
       );
       const catalog = discoverSkillCatalog({ workspace });
+      const secret = `AKIA${"Z".repeat(16)}`;
+      await writeFile(
+        skillPath,
+        `---\nname: review\ndescription: Review changes.\nsecret: [${secret}\n---\nreview\n`,
+      );
+      expect(() => catalog.load("repo:review")).toThrow(
+        "SKILL.md contains invalid YAML frontmatter",
+      );
+      try {
+        catalog.load("repo:review");
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        if (error instanceof Error) {
+          expect(error.message).not.toContain(secret);
+        }
+      }
       await rm(skillPath);
       expect(() => catalog.load("repo:review")).toThrow(
-        'workflow skill "repo:review" was not found',
+        "SKILL.md is missing from the package",
       );
       expect(() => catalog.load("repo:a:b:c")).toThrow(
         "qualified skill names use scope:name or scope:root-id:name",
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a safe cataloged Skill gains a secret before activation,
+    When the user activates that existing descriptor,
+    Then Keel re-audits and blocks it before returning changed content`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-skill-audit-change-"));
+    const skillDirectory = join(workspace, ".agents", "skills", "review");
+    await mkdir(skillDirectory, { recursive: true });
+    const skillPath = join(skillDirectory, "SKILL.md");
+    await writeFile(
+      skillPath,
+      "---\nname: review\ndescription: Review changes.\n---\nSafe body.\n",
+    );
+
+    try {
+      const catalog = discoverSkillCatalog({ workspace });
+      await writeFile(
+        skillPath,
+        `---\nname: review\ndescription: Review changes.\n---\nCredential: ghp_${"c".repeat(36)}\n`,
+      );
+
+      expect(() => catalog.load("repo:review")).toThrow("embedded_secret");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -655,6 +700,9 @@ describe("project skills catalog", () => {
           "references/marker.txt",
         ),
       ).toThrow("is no longer available");
+      expect(catalog.readResource("repo:review", "references/marker.txt")).toBe(
+        "RESOURCE-OK",
+      );
       activation.registerExplicit([catalog.load("repo:review")]);
       expect(
         activation.readResource("repo:review", "references/marker.txt"),

@@ -24,6 +24,7 @@ import {
 import type { CliRuntime } from "./runtime.ts";
 import { showToolOutputArtifact } from "./tool-output-artifacts.ts";
 import {
+  formatWorkflowSkillDiagnostics,
   formatWorkflowSkillList,
   formatWorkflowSkillListWarnings,
   listWorkflowSkills,
@@ -144,9 +145,20 @@ export function runUndoCommand(
   }
 }
 
-export function runSkillsCommand(runtime: CliRuntime): number {
+export function runSkillsCommand(
+  cliArgs: Extract<CliArgs, { readonly command: "skills" }>,
+  runtime: CliRuntime,
+): number {
   try {
     const result = listWorkflowSkills(runtime, runtime.cwd());
+    if (cliArgs.mode === "doctor") {
+      runtime.writeStdout(formatWorkflowSkillDiagnostics(result.audits));
+      return result.audits.some((audit) =>
+        audit.findings.some((finding) => finding.severity === "blocker"),
+      )
+        ? 1
+        : 0;
+    }
     runtime.writeStdout(formatWorkflowSkillList(result.skills));
     const warningText = formatWorkflowSkillListWarnings(result.warnings);
     runtime.writeStderr(

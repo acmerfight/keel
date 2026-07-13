@@ -206,10 +206,11 @@ Known limits that shape the priorities below:
 - Workflow expansion features are not the current bottleneck. The local Skill
   runtime now supports scoped discovery, explicit and model-selected activation,
   bounded search, multiple active Skills, and a durable lifecycle across
-  compaction, resume, and fork. The next Skill work should focus on deterministic
-  security and quality gates, followed by pinned distribution only when routing
-  and task-outcome evals justify it. Sub-agents, MCP, marketplaces, and IDE
-  integration remain deferred.
+  compaction, resume, and fork. Deterministic package audit now excludes blocked
+  Skills from routing and activation and exposes actionable diagnostics through
+  `keel skills doctor`. The next Skill work should calibrate catalog routing and
+  task outcomes before pinned distribution. Sub-agents, MCP, marketplaces, and
+  IDE integration remain deferred.
 
 ## P0 — Blocks daily use or makes the quality goal unfalsifiable
 
@@ -351,10 +352,13 @@ Codex/Claude Code — or directly moves the eval numbers.
   digests, active state, and history persist across compaction, resume, and fork;
   changed files are diagnosed without silently replacing the session snapshot,
   and `/skill reload` or `/skill deactivate` provides explicit control. Reports
-  expose activation events and final active state. Remaining work is security
-  lint/doctor policy, catalog-budget and routing calibration through evals, then
-  pinned installation and update. Marketplace, multi-agent execution, and
-  remote installation remain deferred.
+  expose activation events and final active state. Deterministic audit blocks
+  invalid, obfuscated, secret-bearing, unreadable, or incompletely scanned
+  packages before routing or activation; `keel skills doctor` reports blockers
+  and advisory portability, script, authority, and dangerous-instruction
+  findings without executing package code. Remaining work is catalog-budget and
+  routing calibration through evals, then pinned installation and update.
+  Marketplace, multi-agent execution, and remote installation remain deferred.
 
 ## P2 — After the replacement works
 

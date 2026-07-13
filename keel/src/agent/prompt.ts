@@ -56,7 +56,7 @@ Workflow skill ${skill.qualifiedName} from ${skill.relativePath}:
 This workflow skill is active for the current session. Follow it unless it conflicts with direct system, developer, or current user request instructions, or with explicit safety boundaries.
 Skill base directory: ${posixDirectoryName(skill.relativePath)}
 Relative paths in this workflow skill resolve from that directory.
-Read advertised resources with skill_resource using this skill's exact qualified name and the relative resource path. Do not use ordinary workspace file tools for resources outside the workspace.
+Read advertised text resources with skill_resource using this skill's exact qualified name and the relative resource path. Binary assets cannot be read as text with skill_resource; use their listed Skill-relative paths only with an approved binary-capable tool. Do not use ordinary workspace file tools for resources outside the workspace.
 ${workflowSkillResourceLines(skill)}
 Each workflow skill instruction line is quoted below.
 

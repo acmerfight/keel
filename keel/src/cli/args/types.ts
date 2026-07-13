@@ -202,7 +202,7 @@ export type CliArgs =
   | SetupCliArgs
   | DoctorCliArgs
   | UndoCliArgs
-  | { readonly command: "skills" }
+  | { readonly command: "skills"; readonly mode: "doctor" | "list" }
   | ArtifactsCliArgs
   | ApprovalsCliArgs
   | SessionsCliArgs

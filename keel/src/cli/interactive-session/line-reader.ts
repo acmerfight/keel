@@ -107,10 +107,12 @@ export function createLineReader(
   const waiters: Array<(line: QueuedLine | null) => void> = [];
   const freshWaiters: LineWaiter[] = [];
   let closed = false;
+  let inputFailure: { readonly error: unknown } | null = null;
 
   // Approval answers must be typed after the approval prompt appears. The
   // sequence lets approval waits ignore already-queued user messages.
   input.on("line", (line) => {
+    if (inputFailure !== null) return;
     options.onLineSubmitted?.(line);
     currentSequence++;
     const queuedLine = { sequence: currentSequence, line };
@@ -129,13 +131,20 @@ export function createLineReader(
       waiter(queuedLine);
       return;
     }
-    const admittedInput =
-      line.trim() === ""
-        ? undefined
-        : options.persistQueuedInput?.({
-            sequence: queuedLine.sequence,
-            line: queuedLine.line,
-          });
+    let admittedInput: SessionQueuedInput | undefined;
+    try {
+      admittedInput =
+        line.trim() === ""
+          ? undefined
+          : options.persistQueuedInput?.({
+              sequence: queuedLine.sequence,
+              line: queuedLine.line,
+            });
+    } catch (error) {
+      inputFailure = { error };
+      closed = true;
+      return;
+    }
     queued.push(
       queuedLineWithInputId(
         queuedLine.sequence,
@@ -161,6 +170,9 @@ export function createLineReader(
 
   return {
     readLine: () => {
+      if (inputFailure !== null) {
+        return Promise.reject(inputFailure.error);
+      }
       const queuedLine = queued.shift();
       if (queuedLine !== undefined) {
         return Promise.resolve(queuedLine);
@@ -173,6 +185,9 @@ export function createLineReader(
       });
     },
     readLineAfter: (sequence, signal) => {
+      if (inputFailure !== null) {
+        return Promise.reject(inputFailure.error);
+      }
       for (const [index, queuedLine] of queued.entries()) {
         if (queuedLine.sequence > sequence) {
           queued.splice(index, 1);

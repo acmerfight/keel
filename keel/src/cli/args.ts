@@ -113,10 +113,13 @@ export function parseCliArgs(args: readonly string[]): CliArgsParseResult {
   }
 
   if (args[0] === "skills") {
-    if (args.length > 1) {
-      return parseError(`Error: unknown skills option "${args[1]}"`);
+    if (args.length === 1) {
+      return parseOk({ command: "skills", mode: "list" });
     }
-    return parseOk({ command: "skills" });
+    if (args.length === 2 && args[1] === "doctor") {
+      return parseOk({ command: "skills", mode: "doctor" });
+    }
+    return parseError(`Error: unknown skills option "${args[1]}"`);
   }
 
   if (args[0] === "eval") {

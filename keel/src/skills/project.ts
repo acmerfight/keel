@@ -12,11 +12,19 @@ import {
   statSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { redactSecretLikeText } from "../core/secret-text.ts";
 import {
   BINARY_SAMPLE_BYTES,
   hasBinaryControlBytes,
+  isBinaryContentSample,
   isBinarySample,
 } from "../tools/text-file.ts";
+import {
+  auditSkillPackage,
+  firstSkillAuditBlocker,
+  type SkillAuditFinding,
+  type SkillPackageAudit,
+} from "./audit.ts";
 import type {
   SkillCatalog,
   SkillCatalogWarning,
@@ -29,6 +37,7 @@ import {
   isWorkflowSkillResourcePath,
   MAX_WORKFLOW_SKILL_RESOURCE_ENTRY_VISITS,
   MAX_WORKFLOW_SKILL_RESOURCE_PATHS,
+  MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES,
   WORKFLOW_SKILL_RESOURCE_DIRECTORIES,
 } from "./resources.ts";
 import { parseSkillDocument, validateSkillName } from "./schema.ts";
@@ -49,6 +58,30 @@ interface SkillRoot {
 interface ReadSkill {
   readonly descriptor: SkillDescriptor;
   readonly skill: WorkflowSkill;
+  readonly findings: readonly SkillAuditFinding[];
+}
+
+interface SkillResourceInventory {
+  readonly resourcePaths: readonly string[];
+  readonly findings: readonly SkillAuditFinding[];
+}
+
+interface DiscoveredSkillAudit {
+  readonly scope: SkillScope;
+  readonly name: string;
+  readonly rootKey: string;
+  readonly relativePath: string;
+  readonly findings: readonly SkillAuditFinding[];
+}
+
+class SkillPackageValidationError extends WorkflowSkillError {
+  readonly auditMessage: string;
+
+  constructor(message: string, auditMessage: string) {
+    super(message);
+    this.name = "SkillPackageValidationError";
+    this.auditMessage = auditMessage;
+  }
 }
 
 export interface SkillDiscoveryOptions {
@@ -66,6 +99,10 @@ function toPosixPath(path: string): string {
 
 function pathExists(path: string): boolean {
   return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }
 
 function skillRootStatus(path: string): SkillRootStatus {
@@ -183,36 +220,100 @@ function compareSkillResourcePaths(left: string, right: string): number {
 function listSkillResourceDirectory(options: {
   readonly currentPath: string;
   readonly relativeParts: readonly string[];
-  readonly state: { readonly resourcePaths: string[]; entryVisits: number };
+  readonly state: {
+    readonly resourcePaths: string[];
+    readonly findings: SkillAuditFinding[];
+    entryVisits: number;
+  };
 }): void {
-  const directory = opendirSync(options.currentPath);
+  let directory: ReturnType<typeof opendirSync>;
+  try {
+    directory = opendirSync(options.currentPath);
+  } catch {
+    options.state.findings.push({
+      severity: "blocker",
+      code: "resource_unreadable",
+      relativePath: options.relativeParts.join("/"),
+      message: "could not be opened during deterministic package audit",
+    });
+    return;
+  }
   try {
     for (;;) {
+      const entry = directory.readSync();
+      if (entry === null) return;
       if (
         options.state.resourcePaths.length >=
           MAX_WORKFLOW_SKILL_RESOURCE_PATHS ||
         options.state.entryVisits >= MAX_WORKFLOW_SKILL_RESOURCE_ENTRY_VISITS
       ) {
+        if (
+          !options.state.findings.some(
+            (finding) => finding.code === "resource_scan_incomplete",
+          )
+        ) {
+          options.state.findings.push({
+            severity: "blocker",
+            code: "resource_scan_incomplete",
+            relativePath: options.relativeParts.join("/"),
+            message:
+              "exceeds the bounded package inventory, so deterministic audit could not inspect every resource",
+          });
+        }
         return;
       }
-      const entry = directory.readSync();
-      if (entry === null) return;
       options.state.entryVisits += 1;
       const entryPath = join(options.currentPath, entry.name);
       const entryRelativeParts = [...options.relativeParts, entry.name];
-      if (entry.isDirectory()) {
+      const resourcePath = entryRelativeParts.join("/");
+      if (!isWorkflowSkillResourcePath(resourcePath)) {
+        options.state.findings.push({
+          severity: "blocker",
+          code: "invalid_resource_path",
+          relativePath: resourcePath,
+          message:
+            "contains path separators, traversal, control, bidi, or zero-width characters",
+        });
+        continue;
+      }
+      if (entry.isSymbolicLink()) {
+        options.state.findings.push({
+          severity: "blocker",
+          code: "resource_symlink",
+          relativePath: entryRelativeParts.join("/"),
+          message:
+            "is a symbolic link; package resources must remain regular files and directories",
+        });
+      } else if (entry.isDirectory()) {
         listSkillResourceDirectory({
           currentPath: entryPath,
           relativeParts: entryRelativeParts,
           state: options.state,
         });
-      } else if (entry.isFile()) {
-        const resourcePath = entryRelativeParts.join("/");
-        if (isWorkflowSkillResourcePath(resourcePath)) {
+      } else {
+        /* v8 ignore else -- portable Skill fixtures can create files, directories, and symlinks; device/socket entries remain fail-closed. */
+        if (entry.isFile()) {
           options.state.resourcePaths.push(resourcePath);
+        } else {
+          options.state.findings.push({
+            severity: "blocker",
+            code: "resource_unreadable",
+            relativePath: entryRelativeParts.join("/"),
+            message:
+              "is not a regular file or directory and cannot be audited safely",
+          });
         }
       }
     }
+  } catch {
+    /* v8 ignore next 7 -- a directory read can fail only after a successful open because of a concurrent filesystem or mount fault. */
+    options.state.findings.push({
+      severity: "blocker",
+      code: "resource_unreadable",
+      relativePath: options.relativeParts.join("/"),
+      message:
+        "could not be read completely during deterministic package audit",
+    });
   } finally {
     directory.closeSync();
   }
@@ -221,29 +322,47 @@ function listSkillResourceDirectory(options: {
 function listSkillResourcePaths(
   root: SkillRoot,
   skillName: string,
-): readonly string[] {
+): SkillResourceInventory {
   const skillDirectory = join(root.rootPath, skillName);
-  const state: { resourcePaths: string[]; entryVisits: number } = {
+  const state: {
+    resourcePaths: string[];
+    findings: SkillAuditFinding[];
+    entryVisits: number;
+  } = {
     resourcePaths: [],
+    findings: [],
     entryVisits: 0,
   };
   for (const directory of WORKFLOW_SKILL_RESOURCE_DIRECTORIES) {
-    if (
-      state.resourcePaths.length >= MAX_WORKFLOW_SKILL_RESOURCE_PATHS ||
-      state.entryVisits >= MAX_WORKFLOW_SKILL_RESOURCE_ENTRY_VISITS
-    ) {
-      break;
-    }
     const directoryPath = join(skillDirectory, directory);
-    if (lstatSync(directoryPath, { throwIfNoEntry: false })?.isDirectory()) {
+    const directoryStat = lstatSync(directoryPath, { throwIfNoEntry: false });
+    if (directoryStat?.isSymbolicLink()) {
+      state.findings.push({
+        severity: "blocker",
+        code: "resource_symlink",
+        relativePath: directory,
+        message:
+          "is a symbolic link; package resource directories must remain inside the Skill package",
+      });
+    } else if (directoryStat?.isDirectory()) {
       listSkillResourceDirectory({
         currentPath: directoryPath,
         relativeParts: [directory],
         state,
       });
+    } else if (directoryStat !== undefined) {
+      state.findings.push({
+        severity: "blocker",
+        code: "resource_unreadable",
+        relativePath: directory,
+        message: "must be a directory when present in a Skill package",
+      });
     }
   }
-  return state.resourcePaths.toSorted(compareSkillResourcePaths);
+  return {
+    resourcePaths: state.resourcePaths.toSorted(compareSkillResourcePaths),
+    findings: state.findings,
+  };
 }
 
 function ensureRealPathInsideRoot(
@@ -294,6 +413,61 @@ function decodeSkillBytes(skillFilePath: string, bytes: Uint8Array): string {
   }
 }
 
+function binarySkillResourceError(relativePath: string): WorkflowSkillError {
+  /* v8 ignore next 2 -- audit blocks non-assets binaries; the fallback wording only protects a concurrent replacement after re-audit. */
+  const kind = relativePath.startsWith("assets/")
+    ? "binary asset"
+    : "binary resource";
+  return new WorkflowSkillError(
+    `Error: workflow skill resource ${JSON.stringify(redactSecretLikeText(relativePath))} is a ${kind} and cannot be read as text with skill_resource; use its advertised Skill-relative path with an approved binary-capable tool.`,
+  );
+}
+
+function readSkillResourceText(
+  resourcePath: string,
+  relativePath: string,
+): string {
+  const fd = openSync(resourcePath, "r");
+  try {
+    const reportedSize = fstatSync(fd).size;
+    const sample = Buffer.allocUnsafe(
+      Math.min(reportedSize, BINARY_SAMPLE_BYTES),
+    );
+    const sampleBytesRead = readSync(fd, sample, 0, sample.length, 0);
+    if (
+      isBinaryContentSample(
+        sample.subarray(0, sampleBytesRead),
+        sampleBytesRead === reportedSize,
+      )
+    ) {
+      throw binarySkillResourceError(relativePath);
+    }
+    /* v8 ignore next 4 -- the package is re-audited immediately before this read; only concurrent growth can cross the text limit here. */
+    if (reportedSize > MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES) {
+      throw new WorkflowSkillError(
+        `Error: workflow skill resource ${JSON.stringify(redactSecretLikeText(relativePath))} is too large to read as text (${reportedSize} bytes; limit ${MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES} bytes).`,
+      );
+    }
+    const bytes = Buffer.allocUnsafe(reportedSize);
+    const bytesRead = readSync(fd, bytes, 0, bytes.length, 0);
+    const content = bytes.subarray(0, bytesRead);
+    /* v8 ignore next 3 -- the package is re-audited immediately before this read; only concurrent replacement can introduce later binary bytes. */
+    if (hasBinaryControlBytes(content)) {
+      throw binarySkillResourceError(relativePath);
+    }
+    try {
+      return new TextDecoder("utf-8", { fatal: true })
+        .decode(content)
+        .trimEnd();
+    } catch {
+      /* v8 ignore next 1 -- the package is re-audited immediately before this read; only concurrent replacement can introduce invalid UTF-8. */
+      throw binarySkillResourceError(relativePath);
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function skillDigest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -305,7 +479,7 @@ function skillRootKey(root: SkillRoot): string {
     .slice(0, 12);
 }
 
-function readSkillFile(
+function readSkillFileFromDisk(
   root: SkillRoot,
   skillName: string,
   includeResourcePaths: boolean,
@@ -324,10 +498,8 @@ function readSkillFile(
     );
   }
   const bytes = readSkillBytes(skillFilePath);
-  const parsed = parseSkillDocument(
-    toPosixPath(skillFilePath),
-    decodeSkillBytes(skillFilePath, bytes),
-  );
+  const decoded = decodeSkillBytes(skillFilePath, bytes);
+  const parsed = parseSkillDocument(toPosixPath(skillFilePath), decoded);
   if (parsed.name !== skillName) {
     throw new WorkflowSkillError(
       `Error: workflow skill ${JSON.stringify(`${root.scope}:${skillName}`)} has mismatched frontmatter name ${JSON.stringify(parsed.name)}.`,
@@ -339,6 +511,20 @@ function readSkillFile(
   const id = `${packageId}:${digest}`;
   const qualifiedName = `${root.scope}:${parsed.name}`;
   const relativePath = skillDisplayPath(root, skillName);
+  const inventory = listSkillResourcePaths(root, skillName);
+  const findings = auditSkillPackage({
+    skillDirectory: join(root.rootPath, skillName),
+    skillRelativePath: relativePath,
+    content: decoded,
+    resourcePaths: inventory.resourcePaths,
+    inventoryFindings: inventory.findings,
+    ...(parsed.allowedTools !== undefined
+      ? { allowedTools: parsed.allowedTools }
+      : {}),
+    ...(parsed.compatibility !== undefined
+      ? { compatibility: parsed.compatibility }
+      : {}),
+  });
   return {
     descriptor: {
       id,
@@ -361,12 +547,56 @@ function readSkillFile(
       digest,
       name: parsed.name,
       relativePath,
-      resourcePaths: includeResourcePaths
-        ? listSkillResourcePaths(root, skillName)
-        : [],
+      resourcePaths: includeResourcePaths ? inventory.resourcePaths : [],
       content: parsed.content,
     },
+    findings,
   };
+}
+
+function readSkillFile(
+  root: SkillRoot,
+  skillName: string,
+  includeResourcePaths: boolean,
+): ReadSkill {
+  try {
+    return readSkillFileFromDisk(root, skillName, includeResourcePaths);
+  } catch (error) {
+    if (error instanceof WorkflowSkillError) {
+      const auditMessage = invalidPackageAuditMessage(error);
+      throw new SkillPackageValidationError(
+        invalidPackageErrorMessage(root, skillName, auditMessage),
+        auditMessage,
+      );
+    }
+    /* v8 ignore else: filesystem operations throw errno exceptions; unexpected implementation faults must retain their original identity. */
+    if (isErrnoException(error)) {
+      const auditMessage =
+        "Skill package files could not be read during deterministic validation";
+      throw new SkillPackageValidationError(
+        invalidPackageErrorMessage(root, skillName, auditMessage),
+        auditMessage,
+      );
+    }
+    /* v8 ignore next: preserve unexpected implementation faults for the runtime boundary. */
+    throw error;
+  }
+}
+
+function assertSkillAuditPass(
+  qualifiedName: string,
+  findings: readonly SkillAuditFinding[],
+): void {
+  const blocker = firstSkillAuditBlocker(findings);
+  if (blocker === undefined) return;
+  throw new WorkflowSkillError(skillAuditErrorMessage(qualifiedName, blocker));
+}
+
+function skillAuditErrorMessage(
+  qualifiedName: string,
+  blocker: SkillAuditFinding,
+): string {
+  return `Error: workflow skill ${JSON.stringify(redactSecretLikeText(qualifiedName))} is blocked by deterministic audit [${blocker.code}] at ${redactSecretLikeText(blocker.relativePath)}: ${redactSecretLikeText(blocker.message)}.`;
 }
 
 function lookupParts(lookup: string): {
@@ -469,36 +699,135 @@ function searchScore(skill: SkillDescriptor, query: string): number {
   return score;
 }
 
+function invalidPackageAuditMessage(error: WorkflowSkillError): string {
+  if (error instanceof SkillPackageValidationError) {
+    return error.auditMessage;
+  }
+  const message = error.message;
+  if (message.includes("resolved SKILL.md path escapes")) {
+    return "SKILL.md resolves outside its declared Skill root";
+  }
+  if (message.includes("must be a regular SKILL.md")) {
+    return "SKILL.md must be a regular file";
+  }
+  /* v8 ignore next 2 -- discovery checks SKILL.md existence immediately before reading; this only catches a concurrent deletion. */
+  if (message.includes("was not found")) {
+    return "SKILL.md is missing from the package";
+  }
+  if (message.includes("SKILL.md is too large")) {
+    return `SKILL.md exceeds the ${MAX_WORKFLOW_SKILL_BYTES}-byte limit`;
+  }
+  if (message.includes("binary or not valid UTF-8")) {
+    return "SKILL.md must be valid UTF-8 text without binary control bytes";
+  }
+  if (message.includes("mismatched frontmatter name")) {
+    return "frontmatter name must match the parent package directory";
+  }
+  if (message.includes("must start with YAML frontmatter")) {
+    return "SKILL.md must start with YAML frontmatter";
+  }
+  if (message.includes("unterminated YAML frontmatter")) {
+    return "SKILL.md YAML frontmatter must end with a closing delimiter";
+  }
+  if (message.includes("invalid YAML frontmatter")) {
+    return "SKILL.md contains invalid YAML frontmatter";
+  }
+  if (message.includes("invalid Agent Skills frontmatter")) {
+    return "frontmatter does not match the Agent Skills schema";
+  }
+  if (message.includes("metadata.keel.activation")) {
+    return 'metadata.keel.activation must be "implicit" or "explicit"';
+  }
+  /* v8 ignore next 3 -- all current package-validation sites are categorized above or use the shared skill-name validator. */
+  if (!message.includes("skill names may contain")) {
+    return "does not satisfy deterministic package validation";
+  }
+  return "package name violates the Agent Skills lowercase name contract";
+}
+
+function invalidPackageErrorMessage(
+  root: SkillRoot,
+  skillName: string,
+  auditMessage: string,
+): string {
+  const qualifiedName = redactSecretLikeText(`${root.scope}:${skillName}`);
+  const displayPath = redactSecretLikeText(skillDisplayPath(root, skillName));
+  return `Error: workflow skill ${JSON.stringify(qualifiedName)} is blocked by deterministic audit [invalid_package] at ${displayPath}: ${redactSecretLikeText(auditMessage)}.`;
+}
+
 export function discoverSkillCatalog(
   options: SkillDiscoveryOptions,
 ): SkillCatalog {
   const rootsById = new Map<string, SkillRoot>();
   const seenRoots = new Set<string>();
   const skills: SkillDescriptor[] = [];
-  const warnings: SkillCatalogWarning[] = [];
+  const discoveredAudits: DiscoveredSkillAudit[] = [];
+  const recordInvalidPackage = (
+    root: SkillRoot,
+    skillName: string,
+    auditMessage: string,
+  ): void => {
+    discoveredAudits.push({
+      scope: root.scope,
+      name: skillName,
+      rootKey: skillRootKey(root),
+      relativePath: skillDisplayPath(root, skillName),
+      findings: [
+        {
+          severity: "blocker",
+          code: "invalid_package",
+          relativePath: skillDisplayPath(root, skillName),
+          message: auditMessage,
+        },
+      ],
+    });
+  };
   for (const root of discoveryRoots(options)) {
     if (!ensureSkillRootDirectory(root)) continue;
     const rootIdentity = `${root.scope}:${realpathSync(root.rootPath)}`;
     if (seenRoots.has(rootIdentity)) continue;
     seenRoots.add(rootIdentity);
     for (const entry of readdirSync(root.rootPath, { withFileTypes: true })) {
+      const skillFileExists = existsSync(
+        join(root.rootPath, entry.name, SKILL_FILE),
+      );
+      if (entry.isSymbolicLink() && !skillFileExists) {
+        recordInvalidPackage(
+          root,
+          entry.name,
+          "Skill package symlink is dangling or has no readable SKILL.md",
+        );
+        continue;
+      }
       if (
         (!entry.isDirectory() && !entry.isSymbolicLink()) ||
-        !existsSync(join(root.rootPath, entry.name, SKILL_FILE))
+        !skillFileExists
       ) {
         continue;
       }
       try {
         const read = readSkillFile(root, entry.name, false);
+        discoveredAudits.push({
+          scope: root.scope,
+          name: read.descriptor.name,
+          rootKey: read.descriptor.rootKey,
+          relativePath: read.descriptor.relativePath,
+          findings: read.findings,
+        });
+        const blocker = firstSkillAuditBlocker(read.findings);
+        if (blocker !== undefined) {
+          continue;
+        }
         skills.push(read.descriptor);
         rootsById.set(read.descriptor.id, root);
       } catch (error) {
         /* v8 ignore next 3: unexpected filesystem/runtime faults must propagate. */
         if (!(error instanceof WorkflowSkillError)) throw error;
-        warnings.push({
-          name: `${root.scope}:${entry.name}`,
-          message: error.message,
-        });
+        recordInvalidPackage(
+          root,
+          entry.name,
+          invalidPackageAuditMessage(error),
+        );
       }
     }
   }
@@ -514,6 +843,40 @@ export function discoverSkillCatalog(
         ? `${skill.scope}:${skill.name}`
         : `${skill.scope}:${skill.rootKey}:${skill.name}`,
   }));
+  const auditDuplicateCounts = new Map<string, number>();
+  for (const audit of discoveredAudits) {
+    const key = `${audit.scope}:${audit.name}`;
+    auditDuplicateCounts.set(key, (auditDuplicateCounts.get(key) ?? 0) + 1);
+  }
+  const identifiedAudits = discoveredAudits.map((audit) => ({
+    ...audit,
+    qualifiedName:
+      auditDuplicateCounts.get(`${audit.scope}:${audit.name}`) === 1
+        ? `${audit.scope}:${audit.name}`
+        : `${audit.scope}:${audit.rootKey}:${audit.name}`,
+  }));
+  const warnings: readonly SkillCatalogWarning[] = identifiedAudits.flatMap(
+    (audit) => {
+      const blocker = firstSkillAuditBlocker(audit.findings);
+      return blocker === undefined
+        ? []
+        : [
+            {
+              name: audit.qualifiedName,
+              message: skillAuditErrorMessage(audit.qualifiedName, blocker),
+            },
+          ];
+    },
+  );
+  const audits: readonly SkillPackageAudit[] = identifiedAudits
+    .map((audit) => ({
+      qualifiedName: audit.qualifiedName,
+      relativePath: audit.relativePath,
+      findings: audit.findings,
+    }))
+    .toSorted((left, right) =>
+      left.qualifiedName.localeCompare(right.qualifiedName),
+    );
   const sortedSkills = collisionSafeSkills.toSorted(
     (left, right) =>
       left.name.localeCompare(right.name) ||
@@ -533,6 +896,7 @@ export function discoverSkillCatalog(
       );
     }
     const current = readSkillFile(root, descriptor.name, true);
+    assertSkillAuditPass(descriptor.qualifiedName, current.findings);
     if (
       current.descriptor.digest !== descriptor.digest ||
       current.descriptor.id !== descriptor.id
@@ -550,10 +914,13 @@ export function discoverSkillCatalog(
     lookup: string,
   ): SkillCatalogWarning | undefined => {
     const parts = lookupParts(lookup);
+    if (parts.scope !== undefined && lookup.split(":").length === 3) {
+      return warnings.find((warning) => warning.name === lookup);
+    }
     const matches = warnings.filter((warning) => {
-      const separator = warning.name.indexOf(":");
-      const scope = warning.name.slice(0, separator);
-      const name = warning.name.slice(separator + 1);
+      const warningParts = warning.name.split(":");
+      const scope = warningParts[0];
+      const name = warningParts.at(-1);
       return (
         name === parts.name &&
         (parts.scope === undefined || scope === parts.scope)
@@ -583,6 +950,7 @@ export function discoverSkillCatalog(
     skills: sortedSkills,
     implicitSkills,
     warnings,
+    audits,
     load: (lookup) => loadWithWarning(sortedSkills, lookup),
     loadImplicit: (lookup) => loadWithWarning(implicitSkills, lookup),
     loadPackage: (packageId) => {
@@ -594,6 +962,7 @@ export function discoverSkillCatalog(
       /* v8 ignore next -- descriptors and roots are populated atomically above. */
       if (root === undefined) return undefined;
       const current = readSkillFile(root, descriptor.name, true);
+      assertSkillAuditPass(descriptor.qualifiedName, current.findings);
       return { ...current.skill, qualifiedName: descriptor.qualifiedName };
     },
     search: (query, limit = 20) =>
@@ -622,6 +991,7 @@ export function discoverSkillCatalog(
         );
       }
       const current = readSkillFile(root, descriptor.name, true);
+      assertSkillAuditPass(descriptor.qualifiedName, current.findings);
       if (current.descriptor.digest !== descriptor.digest) {
         throw new WorkflowSkillError(
           `Error: workflow skill ${JSON.stringify(descriptor.qualifiedName)} changed after catalog discovery.`,
@@ -637,7 +1007,7 @@ export function discoverSkillCatalog(
         join(root.rootPath, descriptor.name),
         resourcePath,
       );
-      return decodeSkillBytes(resourcePath, readSkillBytes(resourcePath));
+      return readSkillResourceText(resourcePath, path);
     },
     readPackageResource: (packageId, digest, path) => {
       if (!isWorkflowSkillResourcePath(path)) {
@@ -661,6 +1031,7 @@ export function discoverSkillCatalog(
         );
       }
       const current = readSkillFile(root, descriptor.name, true);
+      assertSkillAuditPass(descriptor.qualifiedName, current.findings);
       if (current.skill.digest !== digest) {
         throw new WorkflowSkillError(
           `Error: workflow skill ${JSON.stringify(descriptor.qualifiedName)} changed on disk; reload it before reading resources.`,
@@ -676,7 +1047,7 @@ export function discoverSkillCatalog(
         join(root.rootPath, descriptor.name),
         resourcePath,
       );
-      return decodeSkillBytes(resourcePath, readSkillBytes(resourcePath));
+      return readSkillResourceText(resourcePath, path);
     },
   };
 }
