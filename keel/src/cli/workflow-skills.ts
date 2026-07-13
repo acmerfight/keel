@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import { redactSecretLikeText } from "../core/secret-text.ts";
 import type { SkillPackageAudit } from "../skills/audit.ts";
 import {
   exposeSkillCatalog,
@@ -118,6 +119,10 @@ function plural(count: number, singular: string, pluralValue: string): string {
   return count === 1 ? singular : pluralValue;
 }
 
+function sanitizeWorkflowSkillOutputText(text: string): string {
+  return sanitizeStatusLineText(redactSecretLikeText(text));
+}
+
 export function formatWorkflowSkillDiagnostics(
   audits: readonly SkillPackageAudit[],
 ): string {
@@ -137,11 +142,13 @@ export function formatWorkflowSkillDiagnostics(
     if (blocker) blockedPackages += 1;
     warningCount += warnings.length;
     const status = blocker ? "blocked" : warnings.length > 0 ? "warning" : "ok";
-    lines.push(`- ${sanitizeStatusLineText(audit.qualifiedName)}: ${status}`);
+    lines.push(
+      `- ${sanitizeWorkflowSkillOutputText(audit.qualifiedName)}: ${status}`,
+    );
     for (const finding of audit.findings) {
       const severity = finding.severity === "blocker" ? "BLOCK" : "WARN";
       lines.push(
-        `  - ${severity} [${finding.code}] ${sanitizeStatusLineText(finding.relativePath)}: ${finding.message}`,
+        `  - ${severity} [${finding.code}] ${sanitizeWorkflowSkillOutputText(finding.relativePath)}: ${sanitizeWorkflowSkillOutputText(finding.message)}`,
       );
     }
   }
@@ -162,7 +169,7 @@ export function formatWorkflowSkillList(
     "Workflow skills:",
     ...skills.map(
       (skill) =>
-        `- ${skill.qualifiedName}: ${skill.description}${
+        `- ${sanitizeWorkflowSkillOutputText(skill.qualifiedName)}: ${sanitizeWorkflowSkillOutputText(skill.description)}${
           skill.activationPolicy === "explicit" ? " [explicit only]" : ""
         }`,
     ),
@@ -171,7 +178,7 @@ export function formatWorkflowSkillList(
 }
 
 function formatWorkflowSkillWarningMessage(message: string): string {
-  return sanitizeStatusLineText(message.replace(/^Error: /u, ""));
+  return sanitizeWorkflowSkillOutputText(message.replace(/^Error: /u, ""));
 }
 
 export function formatWorkflowSkillListWarnings(
@@ -180,7 +187,7 @@ export function formatWorkflowSkillListWarnings(
   return warnings
     .map(
       (warning) =>
-        `Warning: skipped workflow skill ${sanitizeStatusLineText(JSON.stringify(warning.name))}: ${formatWorkflowSkillWarningMessage(warning.message)}\n`,
+        `Warning: skipped workflow skill ${sanitizeWorkflowSkillOutputText(JSON.stringify(warning.name))}: ${formatWorkflowSkillWarningMessage(warning.message)}\n`,
     )
     .join("");
 }

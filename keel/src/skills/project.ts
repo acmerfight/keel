@@ -12,6 +12,7 @@ import {
   statSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { redactSecretLikeText } from "../core/secret-text.ts";
 import {
   BINARY_SAMPLE_BYTES,
   hasBinaryControlBytes,
@@ -287,17 +288,19 @@ function listSkillResourceDirectory(options: {
           relativeParts: entryRelativeParts,
           state: options.state,
         });
-      } else if (entry.isFile()) {
-        options.state.resourcePaths.push(resourcePath);
       } else {
-        /* v8 ignore next 7 -- portable Skill fixtures can create files, directories, and symlinks; device/socket entries remain fail-closed. */
-        options.state.findings.push({
-          severity: "blocker",
-          code: "resource_unreadable",
-          relativePath: entryRelativeParts.join("/"),
-          message:
-            "is not a regular file or directory and cannot be audited safely",
-        });
+        /* v8 ignore else -- portable Skill fixtures can create files, directories, and symlinks; device/socket entries remain fail-closed. */
+        if (entry.isFile()) {
+          options.state.resourcePaths.push(resourcePath);
+        } else {
+          options.state.findings.push({
+            severity: "blocker",
+            code: "resource_unreadable",
+            relativePath: entryRelativeParts.join("/"),
+            message:
+              "is not a regular file or directory and cannot be audited safely",
+          });
+        }
       }
     }
   } catch {
@@ -529,9 +532,14 @@ function assertSkillAuditPass(
 ): void {
   const blocker = firstSkillAuditBlocker(findings);
   if (blocker === undefined) return;
-  throw new WorkflowSkillError(
-    `Error: workflow skill ${JSON.stringify(qualifiedName)} is blocked by deterministic audit [${blocker.code}] at ${blocker.relativePath}: ${blocker.message}.`,
-  );
+  throw new WorkflowSkillError(skillAuditErrorMessage(qualifiedName, blocker));
+}
+
+function skillAuditErrorMessage(
+  qualifiedName: string,
+  blocker: SkillAuditFinding,
+): string {
+  return `Error: workflow skill ${JSON.stringify(redactSecretLikeText(qualifiedName))} is blocked by deterministic audit [${blocker.code}] at ${redactSecretLikeText(blocker.relativePath)}: ${redactSecretLikeText(blocker.message)}.`;
 }
 
 function lookupParts(lookup: string): {
@@ -685,8 +693,9 @@ function invalidPackageErrorMessage(
   skillName: string,
   auditMessage: string,
 ): string {
-  const qualifiedName = `${root.scope}:${skillName}`;
-  return `Error: workflow skill ${JSON.stringify(qualifiedName)} is blocked by deterministic audit [invalid_package] at ${skillDisplayPath(root, skillName)}: ${auditMessage}.`;
+  const qualifiedName = redactSecretLikeText(`${root.scope}:${skillName}`);
+  const displayPath = redactSecretLikeText(skillDisplayPath(root, skillName));
+  return `Error: workflow skill ${JSON.stringify(qualifiedName)} is blocked by deterministic audit [invalid_package] at ${displayPath}: ${redactSecretLikeText(auditMessage)}.`;
 }
 
 export function discoverSkillCatalog(
@@ -757,7 +766,10 @@ export function discoverSkillCatalog(
         if (blocker !== undefined) {
           warnings.push({
             name: `${root.scope}:${entry.name}`,
-            message: `Error: workflow skill ${JSON.stringify(`${root.scope}:${entry.name}`)} is blocked by deterministic audit [${blocker.code}] at ${blocker.relativePath}: ${blocker.message}.`,
+            message: skillAuditErrorMessage(
+              `${root.scope}:${entry.name}`,
+              blocker,
+            ),
           });
           continue;
         }

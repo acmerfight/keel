@@ -263,8 +263,8 @@ describe("CLI Main - Skills Doctor", () => {
   });
 
   test(`Given a Skill resource path itself contains persistence-sensitive text,
-    When the user audits the package,
-    Then doctor blocks the snapshot before activation can reach session persistence`, async () => {
+    When the user audits, lists, or explicitly activates the package,
+    Then Keel blocks the snapshot without echoing the credential`, async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-skills-doctor-secret-resource-path-"),
     );
@@ -275,19 +275,85 @@ describe("CLI Main - Skills Doctor", () => {
       body: "Read the bundled reference.",
     });
     await mkdir(join(directory, "references"), { recursive: true });
+    const secret = "sk-example-secret-435";
     await writeFile(
-      join(directory, "references", "sk-example-secret-435.md"),
+      join(directory, "references", `${secret}.md`),
       "Safe reference contents.\n",
     );
 
     try {
       const doctor = createRuntime(["skills", "doctor"], { cwd: workspace });
+      const list = createRuntime(["skills"], { cwd: workspace });
+      const activation = createRuntime(
+        ["--provider", "fake", "--skill", "unsafe-path", "use the Skill"],
+        { cwd: workspace },
+      );
 
       expect(await runCliMain(doctor.runtime)).toBe(1);
+      expect(await runCliMain(list.runtime)).toBe(0);
+      expect(await runCliMain(activation.runtime)).toBe(1);
       expect(doctor.stderr()).toBe("");
       expect(doctor.stdout()).toContain("- repo:unsafe-path: blocked");
       expect(doctor.stdout()).toContain("[embedded_secret]");
-      expect(doctor.stdout()).toContain("references/sk-example-secret-435.md");
+      expect(doctor.stdout()).toContain("references/[REDACTED_SECRET].md");
+      expect(list.stderr()).toContain("references/[REDACTED_SECRET].md");
+      expect(activation.stderr()).toContain("references/[REDACTED_SECRET].md");
+      for (const output of [
+        doctor.stdout(),
+        doctor.stderr(),
+        list.stdout(),
+        list.stderr(),
+        activation.stdout(),
+        activation.stderr(),
+      ]) {
+        expect(output).not.toContain(secret);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given persistence-sensitive text forms a Skill package identifier,
+    When the user audits, lists, or explicitly activates the package,
+    Then every diagnostic representation redacts the identifier`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skills-doctor-secret-identifier-"),
+    );
+    const secret = "sk-example-identifier-435";
+    await writeSkill({
+      workspace,
+      name: secret,
+      description: "Unsafe package identifier example.",
+      body: "Do not activate this package.",
+    });
+
+    try {
+      const doctor = createRuntime(["skills", "doctor"], { cwd: workspace });
+      const list = createRuntime(["skills"], { cwd: workspace });
+      const activation = createRuntime(
+        ["--provider", "fake", "--skill", secret, "use the Skill"],
+        { cwd: workspace },
+      );
+
+      expect(await runCliMain(doctor.runtime)).toBe(1);
+      expect(await runCliMain(list.runtime)).toBe(0);
+      expect(await runCliMain(activation.runtime)).toBe(1);
+      expect(doctor.stdout()).toContain("repo:[REDACTED_SECRET]: blocked");
+      expect(doctor.stdout()).toContain(
+        ".agents/skills/[REDACTED_SECRET]/SKILL.md",
+      );
+      expect(list.stderr()).toContain('"repo:[REDACTED_SECRET]"');
+      expect(activation.stderr()).toContain('"repo:[REDACTED_SECRET]"');
+      for (const output of [
+        doctor.stdout(),
+        doctor.stderr(),
+        list.stdout(),
+        list.stderr(),
+        activation.stdout(),
+        activation.stderr(),
+      ]) {
+        expect(output).not.toContain(secret);
+      }
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

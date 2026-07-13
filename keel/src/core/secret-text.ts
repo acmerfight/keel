@@ -1,4 +1,4 @@
-export const PERSISTENCE_REDACTION_MARKER = "[REDACTED_SECRET]";
+export const SECRET_REDACTION_MARKER = "[REDACTED_SECRET]";
 
 type SecretRedactionKind = "bearer" | "environment" | "whole";
 
@@ -79,18 +79,18 @@ function redactWithRule(text: string, rule: SecretTextRule): string {
     return text.replace(
       rule.redactionPattern,
       (_match, lineStart: string, keyPrefix: string) =>
-        `${lineStart}${keyPrefix}${PERSISTENCE_REDACTION_MARKER}`,
+        `${lineStart}${keyPrefix}${SECRET_REDACTION_MARKER}`,
     );
   }
   if (rule.redactionKind === "bearer") {
     return text.replace(
       rule.redactionPattern,
-      `Bearer ${PERSISTENCE_REDACTION_MARKER}`,
+      `Bearer ${SECRET_REDACTION_MARKER}`,
     );
   }
-  return text.replace(rule.redactionPattern, PERSISTENCE_REDACTION_MARKER);
+  return text.replace(rule.redactionPattern, SECRET_REDACTION_MARKER);
 }
 
-export function redactSecretLikeTextForPersistence(text: string): string {
+export function redactSecretLikeText(text: string): string {
   return SECRET_TEXT_RULES.reduce(redactWithRule, text);
 }

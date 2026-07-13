@@ -1,6 +1,9 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { secretLikeTextLabel } from "../core/secret-text.ts";
+import {
+  redactSecretLikeText,
+  secretLikeTextLabel,
+} from "../core/secret-text.ts";
 import {
   BINARY_SAMPLE_BYTES,
   hasBinaryControlBytes,
@@ -71,12 +74,18 @@ function uniqueFindings(
   findings: readonly SkillAuditFinding[],
 ): readonly SkillAuditFinding[] {
   const seen = new Set<string>();
-  return findings.filter((finding) => {
-    const key = findingKey(finding);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return findings
+    .filter((finding) => {
+      const key = findingKey(finding);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((finding) => ({
+      ...finding,
+      relativePath: redactSecretLikeText(finding.relativePath),
+      message: redactSecretLikeText(finding.message),
+    }));
 }
 
 function auditText(

@@ -997,6 +997,90 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given a secret-bearing resource path appears after Skill catalog discovery,
+    When the model tries to activate that Skill,
+    Then Keel blocks activation without exposing the credential to the provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skill-secret-path-race-"),
+    );
+    const reportPath = join(workspace, "run.json");
+    const references = join(
+      workspace,
+      ".agents",
+      "skills",
+      "review",
+      "references",
+    );
+    const secret = "sk-provider-path-secret-435";
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "Read the relevant packaged references.",
+    );
+    await mkdir(references, { recursive: true });
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", async () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          await writeFile(join(references, `${secret}.md`), "Safe contents.\n");
+          res.write(sseToolCall("call_skill", "skill", { name: "review" }));
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Continued without the blocked Skill."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      ["--report", reportPath, "review pull request 123"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_skill",
+          content: expect.stringContaining("references/[REDACTED_SECRET].md"),
+        }),
+      );
+      expect(JSON.stringify(secondRequest)).not.toContain(secret);
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        schemaVersion: 8,
+        skillActivations: [],
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a valid project skill expands beyond the generic inline tool-output limit,
     When the model activates it on demand,
     Then Keel delivers the complete skill body instead of recording a truncated activation`, async () => {

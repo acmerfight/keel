@@ -1,7 +1,7 @@
 import { copyReadResourceObservation } from "../core/resource-observation.ts";
 import {
-  PERSISTENCE_REDACTION_MARKER,
-  redactSecretLikeTextForPersistence,
+  redactSecretLikeText,
+  SECRET_REDACTION_MARKER,
 } from "../core/secret-text.ts";
 import type {
   AssistantProviderMetadata,
@@ -15,11 +15,11 @@ import {
 } from "../tools/registry.ts";
 
 export function redactTextForPersistence(text: string): string {
-  return redactSecretLikeTextForPersistence(text);
+  return redactSecretLikeText(text);
 }
 
 export function hasPersistenceRedactionMarker(text: string): boolean {
-  return text.includes(PERSISTENCE_REDACTION_MARKER);
+  return text.includes(SECRET_REDACTION_MARKER);
 }
 
 function redactUnknownForPersistence(value: unknown): unknown {
