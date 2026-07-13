@@ -12,6 +12,7 @@ import {
   emptySessionTaskProgress,
   type SessionTaskProgress,
 } from "../core/task-progress.ts";
+import type { RecordUndoCheckpointResult } from "../core/undo-protection.ts";
 import type {
   AssistantProviderMetadata,
   LLMProvider,
@@ -166,6 +167,18 @@ function toolEndEvent(
       ? { bashExitCode: execution.bashCommandEvidence.exitCode }
       : {}),
   };
+}
+
+function undoCheckpointEvent(
+  result: RecordUndoCheckpointResult,
+): Extract<AgentEvent, { readonly type: "undo_checkpoint" }> {
+  return result.written
+    ? { type: "undo_checkpoint", written: true }
+    : {
+        type: "undo_checkpoint",
+        written: false,
+        reason: result.reason,
+      };
 }
 
 function isBlockedGoalProposal(toolCall: ToolCall): boolean {
@@ -1098,43 +1111,70 @@ export async function* runAgent(
     options.workspace,
   );
   const checkpointOperations: RecordLastBatchCheckpointOperation[] = [];
-  try {
-    yield* runAgentTurn({
-      workspace: options.workspace,
-      provider: options.provider,
-      messages,
-      systemPrompt: options.systemPrompt,
-      signal: options.signal,
-      allowBash: options.allowBash,
-      ...(options.skillActivation !== undefined
-        ? { skillActivation: options.skillActivation }
-        : {}),
-      stopPolicy: options.stopPolicy,
-      readVisibility,
-      projectInstructionVisibility,
-      recordCheckpointOperations: (operations) => {
-        checkpointOperations.push(...operations);
-      },
-      ...(options.costTracking !== undefined
-        ? { costTracking: options.costTracking }
-        : {}),
-      ...(options.bashPermission !== undefined
-        ? { bashPermission: options.bashPermission }
-        : {}),
-      ...(options.contextCompaction !== undefined
-        ? { contextCompaction: options.contextCompaction }
-        : {}),
-      ...(options.toolOutputArtifacts !== undefined
-        ? { toolOutputArtifacts: options.toolOutputArtifacts }
-        : {}),
-    });
-    options.onTranscriptReady?.(messages);
-  } finally {
-    if (checkpointOperations.length > 0) {
+  let checkpointRecorded = false;
+  const recordCheckpoint = (): Extract<
+    AgentEvent,
+    { readonly type: "undo_checkpoint" }
+  > | null => {
+    if (checkpointOperations.length === 0) return null;
+    return undoCheckpointEvent(
       recordLastTaskCheckpoint({
         workspace: options.workspace,
         operations: checkpointOperations,
-      });
+      }),
+    );
+  };
+  try {
+    let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+    try {
+      for await (const event of runAgentTurn({
+        workspace: options.workspace,
+        provider: options.provider,
+        messages,
+        systemPrompt: options.systemPrompt,
+        signal: options.signal,
+        allowBash: options.allowBash,
+        ...(options.skillActivation !== undefined
+          ? { skillActivation: options.skillActivation }
+          : {}),
+        stopPolicy: options.stopPolicy,
+        readVisibility,
+        projectInstructionVisibility,
+        recordCheckpointOperations: (operations) => {
+          checkpointOperations.push(...operations);
+        },
+        ...(options.costTracking !== undefined
+          ? { costTracking: options.costTracking }
+          : {}),
+        ...(options.bashPermission !== undefined
+          ? { bashPermission: options.bashPermission }
+          : {}),
+        ...(options.contextCompaction !== undefined
+          ? { contextCompaction: options.contextCompaction }
+          : {}),
+        ...(options.toolOutputArtifacts !== undefined
+          ? { toolOutputArtifacts: options.toolOutputArtifacts }
+          : {}),
+      })) {
+        if (event.type === "end") {
+          finalEnd = event;
+        } else {
+          yield event;
+        }
+      }
+    } catch (error) {
+      const checkpointEvent = recordCheckpoint();
+      checkpointRecorded = true;
+      if (checkpointEvent !== null) yield checkpointEvent;
+      throw error;
     }
+    options.onTranscriptReady?.(messages);
+    const checkpointEvent = recordCheckpoint();
+    checkpointRecorded = true;
+    if (checkpointEvent !== null) yield checkpointEvent;
+    /* v8 ignore next -- a normally completed runAgentTurn always emits one terminal end event. */
+    if (finalEnd !== undefined) yield finalEnd;
+  } finally {
+    if (!checkpointRecorded) recordCheckpoint();
   }
 }

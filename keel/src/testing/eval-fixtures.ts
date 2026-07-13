@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 type EvalTrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
 
 export interface EvalRunReport {
-  readonly schemaVersion: 7;
+  readonly schemaVersion: 8;
   readonly modelsUsed: readonly {
     readonly provider: string;
     readonly model: string;
@@ -41,6 +41,27 @@ export interface EvalRunReport {
     readonly total: number;
     readonly budgetChars: number;
     readonly usedChars: number;
+  };
+  readonly undoProtection: {
+    readonly status: "available" | "not_applicable" | "unavailable";
+    readonly checkpointsWritten: number;
+    readonly failures: readonly {
+      readonly reason:
+        | "checkpoint_write_failed"
+        | "git_workspace_unavailable"
+        | "target_unavailable";
+      readonly count: number;
+    }[];
+    readonly latestCheckpoint:
+      | { readonly written: true }
+      | {
+          readonly written: false;
+          readonly reason:
+            | "checkpoint_write_failed"
+            | "git_workspace_unavailable"
+            | "target_unavailable";
+        }
+      | null;
   };
 }
 
@@ -87,7 +108,7 @@ export function evalRunReport(
   };
   const costUsd = options.costUsd ?? 0.001;
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     modelsUsed: [{ provider: "deepseek", model: "deepseek-v4-flash" }],
     usageByModel: [
       {
@@ -113,6 +134,12 @@ export function evalRunReport(
       total: 0,
       budgetChars: 8000,
       usedChars: 0,
+    },
+    undoProtection: {
+      status: "not_applicable",
+      checkpointsWritten: 0,
+      failures: [],
+      latestCheckpoint: null,
     },
   };
 }

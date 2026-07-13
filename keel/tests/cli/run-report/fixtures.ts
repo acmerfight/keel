@@ -19,7 +19,7 @@ export {
   z,
 };
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(7),
+  schemaVersion: z.literal(8),
   turns: z.number().int().nonnegative(),
   stopReason: z.string(),
   usage: z.object({
@@ -54,6 +54,33 @@ export const runReportSchema = z.object({
       costUsd: z.number(),
     }),
   ),
+  undoProtection: z.object({
+    status: z.enum(["available", "not_applicable", "unavailable"]),
+    checkpointsWritten: z.number().int().nonnegative(),
+    failures: z.array(
+      z.object({
+        reason: z.enum([
+          "checkpoint_write_failed",
+          "git_workspace_unavailable",
+          "target_unavailable",
+        ]),
+        count: z.number().int().positive(),
+      }),
+    ),
+    latestCheckpoint: z
+      .discriminatedUnion("written", [
+        z.object({ written: z.literal(true) }),
+        z.object({
+          written: z.literal(false),
+          reason: z.enum([
+            "checkpoint_write_failed",
+            "git_workspace_unavailable",
+            "target_unavailable",
+          ]),
+        }),
+      ])
+      .nullable(),
+  }),
 });
 
 export const requestModelSchema = z.object({

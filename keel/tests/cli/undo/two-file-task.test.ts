@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import {
   commitFile,
@@ -11,6 +12,38 @@ import {
 } from "./fixtures.ts";
 
 describe("CLI Undo", () => {
+  test(`Given one task changes two files but its task checkpoint cannot be written,
+    When the task finishes,
+    Then both changes remain and the user sees one unavailable-protection warning`, async () => {
+    // Given
+    const workspace = await createGitWorkspace();
+    await commitFile(workspace, "first.txt", "first old\n");
+    await commitFile(workspace, "second.txt", "second old\n");
+    await mkdir(join(workspace, ".git", "keel", "undo-checkpoints.json"), {
+      recursive: true,
+    });
+
+    try {
+      // When
+      const result = await runTwoFileEditTask(workspace);
+
+      // Then
+      expect(await readFile(join(workspace, "first.txt"), "utf8")).toBe(
+        "first new\n",
+      );
+      expect(await readFile(join(workspace, "second.txt"), "utf8")).toBe(
+        "second new\n",
+      );
+      expect(
+        result.stderr.match(
+          /Warning: change applied; undo checkpoint unavailable for this task\./gu,
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given one Keel task edits two files in separate tool calls,
     When user runs the undo command,
     Then both files are restored as one task checkpoint`, async () => {

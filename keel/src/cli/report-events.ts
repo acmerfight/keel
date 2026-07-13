@@ -1,6 +1,10 @@
 import type { ContextCompactionStats } from "../agent/context-compaction.ts";
 import type { AgentEvent } from "../agent/events.ts";
 import type { ToolOutputArtifactCompactionArtifact } from "../agent/tool-output-artifacts.ts";
+import {
+  createUndoProtectionTracker,
+  type UndoProtectionSummary,
+} from "../core/undo-protection.ts";
 import type { SkillActivationRecord } from "../skills/model.ts";
 
 type ContextCompactionEvent = Extract<
@@ -31,6 +35,7 @@ export interface AgentEventReportRecorder {
   readonly record: (event: AgentEvent) => void;
   readonly contextCompactions: () => readonly RunReportContextCompaction[];
   readonly skillActivations: () => readonly SkillActivationRecord[];
+  readonly undoProtection: () => UndoProtectionSummary;
 }
 
 function providerRequestAction(
@@ -90,6 +95,7 @@ function runReportContextCompaction(
 export function createAgentEventReportRecorder(): AgentEventReportRecorder {
   const contextCompactions: RunReportContextCompaction[] = [];
   const skillActivations: SkillActivationRecord[] = [];
+  const undoProtection = createUndoProtectionTracker();
   return {
     record: (event) => {
       if (event.type === "context_compacted") {
@@ -99,8 +105,12 @@ export function createAgentEventReportRecorder(): AgentEventReportRecorder {
         const { type: _type, ...activation } = event;
         skillActivations.push(activation);
       }
+      if (event.type === "undo_checkpoint") {
+        undoProtection.record(event);
+      }
     },
     contextCompactions: () => [...contextCompactions],
     skillActivations: () => [...skillActivations],
+    undoProtection: undoProtection.summary,
   };
 }

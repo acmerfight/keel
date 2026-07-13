@@ -9,6 +9,7 @@ import {
   formatSessionTaskProgressSummary,
   type SessionTaskProgress,
 } from "../core/task-progress.ts";
+import type { UndoProtectionSummary } from "../core/undo-protection.ts";
 import type { Message } from "../llm/types.ts";
 import { sanitizeStatusLineText } from "./output.ts";
 import { redactTextForPersistence } from "./persistence-redaction.ts";
@@ -43,6 +44,7 @@ export interface SessionStatusSnapshotOptions {
   readonly taskProgress: SessionTaskProgress;
   readonly modelSwitchCount: number;
   readonly undoCheckpoints: readonly { readonly restoredLabel: string }[];
+  readonly undoProtection?: UndoProtectionSummary;
   readonly recoveryActions: readonly SessionStatusRecoveryAction[];
 }
 
@@ -133,6 +135,18 @@ function formatUndoCheckpointStatus(
   return `${checkpoints.length} (latest: ${formatStatusText(latest.restoredLabel)})`;
 }
 
+function formatUndoProtectionStatus(summary: UndoProtectionSummary): string {
+  if (summary.latestCheckpoint === null) return "not applicable";
+  const failed = summary.failures.reduce(
+    (total, failure) => total + failure.count,
+    0,
+  );
+  const latestStatus = summary.latestCheckpoint.written
+    ? "available"
+    : `unavailable - ${summary.latestCheckpoint.reason.replaceAll("_", " ")}`;
+  return `${summary.status} overall (latest: ${latestStatus}; ${failed} failed, ${summary.checkpointsWritten} written)`;
+}
+
 export function formatSessionStatusSnapshot(
   options: SessionStatusSnapshotOptions,
 ): string {
@@ -161,6 +175,11 @@ export function formatSessionStatusSnapshot(
     `  model switches: ${options.modelSwitchCount}`,
     `  latest checkpoint: ${latestCheckpointSummary(options.messages) ?? "none"}`,
     `  undo checkpoints: ${formatUndoCheckpointStatus(options.undoCheckpoints)}`,
+    ...(options.undoProtection === undefined
+      ? []
+      : [
+          `  undo protection: ${formatUndoProtectionStatus(options.undoProtection)}`,
+        ]),
     ...formatRecoveryActions(options.recoveryActions),
     "",
   ];

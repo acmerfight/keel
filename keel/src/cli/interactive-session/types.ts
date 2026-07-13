@@ -7,6 +7,7 @@ import type { ModelMetadata } from "../../core/model-metadata.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
 import type { SessionGoal } from "../../core/session-goal.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
+import type { UndoProtectionSummary } from "../../core/undo-protection.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
 import type {
   BashApprovalGrant,
@@ -209,5 +210,6 @@ export interface InteractiveSessionResult {
       readonly usedChars: number;
     };
     readonly explicitSkillActivations: readonly SkillActivationRecord[];
+    readonly undoProtection: UndoProtectionSummary;
   };
 }

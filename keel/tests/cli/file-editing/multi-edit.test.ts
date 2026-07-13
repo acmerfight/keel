@@ -86,7 +86,7 @@ describe("CLI File Editing", () => {
       );
       expect(result.stdout).toBe("Done.\n");
       expect(result.stderr).toBe(
-        "Tool: read note.txt\nTool: edit note.txt\nTool: edit note.txt\nTool failed: edit note.txt\n",
+        "Tool: read note.txt\nTool: edit note.txt\nTool: edit note.txt\nTool failed: edit note.txt\nWarning: change applied; undo checkpoint unavailable for this task.\n",
       );
       expect(requestCount).toBe(3);
       const secondRequest = requestWithMessagesSchema.parse(
@@ -261,7 +261,7 @@ describe("CLI File Editing", () => {
       );
       expect(result.stdout).toBe("Fixed both files.\n");
       expect(result.stderr).toBe(
-        "Tool: read a.txt\nTool: read b.txt\nTool: edit a.txt\nTool: edit b.txt\n",
+        "Tool: read a.txt\nTool: read b.txt\nTool: edit a.txt\nTool: edit b.txt\nWarning: change applied; undo checkpoint unavailable for this task.\n",
       );
       expect(requestCount).toBe(3);
     } finally {

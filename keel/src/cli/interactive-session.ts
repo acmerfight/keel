@@ -44,6 +44,10 @@ import {
   type SessionTaskProgress,
   sessionTaskProgressesEqual,
 } from "../core/task-progress.ts";
+import {
+  createUndoProtectionTracker,
+  undoCheckpointUnavailable,
+} from "../core/undo-protection.ts";
 import type { Message, Usage } from "../llm/types.ts";
 import {
   type BashApprovalGrant,
@@ -144,6 +148,7 @@ import type {
 import {
   formatLiveSessionGoalStatus,
   formatUndoCheckpointList,
+  formatUndoCheckpointWarning,
   sanitizeStatusLineText,
 } from "./output.ts";
 import {
@@ -379,6 +384,7 @@ export async function runInteractiveSession(
   options: InteractiveSessionOptions,
 ): Promise<InteractiveSessionResult> {
   const now = options.now ?? Date.now;
+  const undoProtection = createUndoProtectionTracker();
   const activeWorkflowSkills: WorkflowSkill[] =
     options.skillActivation === undefined
       ? [...(options.workflowSkills ?? [])]
@@ -1235,10 +1241,14 @@ export async function runInteractiveSession(
       };
     } finally {
       if (checkpointOperations.length > 0) {
-        recordLastTaskCheckpoint({
+        const result = recordLastTaskCheckpoint({
           workspace: options.workspace,
           operations: checkpointOperations,
         });
+        undoProtection.record(result);
+        if (undoCheckpointUnavailable(result)) {
+          options.writeStderr(`${formatUndoCheckpointWarning()}\n`);
+        }
       }
       activeAbortController = null;
       setComposerMode("ready");
@@ -1442,6 +1452,7 @@ export async function runInteractiveSession(
             taskProgress,
             modelSwitchCount,
             undoCheckpoints: listUndoCheckpoints(options.workspace),
+            undoProtection: undoProtection.summary(),
             recoveryActions: statusRecoveryActions(),
           }),
         );
@@ -2351,6 +2362,7 @@ export async function runInteractiveSession(
           usedChars: latestCatalogExposure.usedChars,
         },
         explicitSkillActivations,
+        undoProtection: undoProtection.summary(),
       },
     };
   }

@@ -45,7 +45,7 @@ describe("CLI Main - Provider Config", () => {
         JSON.parse(await readFile(reportPath, "utf8")),
       );
       expect(report).toMatchObject({
-        schemaVersion: 7,
+        schemaVersion: 8,
         modelsUsed: [{ provider: "fake", model: "fake" }],
         usageByModel: [
           {

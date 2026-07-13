@@ -1,5 +1,6 @@
 import type { SessionGoal } from "../core/session-goal.ts";
 import type { SessionTaskProgress } from "../core/task-progress.ts";
+import type { RecordUndoCheckpointResult } from "../core/undo-protection.ts";
 import type { ToolCall, Usage } from "../llm/types.ts";
 import type { SkillActivationRecord } from "../skills/model.ts";
 import type { ContextCompactionStats } from "./context-compaction.ts";
@@ -44,6 +45,7 @@ export type AgentEvent =
       readonly ok: boolean;
       readonly bashExitCode?: number | null;
     }
+  | ({ readonly type: "undo_checkpoint" } & RecordUndoCheckpointResult)
   | ({ readonly type: "skill_activated" } & SkillActivationRecord)
   | {
       readonly type: "task_progress_updated";

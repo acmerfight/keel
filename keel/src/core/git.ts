@@ -24,6 +24,12 @@ import {
 import { z } from "zod";
 import { KeelError } from "./error.ts";
 import { debugLog } from "./logger.ts";
+import type { RecordUndoCheckpointResult } from "./undo-protection.ts";
+
+type UndoCheckpointNotWrittenReason = Extract<
+  RecordUndoCheckpointResult,
+  { readonly written: false }
+>["reason"];
 
 export interface RecordLastEditCheckpointOptions {
   readonly workspace: string;
@@ -73,10 +79,6 @@ export type RecordLastBatchCheckpointOperation =
 export interface RecordLastBatchCheckpointOptions {
   readonly workspace: string;
   readonly operations: readonly RecordLastBatchCheckpointOperation[];
-}
-
-export interface RecordLastEditCheckpointResult {
-  readonly written: boolean;
 }
 
 export type RestoreLastEditCheckpointResult =
@@ -456,30 +458,36 @@ function editModeState(
 function skippedCheckpointRecord(
   options: { readonly workspace: string; readonly filePath: string },
   error: string,
-): RecordLastEditCheckpointResult {
+  reason: UndoCheckpointNotWrittenReason,
+): RecordUndoCheckpointResult {
   debugLog(
     `undo checkpoint write skipped: workspace=${options.workspace} filePath=${options.filePath} error=${error}`,
   );
-  return { written: false };
+  return { written: false, reason };
 }
 
 function skippedBatchCheckpointRecord(
   options: RecordLastBatchCheckpointOptions,
   error: string,
-): RecordLastEditCheckpointResult {
+  reason: UndoCheckpointNotWrittenReason,
+): RecordUndoCheckpointResult {
   debugLog(
     `undo checkpoint write skipped: workspace=${options.workspace} operations=${options.operations.length} error=${error}`,
   );
-  return { written: false };
+  return { written: false, reason };
 }
 
 export function recordLastEditCheckpoint(
   options: RecordLastEditCheckpointOptions,
-): RecordLastEditCheckpointResult {
+): RecordUndoCheckpointResult {
   try {
     const gitWorkspace = findGitWorkspace(options.workspace);
     if (gitWorkspace === null) {
-      return skippedCheckpointRecord(options, "git workspace unavailable");
+      return skippedCheckpointRecord(
+        options,
+        "git workspace unavailable",
+        "git_workspace_unavailable",
+      );
     }
 
     const relativePath = normalizeRelativePath(
@@ -490,6 +498,7 @@ export function recordLastEditCheckpoint(
       return skippedCheckpointRecord(
         options,
         "file path unavailable or outside git root",
+        "target_unavailable",
       );
     }
 
@@ -506,17 +515,25 @@ export function recordLastEditCheckpoint(
 
     return { written: true };
   } catch (error) {
-    return skippedCheckpointRecord(options, String(error));
+    return skippedCheckpointRecord(
+      options,
+      String(error),
+      "checkpoint_write_failed",
+    );
   }
 }
 
 export function recordLastCreateCheckpoint(
   options: RecordLastCreateCheckpointOptions,
-): RecordLastEditCheckpointResult {
+): RecordUndoCheckpointResult {
   try {
     const gitWorkspace = findGitWorkspace(options.workspace);
     if (gitWorkspace === null) {
-      return skippedCheckpointRecord(options, "git workspace unavailable");
+      return skippedCheckpointRecord(
+        options,
+        "git workspace unavailable",
+        "git_workspace_unavailable",
+      );
     }
 
     const relativePath = normalizeRelativePath(
@@ -527,6 +544,7 @@ export function recordLastCreateCheckpoint(
       return skippedCheckpointRecord(
         options,
         "file path unavailable or outside git root",
+        "target_unavailable",
       );
     }
 
@@ -542,17 +560,25 @@ export function recordLastCreateCheckpoint(
 
     return { written: true };
   } catch (error) {
-    return skippedCheckpointRecord(options, String(error));
+    return skippedCheckpointRecord(
+      options,
+      String(error),
+      "checkpoint_write_failed",
+    );
   }
 }
 
 export function recordLastDeleteCheckpoint(
   options: RecordLastDeleteCheckpointOptions,
-): RecordLastEditCheckpointResult {
+): RecordUndoCheckpointResult {
   try {
     const gitWorkspace = findGitWorkspace(options.workspace);
     if (gitWorkspace === null) {
-      return skippedCheckpointRecord(options, "git workspace unavailable");
+      return skippedCheckpointRecord(
+        options,
+        "git workspace unavailable",
+        "git_workspace_unavailable",
+      );
     }
 
     const relativePath = normalizeDeletedRelativePath(
@@ -563,6 +589,7 @@ export function recordLastDeleteCheckpoint(
       return skippedCheckpointRecord(
         options,
         "file path unavailable or outside git root",
+        "target_unavailable",
       );
     }
 
@@ -578,17 +605,25 @@ export function recordLastDeleteCheckpoint(
 
     return { written: true };
   } catch (error) {
-    return skippedCheckpointRecord(options, String(error));
+    return skippedCheckpointRecord(
+      options,
+      String(error),
+      "checkpoint_write_failed",
+    );
   }
 }
 
 export function recordLastBatchCheckpoint(
   options: RecordLastBatchCheckpointOptions,
-): RecordLastEditCheckpointResult {
+): RecordUndoCheckpointResult {
   try {
     const gitWorkspace = findGitWorkspace(options.workspace);
     if (gitWorkspace === null) {
-      return skippedBatchCheckpointRecord(options, "git workspace unavailable");
+      return skippedBatchCheckpointRecord(
+        options,
+        "git workspace unavailable",
+        "git_workspace_unavailable",
+      );
     }
 
     const operations: PersistedBatchCheckpointOperation[] = [];
@@ -601,6 +636,7 @@ export function recordLastBatchCheckpoint(
         return skippedBatchCheckpointRecord(
           options,
           "file path unavailable or outside git root",
+          "target_unavailable",
         );
       }
 
@@ -630,7 +666,11 @@ export function recordLastBatchCheckpoint(
     }
 
     if (operations.length === 0) {
-      return skippedBatchCheckpointRecord(options, "empty batch checkpoint");
+      return skippedBatchCheckpointRecord(
+        options,
+        "empty batch checkpoint",
+        "no_changes",
+      );
     }
 
     appendCheckpoint(gitWorkspace, {
@@ -644,7 +684,11 @@ export function recordLastBatchCheckpoint(
     return { written: true };
   } catch (error) {
     /* v8 ignore next 1: checkpoint writes can fail from filesystem races or permissions. */
-    return skippedBatchCheckpointRecord(options, String(error));
+    return skippedBatchCheckpointRecord(
+      options,
+      String(error),
+      "checkpoint_write_failed",
+    );
   }
 }
 
@@ -986,10 +1030,14 @@ function checkpointForwardOperations(
 
 export function recordLastTaskCheckpoint(
   options: RecordLastBatchCheckpointOptions,
-): RecordLastEditCheckpointResult {
+): RecordUndoCheckpointResult {
   const operations = coalesceTaskCheckpointOperations(options.operations);
   if (operations.length === 0) {
-    return skippedBatchCheckpointRecord(options, "empty task checkpoint");
+    return skippedBatchCheckpointRecord(
+      options,
+      "empty task checkpoint",
+      "no_changes",
+    );
   }
 
   if (operations.length === 1) {

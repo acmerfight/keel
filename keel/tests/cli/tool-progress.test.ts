@@ -76,7 +76,9 @@ describe("CLI Tool Progress", () => {
         "hello new world\n",
       );
       expect(result.stdout).toBe("Edited note.txt\n");
-      expect(result.stderr).toBe("Tool: read note.txt\nTool: edit note.txt\n");
+      expect(result.stderr).toBe(
+        "Tool: read note.txt\nTool: edit note.txt\nWarning: change applied; undo checkpoint unavailable for this task.\n",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

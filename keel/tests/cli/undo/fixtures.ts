@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import type { Server } from "node:net";
 import { expect } from "vitest";
 import {
+  type CommandResult,
   createGitWorkspace as createHarnessGitWorkspace,
   runCli as runCliHarness,
 } from "../../../src/testing/cli-harness.ts";
@@ -111,7 +112,9 @@ function sseStopFinish(): string {
   });
 }
 
-export async function runTwoFileEditTask(workspace: string): Promise<void> {
+export async function runTwoFileEditTask(
+  workspace: string,
+): Promise<CommandResult> {
   let requestCount = 0;
   const server = createServer((req, res) => {
     if (req.url !== "/chat/completions") {
@@ -174,6 +177,7 @@ export async function runTwoFileEditTask(workspace: string): Promise<void> {
       },
     });
     expect(edit.exitCode).toBe(0);
+    return edit;
   } finally {
     await close(server);
   }

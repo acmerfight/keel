@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, test } from "vitest";
 import {
   join,
@@ -16,6 +17,7 @@ describe("CLI Run Report", () => {
     Then a structured report file records turns, stop reason, and token usage`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-report-"));
+    execFileSync("git", ["init", "--quiet"], { cwd: workspace });
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
     const reportPath = join(workspace, "report.json");
 
@@ -47,6 +49,12 @@ describe("CLI Run Report", () => {
       expect(report.turns).toBe(3);
       expect(report.stopReason).toBe("completed");
       expect(report.costUsd).toBe(0);
+      expect(report.undoProtection).toEqual({
+        status: "available",
+        checkpointsWritten: 1,
+        failures: [],
+        latestCheckpoint: { written: true },
+      });
       expect(result.stderr).toBe("Tool: read note.txt\nTool: edit note.txt\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });

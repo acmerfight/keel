@@ -34,7 +34,11 @@ import {
 } from "./bash-project-approvals.ts";
 import { createPromptedBashPermissionPolicy } from "./interactive-session/bash-approval.ts";
 import { createLineReader } from "./interactive-session/line-reader.ts";
-import { formatCostReport, printAgentEvents } from "./output.ts";
+import {
+  formatCostReport,
+  formatUndoCheckpointWarning,
+  printAgentEvents,
+} from "./output.ts";
 import {
   loadProjectInstructions,
   ProjectInstructionsError,
@@ -241,8 +245,24 @@ export async function runOneShotCli(
     });
 
     const reportRecorder = createAgentEventReportRecorder();
-    const finalEnd = await printAgentEvents(stream, runtime, reportRecorder);
+    const writeUndoProtectionWarning = (): void => {
+      if (reportRecorder.undoProtection().status === "unavailable") {
+        runtime.writeStderr(`${formatUndoCheckpointWarning()}\n`);
+      }
+    };
+    let finalEnd: Awaited<ReturnType<typeof printAgentEvents>>;
+    try {
+      finalEnd = await printAgentEvents(stream, runtime, reportRecorder);
+    } catch (error) {
+      if (reportRecorder.undoProtection().latestCheckpoint !== null) {
+        runtime.writeStdout("\n");
+        writeUndoProtectionWarning();
+      }
+      throw error;
+    }
     runtime.writeStdout("\n");
+    const undoProtection = reportRecorder.undoProtection();
+    writeUndoProtectionWarning();
     if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
       runtime.writeStderr(formatCostReport(finalEnd.cost, cliArgs.maxCostUsd));
     }
@@ -275,6 +295,7 @@ export async function runOneShotCli(
           budgetChars: catalogExposure.budgetChars,
           usedChars: catalogExposure.usedChars,
         },
+        undoProtection,
       });
     }
     if (

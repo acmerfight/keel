@@ -4,7 +4,7 @@ import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { runCli } from "../../../src/testing/cli-harness.ts";
+import { runCli as runCliCommand } from "../../../src/testing/cli-harness.ts";
 
 export {
   createServer,
@@ -13,11 +13,31 @@ export {
   mkdtemp,
   readFile,
   rm,
-  runCli,
   tmpdir,
   writeFile,
   z,
 };
+
+export function runCli(
+  args: readonly string[],
+  options: {
+    readonly cwd?: string;
+    readonly env?: Record<string, string>;
+    readonly timeoutMs?: number;
+  } = {},
+) {
+  return runCliCommand(args, {
+    ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+    env: {
+      ...(options.cwd !== undefined ? { HOME: options.cwd } : {}),
+      ...options.env,
+    },
+    ...(options.timeoutMs !== undefined
+      ? { timeoutMs: options.timeoutMs }
+      : {}),
+  });
+}
+
 export const requestWithToolsSchema = z
   .object({
     tools: z
