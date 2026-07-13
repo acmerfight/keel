@@ -197,6 +197,17 @@ interface GoalResumeCliArgs extends GoalCliCommonArgs {
 
 export type GoalCliArgs = GoalLaunchCliArgs | GoalResumeCliArgs;
 
+export type SkillsCliArgs =
+  | { readonly command: "skills"; readonly mode: "doctor" | "list" }
+  | {
+      readonly command: "skills";
+      readonly mode: "configure";
+      readonly action: "enable" | "disable";
+      readonly target:
+        | { readonly kind: "all" }
+        | { readonly kind: "skill"; readonly lookup: string };
+    };
+
 export type CliArgs =
   | { readonly command: "help" }
   | AuthCliArgs
@@ -204,7 +215,7 @@ export type CliArgs =
   | SetupCliArgs
   | DoctorCliArgs
   | UndoCliArgs
-  | { readonly command: "skills"; readonly mode: "doctor" | "list" }
+  | SkillsCliArgs
   | ArtifactsCliArgs
   | ApprovalsCliArgs
   | SessionsCliArgs

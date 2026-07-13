@@ -98,6 +98,11 @@ import {
   sessionStoredMessages,
 } from "./session-store.ts";
 import {
+  resolveSkillRuntimePolicy,
+  SkillUserConfigError,
+  skillPolicyReport,
+} from "./skill-user-config.ts";
+import {
   cleanupExpiredToolOutputArtifacts,
   createToolOutputArtifactStore,
   newToolOutputArtifactScope,
@@ -109,12 +114,70 @@ import {
 } from "./tui/interactive-terminal.ts";
 import {
   discoverWorkflowSkillCatalog,
+  filterWorkflowSkillCatalog,
   formatWorkflowSkillListWarnings,
   loadWorkflowSkills,
   WorkflowSkillError,
 } from "./workflow-skills.ts";
 
 type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
+
+function activeSkillPackageIdsByDescriptor(
+  state: SkillLifecycleState,
+): ReadonlyMap<string, string> {
+  const packageIds = new Map<string, string>();
+  for (const activation of state.skillActivations) {
+    packageIds.set(activation.descriptorId, activation.packageId);
+  }
+  return packageIds;
+}
+
+function activeSkillPackageId(
+  packageIds: ReadonlyMap<string, string>,
+  descriptorId: string,
+): string {
+  const packageId = packageIds.get(descriptorId);
+  /* v8 ignore next 3 -- validated session lifecycle state requires every active descriptor id to have an activation. */
+  if (packageId === undefined) return "";
+  return packageId;
+}
+
+function skillLifecycleStateForUserPolicy(
+  state: SkillLifecycleState,
+  disabledPackageIds: readonly string[],
+): SkillLifecycleState {
+  if (disabledPackageIds.length === 0) return state;
+  const disabled = new Set(disabledPackageIds);
+  const packageIds = activeSkillPackageIdsByDescriptor(state);
+  return {
+    skillActivations: state.skillActivations,
+    activeSkillIds: state.activeSkillIds.filter(
+      (id) => !disabled.has(activeSkillPackageId(packageIds, id)),
+    ),
+  };
+}
+
+function restorePolicyHiddenActiveSkillIds(
+  state: SkillLifecycleState,
+  persistedState: SkillLifecycleState,
+  disabledPackageIds: readonly string[],
+): SkillLifecycleState {
+  if (disabledPackageIds.length === 0) return state;
+  const disabled = new Set(disabledPackageIds);
+  const packageIds = activeSkillPackageIdsByDescriptor(persistedState);
+  const currentActiveIds = new Set(state.activeSkillIds);
+  const persistedActiveIds = persistedState.activeSkillIds.filter(
+    (id) =>
+      disabled.has(activeSkillPackageId(packageIds, id)) ||
+      currentActiveIds.has(id),
+  );
+  return {
+    skillActivations: state.skillActivations,
+    activeSkillIds: [
+      ...new Set([...persistedActiveIds, ...state.activeSkillIds]),
+    ],
+  };
+}
 
 async function runInteractiveSessionWithTerminalDisplay(
   options: InteractiveSessionOptions,
@@ -458,6 +521,10 @@ async function runSessionCli(
   let sourceSessionLock: SessionLock | undefined;
   try {
     const workspace = runtime.cwd();
+    const skillPolicy = resolveSkillRuntimePolicy(
+      runtime,
+      cliArgs.skillsEnabled,
+    );
     const projectBashApprovals =
       cliArgs.bashMode === "ask" && mode.kind === "interactive"
         ? (() => {
@@ -569,10 +636,18 @@ async function runSessionCli(
       let headlessGoalBashPermission =
         mode.kind === "headless-goal" ? mode.bashPermission : undefined;
       let headlessPreparedSessionGoal: SessionGoal | undefined;
+      if (!skillPolicy.enabled && (cliArgs.skillNames?.length ?? 0) > 0) {
+        throw new WorkflowSkillError(skillPolicy.unavailableReason);
+      }
       const requestedWorkflowSkills =
-        !cliArgs.skillsEnabled || cliArgs.skillNames === undefined
+        !skillPolicy.enabled || cliArgs.skillNames === undefined
           ? []
-          : loadWorkflowSkills(runtime, workspace, cliArgs.skillNames);
+          : loadWorkflowSkills(
+              runtime,
+              workspace,
+              cliArgs.skillNames,
+              skillPolicy.disabledPackageIds,
+            );
       if (sessionStart.kind === "create") {
         activeSessionId = sessionStart.sessionId;
         ensureSessionCanBeCreated({
@@ -668,14 +743,58 @@ async function runSessionCli(
           initialModelSelection = overrideSelection;
         }
       }
-      const skillCatalog = cliArgs.skillsEnabled
+      const rawSkillCatalog = skillPolicy.enabled
         ? discoverWorkflowSkillCatalog(runtime, workspace)
         : undefined;
-      if (skillCatalog !== undefined) {
+      const discoveredSkillCatalog =
+        rawSkillCatalog === undefined
+          ? undefined
+          : filterWorkflowSkillCatalog(
+              rawSkillCatalog,
+              skillPolicy.disabledPackageIds,
+            );
+      if (discoveredSkillCatalog !== undefined) {
         runtime.writeStderr(
-          formatWorkflowSkillListWarnings(skillCatalog.warnings),
+          formatWorkflowSkillListWarnings(discoveredSkillCatalog.warnings),
         );
       }
+      const disabledPackageIds = new Set(skillPolicy.disabledPackageIds);
+      const sessionSkillState =
+        session === undefined
+          ? undefined
+          : {
+              skillActivations: session.skillActivations,
+              activeSkillIds: session.activeSkillIds,
+            };
+      const policyFilteredSessionSkillState =
+        sessionSkillState === undefined
+          ? undefined
+          : skillLifecycleStateForUserPolicy(
+              sessionSkillState,
+              skillPolicy.disabledPackageIds,
+            );
+      const catalogHasDisabledSkill =
+        rawSkillCatalog?.skills.some((skill) =>
+          disabledPackageIds.has(skill.packageId),
+        ) ?? false;
+      const sessionHasDisabledActiveSkill =
+        sessionSkillState !== undefined &&
+        (() => {
+          const packageIds =
+            activeSkillPackageIdsByDescriptor(sessionSkillState);
+          return sessionSkillState.activeSkillIds.some((id) =>
+            disabledPackageIds.has(activeSkillPackageId(packageIds, id)),
+          );
+        })();
+      const sessionHasEnabledActiveSkill =
+        (policyFilteredSessionSkillState?.activeSkillIds.length ?? 0) > 0;
+      const allRelevantSkillsDisabledByUser =
+        discoveredSkillCatalog?.skills.length === 0 &&
+        (catalogHasDisabledSkill || sessionHasDisabledActiveSkill) &&
+        !sessionHasEnabledActiveSkill;
+      const skillCatalog = allRelevantSkillsDisabledByUser
+        ? undefined
+        : discoveredSkillCatalog;
       let skillActivation: SkillActivationCapability | undefined;
       let lazySessionInitialSkillState: SkillLifecycleState = {
         skillActivations: [],
@@ -702,9 +821,14 @@ async function runSessionCli(
       const persistSkillLifecycleState = (state: SkillLifecycleState): void => {
         /* v8 ignore next -- this callback is exposed only through named-session persistence below. */
         if (ensureActiveSession === undefined) return;
+        const activeSession = ensureActiveSession();
         persistSessionSkillState({
-          session: ensureActiveSession(),
-          state,
+          session: activeSession,
+          state: restorePolicyHiddenActiveSkillIds(
+            state,
+            activeSession,
+            skillPolicy.disabledPackageIds,
+          ),
           runtime,
         });
       };
@@ -712,12 +836,9 @@ async function runSessionCli(
       if (skillCatalog !== undefined) {
         skillActivation = createSkillActivation(skillCatalog, {
           initialState:
-            session === undefined
+            policyFilteredSessionSkillState === undefined
               ? { skillActivations: [], activeSkillIds: [] }
-              : {
-                  skillActivations: session.skillActivations,
-                  activeSkillIds: session.activeSkillIds,
-                },
+              : policyFilteredSessionSkillState,
           now: () => new Date(runtime.now()).toISOString(),
         });
         const skillStateBeforeRequested = skillActivation.state();
@@ -924,13 +1045,23 @@ async function runSessionCli(
             skillState?: SkillLifecycleState,
           ) => {
             const activeSession = activeSessionForPersistence();
+            const persistedSkillState =
+              skillState === undefined
+                ? undefined
+                : restorePolicyHiddenActiveSkillIds(
+                    skillState,
+                    activeSession,
+                    skillPolicy.disabledPackageIds,
+                  );
             persistedMessages = persistSessionMessages({
               session: activeSession,
               previousMessages: persistedMessages,
               currentMessages: messages,
               runtime,
               reason,
-              ...(skillState !== undefined ? { skillState } : {}),
+              ...(persistedSkillState !== undefined
+                ? { skillState: persistedSkillState }
+                : {}),
               consumedInputIds,
             });
           },
@@ -1110,10 +1241,11 @@ async function runSessionCli(
           ? { skillCatalog: skillCatalog.implicitSkills }
           : {}),
         ...(skillActivation !== undefined ? { skillActivation } : {}),
-        ...(!cliArgs.skillsEnabled
+        ...(!skillPolicy.enabled || allRelevantSkillsDisabledByUser
           ? {
-              skillUnavailableReason:
-                "Error: workflow skills are disabled for this run by --no-skills.",
+              skillUnavailableReason: !skillPolicy.enabled
+                ? skillPolicy.unavailableReason
+                : "Error: workflow skills are disabled by user configuration; run keel skills enable <skill> to enable one.",
             }
           : {}),
         ...(initialSkillActivationRecords.length > 0
@@ -1237,6 +1369,7 @@ async function runSessionCli(
             skillActivation?.activeStatuses() ?? [],
           ),
           skillCatalog: interactiveResult.report.skillCatalog,
+          skillPolicy: skillPolicyReport(skillPolicy, cliArgs.skillsEnabled),
           undoProtection: interactiveResult.report.undoProtection,
           ...(goalOutcome !== undefined ? { goalOutcome } : {}),
         });
@@ -1260,7 +1393,10 @@ async function runSessionCli(
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
-    if (error instanceof WorkflowSkillError) {
+    if (
+      error instanceof WorkflowSkillError ||
+      error instanceof SkillUserConfigError
+    ) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }

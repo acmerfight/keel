@@ -3,6 +3,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -97,6 +98,713 @@ async function writeRawSkill(
 }
 
 describe("CLI Main - Skills", () => {
+  test(`Given workflow Skills are installed,
+    When the user disables all Skills globally and later enables all,
+    Then runtime exposure stops immediately and the private persisted control is reversible`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-global-control-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-global-control-home-"),
+    );
+    const reportPath = join(workspace, "global-control-report.json");
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "GLOBAL_CONTROL_REVIEW_BODY",
+    );
+    const disable = createRuntime(["skills", "disable", "--all"], {
+      cwd: workspace,
+      env: { KEEL_HOME: home },
+    });
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(sseTextReplyWithUsage("GLOBAL_CONTROL_SAFE"));
+      });
+    });
+    await listen(server);
+    const providerEnv = {
+      KEEL_HOME: home,
+      DEEPSEEK_API_KEY: "test-key",
+      DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+    };
+
+    try {
+      // When
+      const disableExitCode = await runCliMain(disable.runtime);
+      const disabledRun = createRuntime(
+        ["--report", reportPath, "review this change"],
+        { cwd: workspace, env: providerEnv },
+      );
+      const disabledExitCode = await runCliMain(disabledRun.runtime);
+
+      // Then
+      expect(disableExitCode).toBe(0);
+      expect(disable.stdout()).toBe("Disabled all workflow skills globally.\n");
+      expect(disable.stderr()).toBe("");
+      const configPath = join(home, "skills.json");
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+        schemaVersion: 1,
+        enabled: false,
+        disabledPackageIds: [],
+      });
+      if (process.platform !== "win32") {
+        expect((await stat(configPath)).mode & 0o777).toBe(0o600);
+      }
+      expect(disabledExitCode).toBe(0);
+      expect(disabledRun.stdout()).toBe("GLOBAL_CONTROL_SAFE\n");
+      expect(capturedBodies).toHaveLength(1);
+      const disabledRequest = requestWithMessagesSchema.parse(
+        capturedBodies[0],
+      );
+      const disabledSystem = disabledRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(disabledSystem).not.toContain("Available workflow skills:");
+      expect(disabledSystem).not.toContain("repo:review");
+      expect(disabledSystem).not.toContain("GLOBAL_CONTROL_REVIEW_BODY");
+      const disabledTools =
+        requestWithToolsSchema
+          .parse(capturedBodies[0])
+          .tools?.map((tool) => tool.function?.name) ?? [];
+      expect(disabledTools).not.toContain("skill");
+      expect(disabledTools).not.toContain("skill_search");
+      expect(disabledTools).not.toContain("skill_resource");
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        skillPolicy: { mode: "globally_disabled", disabledPackages: 0 },
+      });
+
+      const explicitDollar = createRuntime(["$review inspect this"], {
+        cwd: workspace,
+        env: providerEnv,
+      });
+      expect(await runCliMain(explicitDollar.runtime)).toBe(1);
+      expect(explicitDollar.stderr()).toBe(
+        "Error: workflow skills are disabled by user configuration; run keel skills enable --all to enable them.\n",
+      );
+      const explicitFlag = createRuntime(["--skill=review", "inspect this"], {
+        cwd: workspace,
+        env: providerEnv,
+      });
+      expect(await runCliMain(explicitFlag.runtime)).toBe(1);
+      expect(explicitFlag.stderr()).toBe(explicitDollar.stderr());
+      expect(capturedBodies).toHaveLength(1);
+
+      const interactiveInput = new PassThrough();
+      interactiveInput.end();
+      const interactiveExplicit = createRuntime(
+        ["--session", "globally-disabled", "--skill", "review"],
+        {
+          cwd: workspace,
+          env: { ...providerEnv, KEEL_FORCE_INTERACTIVE: "1" },
+          input: interactiveInput,
+        },
+      );
+      expect(await runCliMain(interactiveExplicit.runtime)).toBe(1);
+      expect(interactiveExplicit.stderr()).toBe(explicitDollar.stderr());
+      expect(capturedBodies).toHaveLength(1);
+
+      const disabledList = createRuntime(["skills"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(disabledList.runtime)).toBe(0);
+      expect(disabledList.stdout()).toContain(
+        "Workflow skills (globally disabled):",
+      );
+
+      const enable = createRuntime(["skills", "enable", "--all"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(enable.runtime)).toBe(0);
+      expect(enable.stdout()).toBe("Enabled all workflow skills.\n");
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        enabled: true,
+        disabledPackageIds: [],
+      });
+      const list = createRuntime(["skills"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(list.runtime)).toBe(0);
+      expect(list.stdout()).toContain("repo:review");
+      expect(list.stdout()).not.toContain("[disabled by user]");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given multiple workflow Skills are installed,
+    When the user disables and later enables one Skill,
+    Then only that stable package is removed from every runtime surface`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-individual-control-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-individual-control-home-"),
+    );
+    const reportPath = join(workspace, "individual-control-report.json");
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "INDIVIDUAL_CONTROL_REVIEW_BODY",
+    );
+    await writeSkill(
+      workspace,
+      "qa",
+      "Run quality assurance.",
+      "INDIVIDUAL_CONTROL_QA_BODY",
+    );
+    const disable = createRuntime(["skills", "disable", "review"], {
+      cwd: workspace,
+      env: { KEEL_HOME: home },
+    });
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(sseTextReplyWithUsage("INDIVIDUAL_CONTROL_SAFE"));
+      });
+    });
+    await listen(server);
+    const providerEnv = {
+      KEEL_HOME: home,
+      DEEPSEEK_API_KEY: "test-key",
+      DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+    };
+
+    try {
+      // When
+      const disableExitCode = await runCliMain(disable.runtime);
+      const filteredRun = createRuntime(
+        ["--report", reportPath, "review and qa this change"],
+        { cwd: workspace, env: providerEnv },
+      );
+      const filteredExitCode = await runCliMain(filteredRun.runtime);
+
+      // Then
+      expect(disableExitCode).toBe(0);
+      expect(disable.stdout()).toBe("Disabled workflow skill repo:review.\n");
+      const duplicateDisable = createRuntime(
+        ["skills", "disable", "repo:review"],
+        { cwd: workspace, env: { KEEL_HOME: home } },
+      );
+      expect(await runCliMain(duplicateDisable.runtime)).toBe(0);
+      expect(duplicateDisable.stdout()).toBe(
+        "Workflow skill repo:review is already disabled.\n",
+      );
+      const configPath = join(home, "skills.json");
+      const disabledConfig = JSON.parse(await readFile(configPath, "utf8"));
+      expect(disabledConfig).toMatchObject({
+        schemaVersion: 1,
+        enabled: true,
+      });
+      expect(disabledConfig.disabledPackageIds).toHaveLength(1);
+      expect(disabledConfig.disabledPackageIds[0]).toMatch(
+        /^repo:[a-f0-9]{12}:review$/u,
+      );
+      await writeSkill(
+        workspace,
+        "review",
+        "Review a changed pull request.",
+        "INDIVIDUAL_CONTROL_CHANGED_REVIEW_BODY",
+      );
+      const listDisabled = createRuntime(["skills"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(listDisabled.runtime)).toBe(0);
+      expect(listDisabled.stdout()).toContain(
+        "repo:review: Review a changed pull request. [disabled by user]",
+      );
+      expect(listDisabled.stdout()).toContain(
+        "repo:qa: Run quality assurance.",
+      );
+      expect(filteredExitCode).toBe(0);
+      expect(capturedBodies).toHaveLength(1);
+      const filteredRequest = requestWithMessagesSchema.parse(
+        capturedBodies[0],
+      );
+      const filteredSystem = filteredRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(filteredSystem).not.toContain("repo:review");
+      expect(filteredSystem).not.toContain("INDIVIDUAL_CONTROL_REVIEW_BODY");
+      expect(filteredSystem).not.toContain(
+        "INDIVIDUAL_CONTROL_CHANGED_REVIEW_BODY",
+      );
+      expect(filteredSystem).toContain("repo:qa");
+      const filteredTools =
+        requestWithToolsSchema
+          .parse(capturedBodies[0])
+          .tools?.map((tool) => tool.function?.name) ?? [];
+      expect(filteredTools).toContain("skill");
+      expect(filteredTools).toContain("skill_search");
+      expect(filteredTools).toContain("skill_resource");
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        skillPolicy: { mode: "filtered", disabledPackages: 1 },
+      });
+
+      const explicitDisabled = createRuntime(["$review inspect this"], {
+        cwd: workspace,
+        env: providerEnv,
+      });
+      expect(await runCliMain(explicitDisabled.runtime)).toBe(1);
+      expect(explicitDisabled.stdout()).toBe("");
+      expect(explicitDisabled.stderr()).toBe(
+        'Error: workflow skill "repo:review" is disabled by user configuration; run keel skills enable repo:review to enable it.\n',
+      );
+      expect(capturedBodies).toHaveLength(1);
+
+      const explicitEnabled = createRuntime(["$qa inspect this"], {
+        cwd: workspace,
+        env: providerEnv,
+      });
+      expect(await runCliMain(explicitEnabled.runtime)).toBe(0);
+      expect(capturedBodies).toHaveLength(2);
+      const enabledSystem = requestWithMessagesSchema
+        .parse(capturedBodies[1])
+        .messages?.find((message) => message.role === "system")?.content;
+      expect(enabledSystem).toContain("INDIVIDUAL_CONTROL_QA_BODY");
+      expect(enabledSystem).not.toContain("INDIVIDUAL_CONTROL_REVIEW_BODY");
+
+      const enable = createRuntime(["skills", "enable", "repo:review"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(enable.runtime)).toBe(0);
+      expect(enable.stdout()).toBe("Enabled workflow skill repo:review.\n");
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        enabled: true,
+        disabledPackageIds: [],
+      });
+      const duplicateEnable = createRuntime(
+        ["skills", "enable", "repo:review"],
+        { cwd: workspace, env: { KEEL_HOME: home } },
+      );
+      expect(await runCliMain(duplicateEnable.runtime)).toBe(0);
+      expect(duplicateEnable.stdout()).toBe(
+        "Workflow skill repo:review is already enabled.\n",
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one implicit Skill is disabled while another remains enabled,
+    When the model searches, activates, and reads a resource,
+    Then every lazy Skill surface exposes only the enabled package`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skills-filtered-tools-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skills-filtered-tools-home-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review changes and inspect quality.",
+      "DISABLED_FILTERED_TOOL_BODY",
+    );
+    await writeSkill(
+      workspace,
+      "qa",
+      "Inspect quality with the enabled QA workflow.",
+      "Read references/marker.txt after activation.",
+    );
+    await mkdir(join(workspace, ".agents", "skills", "qa", "references"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(workspace, ".agents", "skills", "qa", "references", "marker.txt"),
+      "ENABLED_FILTERED_RESOURCE",
+    );
+    const disable = createRuntime(["skills", "disable", "review"], {
+      cwd: workspace,
+      env: { KEEL_HOME: home },
+    });
+    expect(await runCliMain(disable.runtime)).toBe(0);
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("search_enabled_skill", "skill_search", {
+              query: "inspect quality review",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        if (capturedBodies.length === 2) {
+          res.write(
+            sseToolCall("activate_enabled_skill", "skill", {
+              name: "repo:qa",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        if (capturedBodies.length === 3) {
+          res.write(
+            sseToolCall("read_enabled_resource", "skill_resource", {
+              skill: "repo:qa",
+              path: "references/marker.txt",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        res.end(sseTextReplyWithUsage("FILTERED_TOOLS_OK"));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["inspect quality"], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("FILTERED_TOOLS_OK\n");
+      expect(capturedBodies).toHaveLength(4);
+      const searchRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(searchRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "search_enabled_skill",
+          content: expect.stringContaining("repo:qa"),
+        }),
+      );
+      const searchResult = searchRequest.messages?.find(
+        (message) => message.role === "tool",
+      )?.content;
+      expect(searchResult).not.toContain("repo:review");
+      expect(searchResult).not.toContain("DISABLED_FILTERED_TOOL_BODY");
+      const activationRequest = requestWithMessagesSchema.parse(
+        capturedBodies[2],
+      );
+      const activationResult = activationRequest.messages?.find(
+        (message) =>
+          message.role === "tool" &&
+          message.tool_call_id === "activate_enabled_skill",
+      )?.content;
+      expect(activationResult).toContain("Workflow skill repo:qa");
+      expect(activationResult).not.toContain("DISABLED_FILTERED_TOOL_BODY");
+      const resourceRequest = requestWithMessagesSchema.parse(
+        capturedBodies[3],
+      );
+      expect(resourceRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "read_enabled_resource",
+          content: "ENABLED_FILTERED_RESOURCE",
+        }),
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given repository and user scopes contain the same Skill name,
+    When the repository package is disabled and the user invokes the bare name,
+    Then policy filtering resolves the remaining enabled package without ambiguity`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skills-policy-collision-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skills-policy-collision-home-"),
+    );
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-skills-policy-collision-keel-home-"),
+    );
+    const transcriptPath = join(workspace, "collision-transcript.jsonl");
+    await writeSkill(
+      workspace,
+      "review",
+      "Repository review policy.",
+      "DISABLED_REPOSITORY_COLLISION_BODY",
+    );
+    await writeSkillAtRoot(
+      join(home, ".agents", "skills"),
+      "review",
+      "User review policy.",
+      "ENABLED_USER_COLLISION_BODY",
+    );
+    const env = { HOME: home, KEEL_HOME: keelHome, KEEL_PROVIDER: "fake" };
+    const disable = createRuntime(["skills", "disable", "repo:review"], {
+      cwd: workspace,
+      env,
+    });
+
+    try {
+      expect(await runCliMain(disable.runtime)).toBe(0);
+      const fixture = createRuntime(
+        ["--transcript", transcriptPath, "$review inspect this"],
+        { cwd: workspace, env },
+      );
+
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stderr()).toBe("");
+      const [header] = (await readFile(transcriptPath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(header.systemPrompt).toContain("ENABLED_USER_COLLISION_BODY");
+      expect(header.systemPrompt).not.toContain(
+        "DISABLED_REPOSITORY_COLLISION_BODY",
+      );
+      expect(header.systemPrompt).toContain("Workflow skill user:review");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one Skill is individually disabled,
+    When the user disables and then enables all Skills,
+    Then global shutdown preserves the preference while enable-all clears every layer`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skills-layered-control-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skills-layered-control-home-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "LAYERED_CONTROL_BODY",
+    );
+    const runtimeOptions = { cwd: workspace, env: { KEEL_HOME: home } };
+
+    try {
+      expect(
+        await runCliMain(
+          createRuntime(["skills", "disable", "review"], runtimeOptions)
+            .runtime,
+        ),
+      ).toBe(0);
+
+      // When
+      const disableAll = createRuntime(
+        ["skills", "disable", "--all"],
+        runtimeOptions,
+      );
+      expect(await runCliMain(disableAll.runtime)).toBe(0);
+
+      // Then
+      const configPath = join(home, "skills.json");
+      const globallyDisabled = JSON.parse(await readFile(configPath, "utf8"));
+      expect(globallyDisabled.enabled).toBe(false);
+      expect(globallyDisabled.disabledPackageIds).toHaveLength(1);
+
+      const enableAll = createRuntime(
+        ["skills", "enable", "--all"],
+        runtimeOptions,
+      );
+      expect(await runCliMain(enableAll.runtime)).toBe(0);
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+        schemaVersion: 1,
+        enabled: true,
+        disabledPackageIds: [],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the persisted workflow Skill control is malformed,
+    When a normal run, --no-skills run, and recovery command execute,
+    Then runtime fails closed while explicit suppression and enable-all remain usable`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-invalid-control-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-invalid-control-home-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "INVALID_CONTROL_REVIEW_BODY",
+    );
+    const configPath = join(home, "skills.json");
+    const invalidSchemaConfig = JSON.stringify({
+      schemaVersion: 1,
+      enabled: true,
+      disabledPackageIds: [],
+      unexpected: true,
+    });
+    await writeFile(configPath, invalidSchemaConfig);
+    let providerCalls = 0;
+    const server = createServer((req, res) => {
+      providerCalls++;
+      req.resume();
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end(sseTextReplyWithUsage("INVALID_CONTROL_SAFE"));
+    });
+    await listen(server);
+    const providerEnv = {
+      KEEL_HOME: home,
+      DEEPSEEK_API_KEY: "test-key",
+      DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+    };
+
+    try {
+      // When
+      const normalRun = createRuntime(["review this"], {
+        cwd: workspace,
+        env: providerEnv,
+      });
+      const normalExitCode = await runCliMain(normalRun.runtime);
+
+      // Then
+      expect(normalExitCode).toBe(1);
+      expect(normalRun.stdout()).toBe("");
+      expect(normalRun.stderr()).toContain(
+        "Error: cannot read workflow skill config",
+      );
+      expect(normalRun.stderr()).not.toContain("unexpected runtime failure");
+      expect(normalRun.stderr()).toContain("Unrecognized key");
+      expect(providerCalls).toBe(0);
+
+      const interactiveInput = new PassThrough();
+      interactiveInput.end();
+      const interactiveRun = createRuntime(["--session", "invalid-control"], {
+        cwd: workspace,
+        env: { ...providerEnv, KEEL_FORCE_INTERACTIVE: "1" },
+        input: interactiveInput,
+      });
+      expect(await runCliMain(interactiveRun.runtime)).toBe(1);
+      expect(interactiveRun.stderr()).toContain(
+        "Error: cannot read workflow skill config",
+      );
+      expect(interactiveRun.stderr()).not.toContain(
+        "unexpected runtime failure",
+      );
+      expect(providerCalls).toBe(0);
+
+      await writeFile(configPath, "{");
+      const invalidJson = createRuntime(["review this"], {
+        cwd: workspace,
+        env: providerEnv,
+      });
+      expect(await runCliMain(invalidJson.runtime)).toBe(1);
+      expect(invalidJson.stderr()).toContain("invalid JSON");
+      expect(invalidJson.stderr()).not.toContain("unexpected runtime failure");
+      expect(providerCalls).toBe(0);
+
+      await rm(configPath, { force: true });
+      await mkdir(configPath);
+      const unreadable = createRuntime(["skills"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(unreadable.runtime)).toBe(1);
+      expect(unreadable.stderr()).toContain(
+        "Error: cannot read workflow skill config",
+      );
+      const unwritable = createRuntime(["skills", "enable", "--all"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(unwritable.runtime)).toBe(1);
+      expect(unwritable.stderr()).toContain(
+        "Error: cannot write workflow skill config",
+      );
+      await rm(configPath, { recursive: true, force: true });
+      await writeFile(configPath, invalidSchemaConfig);
+
+      const doctor = createRuntime(["skills", "doctor"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(doctor.runtime)).toBe(0);
+      expect(doctor.stdout()).toContain("Workflow skill diagnostics:");
+
+      const suppressedRun = createRuntime(["--no-skills", "review this"], {
+        cwd: workspace,
+        env: providerEnv,
+      });
+      expect(await runCliMain(suppressedRun.runtime)).toBe(0);
+      expect(suppressedRun.stdout()).toBe("INVALID_CONTROL_SAFE\n");
+      expect(providerCalls).toBe(1);
+
+      const recover = createRuntime(["skills", "enable", "--all"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(recover.runtime)).toBe(0);
+      expect(recover.stdout()).toBe("Enabled all workflow skills.\n");
+      expect(
+        JSON.parse(await readFile(join(home, "skills.json"), "utf8")),
+      ).toEqual({
+        schemaVersion: 1,
+        enabled: true,
+        disabledPackageIds: [],
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given no local workflow skills exist,
     When the user lists skills,
     Then the CLI prints an empty local skills message`, async () => {
@@ -1309,7 +2017,7 @@ describe("CLI Main - Skills", () => {
       );
       expect(firstSystemPrompt).not.toContain("Private checklist body.");
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 8,
+        schemaVersion: 9,
         skillActivations: [
           {
             name: "repo:review",
@@ -1397,7 +2105,7 @@ describe("CLI Main - Skills", () => {
         }),
       );
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 8,
+        schemaVersion: 9,
         skillActivations: [],
       });
     } finally {
@@ -1481,7 +2189,7 @@ describe("CLI Main - Skills", () => {
       );
       expect(JSON.stringify(secondRequest)).not.toContain(secret);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 8,
+        schemaVersion: 9,
         skillActivations: [],
       });
     } finally {

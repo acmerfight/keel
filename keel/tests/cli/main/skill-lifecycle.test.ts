@@ -59,6 +59,338 @@ function isSummaryRequest(body: unknown): boolean {
 }
 
 describe("CLI Main - Skill Lifecycle", () => {
+  test(`Given a named session has an active Skill snapshot,
+    When the user persistently disables that Skill and later enables it,
+    Then disabled resumes hide it without erasing the session activation`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skill-user-control-workspace-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-skill-user-control-home-"));
+    const disabledReportPath = join(workspace, "disabled-report.json");
+    const restoredReportPath = join(workspace, "restored-report.json");
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "USER_CONTROL_REVIEW_SNAPSHOT",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(sseTextReplyWithUsage("Done."));
+      });
+    });
+    await listen(server);
+    const runtimeOptions = {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    } as const;
+    const firstInput = new PassThrough();
+    firstInput.end("start review\n");
+    const firstRun = createRuntime(
+      ["--session", "user-controlled", "--skill", "review"],
+      { ...runtimeOptions, input: firstInput },
+    );
+
+    try {
+      expect(await runCliMain(firstRun.runtime)).toBe(0);
+      const disable = createRuntime(["skills", "disable", "review"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(disable.runtime)).toBe(0);
+      await rm(join(workspace, ".agents", "skills", "review"), {
+        recursive: true,
+        force: true,
+      });
+      const disabledInput = new PassThrough();
+      disabledInput.end("continue while disabled\n");
+      const disabledRun = createRuntime(
+        ["--resume", "user-controlled", "--report", disabledReportPath],
+        { ...runtimeOptions, input: disabledInput },
+      );
+
+      // When
+      const disabledExitCode = await runCliMain(disabledRun.runtime);
+
+      // Then
+      expect(disabledExitCode).toBe(0);
+      expect(capturedBodies).toHaveLength(2);
+      const disabledRequest = requestWithMessagesSchema.parse(
+        capturedBodies[1],
+      );
+      const disabledSystem = disabledRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(disabledSystem).not.toContain("repo:review");
+      expect(disabledSystem).not.toContain("USER_CONTROL_REVIEW_SNAPSHOT");
+      const disabledTools =
+        requestWithToolsSchema
+          .parse(capturedBodies[1])
+          .tools?.map((tool) => tool.function?.name) ?? [];
+      expect(disabledTools).not.toContain("skill");
+      expect(disabledTools).not.toContain("skill_search");
+      expect(disabledTools).not.toContain("skill_resource");
+      expect(
+        JSON.parse(await readFile(disabledReportPath, "utf8")),
+      ).toMatchObject({
+        activeSkills: [],
+        skillCatalog: { total: 0 },
+        skillPolicy: { mode: "filtered", disabledPackages: 1 },
+      });
+
+      await writeSkill(
+        workspace,
+        "review",
+        "Review a pull request.",
+        "USER_CONTROL_REVIEW_SNAPSHOT",
+      );
+
+      const enable = createRuntime(["skills", "enable", "review"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(enable.runtime)).toBe(0);
+      const restoredInput = new PassThrough();
+      restoredInput.end("continue after enabling\n");
+      const restoredRun = createRuntime(
+        ["--resume", "user-controlled", "--report", restoredReportPath],
+        { ...runtimeOptions, input: restoredInput },
+      );
+      expect(await runCliMain(restoredRun.runtime)).toBe(0);
+      expect(capturedBodies).toHaveLength(3);
+      const restoredRequest = requestWithMessagesSchema.parse(
+        capturedBodies[2],
+      );
+      const restoredSystem = restoredRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(restoredSystem).toContain("USER_CONTROL_REVIEW_SNAPSHOT");
+      expect(
+        JSON.parse(await readFile(restoredReportPath, "utf8")),
+      ).toMatchObject({ activeSkills: [{ name: "repo:review" }] });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a session has disabled and enabled active Skill snapshots,
+    When both packages disappear from disk and only one is disabled,
+    Then resume keeps the unrelated enabled snapshot active`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skill-partial-policy-snapshot-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skill-partial-policy-snapshot-home-"),
+    );
+    const reportPath = join(workspace, "partial-policy-report.json");
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "DISABLED_PARTIAL_POLICY_SNAPSHOT",
+    );
+    await writeSkill(
+      workspace,
+      "qa",
+      "Run quality assurance.",
+      "ENABLED_PARTIAL_POLICY_SNAPSHOT",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(sseTextReplyWithUsage("Done."));
+      });
+    });
+    await listen(server);
+    const runtimeOptions = {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    } as const;
+    const firstInput = new PassThrough();
+    firstInput.end("start both workflows\n");
+    const firstRun = createRuntime(
+      ["--session", "partial-policy", "--skill", "review", "--skill", "qa"],
+      { ...runtimeOptions, input: firstInput },
+    );
+
+    try {
+      expect(await runCliMain(firstRun.runtime)).toBe(0);
+      const disable = createRuntime(["skills", "disable", "review"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(disable.runtime)).toBe(0);
+      await rm(join(workspace, ".agents", "skills"), {
+        recursive: true,
+        force: true,
+      });
+      const resumedInput = new PassThrough();
+      resumedInput.end("continue with the available workflow\n");
+      const resumedRun = createRuntime(
+        ["--resume", "partial-policy", "--report", reportPath],
+        { ...runtimeOptions, input: resumedInput },
+      );
+
+      // When
+      const exitCode = await runCliMain(resumedRun.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(capturedBodies).toHaveLength(2);
+      const request = requestWithMessagesSchema.parse(capturedBodies[1]);
+      const systemPrompt = request.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(systemPrompt).not.toContain("DISABLED_PARTIAL_POLICY_SNAPSHOT");
+      expect(systemPrompt).toContain("ENABLED_PARTIAL_POLICY_SNAPSHOT");
+      const toolNames =
+        requestWithToolsSchema
+          .parse(capturedBodies[1])
+          .tools?.map((tool) => tool.function?.name) ?? [];
+      expect(toolNames).toContain("skill");
+      expect(toolNames).toContain("skill_search");
+      expect(toolNames).toContain("skill_resource");
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        activeSkills: [{ name: "repo:qa", diskStatus: "missing_on_disk" }],
+        skillPolicy: { mode: "filtered", disabledPackages: 1 },
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one active session Skill is hidden by user policy,
+    When another enabled Skill activates and persists during that session,
+    Then re-enabling the hidden Skill restores both active snapshots`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skill-hidden-merge-workspace-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-skill-hidden-merge-home-"));
+    const disabledReportPath = join(workspace, "hidden-merge-report.json");
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "HIDDEN_MERGE_REVIEW_SNAPSHOT",
+    );
+    await writeSkill(
+      workspace,
+      "qa",
+      "Run quality assurance.",
+      "HIDDEN_MERGE_QA_SNAPSHOT",
+    );
+    const env = {
+      KEEL_FORCE_INTERACTIVE: "1",
+      KEEL_HOME: home,
+      KEEL_PROVIDER: "fake",
+    };
+    const firstInput = new PassThrough();
+    firstInput.end("start review\n");
+    const firstRun = createRuntime(
+      ["--session", "hidden-merge", "--skill", "review"],
+      { cwd: workspace, env, input: firstInput },
+    );
+
+    try {
+      expect(await runCliMain(firstRun.runtime)).toBe(0);
+      const disable = createRuntime(["skills", "disable", "review"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(disable.runtime)).toBe(0);
+      const activateInput = new PassThrough();
+      activateInput.end("$qa continue with QA\n");
+      const activateRun = createRuntime(
+        ["--resume", "hidden-merge", "--report", disabledReportPath],
+        { cwd: workspace, env, input: activateInput },
+      );
+
+      // When
+      expect(await runCliMain(activateRun.runtime)).toBe(0);
+
+      // Then
+      expect(
+        JSON.parse(await readFile(disabledReportPath, "utf8")),
+      ).toMatchObject({ activeSkills: [{ name: "repo:qa" }] });
+      const reloadInput = new PassThrough();
+      reloadInput.end("/skill reload qa\n");
+      const reloadRun = createRuntime(["--resume", "hidden-merge"], {
+        cwd: workspace,
+        env,
+        input: reloadInput,
+      });
+      expect(await runCliMain(reloadRun.runtime)).toBe(0);
+      expect(reloadRun.stdout()).toContain("Reloaded workflow skill repo:qa");
+      const deactivateInput = new PassThrough();
+      deactivateInput.end("/skill deactivate qa\n");
+      const deactivateRun = createRuntime(["--resume", "hidden-merge"], {
+        cwd: workspace,
+        env,
+        input: deactivateInput,
+      });
+      expect(await runCliMain(deactivateRun.runtime)).toBe(0);
+      expect(deactivateRun.stdout()).toContain(
+        "Deactivated workflow skill repo:qa",
+      );
+      const reactivateInput = new PassThrough();
+      reactivateInput.end("$qa restore QA\n");
+      const reactivateRun = createRuntime(["--resume", "hidden-merge"], {
+        cwd: workspace,
+        env,
+        input: reactivateInput,
+      });
+      expect(await runCliMain(reactivateRun.runtime)).toBe(0);
+      const enable = createRuntime(["skills", "enable", "review"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(enable.runtime)).toBe(0);
+      const restoredInput = new PassThrough();
+      restoredInput.end("/skills active\n");
+      const restoredRun = createRuntime(["--resume", "hidden-merge"], {
+        cwd: workspace,
+        env,
+        input: restoredInput,
+      });
+      expect(await runCliMain(restoredRun.runtime)).toBe(0);
+      expect(restoredRun.stdout()).toContain("repo:review");
+      expect(restoredRun.stdout()).toContain("repo:qa");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a named session has an active Skill,
     When one resume uses --no-skills and a later resume does not,
     Then the middle run exposes no Skill surface without erasing the persisted activation`, async () => {

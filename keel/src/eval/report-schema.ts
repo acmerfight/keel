@@ -61,7 +61,7 @@ const contextCompactionSchema = z.object({
 });
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(8),
+  schemaVersion: z.literal(9),
   modelsUsed: z.array(
     z.object({
       provider: z.string(),
@@ -106,6 +106,10 @@ export const runReportSchema = z.object({
     total: z.number().int().nonnegative(),
     budgetChars: z.number().int().nonnegative(),
     usedChars: z.number().int().nonnegative(),
+  }),
+  skillPolicy: z.object({
+    mode: z.enum(["enabled", "cli_disabled", "globally_disabled", "filtered"]),
+    disabledPackages: z.number().int().nonnegative(),
   }),
   undoProtection: z.object({
     status: z.enum(["available", "not_applicable", "unavailable"]),

@@ -1,7 +1,127 @@
 import { describe, expect, test } from "vitest";
+import {
+  filterWorkflowSkillCatalog,
+  formatWorkflowSkillList,
+} from "../../src/cli/workflow-skills.ts";
+import type {
+  SkillCatalog,
+  SkillDescriptor,
+  WorkflowSkill,
+} from "../../src/skills/model.ts";
+import { WorkflowSkillError } from "../../src/skills/model.ts";
+import { resolveSkillDescriptor } from "../../src/skills/project.ts";
 import { isWorkflowSkillResourcePath } from "../../src/skills/resources.ts";
 
+function descriptor(name: string): SkillDescriptor {
+  return {
+    id: `repo:root:${name}:digest`,
+    packageId: `repo:root:${name}`,
+    rootKey: "root",
+    rootPriority: 0,
+    qualifiedName: `repo:${name}`,
+    scope: "repo",
+    activationPolicy: "implicit",
+    name,
+    description: `${name} description`,
+    relativePath: `.agents/skills/${name}/SKILL.md`,
+    digest: "digest",
+  };
+}
+
+function workflowSkill(skill: SkillDescriptor): WorkflowSkill {
+  return {
+    id: skill.id,
+    packageId: skill.packageId,
+    qualifiedName: skill.qualifiedName,
+    scope: skill.scope,
+    digest: skill.digest,
+    relativePath: skill.relativePath,
+    name: skill.name,
+    resourcePaths: ["references/marker.txt"],
+    content: `${skill.name} body`,
+  };
+}
+
 describe("Workflow Skill Resource Contract", () => {
+  test(`Given one package is disabled in a mixed catalog,
+    When every lazy catalog operation resolves a package,
+    Then disabled identities fail closed and enabled identities remain usable`, () => {
+    // Given
+    const review = descriptor("review");
+    const qa = descriptor("qa");
+    const skills = [review, qa];
+    const load = (lookup: string): WorkflowSkill =>
+      workflowSkill(resolveSkillDescriptor(skills, lookup));
+    const catalog: SkillCatalog = {
+      skills,
+      implicitSkills: skills,
+      warnings: [],
+      audits: [],
+      load,
+      loadImplicit: load,
+      loadPackage: (packageId) => {
+        const skill = skills.find(
+          (candidate) => candidate.packageId === packageId,
+        );
+        return skill === undefined ? undefined : workflowSkill(skill);
+      },
+      search: () => skills,
+      readResource: (lookup, path) =>
+        `${resolveSkillDescriptor(skills, lookup).qualifiedName}:${path}`,
+      readPackageResource: (packageId, digest, path) =>
+        `${packageId}:${digest}:${path}`,
+    };
+    const filtered = filterWorkflowSkillCatalog(catalog, [review.packageId]);
+
+    // When / Then
+    expect(filtered.skills).toEqual([qa]);
+    expect(() => filtered.load("review")).toThrow(
+      'workflow skill "repo:review" is disabled by user configuration',
+    );
+    expect(() => filtered.load("missing")).toThrow(
+      'workflow skill "missing" was not found',
+    );
+    expect(filtered.loadImplicit("qa").qualifiedName).toBe("repo:qa");
+    expect(filtered.loadPackage(review.packageId)).toBeUndefined();
+    expect(filtered.loadPackage(qa.packageId)?.qualifiedName).toBe("repo:qa");
+    expect(filtered.search("anything", 1)).toEqual([qa]);
+    expect(filtered.readResource("qa", "references/marker.txt")).toBe(
+      "repo:qa:references/marker.txt",
+    );
+    expect(() =>
+      filtered.readResource("review", "references/marker.txt"),
+    ).toThrow(WorkflowSkillError);
+    expect(() =>
+      filtered.readPackageResource(
+        review.packageId,
+        review.digest,
+        "references/marker.txt",
+      ),
+    ).toThrow('workflow skill "repo:review" is disabled');
+    expect(() =>
+      filterWorkflowSkillCatalog(catalog, [
+        "repo:missing:ghost",
+      ]).readPackageResource(
+        "repo:missing:ghost",
+        "digest",
+        "references/marker.txt",
+      ),
+    ).toThrow('workflow skill "repo:missing:ghost" is disabled');
+    expect(
+      filtered.readPackageResource(
+        qa.packageId,
+        qa.digest,
+        "references/marker.txt",
+      ),
+    ).toBe("repo:root:qa:digest:references/marker.txt");
+    expect(formatWorkflowSkillList([])).toBe(
+      "No workflow skills found across repo, user, system, or extra scopes.\n",
+    );
+    expect(formatWorkflowSkillList([], { globallyEnabled: false })).toContain(
+      "Workflow skills are globally disabled.",
+    );
+  });
+
   test(`Given persisted workflow skill resource path candidates,
     When the session-store contract validates them,
     Then only skill-relative files under supported resource directories are accepted`, () => {

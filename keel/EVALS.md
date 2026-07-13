@@ -98,7 +98,7 @@ Each trial appends one JSON line:
   "wallMs": 9182,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
-    "schemaVersion": 8,
+    "schemaVersion": 9,
     "modelsUsed": [{ "provider": "deepseek", "model": "deepseek-v4-flash" }],
     "usageByModel": [
       {
@@ -119,6 +119,7 @@ Each trial appends one JSON line:
     "skillActivations": [],
     "activeSkills": [],
     "skillCatalog": { "exposed": 0, "omitted": 0, "total": 0, "budgetChars": 8000, "usedChars": 0 },
+    "skillPolicy": { "mode": "enabled", "disabledPackages": 0 },
     "undoProtection": { "status": "available", "checkpointsWritten": 1, "failures": [], "latestCheckpoint": { "written": true } }
   }
 }

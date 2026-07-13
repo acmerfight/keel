@@ -58,6 +58,11 @@ import { createAgentEventReportRecorder } from "./report-events.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { formatCliRuntimeError } from "./runtime-error.ts";
 import {
+  resolveSkillRuntimePolicy,
+  SkillUserConfigError,
+  skillPolicyReport,
+} from "./skill-user-config.ts";
+import {
   cleanupExpiredToolOutputArtifacts,
   createToolOutputArtifactStore,
   newToolOutputArtifactScope,
@@ -65,6 +70,7 @@ import {
 import { writeRunTranscript } from "./transcript.ts";
 import {
   discoverWorkflowSkillCatalog,
+  filterWorkflowSkillCatalog,
   formatWorkflowSkillListWarnings,
   WorkflowSkillError,
 } from "./workflow-skills.ts";
@@ -141,18 +147,26 @@ export async function runOneShotCli(
       ? []
       : repositoryWorkflowSkillRootPaths(workspace);
     const projectInstructions = loadProjectInstructions(workspace);
+    const skillPolicy = resolveSkillRuntimePolicy(
+      runtime,
+      cliArgs.skillsEnabled,
+    );
     const invocation = parseExplicitSkillInvocation(originalUserMessage);
-    if (!cliArgs.skillsEnabled && invocation !== null) {
-      throw new WorkflowSkillError(
-        "Error: workflow skills are disabled for this run by --no-skills.",
-      );
+    if (
+      !skillPolicy.enabled &&
+      (invocation !== null || (cliArgs.skillNames?.length ?? 0) > 0)
+    ) {
+      throw new WorkflowSkillError(skillPolicy.unavailableReason);
     }
     const userMessage =
       invocation === null || invocation.arguments !== ""
         ? (invocation?.arguments ?? originalUserMessage)
         : "Apply the explicitly selected workflow skill.";
-    const catalog = cliArgs.skillsEnabled
-      ? discoverWorkflowSkillCatalog(runtime, workspace)
+    const catalog = skillPolicy.enabled
+      ? filterWorkflowSkillCatalog(
+          discoverWorkflowSkillCatalog(runtime, workspace),
+          skillPolicy.disabledPackageIds,
+        )
       : undefined;
     const explicitLookups = [
       ...(cliArgs.skillNames ?? []),
@@ -312,6 +326,7 @@ export async function runOneShotCli(
           budgetChars: catalogExposure.budgetChars,
           usedChars: catalogExposure.usedChars,
         },
+        skillPolicy: skillPolicyReport(skillPolicy, cliArgs.skillsEnabled),
         undoProtection,
       });
     }
@@ -338,7 +353,10 @@ export async function runOneShotCli(
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
-    if (error instanceof WorkflowSkillError) {
+    if (
+      error instanceof WorkflowSkillError ||
+      error instanceof SkillUserConfigError
+    ) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }

@@ -684,7 +684,7 @@ function matchingDescriptors(
   );
 }
 
-function resolveDescriptor(
+export function resolveSkillDescriptor(
   skills: readonly SkillDescriptor[],
   lookup: string,
 ): SkillDescriptor {
@@ -918,7 +918,7 @@ export function discoverSkillCatalog(
     candidates: readonly SkillDescriptor[],
     lookup: string,
   ): WorkflowSkill => {
-    const descriptor = resolveDescriptor(candidates, lookup);
+    const descriptor = resolveSkillDescriptor(candidates, lookup);
     const root = rootsById.get(descriptor.id);
     /* v8 ignore next 4 -- descriptors and roots are populated atomically above. */
     if (root === undefined) {
@@ -1013,7 +1013,7 @@ export function discoverSkillCatalog(
           "Error: skill resource paths must stay under references/, scripts/, or assets/.",
         );
       }
-      const descriptor = resolveDescriptor(sortedSkills, lookup);
+      const descriptor = resolveSkillDescriptor(sortedSkills, lookup);
       const root = rootsById.get(descriptor.id);
       /* v8 ignore next 4 -- descriptors and roots are populated atomically above. */
       if (root === undefined) {

@@ -98,6 +98,7 @@ Environment:
 - Workspace root: ${JSON.stringify(workspace)}
 - Platform: ${JSON.stringify(platform)}
 File paths you pass to tools are relative to the workspace root.
+
 ${projectInstructionsSection}
 ${workflowSkillsSection}
 ${catalogSection}

@@ -253,6 +253,40 @@ describe("CLI Args", () => {
   });
 
   test.each([
+    [
+      ["skills", "disable", "--all"],
+      { action: "disable", target: { kind: "all" } },
+    ],
+    [
+      ["skills", "enable", "repo:review"],
+      { action: "enable", target: { kind: "skill", lookup: "repo:review" } },
+    ],
+  ])(`Given a persisted Skill control command %j,
+    When the CLI parses it,
+    Then it produces one explicit control contract`, (args, expected) => {
+    expect(parseCliArgs(args)).toEqual({
+      ok: true,
+      value: { command: "skills", mode: "configure", ...expected },
+    });
+  });
+
+  test.each([
+    [["skills", "disable"], "Error: skills disable requires <skill> or --all."],
+    [
+      ["skills", "enable", "review", "extra"],
+      'Error: unknown skills enable option "extra"',
+    ],
+    [
+      ["skills", "enable", "--bogus"],
+      'Error: unknown skills enable option "--bogus"',
+    ],
+  ])(`Given an invalid persisted Skill control command %j,
+    When the CLI parses it,
+    Then it rejects the malformed control before filesystem access`, (args, message) => {
+    expect(parseCliArgs(args)).toEqual({ ok: false, message });
+  });
+
+  test.each([
     [["--no-skills", "--skill", "review", "review this"]],
     [["--skill=review", "--no-skills", "review this"]],
   ])(`Given --no-skills and an explicit --skill are both present in %j,

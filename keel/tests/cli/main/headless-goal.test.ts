@@ -37,15 +37,38 @@ import {
 } from "../../../src/testing/session-ledger-fixtures.ts";
 
 describe("CLI Main - Headless Goal", () => {
-  test(`Given a headless Goal matches an installed Skill,
-    When the launch uses --no-skills,
-    Then the shared Goal runtime exposes no Skill metadata, body, or tools`, async () => {
+  test.each([
+    {
+      label: "--no-skills",
+      runArgs: ["--no-skills"],
+      persistedGlobalDisable: false,
+      reportMode: "cli_disabled",
+    },
+    {
+      label: "the persisted global Skill shutdown",
+      runArgs: [],
+      persistedGlobalDisable: true,
+      reportMode: "globally_disabled",
+    },
+  ] as const)(`Given a headless Goal matches an installed Skill,
+    When the launch uses $label,
+    Then the shared Goal runtime exposes no Skill metadata, body, or tools`, async ({
+    runArgs,
+    persistedGlobalDisable,
+    reportMode,
+  }) => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-headless-no-skills-workspace-"),
     );
     const home = await mkdtemp(join(tmpdir(), "keel-headless-no-skills-home-"));
     const reportPath = join(workspace, "no-skills-report.json");
+    if (persistedGlobalDisable) {
+      await writeFile(
+        join(home, "skills.json"),
+        `${JSON.stringify({ schemaVersion: 1, enabled: false, disabledPackageIds: [] })}\n`,
+      );
+    }
     const skillDirectory = join(workspace, ".agents", "skills", "review");
     await mkdir(skillDirectory, { recursive: true });
     await writeFile(
@@ -86,7 +109,7 @@ describe("CLI Main - Headless Goal", () => {
         "--done-when=the release review is complete",
         "--session=headless-no-skills",
         "--provider=deepseek",
-        "--no-skills",
+        ...runArgs,
         `--report=${reportPath}`,
       ],
       {
@@ -107,6 +130,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(0);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
         activeSkills: [],
+        skillPolicy: { mode: reportMode, disabledPackages: 0 },
       });
       expect(capturedBodies).toHaveLength(3);
       for (const body of capturedBodies) {
@@ -1676,7 +1700,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(4);
       expect(providerCalls).toBe(1);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 8,
+        schemaVersion: 9,
         stopReason: "cost_budget",
         costBudgetUsd: 0.01,
         costUsd: 0.14,
