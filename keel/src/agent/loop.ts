@@ -100,6 +100,7 @@ export interface RunAgentOptions {
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
+  readonly hiddenWorkspacePaths?: readonly string[];
   readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
   readonly bashPermission?: BashPermissionPolicy;
@@ -121,6 +122,7 @@ export interface RunAgentTurnOptions {
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
+  readonly hiddenWorkspacePaths?: readonly string[];
   readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
   readonly bashPermission?: BashPermissionPolicy;
@@ -592,6 +594,9 @@ export async function* runAgentTurn(
         await restorePostCompactionReads({
           workspace,
           signal,
+          ...(options.hiddenWorkspacePaths !== undefined
+            ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
+            : {}),
           readVisibility,
           projectInstructionVisibility,
           messages: targetMessages,
@@ -831,6 +836,9 @@ export async function* runAgentTurn(
         toolCall,
         signal,
         allowBash,
+        ...(options.hiddenWorkspacePaths !== undefined
+          ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
+          : {}),
         recordCheckpoints: options.recordCheckpointOperations === undefined,
         readBeforeEdit: {
           hasRead: readVisibility.hasRead,
@@ -1134,6 +1142,9 @@ export async function* runAgent(
         systemPrompt: options.systemPrompt,
         signal: options.signal,
         allowBash: options.allowBash,
+        ...(options.hiddenWorkspacePaths !== undefined
+          ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
+          : {}),
         ...(options.skillActivation !== undefined
           ? { skillActivation: options.skillActivation }
           : {}),

@@ -466,6 +466,40 @@ describe("CLI Main - Skills", () => {
           "Cache-Control": "no-cache",
           Connection: "keep-alive",
         });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("read_disabled_skill", "read", {
+              path: ".agents/skills/review/SKILL.md",
+            }),
+          );
+          res.write(
+            sseToolCall(
+              "list_disabled_skills",
+              "ls",
+              { path: ".agents/skills" },
+              { index: 1 },
+            ),
+          );
+          res.write(
+            sseToolCall(
+              "find_disabled_skills",
+              "glob",
+              { pattern: "**/SKILL.md" },
+              { index: 2 },
+            ),
+          );
+          res.write(
+            sseToolCall(
+              "search_disabled_skills",
+              "grep",
+              { pattern: "MUST_HIDE" },
+              { index: 3 },
+            ),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
         res.end(sseTextReplyWithUsage("Completed without Skills."));
       });
     });
@@ -485,8 +519,11 @@ describe("CLI Main - Skills", () => {
       // Then
       expect(exitCode).toBe(0);
       expect(fixture.stdout()).toBe("Completed without Skills.\n");
-      expect(fixture.stderr()).toBe("");
-      expect(capturedBodies).toHaveLength(1);
+      expect(fixture.stderr()).toContain(
+        "Tool failed: read .agents/skills/review/SKILL.md",
+      );
+      expect(fixture.stderr()).toContain("Tool failed: ls .agents/skills");
+      expect(capturedBodies).toHaveLength(2);
       const request = requestWithMessagesSchema.parse(capturedBodies[0]);
       const systemPrompt = request.messages?.find(
         (message) => message.role === "system",
@@ -501,6 +538,11 @@ describe("CLI Main - Skills", () => {
       expect(toolNames).not.toContain("skill");
       expect(toolNames).not.toContain("skill_search");
       expect(toolNames).not.toContain("skill_resource");
+      const followup = JSON.stringify(
+        requestWithMessagesSchema.parse(capturedBodies[1]).messages,
+      );
+      expect(followup).toContain("ignored path");
+      expect(followup).not.toContain("NO_SKILLS_MUST_HIDE_THIS_BODY");
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });

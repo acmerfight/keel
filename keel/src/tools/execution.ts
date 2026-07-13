@@ -97,6 +97,7 @@ interface BuiltinToolExecutionContext {
   readonly workspace: string;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
+  readonly hiddenWorkspacePaths?: readonly string[];
   readonly skillActivation?: Pick<
     SkillActivationCapability,
     "activate" | "search" | "readResource"
@@ -552,12 +553,19 @@ async function executeUpdateGoalTool(
 }
 
 function executeReadTool(
-  { workspace, projectInstructions }: BuiltinToolExecutionContext,
+  {
+    workspace,
+    projectInstructions,
+    hiddenWorkspacePaths,
+  }: BuiltinToolExecutionContext,
   toolCall: ReadToolCall,
 ): ToolExecution {
   const result = executeRead(workspace, toolCall.path, {
     offset: toolCall.offset,
     limit: toolCall.limit,
+    ...(hiddenWorkspacePaths !== undefined
+      ? { hiddenPaths: hiddenWorkspacePaths }
+      : {}),
   });
   const scopedOutput = projectInstructions?.formatReadOutput(
     result.targetPath,
@@ -586,12 +594,15 @@ function executeReadTool(
 }
 
 function executeLsTool(
-  { workspace }: BuiltinToolExecutionContext,
+  { workspace, hiddenWorkspacePaths }: BuiltinToolExecutionContext,
   toolCall: LsToolCall,
 ): ToolExecution {
   const result = executeLs(workspace, {
     ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
     ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
+    ...(hiddenWorkspacePaths !== undefined
+      ? { hiddenPaths: hiddenWorkspacePaths }
+      : {}),
   });
   return {
     content: result.content,
@@ -601,12 +612,15 @@ function executeLsTool(
 }
 
 async function executeGlobTool(
-  { workspace, signal }: BuiltinToolExecutionContext,
+  { workspace, signal, hiddenWorkspacePaths }: BuiltinToolExecutionContext,
   toolCall: GlobToolCall,
 ): Promise<ToolExecution> {
   const result = await executeGlob(workspace, toolCall.pattern, {
     ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
     signal,
+    ...(hiddenWorkspacePaths !== undefined
+      ? { hiddenPaths: hiddenWorkspacePaths }
+      : {}),
   });
   return {
     content: result.content,
@@ -616,12 +630,20 @@ async function executeGlobTool(
 }
 
 async function executeGrepTool(
-  { workspace, signal, projectInstructions }: BuiltinToolExecutionContext,
+  {
+    workspace,
+    signal,
+    projectInstructions,
+    hiddenWorkspacePaths,
+  }: BuiltinToolExecutionContext,
   toolCall: GrepToolCall,
 ): Promise<ToolExecution> {
   const result = await executeGrep(workspace, toolCall.pattern, {
     ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
     signal,
+    ...(hiddenWorkspacePaths !== undefined
+      ? { hiddenPaths: hiddenWorkspacePaths }
+      : {}),
   });
   const scopedOutput = projectInstructions?.formatInspectionOutput(
     result.inspectionTargetPaths,
@@ -638,7 +660,7 @@ async function executeGrepTool(
 }
 
 async function executeGitDiffTool(
-  { workspace, signal }: BuiltinToolExecutionContext,
+  { workspace, signal, hiddenWorkspacePaths }: BuiltinToolExecutionContext,
   toolCall: GitDiffToolCall,
 ): Promise<ToolExecution> {
   const result = await executeGitDiff(workspace, {
@@ -650,6 +672,9 @@ async function executeGitDiffTool(
       : {}),
     ...(toolCall.paths !== undefined ? { paths: toolCall.paths } : {}),
     signal,
+    ...(hiddenWorkspacePaths !== undefined
+      ? { hiddenPaths: hiddenWorkspacePaths }
+      : {}),
   });
   return {
     content: result.content,
@@ -659,12 +684,15 @@ async function executeGitDiffTool(
 }
 
 async function executeGitStatusTool(
-  { workspace, signal }: BuiltinToolExecutionContext,
+  { workspace, signal, hiddenWorkspacePaths }: BuiltinToolExecutionContext,
   toolCall: GitStatusToolCall,
 ): Promise<ToolExecution> {
   const result = await executeGitStatus(workspace, {
     ...(toolCall.paths !== undefined ? { paths: toolCall.paths } : {}),
     signal,
+    ...(hiddenWorkspacePaths !== undefined
+      ? { hiddenPaths: hiddenWorkspacePaths }
+      : {}),
   });
   return {
     content: result.content,

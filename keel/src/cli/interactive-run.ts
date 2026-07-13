@@ -20,6 +20,7 @@ import type {
   SkillActivationRecord,
   SkillLifecycleState,
 } from "../skills/model.ts";
+import { repositoryWorkflowSkillRootPaths } from "../skills/project.ts";
 import type { CliArgs } from "./args.ts";
 import { USAGE } from "./args.ts";
 import {
@@ -1074,6 +1075,11 @@ async function runSessionCli(
       const interactiveSessionOptions: InteractiveSessionOptions = {
         cliArgs,
         workspace,
+        ...(!cliArgs.skillsEnabled
+          ? {
+              hiddenWorkspacePaths: repositoryWorkflowSkillRootPaths(workspace),
+            }
+          : {}),
         platform: runtime.platform,
         ...(mode.kind === "headless-goal" ? { exitOnTurnAbort: true } : {}),
         ...(mode.kind === "headless-goal" &&

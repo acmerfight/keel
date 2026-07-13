@@ -21,6 +21,7 @@ export interface GlobOptions {
   readonly path?: string;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
+  readonly hiddenPaths?: readonly string[];
 }
 
 function globArgs(
@@ -76,9 +77,13 @@ async function runGlob(
   pattern: string,
   signal?: AbortSignal,
   timeoutMs: number = DEFAULT_RIPGREP_TIMEOUT_MS,
+  hiddenPaths: readonly string[] = [],
 ): Promise<ToolResult> {
   const matches = new CountOutputLimit<string>(MAX_GLOB_MATCHES);
-  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  const projectIgnorePolicy = createProjectIgnorePolicy(
+    workspacePath,
+    hiddenPaths,
+  );
 
   const result = await runRipgrepProcess({
     toolName: "glob",
@@ -177,7 +182,10 @@ export async function executeGlob(
     );
   }
   if (options.path !== undefined) {
-    const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+    const projectIgnorePolicy = createProjectIgnorePolicy(
+      workspacePath,
+      options.hiddenPaths,
+    );
     if (
       projectIgnorePolicy.isIgnored(requestedPath, true) ||
       projectIgnorePolicy.isIgnored(targetPath, true)
@@ -196,5 +204,6 @@ export async function executeGlob(
     pattern,
     options.signal,
     options.timeoutMs,
+    options.hiddenPaths,
   );
 }

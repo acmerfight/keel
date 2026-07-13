@@ -46,6 +46,7 @@ export interface GitDiffOptions {
   readonly mergeBase?: boolean;
   readonly paths?: readonly string[];
   readonly signal?: AbortSignal;
+  readonly hiddenPaths?: readonly string[];
 }
 
 export interface GitDiffResult extends ToolResult {
@@ -631,7 +632,10 @@ export async function executeGitDiff(
       inGitWorkTree: false,
     };
   }
-  const projectIgnorePolicy = createProjectIgnorePolicy(scope.rootPath);
+  const projectIgnorePolicy = createProjectIgnorePolicy(
+    scope.rootPath,
+    options.hiddenPaths,
+  );
   assertGitPathFiltersAllowed(
     "git_diff",
     workspacePath,

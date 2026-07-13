@@ -146,6 +146,7 @@ function publishVisibleProjectInstructions(
 export async function restorePostCompactionReads(options: {
   readonly workspace: string;
   readonly signal: AbortSignal;
+  readonly hiddenWorkspacePaths?: readonly string[];
   readonly readVisibility: ReadVisibilityState;
   readonly projectInstructionVisibility: ProjectInstructionVisibilityState;
   readonly messages: Message[];
@@ -235,6 +236,9 @@ export async function restorePostCompactionReads(options: {
       toolCall,
       signal: options.signal,
       allowBash: false,
+      ...(options.hiddenWorkspacePaths !== undefined
+        ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
+        : {}),
       projectInstructions: options.projectInstructionVisibility,
     });
     if (

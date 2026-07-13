@@ -79,6 +79,7 @@ export type InteractiveResolvedProvider =
 export interface InteractiveSessionOptions {
   readonly cliArgs: InteractiveSessionArgs;
   readonly workspace: string;
+  readonly hiddenWorkspacePaths?: readonly string[];
   readonly platform: NodeJS.Platform;
   readonly sessionId?: string;
   readonly projectInstructions?: ProjectInstructions;

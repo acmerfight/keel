@@ -331,12 +331,18 @@ function formatInteractiveDiffOutput(
 
 async function inspectInteractiveDiff(
   workspace: string,
+  hiddenPaths?: readonly string[],
 ): Promise<InteractiveDiffInspection> {
-  const status = await executeGitStatus(workspace);
+  const status = await executeGitStatus(workspace, {
+    ...(hiddenPaths !== undefined ? { hiddenPaths } : {}),
+  });
   if (!status.inGitWorkTree) {
     return { kind: "non-git", message: NON_GIT_DIFF_MESSAGE };
   }
-  const diff = await executeGitDiff(workspace, { mode: "all" });
+  const diff = await executeGitDiff(workspace, {
+    mode: "all",
+    ...(hiddenPaths !== undefined ? { hiddenPaths } : {}),
+  });
   if (!diff.hasChanges) {
     return { kind: "status-only", statusOutput: status.content };
   }
@@ -939,6 +945,9 @@ export async function runInteractiveSession(
           systemPrompt: baseSystemPromptWithGoal(),
           signal: turnAbortController.signal,
           allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+          ...(options.hiddenWorkspacePaths !== undefined
+            ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
+            : {}),
           ...(options.skillActivation !== undefined
             ? { skillActivation: options.skillActivation }
             : {}),
@@ -1881,7 +1890,10 @@ export async function runInteractiveSession(
         try {
           options.writeStdout(
             formatInteractiveDiffOutput(
-              await inspectInteractiveDiff(options.workspace),
+              await inspectInteractiveDiff(
+                options.workspace,
+                options.hiddenWorkspacePaths,
+              ),
             ),
           );
         } catch (error) {

@@ -25,6 +25,7 @@ import {
   workflowSkillFromActivation,
 } from "../skills/lifecycle.ts";
 import { explicitSkillActivationRecord } from "../skills/model.ts";
+import { repositoryWorkflowSkillRootPaths } from "../skills/project.ts";
 import type { CliArgs } from "./args.ts";
 import {
   BashProjectApprovalsError,
@@ -136,6 +137,9 @@ export async function runOneShotCli(
   let closeBashApprovalInput: (() => void) | undefined;
   try {
     const workspace = runtime.cwd();
+    const hiddenWorkspacePaths = cliArgs.skillsEnabled
+      ? []
+      : repositoryWorkflowSkillRootPaths(workspace);
     const projectInstructions = loadProjectInstructions(workspace);
     const invocation = parseExplicitSkillInvocation(originalUserMessage);
     if (!cliArgs.skillsEnabled && invocation !== null) {
@@ -225,6 +229,7 @@ export async function runOneShotCli(
       systemPrompt,
       signal: abortController.signal,
       allowBash: bashModeExposesTool(cliArgs.bashMode),
+      ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
       ...(skillActivation !== undefined ? { skillActivation } : {}),
       stopPolicy: defaultStopPolicy(),
       toolOutputArtifacts,

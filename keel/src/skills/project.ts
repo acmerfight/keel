@@ -145,6 +145,19 @@ function repositorySkillRoots(workspace: string): readonly SkillRoot[] {
   }
 }
 
+export function repositoryWorkflowSkillRootPaths(
+  workspace: string,
+): readonly string[] {
+  const resolvedWorkspace = realpathSync(workspace);
+  const localRoot = join(resolvedWorkspace, LOCAL_SKILL_ROOT);
+  return [
+    localRoot,
+    ...repositorySkillRoots(resolvedWorkspace)
+      .map((root) => root.rootPath)
+      .filter((rootPath) => rootPath !== localRoot),
+  ];
+}
+
 function configuredSkillRoot(
   scope: Exclude<SkillScope, "repo">,
   rootPath: string,

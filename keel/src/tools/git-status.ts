@@ -21,6 +21,7 @@ const STATUS_CODE_PATTERN = /^[.MADRCUTU?!]{2}$/u;
 export interface GitStatusOptions {
   readonly paths?: readonly string[];
   readonly signal?: AbortSignal;
+  readonly hiddenPaths?: readonly string[];
 }
 
 export interface GitStatusResult extends ToolResult {
@@ -398,7 +399,10 @@ export async function executeGitStatus(
         "Not in a git work tree. git_status can only inspect changes inside a Git repository.",
     };
   }
-  const projectIgnorePolicy = createProjectIgnorePolicy(scope.rootPath);
+  const projectIgnorePolicy = createProjectIgnorePolicy(
+    scope.rootPath,
+    options.hiddenPaths,
+  );
   assertGitPathFiltersAllowed(
     "git_status",
     workspacePath,
