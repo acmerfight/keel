@@ -457,6 +457,81 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given a disabled repository Skill is an in-root package symlink,
+    When the model reads the package through its canonical path,
+    Then ordinary file tools still hide the disabled instructions`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-disabled-symlink-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-disabled-symlink-home-"),
+    );
+    const skillRoot = join(workspace, ".agents", "skills");
+    const canonicalPackage = join(skillRoot, "review-source");
+    await mkdir(canonicalPackage, { recursive: true });
+    await writeFile(
+      join(canonicalPackage, "SKILL.md"),
+      "---\nname: review\ndescription: Review changes\n---\n\nDISABLED_CANONICAL_SKILL_BODY\n",
+    );
+    await symlink("review-source", join(skillRoot, "review"), "dir");
+    const disable = createRuntime(["skills", "disable", "repo:review"], {
+      cwd: workspace,
+      env: { KEEL_HOME: home },
+    });
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("read_disabled_canonical_skill", "read", {
+              path: ".agents/skills/review-source/SKILL.md",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        res.end(sseTextReplyWithUsage("CANONICAL_SKILL_HIDDEN"));
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      expect(await runCliMain(disable.runtime)).toBe(0);
+      const filtered = createRuntime(["inspect the canonical package"], {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+      const exitCode = await runCliMain(filtered.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(filtered.stdout()).toBe("CANONICAL_SKILL_HIDDEN\n");
+      expect(capturedBodies).toHaveLength(2);
+      const followup = JSON.stringify(
+        requestWithMessagesSchema.parse(capturedBodies[1]).messages,
+      );
+      expect(followup).toContain("ignored path");
+      expect(followup).not.toContain("DISABLED_CANONICAL_SKILL_BODY");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given several Skill controls share one user configuration,
     When separate Keel processes disable them concurrently,
     Then every successful update remains persisted`, async () => {
@@ -505,6 +580,67 @@ describe("CLI Main - Skills", () => {
       expect(config.disabledPackageIds).toHaveLength(
         existingDisabledPackageIds.length + names.length,
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given several Skill controls contend on one crashed config lock,
+    When separate Keel processes reclaim it and disable different Skills,
+    Then one lock generation is reclaimed and every update remains persisted`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-concurrent-stale-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-concurrent-stale-home-"),
+    );
+    const names = Array.from({ length: 8 }, (_, index) => `skill-${index}`);
+    for (const name of names) {
+      await writeSkill(workspace, name, `Control ${name}.`, `BODY_${name}`);
+    }
+    const existingDisabledPackageIds = Array.from(
+      { length: 9_000 },
+      (_, index) => `repo:existing:${index}`,
+    );
+    await writeFile(
+      join(home, "skills.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        enabled: true,
+        disabledPackageIds: existingDisabledPackageIds,
+      })}\n`,
+    );
+    const lockPath = join(home, "skills.lock");
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      `${JSON.stringify({ pid: 2_147_483_647, token: randomUUID() })}\n`,
+    );
+
+    try {
+      // When
+      const results = await Promise.all(
+        names.map((name) =>
+          runCli(["skills", "disable", name], {
+            cwd: workspace,
+            env: { KEEL_HOME: home },
+          }),
+        ),
+      );
+      const config = JSON.parse(
+        await readFile(join(home, "skills.json"), "utf8"),
+      );
+
+      // Then
+      expect(results.map((result) => result.exitCode)).toEqual(
+        names.map(() => 0),
+      );
+      expect(config.disabledPackageIds).toHaveLength(
+        existingDisabledPackageIds.length + names.length,
+      );
+      await expect(stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

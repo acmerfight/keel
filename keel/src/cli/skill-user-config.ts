@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
@@ -86,6 +86,10 @@ function skillConfigLockOwnerPath(lockPath: string): string {
   return join(lockPath, "owner.json");
 }
 
+function reclaimedSkillConfigLockRoot(lockPath: string): string {
+  return `${lockPath}.reclaimed`;
+}
+
 function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -109,7 +113,25 @@ function readSkillConfigLockOwner(
   }
 }
 
-function removeStaleSkillConfigLock(lockPath: string): boolean {
+function staleSkillConfigLockGeneration(
+  lockPath: string,
+  owner: z.infer<typeof skillConfigLockOwnerSchema> | null,
+): string | null {
+  if (owner !== null) return owner.token;
+  try {
+    const stats = statSync(lockPath);
+    return createHash("sha256")
+      .update(`${stats.dev}:${stats.ino}:${stats.birthtimeMs}`)
+      .digest("hex");
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT")) return null;
+    configError(
+      `Error: cannot identify workflow skill config lock ${lockPath}: ${errorMessage(error)}`,
+    );
+  }
+}
+
+function reclaimStaleSkillConfigLock(lockPath: string): boolean {
   const owner = readSkillConfigLockOwner(lockPath);
   /* v8 ignore next -- live-owner contention is exercised by the real concurrent CLI subprocess acceptance case. */
   if (owner !== null && processIsAlive(owner.pid)) return false;
@@ -132,13 +154,31 @@ function removeStaleSkillConfigLock(lockPath: string): boolean {
       );
     }
   }
+  const generation = staleSkillConfigLockGeneration(lockPath, owner);
+  if (generation === null) return true;
+  const reclaimedRoot = reclaimedSkillConfigLockRoot(lockPath);
+  const reclaimedPath = join(reclaimedRoot, generation);
   try {
-    rmSync(lockPath, { recursive: true, force: true });
+    mkdirSync(reclaimedRoot, { recursive: true, mode: 0o700 });
+    // Retain a non-empty tombstone for each generation so a delayed contender
+    // cannot rename a replacement live lock over the same destination.
+    writeFileSync(join(lockPath, ".reclaim-generation"), `${generation}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "a",
+    });
+    renameSync(lockPath, reclaimedPath);
     return true;
   } catch (error) {
-    /* v8 ignore next 3 -- requires a filesystem race or permission change while reclaiming a proven-stale lock. */
+    if (hasNodeErrorCode(error, "ENOENT")) return true;
+    if (
+      hasNodeErrorCode(error, "EEXIST") ||
+      hasNodeErrorCode(error, "ENOTEMPTY")
+    )
+      return false;
+    /* v8 ignore next 3 -- requires a filesystem permission fault while reclaiming a proven-stale lock. */
     configError(
-      `Error: cannot remove stale workflow skill config lock ${lockPath}: ${errorMessage(error)}`,
+      `Error: cannot reclaim stale workflow skill config lock ${lockPath}: ${errorMessage(error)}`,
     );
   }
 }
@@ -159,7 +199,7 @@ function withUserSkillConfigLock<Result>(
       /* v8 ignore else -- non-EEXIST failures require a user-home filesystem or permission fault. */
       if (hasNodeErrorCode(error, "EEXIST")) {
         /* v8 ignore else -- active-lock waiting is exercised by the real concurrent CLI subprocess acceptance case. */
-        if (removeStaleSkillConfigLock(lockPath)) continue;
+        if (reclaimStaleSkillConfigLock(lockPath)) continue;
         /* v8 ignore start -- live-owner waiting and timeout are exercised by the real concurrent CLI subprocess acceptance case. */
         if (Date.now() >= deadline) {
           configError(

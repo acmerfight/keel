@@ -100,7 +100,21 @@ export function disabledWorkflowSkillWorkspacePaths(
         .filter(
           (skill) => skill.scope === "repo" && disabled.has(skill.packageId),
         )
-        .map((skill) => resolve(workspacePath, dirname(skill.relativePath)))
+        .flatMap((skill) => {
+          const requestedPackagePath = resolve(
+            workspacePath,
+            dirname(skill.relativePath),
+          );
+          let resolvedPackagePath: string;
+          try {
+            resolvedPackagePath = realpathSync(requestedPackagePath);
+          } catch {
+            throw new WorkflowSkillError(
+              `Error: cannot enforce the disabled workflow skill boundary for ${JSON.stringify(skill.qualifiedName)} because its canonical package path is unavailable.`,
+            );
+          }
+          return [requestedPackagePath, resolvedPackagePath];
+        })
         .filter((skillPath) => {
           const relativePath = relative(workspacePath, skillPath);
           return (
