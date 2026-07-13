@@ -47,6 +47,15 @@ function escapeControlChar(char: string): string {
   }
 }
 
+function firstCodePoint(character: string): number {
+  const code = character.codePointAt(0);
+  /* v8 ignore next 3 -- replace callbacks always provide one non-empty matched character. */
+  if (code === undefined) {
+    return 0;
+  }
+  return code;
+}
+
 // Assistant text is model-controlled. Newlines and tabs are legitimate prose
 // formatting, but every other C0/C1 control character (ESC, BEL, raw CSI/OSC
 // bytes) could drive the terminal: clear the screen, move the cursor over
@@ -68,10 +77,10 @@ function sanitizeAssistantText(text: string): string {
 // tool call to exactly one readable stderr line.
 function sanitizeToolLabel(label: string): string {
   const escaped = label.replace(
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: escaping control characters is the point
-    /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2060\u202a-\u202e\u2066-\u2069\ufeff]/g,
+    // biome-ignore lint/suspicious/noControlCharactersInRegex lint/suspicious/noMisleadingCharacterClass: escaping invisible and control characters is the point
+    /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufeff\uffa0\u{e0001}\u{e0020}-\u{e007f}]/gu,
     (char) => {
-      const code = char.charCodeAt(0);
+      const code = firstCodePoint(char);
       return code <= 0x9f
         ? escapeControlChar(char)
         : `\\u{${code.toString(16)}}`;
@@ -84,10 +93,10 @@ function sanitizeToolLabel(label: string): string {
 
 export function sanitizeStatusLineText(text: string): string {
   const escaped = text.replace(
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: status lines must render untrusted bytes visibly.
-    /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2060\u202a-\u202e\u2066-\u2069\ufeff]/g,
+    // biome-ignore lint/suspicious/noControlCharactersInRegex lint/suspicious/noMisleadingCharacterClass: status lines must render untrusted invisible and control bytes visibly.
+    /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufeff\uffa0\u{e0001}\u{e0020}-\u{e007f}]/gu,
     (char) => {
-      const code = char.charCodeAt(0);
+      const code = firstCodePoint(char);
       return code <= 0x9f
         ? escapeControlChar(char)
         : `\\u{${code.toString(16)}}`;

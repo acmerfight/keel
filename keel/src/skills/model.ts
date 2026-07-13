@@ -1,3 +1,5 @@
+import type { SkillPackageAudit } from "./audit.ts";
+
 export class WorkflowSkillError extends Error {
   constructor(message: string) {
     super(message);
@@ -43,6 +45,7 @@ export interface SkillCatalog {
   readonly skills: readonly SkillDescriptor[];
   readonly implicitSkills: readonly SkillDescriptor[];
   readonly warnings: readonly SkillCatalogWarning[];
+  readonly audits: readonly SkillPackageAudit[];
   readonly load: (lookup: string) => WorkflowSkill;
   readonly loadImplicit: (lookup: string) => WorkflowSkill;
   readonly loadPackage: (packageId: string) => WorkflowSkill | undefined;

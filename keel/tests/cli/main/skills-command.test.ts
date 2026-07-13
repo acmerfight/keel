@@ -260,8 +260,32 @@ describe("CLI Main - Skills", () => {
         'Warning: skipped workflow skill "repo:broken":',
       );
       expect(fixture.stderr()).toContain(
-        "description: Invalid input: expected string, received undefined",
+        "frontmatter does not match the Agent Skills schema",
       );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an invalid package directory contains a bidi control,
+    When the user lists skills,
+    Then the skipped-package warning renders the package name visibly on one line`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-skills-bidi-warning-"),
+    );
+    const bidiName = "bad\u202ename";
+    await writeRawSkill(
+      workspace,
+      bidiName,
+      "---\nname: invalid\ndescription: Invalid package.\n---\nbody\n",
+    );
+    const fixture = createRuntime(["skills"], { cwd: workspace });
+
+    try {
+      expect(await runCliMain(fixture.runtime)).toBe(0);
+      expect(fixture.stderr()).not.toContain("\u202e");
+      expect(fixture.stderr()).toContain('"repo:bad\\u{202e}name"');
+      expect(fixture.stderr().split("\n")).toHaveLength(2);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -272,31 +296,32 @@ describe("CLI Main - Skills", () => {
       name: "Uppercase",
       content:
         "---\nname: Uppercase\ndescription: Invalid uppercase name.\n---\nbody\n",
-      expected: "lowercase letters, numbers, and hyphens",
+      expected:
+        "package name violates the Agent Skills lowercase name contract",
     },
     {
       name: "unknown-field",
       content:
         "---\nname: unknown-field\ndescription: Unknown top-level field.\nowner: keel\n---\nbody\n",
-      expected: "unrecognized key",
+      expected: "frontmatter does not match the Agent Skills schema",
     },
     {
       name: "numeric-metadata",
       content:
         "---\nname: numeric-metadata\ndescription: Non-string metadata.\nmetadata:\n  version: 1\n---\nbody\n",
-      expected: "metadata.version",
+      expected: "frontmatter does not match the Agent Skills schema",
     },
     {
       name: "duplicate-key",
       content:
         "---\nname: duplicate-key\ndescription: First.\ndescription: Second.\n---\nbody\n",
-      expected: "duplicate",
+      expected: "SKILL.md contains invalid YAML frontmatter",
     },
     {
       name: "yaml-alias",
       content:
         "---\nname: yaml-alias\ndescription: &description Aliased text.\nmetadata:\n  copy: *description\n---\nbody\n",
-      expected: "alias",
+      expected: "SKILL.md contains invalid YAML frontmatter",
     },
   ])(`Given a project skill violates the Agent Skills contract for $name,
     When the user lists project skills,
@@ -1102,17 +1127,6 @@ describe("CLI Main - Skills", () => {
       "Hidden nested guide body.",
     );
     await writeFile(
-      join(
-        workspace,
-        ".agents",
-        "skills",
-        "review",
-        "references",
-        "bad\\name.md",
-      ),
-      "Hidden invalid resource path body.",
-    );
-    await writeFile(
       join(workspace, ".agents", "skills", "review", "scripts", "verify.ts"),
       "console.log('hidden script body');",
     );
@@ -1123,18 +1137,6 @@ describe("CLI Main - Skills", () => {
     await writeFile(
       join(workspace, ".agents", "skills", "review", "notes.md"),
       "Do not list top-level scratch files.",
-    );
-    await writeFile(join(workspace, "outside.md"), "outside");
-    await symlink(
-      join(workspace, "outside.md"),
-      join(
-        workspace,
-        ".agents",
-        "skills",
-        "review",
-        "references",
-        "outside.md",
-      ),
     );
     const fixture = createRuntime(
       ["--transcript", transcriptPath, "--skill", "review", "review PR 123"],
@@ -1172,10 +1174,6 @@ describe("CLI Main - Skills", () => {
       );
       expect(header.systemPrompt).not.toContain("Hidden checklist body.");
       expect(header.systemPrompt).not.toContain("Hidden nested guide body.");
-      expect(header.systemPrompt).not.toContain("bad\\name.md");
-      expect(header.systemPrompt).not.toContain(
-        "Hidden invalid resource path body.",
-      );
       expect(header.systemPrompt).not.toContain("hidden script body");
       expect(header.systemPrompt).not.toContain("Hidden asset body.");
       expect(header.systemPrompt).not.toContain("notes.md");
@@ -1298,7 +1296,7 @@ describe("CLI Main - Skills", () => {
       "references",
     );
     await mkdir(referencesDir, { recursive: true });
-    for (let index = 0; index < 55; index++) {
+    for (let index = 0; index < 50; index++) {
       await writeFile(
         join(referencesDir, `resource-${String(index).padStart(2, "0")}.md`),
         `Resource ${index}`,
@@ -2480,7 +2478,7 @@ describe("CLI Main - Skills", () => {
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toBe(
-        "Error: cannot load workflow skill: resolved SKILL.md path escapes its skill root.\n",
+        'Error: workflow skill "repo:escape" is blocked by deterministic audit [invalid_package] at .agents/skills/escape/SKILL.md: SKILL.md resolves outside its declared Skill root.\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -2624,7 +2622,7 @@ describe("CLI Main - Skills", () => {
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toContain(
-        "Error: workflow skill SKILL.md is too large to load",
+        "SKILL.md exceeds the 51200-byte limit",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -2656,8 +2654,8 @@ describe("CLI Main - Skills", () => {
       // Then
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toBe(
-        "Error: workflow skill SKILL.md is binary or not valid UTF-8 text.\n",
+      expect(fixture.stderr()).toContain(
+        "SKILL.md must be valid UTF-8 text without binary control bytes",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -2673,13 +2671,12 @@ describe("CLI Main - Skills", () => {
     {
       name: "unterminated",
       content: "---\nname: unterminated\ndescription: Unterminated skill.\n",
-      expected: "has unterminated YAML frontmatter",
+      expected: "SKILL.md YAML frontmatter must end with a closing delimiter",
     },
     {
       name: "missing-description",
       content: "---\nname: missing-description\n---\nbody\n",
-      expected:
-        "description: Invalid input: expected string, received undefined",
+      expected: "frontmatter does not match the Agent Skills schema",
     },
   ])(`Given a workflow skill has invalid frontmatter for $name,
     When the CLI starts a one-shot run,
@@ -2732,7 +2729,7 @@ describe("CLI Main - Skills", () => {
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toBe(
-        'Error: workflow skill "repo:review" has mismatched frontmatter name "other".\n',
+        'Error: workflow skill "repo:review" is blocked by deterministic audit [invalid_package] at .agents/skills/review/SKILL.md: frontmatter name must match the parent package directory.\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -2760,7 +2757,7 @@ describe("CLI Main - Skills", () => {
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toBe(
-        'Error: workflow skill "repo:folder" must be a regular SKILL.md file.\n',
+        'Error: workflow skill "repo:folder" is blocked by deterministic audit [invalid_package] at .agents/skills/folder/SKILL.md: SKILL.md must be a regular file.\n',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
