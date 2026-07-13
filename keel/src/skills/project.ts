@@ -11,7 +11,7 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { redactSecretLikeText } from "../core/secret-text.ts";
 import {
   BINARY_SAMPLE_BYTES,
@@ -143,6 +143,35 @@ function repositorySkillRoots(workspace: string): readonly SkillRoot[] {
     current = dirname(current);
     priority += 1;
   }
+}
+
+export function repositoryWorkflowSkillRootPaths(
+  workspace: string,
+): readonly string[] {
+  const resolvedWorkspace = realpathSync(workspace);
+  const localRoot = join(resolvedWorkspace, LOCAL_SKILL_ROOT);
+  const repositoryRoots = repositorySkillRoots(resolvedWorkspace);
+  if (
+    repositoryRoots.some((root) => {
+      const workspaceFromRoot = relative(root.rootPath, resolvedWorkspace);
+      return (
+        workspaceFromRoot === "" ||
+        (workspaceFromRoot !== ".." &&
+          !workspaceFromRoot.startsWith(`..${sep}`) &&
+          !isAbsolute(workspaceFromRoot))
+      );
+    })
+  ) {
+    throw new WorkflowSkillError(
+      "Error: workflow skills cannot be disabled while the workspace is inside a repository Skill root; run Keel from a workspace outside .agents/skills.",
+    );
+  }
+  return [
+    localRoot,
+    ...repositoryRoots
+      .map((root) => root.rootPath)
+      .filter((rootPath) => rootPath !== localRoot),
+  ];
 }
 
 function configuredSkillRoot(

@@ -67,11 +67,12 @@ import {
   skillLifecycleStatesEqual,
   workflowSkillFromActivation,
 } from "../skills/lifecycle.ts";
-import type {
-  ActiveSkillStatus,
-  SkillActivationRecord,
-  SkillLifecycleState,
-  WorkflowSkill,
+import {
+  type ActiveSkillStatus,
+  type SkillActivationRecord,
+  type SkillLifecycleState,
+  type WorkflowSkill,
+  WorkflowSkillError,
 } from "../skills/model.ts";
 import { executeGitDiff } from "../tools/git-diff.ts";
 import { executeGitStatus } from "../tools/git-status.ts";
@@ -330,12 +331,16 @@ function formatInteractiveDiffOutput(
 
 async function inspectInteractiveDiff(
   workspace: string,
+  hiddenPaths: readonly string[],
 ): Promise<InteractiveDiffInspection> {
-  const status = await executeGitStatus(workspace);
+  const status = await executeGitStatus(workspace, { hiddenPaths });
   if (!status.inGitWorkTree) {
     return { kind: "non-git", message: NON_GIT_DIFF_MESSAGE };
   }
-  const diff = await executeGitDiff(workspace, { mode: "all" });
+  const diff = await executeGitDiff(workspace, {
+    mode: "all",
+    hiddenPaths,
+  });
   if (!diff.hasChanges) {
     return { kind: "status-only", statusOutput: status.content };
   }
@@ -384,6 +389,7 @@ export async function runInteractiveSession(
   options: InteractiveSessionOptions,
 ): Promise<InteractiveSessionResult> {
   const now = options.now ?? Date.now;
+  const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const undoProtection = createUndoProtectionTracker();
   const activeWorkflowSkills: WorkflowSkill[] =
     options.skillActivation === undefined
@@ -938,6 +944,7 @@ export async function runInteractiveSession(
           systemPrompt: baseSystemPromptWithGoal(),
           signal: turnAbortController.signal,
           allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+          hiddenWorkspacePaths,
           ...(options.skillActivation !== undefined
             ? { skillActivation: options.skillActivation }
             : {}),
@@ -1375,6 +1382,9 @@ export async function runInteractiveSession(
       if (explicitInvocation !== null) {
         let stateBeforeActivation: SkillLifecycleState | undefined;
         try {
+          if (options.skillUnavailableReason !== undefined) {
+            throw new WorkflowSkillError(options.skillUnavailableReason);
+          }
           const skill = options.activateExplicitSkill?.(
             explicitInvocation.lookup,
           );
@@ -1383,7 +1393,10 @@ export async function runInteractiveSession(
           }
           /* v8 ignore next 3 -- the CLI installs activation lookup and lifecycle ownership together. */
           if (options.skillActivation === undefined) {
-            throw new Error("explicit skill activation is unavailable");
+            throw new WorkflowSkillError(
+              options.skillUnavailableReason ??
+                "explicit skill activation is unavailable",
+            );
           }
           stateBeforeActivation = options.skillActivation.state();
           const activation = options.skillActivation.activateExplicit(
@@ -1874,7 +1887,10 @@ export async function runInteractiveSession(
         try {
           options.writeStdout(
             formatInteractiveDiffOutput(
-              await inspectInteractiveDiff(options.workspace),
+              await inspectInteractiveDiff(
+                options.workspace,
+                hiddenWorkspacePaths,
+              ),
             ),
           );
         } catch (error) {
@@ -2136,7 +2152,10 @@ export async function runInteractiveSession(
         let stateBeforeCommand: SkillLifecycleState | undefined;
         try {
           if (options.skillActivation === undefined) {
-            throw new Error("explicit skill activation is unavailable");
+            throw new WorkflowSkillError(
+              options.skillUnavailableReason ??
+                "explicit skill activation is unavailable",
+            );
           }
           stateBeforeCommand = options.skillActivation.state();
           let successMessage: string;

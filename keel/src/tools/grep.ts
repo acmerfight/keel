@@ -26,6 +26,7 @@ export interface GrepOptions {
   readonly path?: string;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
+  readonly hiddenPaths?: readonly string[];
 }
 
 interface RipgrepMatch {
@@ -199,12 +200,16 @@ async function runRipgrep(
   pattern: string,
   signal?: AbortSignal,
   timeoutMs: number = DEFAULT_RIPGREP_TIMEOUT_MS,
+  hiddenPaths: readonly string[] = [],
 ): Promise<GrepToolResult> {
   const matches = new CountOutputLimit<{
     readonly output: string;
     readonly targetPath?: string;
   }>(MAX_GREP_MATCHES);
-  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  const projectIgnorePolicy = createProjectIgnorePolicy(
+    workspacePath,
+    hiddenPaths,
+  );
 
   const result = await runRipgrepProcess({
     toolName: "grep",
@@ -317,7 +322,10 @@ export async function executeGrep(
     );
   }
   if (options.path !== undefined) {
-    const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+    const projectIgnorePolicy = createProjectIgnorePolicy(
+      workspacePath,
+      options.hiddenPaths,
+    );
     if (
       projectIgnorePolicy.isIgnored(requestedPath, targetIsDirectory) ||
       projectIgnorePolicy.isIgnored(targetPath, targetIsDirectory)
@@ -336,6 +344,7 @@ export async function executeGrep(
     pattern,
     options.signal,
     options.timeoutMs,
+    options.hiddenPaths,
   );
   return {
     ...result,

@@ -214,6 +214,7 @@ function headlessGoalRunArgs(
   return {
     command: "run",
     bashMode: cliArgs.bashMode,
+    skillsEnabled: cliArgs.skillsEnabled,
     ephemeral: false,
     ...(cliArgs.mode === "launch"
       ? {

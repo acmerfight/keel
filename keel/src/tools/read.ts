@@ -30,6 +30,7 @@ const READ_CHUNK_BYTES = 8192;
 export interface ReadOptions {
   readonly offset?: number | undefined;
   readonly limit?: number | undefined;
+  readonly hiddenPaths?: readonly string[];
 }
 
 interface ReadToolResult extends ToolResult {
@@ -313,7 +314,10 @@ export function executeRead(
   });
   const stat = statSync(accessTargetPath);
   const targetIsDirectory = stat.isDirectory();
-  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  const projectIgnorePolicy = createProjectIgnorePolicy(
+    workspacePath,
+    options.hiddenPaths,
+  );
   if (
     projectIgnorePolicy.isIgnored(requestedPath, targetIsDirectory) ||
     projectIgnorePolicy.isIgnored(accessTargetPath, targetIsDirectory)

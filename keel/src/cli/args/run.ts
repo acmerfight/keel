@@ -22,6 +22,7 @@ const RUN_OPTIONS = [
   "--provider",
   "--model",
   "--skill",
+  "--no-skills",
   "--max-cost",
   "--report",
   "--transcript",
@@ -50,6 +51,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   let forkPoints = false;
   let providerId: RunCliArgs["providerId"] | undefined;
   let model: string | undefined;
+  let skillsEnabled = true;
   const skillNames: string[] = [];
   let userMessage: string | undefined;
   const maxCostPrefix = "--max-cost=";
@@ -152,6 +154,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       if (!parsed.ok) return parsed;
       skillNames.push(parsed.value);
       skipNext = true;
+      continue;
+    }
+
+    if (arg === "--no-skills") {
+      skillsEnabled = false;
       continue;
     }
 
@@ -422,10 +429,14 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   }
   const parsedResumeSession: RunCliArgs["resumeSession"] | undefined =
     resumePick ? { kind: "pick" } : resumeSession;
+  if (!skillsEnabled && skillNames.length > 0) {
+    return parseError("Error: --no-skills cannot be combined with --skill.");
+  }
 
   return parseOk({
     command: "run",
     bashMode,
+    skillsEnabled,
     ...(userMessage !== undefined ? { userMessage } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(reportFile !== undefined ? { reportFile } : {}),

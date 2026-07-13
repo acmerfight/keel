@@ -442,6 +442,191 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given a project Skill matches the task,
+    When the user runs Keel with --no-skills,
+    Then the provider receives no Skill metadata, instructions, or tools`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-no-skills-"));
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request when the user asks for correctness findings.",
+      "NO_SKILLS_MUST_HIDE_THIS_BODY",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("read_disabled_skill", "read", {
+              path: ".agents/skills/review/SKILL.md",
+            }),
+          );
+          res.write(
+            sseToolCall(
+              "list_disabled_skills",
+              "ls",
+              { path: ".agents/skills" },
+              { index: 1 },
+            ),
+          );
+          res.write(
+            sseToolCall(
+              "find_disabled_skills",
+              "glob",
+              { pattern: "**/SKILL.md" },
+              { index: 2 },
+            ),
+          );
+          res.write(
+            sseToolCall(
+              "search_disabled_skills",
+              "grep",
+              { pattern: "MUST_HIDE" },
+              { index: 3 },
+            ),
+          );
+          res.write(
+            sseToolCall(
+              "status_without_skills",
+              "git_status",
+              {},
+              { index: 4 },
+            ),
+          );
+          res.write(
+            sseToolCall("diff_without_skills", "git_diff", {}, { index: 5 }),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Completed without Skills."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(["--no-skills", "review pull request 437"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Completed without Skills.\n");
+      expect(fixture.stderr()).toContain(
+        "Tool failed: read .agents/skills/review/SKILL.md",
+      );
+      expect(fixture.stderr()).toContain("Tool failed: ls .agents/skills");
+      expect(capturedBodies).toHaveLength(2);
+      const request = requestWithMessagesSchema.parse(capturedBodies[0]);
+      const systemPrompt = request.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(systemPrompt).not.toContain("Available workflow skills:");
+      expect(systemPrompt).not.toContain("repo:review");
+      expect(systemPrompt).not.toContain("NO_SKILLS_MUST_HIDE_THIS_BODY");
+      const toolNames =
+        requestWithToolsSchema
+          .parse(capturedBodies[0])
+          .tools?.map((tool) => tool.function?.name) ?? [];
+      expect(toolNames).not.toContain("skill");
+      expect(toolNames).not.toContain("skill_search");
+      expect(toolNames).not.toContain("skill_resource");
+      const followup = JSON.stringify(
+        requestWithMessagesSchema.parse(capturedBodies[1]).messages,
+      );
+      expect(followup).toContain("ignored path");
+      expect(followup).not.toContain("NO_SKILLS_MUST_HIDE_THIS_BODY");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the workspace is inside a repository Skill root,
+    When the user runs Keel with --no-skills,
+    Then it rejects the conflicting workspace before calling a provider`, async () => {
+    // Given
+    const repository = await mkdtemp(
+      join(tmpdir(), "keel-cli-no-skills-inside-root-"),
+    );
+    const workspace = join(repository, ".agents", "skills", "review");
+    await mkdir(join(repository, ".git"), { recursive: true });
+    await mkdir(workspace, { recursive: true });
+    await writeFile(
+      join(workspace, "SKILL.md"),
+      "---\nname: review\ndescription: Review changes\n---\n\nPRIVATE_REVIEW_BODY\n",
+    );
+    const fixture = createRuntime(["--no-skills", "inspect this workspace"], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Error: workflow skills cannot be disabled while the workspace is inside a repository Skill root; run Keel from a workspace outside .agents/skills.\n",
+      );
+    } finally {
+      await rm(repository, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user explicitly invokes a Skill while Skills are disabled,
+    When Keel parses the one-shot request,
+    Then it rejects the invocation before resolving or spending a provider`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-no-skills-explicit-"),
+    );
+    await writeSkill(
+      workspace,
+      "review",
+      "Review a pull request.",
+      "NO_SKILLS_EXPLICIT_BODY",
+    );
+    const fixture = createRuntime(["--no-skills", "$review inspect this"], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Error: workflow skills are disabled for this run by --no-skills.\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a local workflow skill is selected for a one-shot run,
     When the CLI starts the agent,
     Then the provider-visible system prompt includes that skill body`, async () => {

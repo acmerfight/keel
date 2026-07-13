@@ -16,6 +16,7 @@ const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
 export interface LsOptions {
   readonly path?: string;
   readonly limit?: number;
+  readonly hiddenPaths?: readonly string[];
 }
 
 interface LsEntry {
@@ -128,7 +129,10 @@ export function executeLs(
     );
   }
 
-  const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
+  const projectIgnorePolicy = createProjectIgnorePolicy(
+    workspacePath,
+    options.hiddenPaths,
+  );
   const targetStat = statSync(targetPath);
   const targetIsDirectory = targetStat.isDirectory();
   if (

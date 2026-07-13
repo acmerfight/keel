@@ -146,11 +146,13 @@ function publishVisibleProjectInstructions(
 export async function restorePostCompactionReads(options: {
   readonly workspace: string;
   readonly signal: AbortSignal;
+  readonly hiddenWorkspacePaths?: readonly string[];
   readonly readVisibility: ReadVisibilityState;
   readonly projectInstructionVisibility: ProjectInstructionVisibilityState;
   readonly messages: Message[];
   readonly nextToolCallId: () => string;
 }): Promise<void> {
+  const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const skippedReadTargets = compactedCurrentReadRestoreTargets({
     workspace: options.workspace,
     messages: options.messages,
@@ -235,6 +237,7 @@ export async function restorePostCompactionReads(options: {
       toolCall,
       signal: options.signal,
       allowBash: false,
+      hiddenWorkspacePaths,
       projectInstructions: options.projectInstructionVisibility,
     });
     if (

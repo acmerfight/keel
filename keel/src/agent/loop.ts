@@ -100,6 +100,7 @@ export interface RunAgentOptions {
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
+  readonly hiddenWorkspacePaths?: readonly string[];
   readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
   readonly bashPermission?: BashPermissionPolicy;
@@ -121,6 +122,7 @@ export interface RunAgentTurnOptions {
   readonly systemPrompt: string;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
+  readonly hiddenWorkspacePaths?: readonly string[];
   readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
   readonly bashPermission?: BashPermissionPolicy;
@@ -524,6 +526,7 @@ export async function* runAgentTurn(
     stopPolicy,
     drainInjectedUserMessages,
   } = options;
+  const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const allowSkill = options.skillActivation !== undefined;
   let sessionLedger = sessionLedgerFromMessages(messages);
   const applySessionLedger = (next: SessionLedger) => {
@@ -592,6 +595,7 @@ export async function* runAgentTurn(
         await restorePostCompactionReads({
           workspace,
           signal,
+          hiddenWorkspacePaths,
           readVisibility,
           projectInstructionVisibility,
           messages: targetMessages,
@@ -831,6 +835,7 @@ export async function* runAgentTurn(
         toolCall,
         signal,
         allowBash,
+        hiddenWorkspacePaths,
         recordCheckpoints: options.recordCheckpointOperations === undefined,
         readBeforeEdit: {
           hasRead: readVisibility.hasRead,
@@ -1134,6 +1139,7 @@ export async function* runAgent(
         systemPrompt: options.systemPrompt,
         signal: options.signal,
         allowBash: options.allowBash,
+        hiddenWorkspacePaths: options.hiddenWorkspacePaths ?? [],
         ...(options.skillActivation !== undefined
           ? { skillActivation: options.skillActivation }
           : {}),

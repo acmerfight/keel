@@ -235,6 +235,39 @@ describe("CLI Args", () => {
     );
   });
 
+  test(`Given the user requests an ordinary run without workflow Skills,
+    When the CLI parses --no-skills,
+    Then the run contract records an absolute per-run disable`, () => {
+    // When
+    const parsed = parseCliArgs(["--no-skills", "review without skills"]);
+
+    // Then
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: {
+        command: "run",
+        skillsEnabled: false,
+        userMessage: "review without skills",
+      },
+    });
+  });
+
+  test.each([
+    [["--no-skills", "--skill", "review", "review this"]],
+    [["--skill=review", "--no-skills", "review this"]],
+  ])(`Given --no-skills and an explicit --skill are both present in %j,
+    When the CLI parses the run,
+    Then it rejects the contradictory Skill policy before execution`, (args) => {
+    // When
+    const parsed = parseCliArgs(args);
+
+    // Then
+    expect(parsed).toEqual({
+      ok: false,
+      message: "Error: --no-skills cannot be combined with --skill.",
+    });
+  });
+
   test(`Given a doctor model option is followed by the offline flag,
     When the user runs the CLI,
     Then the CLI rejects the missing model instead of disabling offline mode`, async () => {
@@ -568,6 +601,7 @@ describe("CLI Args", () => {
         bashMode: "trusted",
         providerId: "fake",
         model: "test-model",
+        skillsEnabled: true,
         skillNames: ["release"],
         maxCostUsd: 1.25,
         reportFile: "goal.json",
@@ -602,6 +636,7 @@ describe("CLI Args", () => {
         },
         budget: { turns: 12 },
         bashMode: "disabled",
+        skillsEnabled: true,
         providerId: "fake",
         sessionId: "release-narrative",
       },
@@ -656,6 +691,7 @@ describe("CLI Args", () => {
         mode: "resume",
         resumeSession,
         bashMode: args.includes("--bash-policy=deny") ? "disabled" : "trusted",
+        skillsEnabled: true,
         budget: args.includes("--turns=12")
           ? {
               turns: 12,
@@ -673,6 +709,54 @@ describe("CLI Args", () => {
           ? { reportFile: "goal.json" }
           : {}),
       },
+    });
+  });
+
+  test.each([
+    [
+      [
+        "goal",
+        "--objective=Review safely",
+        "--done-when=the review is complete",
+        "--no-skills",
+      ],
+      "launch",
+    ],
+    [["goal", "resume", "review-session", "--no-skills"], "resume"],
+  ])(`Given a headless Goal %s requests --no-skills,
+    When the CLI parses the Goal,
+    Then it propagates the per-run disable into the shared runtime contract`, (args, mode) => {
+    // When
+    const parsed = parseCliArgs(args);
+
+    // Then
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: { command: "goal", mode, skillsEnabled: false },
+    });
+  });
+
+  test.each([
+    [
+      [
+        "goal",
+        "--objective=Review safely",
+        "--done-when=the review is complete",
+        "--no-skills",
+        "--skill=review",
+      ],
+    ],
+    [["goal", "resume", "review-session", "--skill=review", "--no-skills"]],
+  ])(`Given a headless Goal combines --no-skills with --skill in %j,
+    When the CLI parses the Goal,
+    Then it rejects the contradictory Skill policy before execution`, (args) => {
+    // When
+    const parsed = parseCliArgs(args);
+
+    // Then
+    expect(parsed).toEqual({
+      ok: false,
+      message: "Error: --no-skills cannot be combined with --skill.",
     });
   });
 

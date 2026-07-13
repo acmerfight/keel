@@ -20,6 +20,7 @@ import type {
   SkillActivationRecord,
   SkillLifecycleState,
 } from "../skills/model.ts";
+import { repositoryWorkflowSkillRootPaths } from "../skills/project.ts";
 import type { CliArgs } from "./args.ts";
 import { USAGE } from "./args.ts";
 import {
@@ -569,7 +570,7 @@ async function runSessionCli(
         mode.kind === "headless-goal" ? mode.bashPermission : undefined;
       let headlessPreparedSessionGoal: SessionGoal | undefined;
       const requestedWorkflowSkills =
-        cliArgs.skillNames === undefined
+        !cliArgs.skillsEnabled || cliArgs.skillNames === undefined
           ? []
           : loadWorkflowSkills(runtime, workspace, cliArgs.skillNames);
       if (sessionStart.kind === "create") {
@@ -667,11 +668,15 @@ async function runSessionCli(
           initialModelSelection = overrideSelection;
         }
       }
-      const skillCatalog = discoverWorkflowSkillCatalog(runtime, workspace);
-      runtime.writeStderr(
-        formatWorkflowSkillListWarnings(skillCatalog.warnings),
-      );
-      let skillActivation: SkillActivationCapability;
+      const skillCatalog = cliArgs.skillsEnabled
+        ? discoverWorkflowSkillCatalog(runtime, workspace)
+        : undefined;
+      if (skillCatalog !== undefined) {
+        runtime.writeStderr(
+          formatWorkflowSkillListWarnings(skillCatalog.warnings),
+        );
+      }
+      let skillActivation: SkillActivationCapability | undefined;
       let lazySessionInitialSkillState: SkillLifecycleState = {
         skillActivations: [],
         activeSkillIds: [],
@@ -703,40 +708,41 @@ async function runSessionCli(
           runtime,
         });
       };
-      skillActivation = createSkillActivation(skillCatalog, {
-        initialState:
-          session === undefined
-            ? { skillActivations: [], activeSkillIds: [] }
-            : {
-                skillActivations: session.skillActivations,
-                activeSkillIds: session.activeSkillIds,
-              },
-        now: () => new Date(runtime.now()).toISOString(),
-      });
-      const skillStateBeforeRequested = skillActivation.state();
       const initialSkillActivationRecords: SkillActivationRecord[] = [];
-      for (const skill of requestedWorkflowSkills) {
-        const activated = skillActivation.activateExplicit(skill, "");
-        if (activated.record !== undefined) {
-          initialSkillActivationRecords.push(activated.record);
+      if (skillCatalog !== undefined) {
+        skillActivation = createSkillActivation(skillCatalog, {
+          initialState:
+            session === undefined
+              ? { skillActivations: [], activeSkillIds: [] }
+              : {
+                  skillActivations: session.skillActivations,
+                  activeSkillIds: session.activeSkillIds,
+                },
+          now: () => new Date(runtime.now()).toISOString(),
+        });
+        const skillStateBeforeRequested = skillActivation.state();
+        for (const skill of requestedWorkflowSkills) {
+          const activated = skillActivation.activateExplicit(skill, "");
+          if (activated.record !== undefined) {
+            initialSkillActivationRecords.push(activated.record);
+          }
+        }
+        if (
+          session !== undefined &&
+          !skillLifecycleStatesEqual(
+            skillStateBeforeRequested,
+            skillActivation.state(),
+          )
+        ) {
+          persistSkillLifecycleState(skillActivation.state());
+        }
+        if (session === undefined) {
+          lazySessionInitialSkillState = skillActivation.state();
         }
       }
-      if (
-        session !== undefined &&
-        !skillLifecycleStatesEqual(
-          skillStateBeforeRequested,
-          skillActivation.state(),
-        )
-      ) {
-        persistSkillLifecycleState(skillActivation.state());
-      }
-      if (session === undefined) {
-        lazySessionInitialSkillState = skillActivation.state();
-      }
-      const workflowSkills = skillActivation
-        .active()
-        .map(workflowSkillFromActivation);
-      for (const status of skillActivation.activeStatuses()) {
+      const workflowSkills =
+        skillActivation?.active().map(workflowSkillFromActivation) ?? [];
+      for (const status of skillActivation?.activeStatuses() ?? []) {
         if (status.diskStatus === "current") continue;
         runtime.writeStderr(
           `Warning: workflow skill ${status.activation.qualifiedName} ${status.diskStatus}; continuing with session snapshot sha256:${status.activation.digest}.\n`,
@@ -1048,7 +1054,7 @@ async function runSessionCli(
                 inputEchoesToDisplay: true,
                 session: displaySession,
                 workspace,
-                skillCompletions: skillCatalog.skills,
+                skillCompletions: skillCatalog?.skills ?? [],
                 onInterrupt: () => {
                   activeSigintHandler?.();
                 },
@@ -1069,6 +1075,11 @@ async function runSessionCli(
       const interactiveSessionOptions: InteractiveSessionOptions = {
         cliArgs,
         workspace,
+        ...(!cliArgs.skillsEnabled
+          ? {
+              hiddenWorkspacePaths: repositoryWorkflowSkillRootPaths(workspace),
+            }
+          : {}),
         platform: runtime.platform,
         ...(mode.kind === "headless-goal" ? { exitOnTurnAbort: true } : {}),
         ...(mode.kind === "headless-goal" &&
@@ -1095,14 +1106,25 @@ async function runSessionCli(
           : {}),
         ...(projectInstructions !== undefined ? { projectInstructions } : {}),
         ...(workflowSkills.length > 0 ? { workflowSkills } : {}),
-        ...(skillCatalog.implicitSkills.length > 0
+        ...(skillCatalog !== undefined && skillCatalog.implicitSkills.length > 0
           ? { skillCatalog: skillCatalog.implicitSkills }
           : {}),
-        skillActivation,
+        ...(skillActivation !== undefined ? { skillActivation } : {}),
+        ...(!cliArgs.skillsEnabled
+          ? {
+              skillUnavailableReason:
+                "Error: workflow skills are disabled for this run by --no-skills.",
+            }
+          : {}),
         ...(initialSkillActivationRecords.length > 0
           ? { initialSkillActivationRecords }
           : {}),
-        activateExplicitSkill: (lookup) => skillCatalog.load(lookup),
+        ...(skillCatalog !== undefined
+          ? {
+              activateExplicitSkill: (lookup: string) =>
+                skillCatalog.load(lookup),
+            }
+          : {}),
         ...(sessionPersistence !== undefined ? sessionPersistence : {}),
         ...(initialInputLines.length > 0 ? { initialInputLines } : {}),
         ...(projectBashApprovals !== undefined
@@ -1211,7 +1233,9 @@ async function runSessionCli(
             ...interactiveResult.report.explicitSkillActivations,
             ...reportRecorder.skillActivations(),
           ],
-          activeSkills: reportActiveSkills(skillActivation.activeStatuses()),
+          activeSkills: reportActiveSkills(
+            skillActivation?.activeStatuses() ?? [],
+          ),
           skillCatalog: interactiveResult.report.skillCatalog,
           undoProtection: interactiveResult.report.undoProtection,
           ...(goalOutcome !== undefined ? { goalOutcome } : {}),

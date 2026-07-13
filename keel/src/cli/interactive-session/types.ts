@@ -79,12 +79,14 @@ export type InteractiveResolvedProvider =
 export interface InteractiveSessionOptions {
   readonly cliArgs: InteractiveSessionArgs;
   readonly workspace: string;
+  readonly hiddenWorkspacePaths?: readonly string[];
   readonly platform: NodeJS.Platform;
   readonly sessionId?: string;
   readonly projectInstructions?: ProjectInstructions;
   readonly workflowSkills?: readonly WorkflowSkill[];
   readonly skillCatalog?: readonly SkillDescriptor[];
   readonly skillActivation?: SkillActivationCapability;
+  readonly skillUnavailableReason?: string;
   readonly initialSkillActivationRecords?: readonly SkillActivationRecord[];
   readonly activateExplicitSkill?: (lookup: string) => WorkflowSkill;
   readonly initialSessionTitle?: string;

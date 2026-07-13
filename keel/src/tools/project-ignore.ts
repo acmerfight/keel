@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import ignore from "ignore";
 
 type IgnoreMatcher = ReturnType<typeof ignore>;
@@ -9,6 +9,22 @@ export interface ProjectIgnorePolicy {
     targetPath: string,
     targetIsDirectory: boolean,
   ) => boolean;
+}
+
+function isHiddenPath(
+  targetPath: string,
+  hiddenPaths: readonly string[],
+): boolean {
+  const absoluteTargetPath = resolve(targetPath);
+  return hiddenPaths.some((hiddenPath) => {
+    const relativePath = relative(resolve(hiddenPath), absoluteTargetPath);
+    return (
+      relativePath === "" ||
+      (!relativePath.startsWith(`..${sep}`) &&
+        relativePath !== ".." &&
+        !isAbsolute(relativePath))
+    );
+  });
 }
 
 function pathForIgnoreFile(
@@ -58,6 +74,7 @@ function ancestorDirectoryIgnorePaths(
 
 export function createProjectIgnorePolicy(
   workspacePath: string,
+  hiddenPaths: readonly string[] = [],
 ): ProjectIgnorePolicy {
   const matchers = new Map<string, IgnoreMatcher | null>();
 
@@ -78,6 +95,7 @@ export function createProjectIgnorePolicy(
 
   return {
     isIgnored: (targetPath: string, targetIsDirectory: boolean): boolean => {
+      if (isHiddenPath(targetPath, hiddenPaths)) return true;
       let ignored = false;
 
       for (const directory of ignoreFileDirectories(
