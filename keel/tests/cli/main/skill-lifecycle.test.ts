@@ -53,6 +53,17 @@ const requestControlSchema = z
   })
   .passthrough();
 
+const requestToolDescriptionsSchema = z.object({
+  tools: z.array(
+    z.object({
+      function: z.object({
+        name: z.string(),
+        description: z.string(),
+      }),
+    }),
+  ),
+});
+
 function isSummaryRequest(body: unknown): boolean {
   const request = requestControlSchema.parse(body);
   return request.tool_choice === "none" || request.tools === undefined;
@@ -1129,6 +1140,225 @@ describe("CLI Main - Skill Lifecycle", () => {
             trigger: "model_selected",
             diskStatus: "current",
           },
+        ],
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one request clearly matches two implicit Skills,
+    When the model receives the Skill selection contract and activates both,
+    Then every clear match remains permitted and both instruction bodies become active`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skill-compound-contract-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skill-compound-contract-home-"),
+    );
+    const reportPath = join(workspace, "report.json");
+    await writeSkill(
+      workspace,
+      "review",
+      "Review source changes when the user asks for correctness findings.",
+      "COMPOUND REVIEW BODY",
+    );
+    await writeSkill(
+      workspace,
+      "qa",
+      "Run quality assurance when the user asks to test changes.",
+      "COMPOUND QA BODY",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("activate_review", "skill", { name: "repo:review" }),
+          );
+          res.write(
+            sseToolCall(
+              "activate_qa",
+              "skill",
+              { name: "repo:qa" },
+              { index: 1 },
+            ),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Review and QA complete."));
+      });
+    });
+    await listen(server);
+    const run = createRuntime(
+      [
+        "--report",
+        reportPath,
+        "Review this patch for correctness, then test its command-line behavior.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          HOME: home,
+          KEEL_HOME: join(home, ".keel"),
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(run.stdout()).toBe("Review and QA complete.\n");
+      expect(capturedBodies).toHaveLength(2);
+      const firstRequest = requestWithMessagesSchema.parse(capturedBodies[0]);
+      const firstSystem = firstRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(firstSystem).toContain("one or more skills clearly match");
+      expect(firstSystem).toContain("once for each clear match");
+      expect(firstSystem).toContain("up to 3 model-selected skills per turn");
+      const skillTool = requestToolDescriptionsSchema
+        .parse(capturedBodies[0])
+        .tools.find((tool) => tool.function.name === "skill");
+      expect(skillTool?.function.description).toContain(
+        "each clearly matching inactive skill",
+      );
+      expect(skillTool?.function.description).toContain(
+        "up to 3 model-selected skills per turn",
+      );
+      expect(skillTool?.function.description).toContain(
+        "the same skill is already active",
+      );
+      expect(skillTool?.function.description).not.toContain(
+        "or a skill is already active",
+      );
+      const finalRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      const finalSystem = finalRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(occurrences(finalSystem ?? "", "COMPOUND REVIEW BODY")).toBe(1);
+      expect(occurrences(finalSystem ?? "", "COMPOUND QA BODY")).toBe(1);
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        activeSkills: [
+          { name: "repo:review", trigger: "model_selected" },
+          { name: "repo:qa", trigger: "model_selected" },
+        ],
+      });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one explicit Skill and another implicit Skill match a compound request,
+    When the model receives the remaining catalog and activates its clear match,
+    Then the explicit choice stays active without prohibiting the implicit activation`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skill-explicit-compose-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skill-explicit-compose-home-"),
+    );
+    const reportPath = join(workspace, "report.json");
+    await writeSkill(
+      workspace,
+      "review",
+      "Review source changes when the user asks for correctness findings.",
+      "EXPLICIT REVIEW BODY",
+    );
+    await writeSkill(
+      workspace,
+      "qa",
+      "Run quality assurance when the user asks to test changes.",
+      "IMPLICIT QA BODY",
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          res.write(sseToolCall("activate_qa", "skill", { name: "repo:qa" }));
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Explicit review and QA complete."));
+      });
+    });
+    await listen(server);
+    const run = createRuntime(
+      [
+        "--skill",
+        "review",
+        "--report",
+        reportPath,
+        "Review this patch for correctness, then test its command-line behavior.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          HOME: home,
+          KEEL_HOME: join(home, ".keel"),
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(run.stdout()).toBe("Explicit review and QA complete.\n");
+      expect(capturedBodies).toHaveLength(2);
+      const firstRequest = requestWithMessagesSchema.parse(capturedBodies[0]);
+      const firstSystem = firstRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(occurrences(firstSystem ?? "", "EXPLICIT REVIEW BODY")).toBe(1);
+      expect(firstSystem).toContain('name: "repo:qa"');
+      expect(firstSystem).not.toContain("IMPLICIT QA BODY");
+      const skillTool = requestToolDescriptionsSchema
+        .parse(capturedBodies[0])
+        .tools.find((tool) => tool.function.name === "skill");
+      expect(skillTool?.function.description).not.toContain(
+        "the user explicitly selected a workflow skill at launch",
+      );
+      const finalRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      const finalSystem = finalRequest.messages?.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(occurrences(finalSystem ?? "", "EXPLICIT REVIEW BODY")).toBe(1);
+      expect(occurrences(finalSystem ?? "", "IMPLICIT QA BODY")).toBe(1);
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        activeSkills: [
+          { name: "repo:review", trigger: "user_explicit" },
+          { name: "repo:qa", trigger: "model_selected" },
         ],
       });
     } finally {

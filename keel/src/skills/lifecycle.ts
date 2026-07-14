@@ -1,5 +1,6 @@
 import {
   type ActiveSkillStatus,
+  MODEL_SELECTED_SKILL_ACTIVATIONS_PER_TURN,
   type SkillActivation,
   type SkillActivationCapability,
   type SkillActivationRecord,
@@ -10,8 +11,6 @@ import {
   type WorkflowSkill,
   WorkflowSkillError,
 } from "./model.ts";
-
-const MODEL_SELECTED_ACTIVATIONS_PER_TURN = 3;
 
 export interface CreateSkillActivationOptions {
   readonly initialState?: SkillLifecycleState;
@@ -314,9 +313,9 @@ export function createSkillActivation(
       );
     },
     activate: (name) => {
-      if (modelSelectedThisTurn >= MODEL_SELECTED_ACTIVATIONS_PER_TURN) {
+      if (modelSelectedThisTurn >= MODEL_SELECTED_SKILL_ACTIVATIONS_PER_TURN) {
         throw new WorkflowSkillError(
-          `Error: this turn already activated ${MODEL_SELECTED_ACTIVATIONS_PER_TURN} model-selected workflow skills; continue with the active set or ask the user to activate another explicitly.`,
+          `Error: this turn already activated ${MODEL_SELECTED_SKILL_ACTIVATIONS_PER_TURN} model-selected workflow skills; continue with the active set or ask the user to activate another explicitly.`,
         );
       }
       const skill = catalog.loadImplicit(name);

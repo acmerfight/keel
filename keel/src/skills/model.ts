@@ -10,6 +10,8 @@ export class WorkflowSkillError extends Error {
 export type SkillScope = "repo" | "user" | "system" | "extra";
 export type SkillActivationPolicy = "implicit" | "explicit";
 
+export const MODEL_SELECTED_SKILL_ACTIVATIONS_PER_TURN = 3;
+
 export interface WorkflowSkill {
   readonly id: string;
   readonly packageId: string;
