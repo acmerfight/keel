@@ -4,6 +4,7 @@ import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { runReportSchema } from "../../../src/eval/report-schema.ts";
 import { runCli, runCliProcess } from "../../../src/testing/cli-harness.ts";
 
 export {
@@ -14,74 +15,10 @@ export {
   rm,
   runCli,
   runCliProcess,
+  runReportSchema,
   tmpdir,
   writeFile,
-  z,
 };
-export const runReportSchema = z.object({
-  schemaVersion: z.literal(9),
-  turns: z.number().int().nonnegative(),
-  stopReason: z.string(),
-  usage: z.object({
-    inputTokens: z.number().int().nonnegative(),
-    cachedInputTokens: z.number().int().nonnegative(),
-    uncachedInputTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
-  }),
-  durationMs: z.number().nonnegative(),
-  costUsd: z.number(),
-  costBudgetUsd: z.number().positive().optional(),
-  costOvershootUsd: z.number().nonnegative(),
-  contextCompactions: z.array(z.unknown()),
-  skillActivations: z.array(z.unknown()),
-  modelsUsed: z.array(
-    z.object({
-      provider: z.string(),
-      model: z.string(),
-    }),
-  ),
-  usageByModel: z.array(
-    z.object({
-      provider: z.string(),
-      model: z.string(),
-      turns: z.number().int().nonnegative(),
-      usage: z.object({
-        inputTokens: z.number().int().nonnegative(),
-        cachedInputTokens: z.number().int().nonnegative(),
-        uncachedInputTokens: z.number().int().nonnegative(),
-        outputTokens: z.number().int().nonnegative(),
-      }),
-      costUsd: z.number(),
-    }),
-  ),
-  undoProtection: z.object({
-    status: z.enum(["available", "not_applicable", "unavailable"]),
-    checkpointsWritten: z.number().int().nonnegative(),
-    failures: z.array(
-      z.object({
-        reason: z.enum([
-          "checkpoint_write_failed",
-          "git_workspace_unavailable",
-          "target_unavailable",
-        ]),
-        count: z.number().int().positive(),
-      }),
-    ),
-    latestCheckpoint: z
-      .discriminatedUnion("written", [
-        z.object({ written: z.literal(true) }),
-        z.object({
-          written: z.literal(false),
-          reason: z.enum([
-            "checkpoint_write_failed",
-            "git_workspace_unavailable",
-            "target_unavailable",
-          ]),
-        }),
-      ])
-      .nullable(),
-  }),
-});
 
 export const requestModelSchema = z.object({
   model: z.string(),

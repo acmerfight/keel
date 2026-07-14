@@ -25,6 +25,10 @@ import type {
 import type { SessionForkPoints } from "../fork-points.ts";
 import type { ModelSource, ProviderSelection } from "../provider-config.ts";
 import type {
+  AgentEventReportRecorder,
+  RunReportTask,
+} from "../report-events.ts";
+import type {
   SessionModelSelection,
   SessionPersistenceReason,
   SessionQueuedInput,
@@ -104,6 +108,7 @@ export interface InteractiveSessionOptions {
   readonly initialProjectBashApprovalGrants?: readonly BashProjectApprovalGrant[];
   readonly bashPermission?: SessionBashPermissionPolicy;
   readonly goalAutomaticContinuationTurnLimit?: number;
+  readonly reportRecorder?: AgentEventReportRecorder;
   readonly exitOnTurnAbort?: boolean;
   readonly now?: () => number;
   readonly persistProjectBashApprovalGrant?: (
@@ -190,7 +195,7 @@ export type InteractiveInputDisposition =
 export interface InteractiveReportModelUsage {
   readonly provider: ProviderId;
   readonly model: string;
-  readonly turns: number;
+  readonly agentLoopTurns: number;
   readonly usage: Usage;
   readonly costUsd: number;
 }
@@ -198,6 +203,7 @@ export interface InteractiveReportModelUsage {
 export interface InteractiveSessionResult {
   readonly goal?: SessionGoal;
   readonly report?: {
+    readonly tasks: readonly RunReportTask[];
     readonly modelsUsed: readonly {
       readonly provider: ProviderId;
       readonly model: string;

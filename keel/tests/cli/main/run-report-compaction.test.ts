@@ -50,7 +50,9 @@ function barelyOversizedStaleReadFixture(label: string): string {
 
 const reportSchema = z
   .object({
-    schemaVersion: z.literal(9),
+    schemaVersion: z.literal(10),
+    agentLoopTurns: z.number().int().nonnegative(),
+    tasks: z.array(z.unknown()),
     skillActivations: z.array(z.unknown()),
     contextCompactions: z.array(
       z
@@ -275,7 +277,27 @@ describe("CLI Main - Run Report Compaction", () => {
       expect(run.stderr()).toContain("Context compacted: preflight");
       const report = await readReport(reportPath);
       expect(report).toMatchObject({
-        schemaVersion: 9,
+        schemaVersion: 10,
+        tasks: [
+          {
+            ordinal: 1,
+            trigger: "user_prompt",
+            agentRuns: [
+              {
+                ordinal: 1,
+                trigger: "user_prompt",
+                contextCompactions: [
+                  {
+                    reason: "preflight",
+                    providerRequestAction:
+                      "avoided_predictable_overflow_request",
+                  },
+                ],
+              },
+            ],
+            outcome: "completed",
+          },
+        ],
         contextCompactions: [
           {
             reason: "preflight",
@@ -512,7 +534,26 @@ describe("CLI Main - Run Report Compaction", () => {
       expect(mainBodies).toHaveLength(3);
       const report = await readReport(reportPath);
       expect(report).toMatchObject({
-        schemaVersion: 9,
+        schemaVersion: 10,
+        tasks: [
+          {
+            ordinal: 1,
+            trigger: "user_prompt",
+            agentRuns: [
+              {
+                ordinal: 1,
+                trigger: "user_prompt",
+                contextCompactions: [
+                  {
+                    reason: "overflow_recovery",
+                    providerRequestAction: "retried_after_context_overflow",
+                  },
+                ],
+              },
+            ],
+            outcome: "completed",
+          },
+        ],
         contextCompactions: [
           {
             reason: "overflow_recovery",
@@ -628,7 +669,7 @@ describe("CLI Main - Run Report Compaction", () => {
       expect(mainBodies).toHaveLength(2);
       const report = await readReport(reportPath);
       expect(report).toMatchObject({
-        schemaVersion: 9,
+        schemaVersion: 10,
         contextCompactions: [
           {
             reason: "proactive",
@@ -1390,7 +1431,7 @@ describe("CLI Main - Run Report Compaction", () => {
       expect(mainBodies).toHaveLength(4);
       const report = await readReport(reportPath);
       expect(report).toMatchObject({
-        schemaVersion: 9,
+        schemaVersion: 10,
         contextCompactions: [
           {
             reason: "proactive",
@@ -1515,7 +1556,7 @@ describe("CLI Main - Run Report Compaction", () => {
       expect(run.stdout()).toContain("session report ready\n");
       const report = await readReport(reportPath);
       expect(report).toMatchObject({
-        schemaVersion: 9,
+        schemaVersion: 10,
         contextCompactions: [
           {
             reason: "preflight",

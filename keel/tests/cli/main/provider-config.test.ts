@@ -45,13 +45,13 @@ describe("CLI Main - Provider Config", () => {
         JSON.parse(await readFile(reportPath, "utf8")),
       );
       expect(report).toMatchObject({
-        schemaVersion: 9,
+        schemaVersion: 10,
         modelsUsed: [{ provider: "fake", model: "fake" }],
         usageByModel: [
           {
             provider: "fake",
             model: "fake",
-            turns: 2,
+            agentLoopTurns: 2,
             costUsd: 0,
           },
         ],

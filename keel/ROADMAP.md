@@ -137,9 +137,10 @@ What a user can do today:
   budget with conservative request admission, provider output bounds, and
   post-response accounting.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
-  session report with turns, stop reason, token usage, duration,
-  provider/model, cost when tracked, and whether changed files received an
-  undo checkpoint.
+  session report with report-local Tasks and Agent Runs, completed main-loop
+  turns, retry and context-recovery attribution, stop reason, token usage,
+  duration, provider/model, cost when tracked, and whether changed files
+  received an undo checkpoint.
 - `keel --transcript <file>` — write provider-visible one-shot messages as
   schema-versioned JSONL.
 - `keel eval [--check] [--trials <n>]` — run a repeatable harness eval suite
@@ -225,8 +226,9 @@ Known limits that shape the priorities below:
    sessions persist transcripts, compaction replacement records, unconsumed
    queued input, active model switches, and workflow-skill activation history and
    active snapshots;
-   interactive `--report` records session-level turns, usage, provider/model,
-   models used, and cost. Real TTY sessions now have a multiline composer with
+   interactive `--report` attributes report-local Tasks, Agent Runs, main-loop
+   turns, and recovery events while retaining session-level usage,
+   provider/model, models used, and cost. Real TTY sessions now have a multiline composer with
    differential redraw, bracketed paste, history draft restoration, and resize
    handling, plus active-turn steering, deferred-command, approval, and
    operation-queue modes, transient activity, and persistent durable Goal

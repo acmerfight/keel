@@ -530,12 +530,13 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     // Then
     const result = await session;
     expect(result.report).toEqual({
+      tasks: [],
       modelsUsed: [{ provider: "fake", model: "fake" }],
       usageByModel: [
         {
           provider: "fake",
           model: "fake",
-          turns: 0,
+          agentLoopTurns: 0,
           usage: EXPENSIVE_USAGE,
           costUsd: 2,
         },

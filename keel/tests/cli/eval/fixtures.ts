@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { runReportSchema } from "../../../src/eval/report-schema.ts";
 import { runCli } from "../../../src/testing/cli-harness.ts";
 import {
   evalResultLine as resultLine,
@@ -23,50 +24,6 @@ export {
   writeResultFile,
   z,
 };
-export const runReportSchema = z.object({
-  schemaVersion: z.literal(9),
-  modelsUsed: z.array(
-    z.object({
-      provider: z.string(),
-      model: z.string(),
-    }),
-  ),
-  usageByModel: z.array(
-    z.object({
-      provider: z.string(),
-      model: z.string(),
-      turns: z.number().int().nonnegative(),
-      usage: z.object({
-        inputTokens: z.number().int().nonnegative(),
-        cachedInputTokens: z.number().int().nonnegative(),
-        uncachedInputTokens: z.number().int().nonnegative(),
-        outputTokens: z.number().int().nonnegative(),
-      }),
-      costUsd: z.number(),
-    }),
-  ),
-  turns: z.number().int().nonnegative(),
-  stopReason: z.string(),
-  usage: z.object({
-    inputTokens: z.number().int().nonnegative(),
-    cachedInputTokens: z.number().int().nonnegative(),
-    uncachedInputTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
-  }),
-  durationMs: z.number().nonnegative(),
-  costUsd: z.number(),
-  costBudgetUsd: z.number().positive().optional(),
-  costOvershootUsd: z.number().nonnegative(),
-  contextCompactions: z.array(z.unknown()),
-  skillActivations: z.array(z.unknown()),
-  undoProtection: z.object({
-    status: z.enum(["available", "not_applicable", "unavailable"]),
-    checkpointsWritten: z.number().int().nonnegative(),
-    failures: z.array(z.unknown()),
-    latestCheckpoint: z.unknown().nullable(),
-  }),
-});
-
 export const resultLineSchema = z.object({
   schemaVersion: z.literal(1),
   timestamp: z.string(),

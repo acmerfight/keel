@@ -7,13 +7,17 @@ import type {
   SkillActivationRecord,
 } from "../skills/model.ts";
 import type { EndEvent } from "./output.ts";
-import type { RunReportContextCompaction } from "./report-events.ts";
+import type {
+  RunReportContextCompaction,
+  RunReportTask,
+} from "./report-events.ts";
 import type { SkillPolicyReport } from "./skill-user-config.ts";
 
 // The report schema is consumed by external tooling (the eval runner and any
 // script comparing runs across keel versions). Bump schemaVersion on any
 // breaking change to the shape.
 interface RunReportInput {
+  readonly tasks: readonly RunReportTask[];
   readonly usageByModel: readonly RunReportModelUsage[];
   readonly end: EndEventWithCost;
   readonly durationMs: number;
@@ -51,19 +55,20 @@ export interface RunReportGoalOutcome {
 interface RunReportModelUsage {
   readonly provider: string;
   readonly model: string;
-  readonly turns: number;
+  readonly agentLoopTurns: number;
   readonly usage: Extract<AgentEvent, { readonly type: "end" }>["usage"];
   readonly costUsd: number;
 }
 
 interface RunReport {
-  readonly schemaVersion: 9;
+  readonly schemaVersion: 10;
+  readonly tasks: readonly RunReportTask[];
   readonly modelsUsed: readonly {
     readonly provider: string;
     readonly model: string;
   }[];
   readonly usageByModel: readonly RunReportModelUsage[];
-  readonly turns: number;
+  readonly agentLoopTurns: number;
   readonly stopReason: string;
   readonly usage: Extract<AgentEvent, { readonly type: "end" }>["usage"];
   readonly durationMs: number;
@@ -106,7 +111,8 @@ export function assertEndEventHasCost(
 export function writeRunReport(filePath: string, input: RunReportInput): void {
   const cost = input.end.cost;
   const report: RunReport = {
-    schemaVersion: 9,
+    schemaVersion: 10,
+    tasks: input.tasks,
     modelsUsed: input.usageByModel.map((entry) => ({
       provider: entry.provider,
       model: entry.model,
@@ -114,11 +120,19 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     usageByModel: input.usageByModel.map((entry) => ({
       provider: entry.provider,
       model: entry.model,
-      turns: entry.turns,
+      agentLoopTurns: entry.agentLoopTurns,
       usage: entry.usage,
       costUsd: entry.costUsd,
     })),
-    turns: input.end.turns,
+    agentLoopTurns: input.tasks.reduce(
+      (taskTotal, task) =>
+        taskTotal +
+        task.agentRuns.reduce(
+          (runTotal, agentRun) => runTotal + agentRun.agentLoopTurns,
+          0,
+        ),
+      0,
+    ),
     stopReason: input.end.stopReason,
     usage: input.end.usage,
     durationMs: input.durationMs,

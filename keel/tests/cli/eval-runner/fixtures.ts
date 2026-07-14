@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach } from "vitest";
 import { z } from "zod";
+import { runReportSchema } from "../../../src/eval/report-schema.ts";
 import { runEvalCommand } from "../../../src/eval/run.ts";
 
 export {
@@ -23,41 +24,7 @@ export const resultLineSchema = z.object({
   trial: z.number().int().positive(),
   pass: z.boolean(),
   outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
-  report: z
-    .object({
-      schemaVersion: z.literal(9),
-      skillPolicy: z.object({
-        mode: z.enum([
-          "enabled",
-          "cli_disabled",
-          "globally_disabled",
-          "filtered",
-        ]),
-        disabledPackages: z.number().int().nonnegative(),
-      }),
-      modelsUsed: z.array(
-        z.object({
-          provider: z.string(),
-          model: z.string(),
-        }),
-      ),
-      usageByModel: z.array(
-        z.object({
-          provider: z.string(),
-          model: z.string(),
-        }),
-      ),
-      contextCompactions: z.array(z.unknown()),
-      skillActivations: z.array(z.unknown()),
-      costOvershootUsd: z.number().nonnegative(),
-      undoProtection: z.object({
-        status: z.enum(["available", "not_applicable", "unavailable"]),
-        checkpointsWritten: z.number().int().nonnegative(),
-        failures: z.array(z.unknown()),
-        latestCheckpoint: z.unknown().nullable(),
-      }),
-    })
-    .optional(),
+  report: runReportSchema.optional(),
   transcriptPath: z.string().optional(),
 });
 
@@ -140,13 +107,30 @@ export const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 export const VALID_REPORT = {
-  schemaVersion: 9,
+  schemaVersion: 10,
+  tasks: [
+    {
+      ordinal: 1,
+      trigger: "user_prompt",
+      agentRuns: [
+        {
+          ordinal: 1,
+          trigger: "user_prompt",
+          agentLoopTurns: 1,
+          providerRetries: [],
+          contextCompactions: [],
+          stopReason: "completed",
+        },
+      ],
+      outcome: "completed",
+    },
+  ],
   modelsUsed: [{ provider: "fake", model: "fake" }],
   usageByModel: [
     {
       provider: "fake",
       model: "fake",
-      turns: 1,
+      agentLoopTurns: 1,
       usage: {
         inputTokens: 1,
         cachedInputTokens: 0,
@@ -156,7 +140,7 @@ export const VALID_REPORT = {
       costUsd: 0,
     },
   ],
-  turns: 1,
+  agentLoopTurns: 1,
   stopReason: "completed",
   usage: {
     inputTokens: 1,

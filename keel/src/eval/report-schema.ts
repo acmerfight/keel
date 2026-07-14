@@ -60,8 +60,38 @@ const contextCompactionSchema = z.object({
   artifacts: z.array(compactionArtifactSchema),
 });
 
+const providerRetrySchema = z.object({
+  provider: z.string(),
+  reason: z.string(),
+  attempt: z.number().int().nonnegative(),
+  maxRetries: z.number().int().nonnegative(),
+  delayMs: z.number().nonnegative(),
+});
+
+const agentRunSchema = z.object({
+  ordinal: z.number().int().positive(),
+  trigger: z.enum([
+    "user_prompt",
+    "goal_activation",
+    "goal_resume",
+    "goal_continuation",
+  ]),
+  agentLoopTurns: z.number().int().nonnegative(),
+  providerRetries: z.array(providerRetrySchema),
+  contextCompactions: z.array(contextCompactionSchema),
+  stopReason: z.string(),
+});
+
+const taskSchema = z.object({
+  ordinal: z.number().int().positive(),
+  trigger: z.enum(["user_prompt", "goal_activation", "goal_resume"]),
+  agentRuns: z.array(agentRunSchema).min(1),
+  outcome: z.string(),
+});
+
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(9),
+  schemaVersion: z.literal(10),
+  tasks: z.array(taskSchema),
   modelsUsed: z.array(
     z.object({
       provider: z.string(),
@@ -72,12 +102,12 @@ export const runReportSchema = z.object({
     z.object({
       provider: z.string(),
       model: z.string(),
-      turns: z.number().int().nonnegative(),
+      agentLoopTurns: z.number().int().nonnegative(),
       usage: usageSchema,
       costUsd: z.number().nonnegative(),
     }),
   ),
-  turns: z.number().int().nonnegative(),
+  agentLoopTurns: z.number().int().nonnegative(),
   stopReason: z.string(),
   usage: usageSchema,
   durationMs: z.number().nonnegative(),

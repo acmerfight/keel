@@ -1,73 +1,9 @@
 import { writeFile } from "node:fs/promises";
+import type { RunReport } from "../eval/report-schema.ts";
 
 type EvalTrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
 
-export interface EvalRunReport {
-  readonly schemaVersion: 9;
-  readonly modelsUsed: readonly {
-    readonly provider: string;
-    readonly model: string;
-  }[];
-  readonly usageByModel: readonly {
-    readonly provider: string;
-    readonly model: string;
-    readonly turns: number;
-    readonly usage: {
-      readonly inputTokens: number;
-      readonly cachedInputTokens: number;
-      readonly uncachedInputTokens: number;
-      readonly outputTokens: number;
-    };
-    readonly costUsd: number;
-  }[];
-  readonly turns: number;
-  readonly stopReason: string;
-  readonly usage: {
-    readonly inputTokens: number;
-    readonly cachedInputTokens: number;
-    readonly uncachedInputTokens: number;
-    readonly outputTokens: number;
-  };
-  readonly durationMs: number;
-  readonly costUsd: number;
-  readonly costBudgetUsd?: number;
-  readonly costOvershootUsd: number;
-  readonly contextCompactions: readonly unknown[];
-  readonly skillActivations: readonly unknown[];
-  readonly activeSkills: readonly unknown[];
-  readonly skillCatalog: {
-    readonly exposed: number;
-    readonly omitted: number;
-    readonly total: number;
-    readonly budgetChars: number;
-    readonly usedChars: number;
-  };
-  readonly skillPolicy: {
-    readonly mode: "enabled";
-    readonly disabledPackages: 0;
-  };
-  readonly undoProtection: {
-    readonly status: "available" | "not_applicable" | "unavailable";
-    readonly checkpointsWritten: number;
-    readonly failures: readonly {
-      readonly reason:
-        | "checkpoint_write_failed"
-        | "git_workspace_unavailable"
-        | "target_unavailable";
-      readonly count: number;
-    }[];
-    readonly latestCheckpoint:
-      | { readonly written: true }
-      | {
-          readonly written: false;
-          readonly reason:
-            | "checkpoint_write_failed"
-            | "git_workspace_unavailable"
-            | "target_unavailable";
-        }
-      | null;
-  };
-}
+export type EvalRunReport = RunReport;
 
 export interface EvalResultLine {
   readonly schemaVersion: 1;
@@ -111,19 +47,37 @@ export function evalRunReport(
     outputTokens: options.outputTokens ?? 20,
   };
   const costUsd = options.costUsd ?? 0.001;
+  const agentLoopTurns = options.turns ?? 3;
   return {
-    schemaVersion: 9,
+    schemaVersion: 10,
+    tasks: [
+      {
+        ordinal: 1,
+        trigger: "user_prompt",
+        agentRuns: [
+          {
+            ordinal: 1,
+            trigger: "user_prompt",
+            agentLoopTurns,
+            providerRetries: [],
+            contextCompactions: [],
+            stopReason: "completed",
+          },
+        ],
+        outcome: "completed",
+      },
+    ],
     modelsUsed: [{ provider: "deepseek", model: "deepseek-v4-flash" }],
     usageByModel: [
       {
         provider: "deepseek",
         model: "deepseek-v4-flash",
-        turns: options.turns ?? 3,
+        agentLoopTurns,
         usage,
         costUsd,
       },
     ],
-    turns: options.turns ?? 3,
+    agentLoopTurns,
     stopReason: "completed",
     usage,
     durationMs: options.durationMs ?? 1000,
