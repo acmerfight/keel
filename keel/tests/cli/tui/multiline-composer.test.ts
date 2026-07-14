@@ -122,7 +122,13 @@ describe("Interactive TUI Composer", () => {
       });
       expect(
         resumed.messages.filter((message) => message.role === "user"),
-      ).toEqual([{ role: "user", content: "first line\nsecond line" }]);
+      ).toEqual([
+        {
+          role: "user",
+          content: "first line\nsecond line",
+          origin: { type: "user_prompt" },
+        },
+      ]);
       expect(
         resumed.messages.filter((message) => message.role === "assistant"),
       ).toEqual([

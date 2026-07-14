@@ -56,17 +56,30 @@ export function projectSessionLedgerToProviderMessages(
 }
 
 export function projectSessionMessageToProvider(message: Message): Message {
-  if (message.role !== "tool" || message.resourceObservation === undefined) {
-    return message;
+  switch (message.role) {
+    case "user":
+      return {
+        role: "user",
+        content: message.content,
+        ...(message.contextCompaction === undefined
+          ? {}
+          : { contextCompaction: message.contextCompaction }),
+      };
+    case "assistant":
+      return message;
+    case "tool":
+      if (message.resourceObservation === undefined) {
+        return message;
+      }
+      return {
+        role: "tool",
+        toolCallId: message.toolCallId,
+        content: message.content,
+        ...(message.sourceTruncated !== undefined
+          ? { sourceTruncated: message.sourceTruncated }
+          : {}),
+      };
   }
-  return {
-    role: "tool",
-    toolCallId: message.toolCallId,
-    content: message.content,
-    ...(message.sourceTruncated !== undefined
-      ? { sourceTruncated: message.sourceTruncated }
-      : {}),
-  };
 }
 
 export function sessionLedgerMessages(

@@ -153,6 +153,7 @@ describe("Context Compaction Summary Checkpoints", () => {
       {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
+        origin: { type: "compaction_checkpoint" },
       },
       { role: "user", content: "Read package." },
       {
@@ -293,6 +294,7 @@ describe("Context Compaction Summary Checkpoints", () => {
     expect(messages[0]).toEqual({
       role: "user",
       content: expect.stringContaining("(no summary available)"),
+      origin: { type: "compaction_checkpoint" },
     });
   });
 
@@ -373,6 +375,7 @@ describe("Context Compaction Summary Checkpoints", () => {
       content: generatedCheckpoint(
         "Second checkpoint summary: preserve alpha state.",
       ),
+      origin: { type: "compaction_checkpoint" },
     });
   });
 
@@ -455,6 +458,7 @@ describe("Context Compaction Summary Checkpoints", () => {
     expect(storedCheckpoint).toEqual({
       role: "user",
       content: generatedCheckpoint(escapedSummary),
+      origin: { type: "compaction_checkpoint" },
     });
     expect(summaryPrompts[1]).toContain(
       '<conversation-checkpoint role="historical-summary">',
@@ -473,6 +477,7 @@ describe("Context Compaction Summary Checkpoints", () => {
       content: generatedCheckpoint(
         "Second checkpoint summary after escaped tags.",
       ),
+      origin: { type: "compaction_checkpoint" },
     });
   });
 
@@ -752,6 +757,7 @@ describe("Context Compaction Summary Checkpoints", () => {
       {
         role: "user",
         content: priorCheckpoint,
+        origin: { type: "compaction_checkpoint" },
         contextCompaction: { evidence },
       },
       {
@@ -791,6 +797,9 @@ describe("Context Compaction Summary Checkpoints", () => {
     );
     expect(messages[0]?.content).toContain("Evidence retained:");
     expect(messages[0]?.content).toContain("tool-output:prior/report");
+    expect(messages[0]).toHaveProperty("origin", {
+      type: "compaction_checkpoint",
+    });
     expect(messages[0]).toHaveProperty("contextCompaction", { evidence });
   });
 
@@ -874,6 +883,7 @@ describe("Context Compaction Summary Checkpoints", () => {
     expect(messages[0]).toEqual({
       role: "user",
       content: generatedCheckpoint("Provider visible summary."),
+      origin: { type: "compaction_checkpoint" },
     });
   });
 
@@ -909,6 +919,7 @@ describe("Context Compaction Summary Checkpoints", () => {
     expect(messages[0]).toEqual({
       role: "user",
       content: generatedCheckpoint("Provider visible summary."),
+      origin: { type: "compaction_checkpoint" },
     });
     expect(messages[0]?.content).not.toContain("Private summary reasoning.");
   });

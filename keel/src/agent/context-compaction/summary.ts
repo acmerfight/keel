@@ -328,6 +328,7 @@ export async function buildCompactedMessages(
       {
         role: "user",
         content: checkpoint,
+        origin: { type: "compaction_checkpoint" },
         ...(checkpointEvidence.length === 0
           ? {}
           : { contextCompaction: { evidence: checkpointEvidence } }),

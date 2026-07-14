@@ -112,7 +112,15 @@ function toolCallsEqual(left: ToolCall, right: ToolCall): boolean {
 function messagesEqual(left: Message, right: Message): boolean {
   switch (left.role) {
     case "user":
-      return right.role === "user" && left.content === right.content;
+      return (
+        right.role === "user" &&
+        left.content === right.content &&
+        stableValuesEqual(left.origin ?? null, right.origin ?? null) &&
+        stableValuesEqual(
+          left.contextCompaction ?? null,
+          right.contextCompaction ?? null,
+        )
+      );
     case "assistant":
       return (
         right.role === "assistant" &&

@@ -52,7 +52,7 @@ import {
   createUndoProtectionTracker,
   undoCheckpointUnavailable,
 } from "../core/undo-protection.ts";
-import type { Message, Usage } from "../llm/types.ts";
+import type { Message, Usage, UserMessageOrigin } from "../llm/types.ts";
 import {
   type BashApprovalGrant,
   type BashProjectApprovalGrant,
@@ -275,6 +275,26 @@ const GOAL_STAGNATION_RECOVERY_OUTCOME: SessionGoalRuntimeOutcome = {
     "Repeated automatic goal continuations showed the same response or tool-use pattern without an observed workspace, task, or goal state change.",
 };
 
+const USER_PROMPT_ORIGIN = {
+  type: "user_prompt",
+} satisfies UserMessageOrigin;
+const STEER_ORIGIN = { type: "steer" } satisfies UserMessageOrigin;
+const QUEUED_FOLLOWUP_ORIGIN = {
+  type: "queued_followup",
+} satisfies UserMessageOrigin;
+const RUNTIME_GOAL_ACTIVATION_ORIGIN = {
+  type: "runtime_goal_activation",
+} satisfies UserMessageOrigin;
+const RUNTIME_GOAL_CONTINUATION_ORIGIN = {
+  type: "runtime_goal_continuation",
+} satisfies UserMessageOrigin;
+const RUNTIME_GOAL_RESUMPTION_ORIGIN = {
+  type: "runtime_goal_resumption",
+} satisfies UserMessageOrigin;
+const RUNTIME_GOAL_STAGNATION_RECOVERY_ORIGIN = {
+  type: "runtime_goal_stagnation_recovery",
+} satisfies UserMessageOrigin;
+
 const GOAL_BUDGET_LIMIT_REASON =
   "Session cost budget could not admit another provider request before the active goal completed.";
 
@@ -301,6 +321,7 @@ const NON_GIT_DIFF_MESSAGE =
 
 interface PromptTurnRequest {
   readonly userMessage: string;
+  readonly userMessageOrigin: UserMessageOrigin;
   readonly consumedInputLines: readonly QueuedLine[];
   readonly runTrigger: RunReportAgentRunTrigger;
   readonly runtimeOutcome?: SessionGoalRuntimeOutcome;
@@ -308,6 +329,7 @@ interface PromptTurnRequest {
 
 interface PendingGoalDrive {
   readonly message: string;
+  readonly origin: UserMessageOrigin;
   readonly taskTrigger: Extract<
     RunReportTaskTrigger,
     "goal_activation" | "goal_resume"
@@ -686,6 +708,12 @@ export async function runInteractiveSession(
     }
     options.consumeQueuedInputs?.(inputIds);
   };
+  const userMessageOriginForPromptInput = (
+    lines: readonly QueuedLine[],
+  ): UserMessageOrigin =>
+    queuedInputIds(lines).length === 0
+      ? USER_PROMPT_ORIGIN
+      : QUEUED_FOLLOWUP_ORIGIN;
   const handleGoalPersistenceFailure = (
     error: unknown,
     lines: readonly QueuedLine[],
@@ -935,7 +963,11 @@ export async function runInteractiveSession(
     const deferredInputLines: QueuedLine[] = [];
     const turnAbortController = new AbortController();
     activeAbortController = turnAbortController;
-    messages.push({ role: "user", content: request.userMessage });
+    messages.push({
+      role: "user",
+      content: request.userMessage,
+      origin: request.userMessageOrigin,
+    });
     let deferRemainingInjectedInput = false;
     let taskProgressChanged = false;
     let sessionGoalStateChanged = false;
@@ -1017,6 +1049,7 @@ export async function runInteractiveSession(
             return injectableLines.map((content) => ({
               role: "user",
               content: content.line,
+              origin: STEER_ORIGIN,
             }));
           },
         }),
@@ -1290,6 +1323,7 @@ export async function runInteractiveSession(
   const runAutomaticGoalContinuations = async (
     initialContinuationMessage = GOAL_CONTINUATION_MESSAGE,
     initialRunTrigger: RunReportAgentRunTrigger = "goal_continuation",
+    initialContinuationOrigin: UserMessageOrigin = RUNTIME_GOAL_CONTINUATION_ORIGIN,
   ): Promise<boolean> => {
     const automaticContinuationTurnLimit =
       resolveGoalAutomaticContinuationTurnLimit(
@@ -1299,6 +1333,7 @@ export async function runInteractiveSession(
     const recentStagnationFingerprints: string[] = [];
     let nextContinuationMessage = initialContinuationMessage;
     let nextRunTrigger = initialRunTrigger;
+    let nextContinuationOrigin = initialContinuationOrigin;
     let nextContinuationRuntimeOutcome: SessionGoalRuntimeOutcome | undefined;
     const recoveryHintedPatterns = new Set<string>();
     while (
@@ -1314,10 +1349,13 @@ export async function runInteractiveSession(
       }
       const userMessage = nextContinuationMessage;
       const runtimeOutcome = nextContinuationRuntimeOutcome;
+      const userMessageOrigin = nextContinuationOrigin;
       nextContinuationMessage = GOAL_CONTINUATION_MESSAGE;
+      nextContinuationOrigin = RUNTIME_GOAL_CONTINUATION_ORIGIN;
       nextContinuationRuntimeOutcome = undefined;
       const result = await runPromptTurn({
         userMessage,
+        userMessageOrigin,
         consumedInputLines: [],
         runTrigger: nextRunTrigger,
         ...(runtimeOutcome !== undefined ? { runtimeOutcome } : {}),
@@ -1358,6 +1396,7 @@ export async function runInteractiveSession(
       ) {
         recoveryHintedPatterns.add(repeatedPattern.key);
         nextContinuationMessage = GOAL_STAGNATION_RECOVERY_MESSAGE;
+        nextContinuationOrigin = RUNTIME_GOAL_STAGNATION_RECOVERY_ORIGIN;
         const evidenceFingerprints = repeatedPattern.fingerprints.filter(
           (fingerprint) => fingerprint.startsWith("tools:"),
         );
@@ -1407,6 +1446,7 @@ export async function runInteractiveSession(
           const shouldStop = await runAutomaticGoalContinuations(
             drive.message,
             drive.runTrigger,
+            drive.origin,
           );
           reportRecorder.endTask(taskOutcomeForGoal(true));
           if (shouldStop) {
@@ -1619,6 +1659,7 @@ export async function runInteractiveSession(
               }
               pendingGoalDrive = {
                 message: GOAL_ACTIVATION_MESSAGE,
+                origin: RUNTIME_GOAL_ACTIVATION_ORIGIN,
                 taskTrigger: "goal_activation",
                 runTrigger: "goal_activation",
               };
@@ -1694,6 +1735,7 @@ export async function runInteractiveSession(
               options.writeStdout(formatInteractiveGoalResumed(resumedGoal));
               pendingGoalDrive = {
                 message: GOAL_RESUMPTION_MESSAGE,
+                origin: RUNTIME_GOAL_RESUMPTION_ORIGIN,
                 taskTrigger: "goal_resume",
                 runTrigger: "goal_resume",
               };
@@ -2417,6 +2459,7 @@ export async function runInteractiveSession(
       reportRecorder.beginTask("user_prompt");
       const turnResult = await runPromptTurn({
         userMessage,
+        userMessageOrigin: userMessageOriginForPromptInput([rawInput]),
         consumedInputLines: [rawInput],
         runTrigger: "user_prompt",
       });

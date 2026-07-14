@@ -7,6 +7,7 @@ import type {
   AssistantProviderMetadata,
   Message,
   UserMessageContextCompactionMetadata,
+  UserMessageOrigin,
 } from "../llm/types.ts";
 import {
   type ToolCall,
@@ -83,12 +84,19 @@ function redactUserContextCompactionMetadataForPersistence(
   };
 }
 
+function copyUserMessageOrigin(origin: UserMessageOrigin): UserMessageOrigin {
+  return { type: origin.type };
+}
+
 export function redactMessageForPersistence(message: Message): Message {
   switch (message.role) {
     case "user":
       return {
         role: "user",
         content: redactTextForPersistence(message.content),
+        ...(message.origin === undefined
+          ? {}
+          : { origin: copyUserMessageOrigin(message.origin) }),
         ...(message.contextCompaction === undefined
           ? {}
           : {

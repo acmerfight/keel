@@ -26,9 +26,11 @@ import {
   sessionTaskPlanSchema,
   sessionTaskProgressSchema,
 } from "../../core/task-progress.ts";
-import type {
-  Message,
-  UserMessageContextCompactionMetadata,
+import {
+  type Message,
+  type UserMessageContextCompactionMetadata,
+  type UserMessageOrigin,
+  userMessageOriginTypes,
 } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
 import { copySkillActivation } from "../../skills/lifecycle.ts";
@@ -94,10 +96,17 @@ const userMessageContextCompactionSchema = z
   })
   .strict();
 
+const userMessageOriginSchema = z
+  .object({
+    type: z.enum(userMessageOriginTypes),
+  })
+  .strict();
+
 const userMessageSchema = z
   .object({
     role: z.literal("user"),
     content: z.string(),
+    origin: userMessageOriginSchema.optional(),
     contextCompaction: userMessageContextCompactionSchema.optional(),
   })
   .strict();
@@ -479,6 +488,7 @@ type RawStoredMessage = z.infer<typeof storedMessageSchema>;
 type RawUserMessageContextCompactionMetadata = z.infer<
   typeof userMessageContextCompactionSchema
 >;
+type RawUserMessageOrigin = z.infer<typeof userMessageOriginSchema>;
 type RawSessionQueuedInput = z.infer<typeof queuedInputSchema>;
 type RawBashApprovalGrant = z.infer<typeof bashApprovalGrantSchema>;
 type RawSessionModelSelection = z.infer<typeof sessionModelSelectionSchema>;
@@ -508,6 +518,14 @@ function copyUserContextCompactionMetadata(
         : { inspectCommand: evidence.inspectCommand }),
     })),
   };
+}
+
+function copyUserMessageOrigin(origin: UserMessageOrigin): UserMessageOrigin {
+  return { type: origin.type };
+}
+
+function toUserMessageOrigin(origin: RawUserMessageOrigin): UserMessageOrigin {
+  return { type: origin.type };
 }
 
 function toUserContextCompactionMetadata(
@@ -540,6 +558,9 @@ function toMessage(message: RawMessage): Message {
       return {
         role: "user",
         content: message.content,
+        ...(message.origin === undefined
+          ? {}
+          : { origin: toUserMessageOrigin(message.origin) }),
         ...(message.contextCompaction === undefined
           ? {}
           : {
@@ -582,6 +603,9 @@ function copyMessage(message: Message): Message {
       return {
         role: "user",
         content: message.content,
+        ...(message.origin === undefined
+          ? {}
+          : { origin: copyUserMessageOrigin(message.origin) }),
         ...(message.contextCompaction === undefined
           ? {}
           : {

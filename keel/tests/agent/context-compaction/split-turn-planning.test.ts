@@ -57,6 +57,7 @@ describe("Context Compaction Split-Turn Planning", () => {
       {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
+        origin: { type: "compaction_checkpoint" },
       },
       {
         role: "user",
@@ -148,6 +149,7 @@ describe("Context Compaction Split-Turn Planning", () => {
             }),
           ],
         },
+        origin: { type: "compaction_checkpoint" },
       },
       {
         role: "assistant",
@@ -213,6 +215,7 @@ describe("Context Compaction Split-Turn Planning", () => {
       {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
+        origin: { type: "compaction_checkpoint" },
       },
       { role: "user", content: "Read the pending report." },
       {
@@ -289,6 +292,7 @@ describe("Context Compaction Split-Turn Planning", () => {
       {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
+        origin: { type: "compaction_checkpoint" },
       },
       { role: "user", content: "Read the pending diagnostics report." },
       {

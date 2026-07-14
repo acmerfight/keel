@@ -892,6 +892,54 @@ describe("Session Store Locks And Validation", () => {
     }
   });
 
+  test(`Given a persisted session message has a malformed origin,
+    When the session is resumed,
+    Then it fails closed with a session-load error`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    await mkdir(join(home, "sessions", "malformed-origin"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(home, "sessions", "malformed-origin", "ledger.jsonl"),
+      [
+        headerLine("malformed-origin", workspace),
+        JSON.stringify({
+          schemaVersion: 4,
+          type: "append",
+          timestamp: "1970-01-01T00:00:00.001Z",
+          reason: "turn",
+          messages: [
+            {
+              id: "msg_malformed_origin",
+              message: {
+                role: "user",
+                content: "hello",
+                origin: { type: "runtime_goal_forged" },
+              },
+            },
+          ],
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When / Then
+      expect(() =>
+        resumeSessionStore({
+          sessionId: "malformed-origin",
+          workspace,
+          runtime: runtime(home),
+        }),
+      ).toThrow(SessionStoreError);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the session ledger path cannot be inspected,
     When the session is resumed,
     Then the store fails closed before reading ledger bytes`, async () => {

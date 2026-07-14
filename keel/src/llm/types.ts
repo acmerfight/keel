@@ -8,9 +8,27 @@ export interface Usage {
   readonly outputTokens: number;
 }
 
+export const userMessageOriginTypes = [
+  "user_prompt",
+  "steer",
+  "queued_followup",
+  "runtime_goal_activation",
+  "runtime_goal_continuation",
+  "runtime_goal_resumption",
+  "runtime_goal_stagnation_recovery",
+  "compaction_checkpoint",
+] as const;
+
+type UserMessageOriginType = (typeof userMessageOriginTypes)[number];
+
+export interface UserMessageOrigin {
+  readonly type: UserMessageOriginType;
+}
+
 interface UserMessage {
   readonly role: "user";
   readonly content: string;
+  readonly origin?: UserMessageOrigin;
   readonly contextCompaction?: UserMessageContextCompactionMetadata;
 }
 
