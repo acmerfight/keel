@@ -98,18 +98,35 @@ Each trial appends one JSON line:
   "wallMs": 9182,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
-    "schemaVersion": 9,
+    "schemaVersion": 10,
+    "tasks": [
+      {
+        "ordinal": 1,
+        "trigger": "user_prompt",
+        "agentRuns": [
+          {
+            "ordinal": 1,
+            "trigger": "user_prompt",
+            "agentLoopTurns": 3,
+            "providerRetries": [],
+            "contextCompactions": [],
+            "stopReason": "completed"
+          }
+        ],
+        "outcome": "completed"
+      }
+    ],
     "modelsUsed": [{ "provider": "deepseek", "model": "deepseek-v4-flash" }],
     "usageByModel": [
       {
         "provider": "deepseek",
         "model": "deepseek-v4-flash",
-        "turns": 3,
+        "agentLoopTurns": 3,
         "usage": { "inputTokens": 5210, "cachedInputTokens": 4100, "uncachedInputTokens": 1110, "outputTokens": 240 },
         "costUsd": 0.000234
       }
     ],
-    "turns": 3,
+    "agentLoopTurns": 3,
     "stopReason": "completed",
     "usage": { "inputTokens": 5210, "cachedInputTokens": 4100, "uncachedInputTokens": 1110, "outputTokens": 240 },
     "durationMs": 8455,
@@ -129,6 +146,9 @@ Each trial appends one JSON line:
   `verify_failed` are the agent's score; `timeout` / `crashed` mean the
   environment or harness broke and the trial must not be read as agent
   quality.
+- `report.tasks` attributes each admitted user Task to one or more Agent Runs.
+  `agentLoopTurns` counts only completed main model/tool-loop iterations; it
+  excludes turn-limit wrap-up, compaction, and independent Goal evaluation.
 - `wallMs` is measured around the spawned agent CLI run. It excludes the
   later verifier step, so read it as agent wall time rather than full
   trial wall time.

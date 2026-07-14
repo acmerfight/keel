@@ -1230,7 +1230,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       text: "Stopped before running tools.",
     });
     expect(endEvent(events)).toMatchObject({
-      turns: 2,
+      turns: 1,
       stopReason: "turn_limit",
     });
     expect(messages.at(-1)).toEqual({

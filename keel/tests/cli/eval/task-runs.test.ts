@@ -39,7 +39,7 @@ describe("CLI Eval", () => {
       });
       expect(line?.report).toMatchObject({
         modelsUsed: [{ provider: "fake", model: "fake" }],
-        turns: 3,
+        agentLoopTurns: 3,
         stopReason: "completed",
       });
     } finally {

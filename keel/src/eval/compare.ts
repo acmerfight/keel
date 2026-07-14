@@ -150,7 +150,7 @@ function summarizeTask(
     harnessFailures,
     harnessFailureRate: harnessFailures / lines.length,
     failedTranscripts,
-    turns: reportMetric(lines, (report) => report.turns),
+    turns: reportMetric(lines, (report) => report.agentLoopTurns),
     inputTokens: reportMetric(lines, (report) => report.usage.inputTokens),
     outputTokens: reportMetric(lines, (report) => report.usage.outputTokens),
     costUsd: reportMetric(lines, (report) => report.costUsd),

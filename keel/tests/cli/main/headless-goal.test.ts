@@ -862,6 +862,7 @@ describe("CLI Main - Headless Goal", () => {
         "Resume with: keel goal resume headless-limited\n",
       );
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        tasks: [{ outcome: "goal_budget" }],
         stopReason: "goal_budget",
         goalOutcome: {
           sessionId: "headless-limited",
@@ -1112,6 +1113,22 @@ describe("CLI Main - Headless Goal", () => {
         '"usage":{"turns":0,"tokens":0,"activeTimeMs":0}',
       );
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        tasks: [
+          {
+            ordinal: 1,
+            trigger: "goal_resume",
+            agentRuns: [
+              {
+                ordinal: 1,
+                trigger: "goal_resume",
+                agentLoopTurns: 2,
+                stopReason: "completed",
+              },
+            ],
+            outcome: "completed",
+          },
+        ],
+        agentLoopTurns: 2,
         stopReason: "completed",
         goalOutcome: {
           sessionId: "headless-resume",
@@ -1700,7 +1717,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(4);
       expect(providerCalls).toBe(1);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 9,
+        schemaVersion: 10,
         stopReason: "cost_budget",
         costBudgetUsd: 0.01,
         costUsd: 0.14,
@@ -1782,6 +1799,7 @@ describe("CLI Main - Headless Goal", () => {
         "Resume with: keel goal resume headless-blocked\n",
       );
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        tasks: [{ outcome: "goal_blocked" }],
         stopReason: "goal_blocked",
         goalOutcome: {
           sessionId: "headless-blocked",
@@ -2078,7 +2096,8 @@ describe("CLI Main - Headless Goal", () => {
         "Headless goal outcome: usage_limited; session: headless-cap\n",
       );
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        turns: 100,
+        agentLoopTurns: 100,
+        tasks: [{ outcome: "goal_usage_limit" }],
         stopReason: "goal_usage_limit",
         goalOutcome: {
           sessionId: "headless-cap",
@@ -2088,6 +2107,107 @@ describe("CLI Main - Headless Goal", () => {
         },
       });
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a headless Goal needs automatic continuation,
+    When the user writes a run report,
+    Then one Task contains multiple Agent Runs and one Task outcome`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-headless-task-runs-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-headless-task-runs-home-"));
+    const reportPath = join(workspace, "task-runs-report.json");
+    let providerCalls = 0;
+    const server = createServer((_req, res) => {
+      providerCalls++;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      if (providerCalls === 1) {
+        res.end(sseTextReplyWithUsage("More work remains."));
+        return;
+      }
+      if (providerCalls === 2) {
+        res.write(
+          sseToolCall("complete_task_runs_goal", "update_goal", {
+            status: "completed",
+          }),
+        );
+        res.write(sseToolFinish());
+        res.end("data: [DONE]\n\n");
+        return;
+      }
+      res.end(sseTextReplyWithUsage("The goal is complete."));
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "goal",
+        "--objective",
+        "Finish across an automatic continuation",
+        "--verify",
+        "true",
+        "--session",
+        "headless-task-runs",
+        "--bash-policy",
+        "trusted",
+        "--provider",
+        "deepseek",
+        "--report",
+        reportPath,
+      ],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_HOME: home,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(providerCalls).toBe(3);
+      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+        schemaVersion: 10,
+        agentLoopTurns: 3,
+        tasks: [
+          {
+            ordinal: 1,
+            trigger: "goal_activation",
+            agentRuns: [
+              {
+                ordinal: 1,
+                trigger: "goal_activation",
+                agentLoopTurns: 1,
+                providerRetries: [],
+                contextCompactions: [],
+                stopReason: "completed",
+              },
+              {
+                ordinal: 2,
+                trigger: "goal_continuation",
+                agentLoopTurns: 2,
+                providerRetries: [],
+                contextCompactions: [],
+                stopReason: "completed",
+              },
+            ],
+            outcome: "completed",
+          },
+        ],
+      });
+    } finally {
+      await close(server);
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }

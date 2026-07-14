@@ -43,7 +43,7 @@ describe("Interactive Session - Queued Input", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { bashMode: "disabled", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -86,7 +86,7 @@ describe("Interactive Session - Queued Input", () => {
     input.write("inspect package\n");
 
     // Then
-    await session;
+    const result = await session;
     expect(stdout).toBe("Steered.\n");
     expect(observedContexts).toEqual([
       [{ role: "user", content: "inspect package" }],
@@ -110,6 +110,20 @@ describe("Interactive Session - Queued Input", () => {
         }),
         { role: "user", content: "focus on scripts" },
       ],
+    ]);
+    expect(result.report?.tasks).toMatchObject([
+      {
+        ordinal: 1,
+        trigger: "user_prompt",
+        agentRuns: [
+          {
+            ordinal: 1,
+            trigger: "user_prompt",
+            agentLoopTurns: 2,
+          },
+        ],
+        outcome: "completed",
+      },
     ]);
   });
 

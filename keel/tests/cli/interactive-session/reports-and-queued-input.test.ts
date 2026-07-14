@@ -142,14 +142,14 @@ describe("Interactive Session - Reports And Queued Input", () => {
       {
         provider: "deepseek",
         model: "deepseek-v4-flash",
-        turns: 1,
+        agentLoopTurns: 1,
         usage: fakeUsage,
         costUsd: 0.001,
       },
       {
         provider: "qwen",
         model: "qwen3.7-plus",
-        turns: 1,
+        agentLoopTurns: 1,
         usage: qwenUsage,
         costUsd: 0.002,
       },
@@ -3405,7 +3405,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "ask" },
+      cliArgs: { bashMode: "ask", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -3450,7 +3450,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     finishFirstTurn();
 
     // Then
-    await session;
+    const result = await session;
     expect(stdout).toBe("First answer\nSecond saw prior context\n");
     expect(observedContexts).toEqual([
       [{ role: "user", content: "first prompt" }],
@@ -3459,6 +3459,20 @@ describe("Interactive Session - Reports And Queued Input", () => {
         { role: "assistant", content: "First answer" },
         { role: "user", content: "second prompt" },
       ],
+    ]);
+    expect(result.report?.tasks).toMatchObject([
+      {
+        ordinal: 1,
+        trigger: "user_prompt",
+        agentRuns: [{ ordinal: 1, trigger: "user_prompt" }],
+        outcome: "completed",
+      },
+      {
+        ordinal: 2,
+        trigger: "user_prompt",
+        agentRuns: [{ ordinal: 1, trigger: "user_prompt" }],
+        outcome: "completed",
+      },
     ]);
   });
 

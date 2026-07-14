@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { sseTextReplyWithUsage as deepseekTextReplyWithUsage } from "../../../src/testing/provider-sse-fixtures.ts";
 import {
   close,
   createServer,
@@ -15,6 +16,87 @@ import {
 } from "./fixtures.ts";
 
 describe("CLI Run Report", () => {
+  test(`Given a provider retries a rate-limited request and succeeds,
+    When the CLI writes a run report,
+    Then the retry remains under the same Task and Agent Run`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-retry-report-"));
+    const reportPath = join(workspace, "report.json");
+    let requests = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        requests++;
+        if (requests === 1) {
+          res.writeHead(429, {
+            "Content-Type": "application/json",
+            "retry-after-ms": "0",
+          });
+          res.end(JSON.stringify({ error: { message: "try again" } }));
+          return;
+        }
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(deepseekTextReplyWithUsage("Recovered after retry."));
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["--report", reportPath, "hello"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "deepseek",
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.stderr).toContain(
+        "Provider retry: DeepSeek rate limited (attempt 1/4 in 0ms)",
+      );
+      expect(result).toMatchObject({ exitCode: 0 });
+      expect(requests).toBe(2);
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.tasks).toMatchObject([
+        {
+          ordinal: 1,
+          trigger: "user_prompt",
+          agentRuns: [
+            {
+              ordinal: 1,
+              trigger: "user_prompt",
+              providerRetries: [
+                {
+                  provider: "DeepSeek",
+                  reason: "provider_rate_limited",
+                  attempt: 1,
+                },
+              ],
+              stopReason: "completed",
+            },
+          ],
+          outcome: "completed",
+        },
+      ]);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given Kimi is selected with an explicit model,
     When the CLI writes a run report,
     Then the report records the Kimi provider and configured model`, async () => {

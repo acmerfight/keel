@@ -41,12 +41,29 @@ describe("CLI Run Report", () => {
         {
           provider: "fake",
           model: "fake",
-          turns: 3,
+          agentLoopTurns: 3,
           usage: report.usage,
           costUsd: 0,
         },
       ]);
-      expect(report.turns).toBe(3);
+      expect(report.agentLoopTurns).toBe(3);
+      expect(report.tasks).toEqual([
+        {
+          ordinal: 1,
+          trigger: "user_prompt",
+          agentRuns: [
+            {
+              ordinal: 1,
+              trigger: "user_prompt",
+              agentLoopTurns: 3,
+              providerRetries: [],
+              contextCompactions: [],
+              stopReason: "completed",
+            },
+          ],
+          outcome: "completed",
+        },
+      ]);
       expect(report.stopReason).toBe("completed");
       expect(report.costUsd).toBe(0);
       expect(report.undoProtection).toEqual({

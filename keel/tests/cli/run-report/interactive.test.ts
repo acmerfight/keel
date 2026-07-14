@@ -46,7 +46,8 @@ describe("CLI Run Report", () => {
       );
       expect(report.modelsUsed).toEqual([]);
       expect(report.usageByModel).toEqual([]);
-      expect(report.turns).toBe(0);
+      expect(report.agentLoopTurns).toBe(0);
+      expect(report.tasks).toEqual([]);
       expect(report.stopReason).toBe("completed");
       expect(report.usage).toEqual({
         inputTokens: 0,
@@ -96,12 +97,26 @@ describe("CLI Run Report", () => {
         {
           provider: "fake",
           model: "fake",
-          turns: 2,
+          agentLoopTurns: 2,
           usage: report.usage,
           costUsd: 0,
         },
       ]);
-      expect(report.turns).toBe(2);
+      expect(report.agentLoopTurns).toBe(2);
+      expect(report.tasks).toMatchObject([
+        {
+          ordinal: 1,
+          trigger: "user_prompt",
+          agentRuns: [{ ordinal: 1, trigger: "user_prompt" }],
+          outcome: "completed",
+        },
+        {
+          ordinal: 2,
+          trigger: "user_prompt",
+          agentRuns: [{ ordinal: 1, trigger: "user_prompt" }],
+          outcome: "completed",
+        },
+      ]);
       expect(report.stopReason).toBe("completed");
       expect(report.usage).toEqual({
         inputTokens: 0,
@@ -184,19 +199,19 @@ describe("CLI Run Report", () => {
         {
           provider: "fake",
           model: "fake",
-          turns: 1,
+          agentLoopTurns: 1,
         },
         {
           provider: "qwen",
           model: "qwen3.7-plus",
-          turns: 1,
+          agentLoopTurns: 1,
           usage: {
             inputTokens: 20,
             outputTokens: 4,
           },
         },
       ]);
-      expect(report.turns).toBe(2);
+      expect(report.agentLoopTurns).toBe(2);
     } finally {
       child.kill("SIGKILL");
       await close(server);

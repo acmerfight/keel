@@ -404,7 +404,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(ledger).toContain('"status":"paused"');
       expect(ledger).toContain('"verificationTimeoutMs":350');
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        turns: 0,
+        agentLoopTurns: 0,
         stopReason: "completed",
         costUsd: 0,
       });

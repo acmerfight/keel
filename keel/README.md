@@ -63,6 +63,68 @@ keel config show
 keel sessions
 ```
 
+## Execution Lifecycle And Reports
+
+Keel separates user work from the runtime segments and provider requests used
+to complete it:
+
+```text
+Session
+├─ Goal (optional, durable completion contract)
+└─ Task (one user-admitted unit of work)
+   └─ Agent Run (one continuous runAgentTurn execution)
+      ├─ Agent-loop Model Turn
+      ├─ Model Operation
+      │  └─ Provider Request Attempt
+      └─ Tool Invocation
+```
+
+- A **Session** owns the durable conversation, queued input, model selection,
+  approvals, Skills, and optional Goal.
+- A **Goal** may span multiple Tasks and explicit resumes. `paused`, `blocked`,
+  `budget_limited`, and `usage_limited` are stopped but resumable states;
+  `completed` is the successful non-resumable state with completion evidence.
+- A **Task** begins when Keel admits a user prompt, Goal activation, or explicit
+  Goal resume. Automatic Goal continuation stays in the current Task.
+- An **Agent Run** is one continuous `runAgentTurn()` execution. Automatic Goal
+  continuation creates another Agent Run under the same Task.
+- An **Agent-loop Model Turn** is one completed main model → tools → model-loop
+  iteration. Turn-limit wrap-up, compaction, and Goal assertion evaluation are
+  separate model work and are not agent-loop turns.
+- A **Model Operation** is one logical model job, such as an agent turn,
+  compaction, evaluation, or wrap-up. A **Provider Request Attempt** is one
+  physical upstream request for that operation. Purpose-labelled operations and
+  exact attempt accounting are not yet exposed; `providerRetries` records the
+  existing retry decisions and must not be interpreted as an exact request
+  count.
+- A **Tool Invocation** is one logical tool request. Its provider tool-call id
+  correlates the pending request and result; it is not a session-global id.
+- **Agent Run end** means `runAgentTurn()` returned. **Task terminal** means no
+  same-Task retry, steering injection, or automatic Goal continuation remains.
+  One Task therefore has one orchestration-owned outcome even when it contains
+  several Agent Runs. A blocked or limited Goal Task reports `goal_blocked`,
+  `goal_budget`, or `goal_usage_limit` instead of copying the final Agent Run's
+  `completed` stop reason; an interrupted, rolled-back Run reports `aborted`.
+- An invocation outcome is the result of the current CLI process. A blocked or
+  limited invocation can leave a durable Goal resumable, so invocation outcome
+  is not Goal completion.
+- A Session is **idle** when no Agent Run is executing. It is **settled** only
+  when no Run, retry, continuation, accepted input, queued Task, or runtime hook
+  can produce more work.
+
+`keel --report <file>` writes report schema 10. `tasks[].ordinal` and nested
+`agentRuns[].ordinal` are report-local identities. Each Agent Run owns its
+`agentLoopTurns`, existing provider retry notices, context-compaction records,
+and stop reason. Root `agentLoopTurns` is derived from those Run records;
+`usageByModel[].agentLoopTurns` is the model-attributed projection of the same
+main-loop count. Goal `usage.turns` has a different owner: it increments once
+per Goal Agent Run, including automatic continuation.
+
+Resuming a process does not silently continue an old Task. If a persisted Goal
+was active when the process stopped, Keel restores it as paused and requires
+`/goal resume` or `keel goal resume`; that explicit action starts a new Task and
+Agent Run under the same durable Goal.
+
 ## Provider Options
 
 Provider setup accepts optional model and base URL overrides:

@@ -176,13 +176,17 @@ describe("Interactive Session - Interrupts", () => {
     expect(stdout).toBe("Working\n");
   });
 
-  test(`Given an interrupted interactive turn stops normally after abort,
-    When user sends another prompt,
-    Then the cancelled user message is not kept in context`, async () => {
+  test(`Given a completed Task is followed by a provider that stops normally after abort,
+    When user interrupts the second Task,
+    Then the cancelled Run is reported as aborted and its user message is not kept in context`, async () => {
     // Given
-    let receiveFirstText: () => void = () => {};
-    const firstTextReceived = new Promise<void>((resolve) => {
-      receiveFirstText = resolve;
+    let finishFirstTurn: () => void = () => {};
+    let receiveSecondText: () => void = () => {};
+    const firstTurnFinished = new Promise<void>((resolve) => {
+      finishFirstTurn = resolve;
+    });
+    const secondTextReceived = new Promise<void>((resolve) => {
+      receiveSecondText = resolve;
     });
     const observedUserContexts: string[][] = [];
     let turn = 0;
@@ -196,6 +200,11 @@ describe("Interactive Session - Interrupts", () => {
             .map((message) => message.content),
         );
         if (turn === 1) {
+          yield { type: "text", text: "First done" };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        if (turn === 2) {
           yield { type: "text", text: "Cancel me" };
           await new Promise<void>((resolve) => {
             options.signal.addEventListener("abort", () => resolve(), {
@@ -205,8 +214,12 @@ describe("Interactive Session - Interrupts", () => {
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
         }
-        yield { type: "text", text: "Second done" };
-        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        if (turn === 3) {
+          yield { type: "text", text: "Third done" };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        throw new Error("unexpected provider turn");
       },
     };
     const input = new PassThrough();
@@ -216,7 +229,7 @@ describe("Interactive Session - Interrupts", () => {
       discoverSkillCatalog({ workspace: process.cwd() }),
     );
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { bashMode: "disabled", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -247,10 +260,13 @@ describe("Interactive Session - Interrupts", () => {
           if (event.type === "text") {
             stdout += event.text;
             if (event.text === "Cancel me") {
-              receiveFirstText();
+              receiveSecondText();
             }
           } else if (event.type === "end") {
             finalEnd = event;
+            if (turn === 1) {
+              finishFirstTurn();
+            }
           }
         }
         return finalEnd;
@@ -261,17 +277,62 @@ describe("Interactive Session - Interrupts", () => {
 
     // When
     input.write("first prompt\n");
-    await withTimeout(firstTextReceived, 5000, "first turn did not start");
+    await withTimeout(firstTurnFinished, 5000, "first turn did not finish");
+    input.write("second prompt\n");
+    await withTimeout(secondTextReceived, 5000, "second turn did not start");
     for (const handler of [...sigintHandlers]) {
       handler();
     }
-    input.write("second prompt\n");
+    input.write("third prompt\n");
     input.end();
 
     // Then
-    await session;
-    expect(stdout).toBe("Cancel me\nSecond done\n");
-    expect(observedUserContexts).toEqual([["first prompt"], ["second prompt"]]);
+    const result = await session;
+    expect(stdout).toBe("First done\nCancel me\nThird done\n");
+    expect(observedUserContexts).toEqual([
+      ["first prompt"],
+      ["first prompt", "second prompt"],
+      ["first prompt", "third prompt"],
+    ]);
+    expect(result.report).toMatchObject({
+      tasks: [
+        {
+          ordinal: 1,
+          agentRuns: [
+            {
+              ordinal: 1,
+              agentLoopTurns: 1,
+              stopReason: "completed",
+            },
+          ],
+          outcome: "completed",
+        },
+        {
+          ordinal: 2,
+          agentRuns: [
+            {
+              ordinal: 1,
+              agentLoopTurns: 1,
+              stopReason: "aborted",
+            },
+          ],
+          outcome: "aborted",
+        },
+        {
+          ordinal: 3,
+          agentRuns: [
+            {
+              ordinal: 1,
+              agentLoopTurns: 1,
+              stopReason: "completed",
+            },
+          ],
+          outcome: "completed",
+        },
+      ],
+      usageByModel: [{ agentLoopTurns: 3 }],
+      end: { turns: 3, stopReason: "completed" },
+    });
   });
 
   test(`Given a resumed queued prompt is interrupted before persistence,

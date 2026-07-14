@@ -1215,6 +1215,7 @@ async function runSessionCli(
       const interactiveSessionOptions: InteractiveSessionOptions = {
         cliArgs,
         workspace,
+        reportRecorder,
         ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
         platform: runtime.platform,
         ...(mode.kind === "headless-goal" ? { exitOnTurnAbort: true } : {}),
@@ -1330,12 +1331,8 @@ async function runSessionCli(
         requireKnownCostModel,
         printAgentEvents: (stream) =>
           interactiveDisplay === undefined
-            ? printAgentEvents(stream, runtime, reportRecorder)
-            : printStableInteractiveAgentEvents(
-                stream,
-                interactiveDisplay,
-                reportRecorder,
-              ),
+            ? printAgentEvents(stream, runtime)
+            : printStableInteractiveAgentEvents(stream, interactiveDisplay),
         formatCostReport,
       };
       const interactiveResult = await runInteractiveSessionWithTerminalDisplay(
@@ -1356,6 +1353,7 @@ async function runSessionCli(
             ? headlessGoalReportStopReason(interactiveResult.goal)
             : undefined;
         writeRunReport(cliArgs.reportFile, {
+          tasks: interactiveResult.report.tasks,
           usageByModel: interactiveResult.report.usageByModel,
           end:
             headlessStopReason === undefined

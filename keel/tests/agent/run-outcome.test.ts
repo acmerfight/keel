@@ -504,7 +504,7 @@ describe("Run Outcome Reporting", () => {
 
       // Then
       const finalEvent = endEvent(events);
-      expect(finalEvent.turns).toBe(2);
+      expect(finalEvent.turns).toBe(1);
       expect(finalEvent.stopReason).toBe("turn_limit");
       expect(finalEvent.usage.inputTokens).toBe(300_000);
       expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
@@ -550,7 +550,7 @@ describe("Run Outcome Reporting", () => {
 
   test(`Given the session hits its round limit mid-task,
     When the agent ends with a wrap-up summary,
-    Then the stop reason names the turn limit and the wrap-up turn is counted`, async () => {
+    Then the stop reason names the turn limit without counting wrap-up as an agent-loop turn`, async () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
@@ -582,7 +582,7 @@ describe("Run Outcome Reporting", () => {
 
       // Then
       expect(endEvent(events)).toMatchObject({
-        turns: 3,
+        turns: 2,
         stopReason: "turn_limit",
       });
     } finally {

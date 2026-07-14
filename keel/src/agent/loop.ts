@@ -136,6 +136,12 @@ export interface RunAgentTurnOptions {
   readonly recordCheckpointOperations?: (
     operations: readonly RecordLastBatchCheckpointOperation[],
   ) => void;
+  readonly onAgentLoopTurnCompleted?: (
+    accounting: Pick<
+      Extract<AgentEvent, { readonly type: "end" }>,
+      "usage" | "turns" | "cost"
+    >,
+  ) => void;
   readonly drainInjectedUserMessages?: () =>
     | readonly InjectedUserMessage[]
     | Promise<readonly InjectedUserMessage[]>;
@@ -673,6 +679,11 @@ export async function* runAgentTurn(
       costTracking,
     );
     const cost = buildCostReport(state.accounting.totalCostUsd, costTracking);
+    options.onAgentLoopTurnCompleted?.({
+      usage: state.accounting.totalUsage,
+      turns: completedTurns,
+      ...(cost !== undefined ? { cost } : {}),
+    });
 
     const decision = stopPolicy.shouldStopAfterTurn({
       completedTurns,
@@ -772,7 +783,7 @@ export async function* runAgentTurn(
       yield {
         type: "end",
         usage: state.accounting.totalUsage,
-        turns: completedTurns + 1,
+        turns: completedTurns,
         stopReason: decision.reason,
         ...(finalCost !== undefined ? { cost: finalCost } : {}),
       };

@@ -153,6 +153,12 @@ import {
   sanitizeStatusLineText,
 } from "./output.ts";
 import {
+  createAgentEventReportRecorder,
+  type RunReportAgentRunTrigger,
+  type RunReportTaskTrigger,
+  recordAgentEventStream,
+} from "./report-events.ts";
+import {
   formatSessionStatusSnapshot,
   formatSessionTasks,
 } from "./session-status-format.ts";
@@ -292,7 +298,20 @@ const NON_GIT_DIFF_MESSAGE =
 interface PromptTurnRequest {
   readonly userMessage: string;
   readonly consumedInputLines: readonly QueuedLine[];
+  readonly runTrigger: RunReportAgentRunTrigger;
   readonly runtimeOutcome?: SessionGoalRuntimeOutcome;
+}
+
+interface PendingGoalDrive {
+  readonly message: string;
+  readonly taskTrigger: Extract<
+    RunReportTaskTrigger,
+    "goal_activation" | "goal_resume"
+  >;
+  readonly runTrigger: Extract<
+    RunReportAgentRunTrigger,
+    "goal_activation" | "goal_resume"
+  >;
 }
 
 interface PromptTurnResult {
@@ -450,7 +469,9 @@ export async function runInteractiveSession(
     options.initialSessionGoal === undefined
       ? undefined
       : copySessionGoal(options.initialSessionGoal);
-  let pendingGoalDriveMessage: string | null = null;
+  let pendingGoalDrive: PendingGoalDrive | null = null;
+  const reportRecorder =
+    options.reportRecorder ?? createAgentEventReportRecorder();
   const inputDisposition = createInteractiveInputDispositionTracker();
   const setComposerMode = (mode: InteractiveComposerMode): void => {
     inputDisposition.setComposerMode(mode);
@@ -619,7 +640,7 @@ export async function runInteractiveSession(
   };
   let activeAbortController: AbortController | null = null;
   let sessionUsage = EMPTY_USAGE;
-  let sessionTurns = 0;
+  let sessionAgentLoopTurns = 0;
   let sessionPromptTurnAttempted = false;
   let sessionEndObserved = false;
   let sessionCostUsd = 0;
@@ -632,7 +653,7 @@ export async function runInteractiveSession(
   const recordReportUsage = (
     selection: SessionModelSelection,
     usage: Usage,
-    turns: number,
+    agentLoopTurns: number,
     costUsd: number,
   ) => {
     const key = reportModelKey(selection);
@@ -641,7 +662,7 @@ export async function runInteractiveSession(
       reportUsageByModel.set(key, {
         provider: selection.providerId,
         model: selection.model,
-        turns,
+        agentLoopTurns,
         usage,
         costUsd,
       });
@@ -650,7 +671,7 @@ export async function runInteractiveSession(
     reportUsageByModel.set(key, {
       provider: current.provider,
       model: current.model,
-      turns: current.turns + turns,
+      agentLoopTurns: current.agentLoopTurns + agentLoopTurns,
       usage: addUsage(current.usage, usage),
       costUsd: current.costUsd + costUsd,
     });
@@ -690,7 +711,7 @@ export async function runInteractiveSession(
     error: unknown,
     lines: readonly QueuedLine[],
   ): void => {
-    pendingGoalDriveMessage = null;
+    pendingGoalDrive = null;
     options.writeStderr(formatInteractiveCommandFailure(error));
     consumeQueuedInputLines(lines);
   };
@@ -741,7 +762,7 @@ export async function runInteractiveSession(
     return {
       type: "end",
       usage: sessionUsage,
-      turns: sessionTurns,
+      turns: sessionAgentLoopTurns,
       stopReason:
         sessionStopReason === "cost_budget"
           ? "cost_budget"
@@ -809,7 +830,7 @@ export async function runInteractiveSession(
   const recordTurnEnd = (end: EndEvent): CostReport | undefined => {
     sessionEndObserved = true;
     sessionUsage = addUsage(sessionUsage, end.usage);
-    sessionTurns += end.turns;
+    sessionAgentLoopTurns += end.turns;
     sessionStopReason = end.stopReason;
     if (end.cost?.budgetLimited === true) {
       sessionCostBudgetLimited = true;
@@ -879,6 +900,26 @@ export async function runInteractiveSession(
     request: PromptTurnRequest,
   ): Promise<PromptTurnResult> => {
     sessionPromptTurnAttempted = true;
+    reportRecorder.beginAgentRun(request.runTrigger);
+    let latestAgentLoopAccounting:
+      | Pick<EndEvent, "usage" | "turns" | "cost">
+      | undefined;
+    const abortReportedAgentRun = (
+      end?: EndEvent,
+      recordAccounting = true,
+    ): void => {
+      const accounting = end ?? latestAgentLoopAccounting;
+      reportRecorder.abortAgentRun(accounting?.turns ?? 0);
+      if (recordAccounting && accounting !== undefined) {
+        recordTurnEnd({
+          type: "end",
+          usage: accounting.usage,
+          turns: accounting.turns,
+          stopReason: "aborted",
+          ...(accounting.cost !== undefined ? { cost: accounting.cost } : {}),
+        });
+      }
+    };
     const skillStateBeforeTurn = options.skillActivation?.state();
     options.skillActivation?.beginTurn();
     const goalTurnStartedAt = sessionGoal?.status === "active" ? now() : null;
@@ -976,6 +1017,9 @@ export async function runInteractiveSession(
           recordCheckpointOperations: (operations) => {
             checkpointOperations.push(...operations);
           },
+          onAgentLoopTurnCompleted: (accounting) => {
+            latestAgentLoopAccounting = accounting;
+          },
           drainInjectedUserMessages: () => {
             const queuedLines = lineReader
               .drainLinesAfter(turnStartSequence)
@@ -1029,8 +1073,11 @@ export async function runInteractiveSession(
           sessionGoalUpdatesDuringTurn.push(copySessionGoal(next));
         },
       );
-      const finalEnd = await options.printAgentEvents(stream);
+      const finalEnd = await options.printAgentEvents(
+        recordAgentEventStream(stream, reportRecorder),
+      );
       if (turnAbortController.signal.aborted) {
+        abortReportedAgentRun(finalEnd);
         if (skillStateBeforeTurn !== undefined) {
           options.skillActivation?.restore(skillStateBeforeTurn);
           syncActiveWorkflowSkills();
@@ -1052,6 +1099,11 @@ export async function runInteractiveSession(
           budgetExceeded: false,
           stagnationFingerprint: null,
         };
+      }
+      if (finalEnd === undefined) {
+        abortReportedAgentRun(undefined, false);
+      } else {
+        reportRecorder.completeAgentRun(finalEnd.turns, finalEnd.stopReason);
       }
       restoreDrainedInput(deferredInputLines);
       const completedSkillState = options.skillActivation?.state();
@@ -1225,6 +1277,7 @@ export async function runInteractiveSession(
       if (!turnAbortController.signal.aborted) {
         throw error;
       }
+      abortReportedAgentRun();
       if (skillStateBeforeTurn !== undefined) {
         options.skillActivation?.restore(skillStateBeforeTurn);
         syncActiveWorkflowSkills();
@@ -1263,6 +1316,7 @@ export async function runInteractiveSession(
   };
   const runAutomaticGoalContinuations = async (
     initialContinuationMessage = GOAL_CONTINUATION_MESSAGE,
+    initialRunTrigger: RunReportAgentRunTrigger = "goal_continuation",
   ): Promise<boolean> => {
     const automaticContinuationTurnLimit =
       resolveGoalAutomaticContinuationTurnLimit(
@@ -1271,6 +1325,7 @@ export async function runInteractiveSession(
     let continuationTurns = 0;
     const recentStagnationFingerprints: string[] = [];
     let nextContinuationMessage = initialContinuationMessage;
+    let nextRunTrigger = initialRunTrigger;
     let nextContinuationRuntimeOutcome: SessionGoalRuntimeOutcome | undefined;
     const recoveryHintedPatterns = new Set<string>();
     while (
@@ -1291,8 +1346,10 @@ export async function runInteractiveSession(
       const result = await runPromptTurn({
         userMessage,
         consumedInputLines: [],
+        runTrigger: nextRunTrigger,
         ...(runtimeOutcome !== undefined ? { runtimeOutcome } : {}),
       });
+      nextRunTrigger = "goal_continuation";
       if (result.aborted) {
         return false;
       }
@@ -1342,16 +1399,44 @@ export async function runInteractiveSession(
     return false;
   };
 
+  const taskOutcomeForGoal = (
+    startedWithActiveGoal: boolean,
+  ): string | undefined => {
+    if (!startedWithActiveGoal) {
+      return undefined;
+    }
+    switch (sessionGoal?.status) {
+      case "blocked":
+        return "goal_blocked";
+      case "budget_limited":
+        return "goal_budget";
+      case "usage_limited":
+        return "goal_usage_limit";
+      case "completed":
+        return "completed";
+      case "active":
+      case "paused":
+      case undefined:
+        return undefined;
+    }
+  };
+
   options.onSigint(abortActiveTurn);
   try {
     for (;;) {
-      if (pendingGoalDriveMessage !== null) {
+      if (pendingGoalDrive !== null) {
         if (sessionGoal?.status !== "active") {
-          pendingGoalDriveMessage = null;
+          pendingGoalDrive = null;
         } else if (lineReader.pendingInputCount() === 0) {
-          const driveMessage = pendingGoalDriveMessage;
-          pendingGoalDriveMessage = null;
-          if (await runAutomaticGoalContinuations(driveMessage)) {
+          const drive = pendingGoalDrive;
+          pendingGoalDrive = null;
+          reportRecorder.beginTask(drive.taskTrigger);
+          const shouldStop = await runAutomaticGoalContinuations(
+            drive.message,
+            drive.runTrigger,
+          );
+          reportRecorder.endTask(taskOutcomeForGoal(true));
+          if (shouldStop) {
             break;
           }
         }
@@ -1559,7 +1644,11 @@ export async function runInteractiveSession(
               if (goalCommand.action === "launch") {
                 options.writeStdout(formatInteractiveGoalBudget(nextGoal));
               }
-              pendingGoalDriveMessage = GOAL_ACTIVATION_MESSAGE;
+              pendingGoalDrive = {
+                message: GOAL_ACTIVATION_MESSAGE,
+                taskTrigger: "goal_activation",
+                runTrigger: "goal_activation",
+              };
             } catch (error) {
               handleGoalPersistenceFailure(error, [rawInput]);
             }
@@ -1630,7 +1719,11 @@ export async function runInteractiveSession(
                 consumedInputIds: queuedInputIds([rawInput]),
               });
               options.writeStdout(formatInteractiveGoalResumed(resumedGoal));
-              pendingGoalDriveMessage = GOAL_RESUMPTION_MESSAGE;
+              pendingGoalDrive = {
+                message: GOAL_RESUMPTION_MESSAGE,
+                taskTrigger: "goal_resume",
+                runTrigger: "goal_resume",
+              };
             } catch (error) {
               handleGoalPersistenceFailure(error, [rawInput]);
             }
@@ -1955,7 +2048,7 @@ export async function runInteractiveSession(
       }
       if (interactiveCommand?.kind === "invalid") {
         if (interactiveCommand.scope === "goal") {
-          pendingGoalDriveMessage = null;
+          pendingGoalDrive = null;
         }
         options.writeStderr(`${interactiveCommand.message}\n`);
         consumeQueuedInputLines([rawInput]);
@@ -2338,18 +2431,25 @@ export async function runInteractiveSession(
         consumeQueuedInputLines([rawInput]);
         continue;
       }
-      pendingGoalDriveMessage = null;
+      pendingGoalDrive = null;
+      const taskStartedWithActiveGoal = sessionGoal?.status === "active";
+      reportRecorder.beginTask("user_prompt");
       const turnResult = await runPromptTurn({
         userMessage,
         consumedInputLines: [rawInput],
+        runTrigger: "user_prompt",
       });
       if (turnResult.aborted) {
+        reportRecorder.endTask("aborted");
         continue;
       }
       if (turnResult.budgetExceeded) {
+        reportRecorder.endTask(taskOutcomeForGoal(taskStartedWithActiveGoal));
         break;
       }
-      if (await runAutomaticGoalContinuations()) {
+      const shouldStop = await runAutomaticGoalContinuations();
+      reportRecorder.endTask(taskOutcomeForGoal(taskStartedWithActiveGoal));
+      if (shouldStop) {
         break;
       }
     }
@@ -2367,6 +2467,7 @@ export async function runInteractiveSession(
     return {
       ...finalGoal,
       report: {
+        tasks: reportRecorder.tasks(),
         modelsUsed: [...reportUsageByModel.values()].map((entry) => ({
           provider: entry.provider,
           model: entry.model,

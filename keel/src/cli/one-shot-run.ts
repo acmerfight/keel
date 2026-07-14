@@ -286,6 +286,8 @@ export async function runOneShotCli(
     });
 
     const reportRecorder = createAgentEventReportRecorder();
+    reportRecorder.beginTask("user_prompt");
+    reportRecorder.beginAgentRun("user_prompt");
     const writeUndoProtectionWarning = (): void => {
       if (reportRecorder.undoProtection().status === "unavailable") {
         runtime.writeStderr(`${formatUndoCheckpointWarning()}\n`);
@@ -301,6 +303,11 @@ export async function runOneShotCli(
       }
       throw error;
     }
+    /* v8 ignore next -- a normally completed runAgent() always emits one terminal end event. */
+    if (finalEnd !== undefined) {
+      reportRecorder.completeAgentRun(finalEnd.turns, finalEnd.stopReason);
+      reportRecorder.endTask();
+    }
     runtime.writeStdout("\n");
     const undoProtection = reportRecorder.undoProtection();
     writeUndoProtectionWarning();
@@ -310,11 +317,12 @@ export async function runOneShotCli(
     if (cliArgs.reportFile !== undefined && finalEnd !== undefined) {
       assertEndEventHasCost(finalEnd);
       writeRunReport(cliArgs.reportFile, {
+        tasks: reportRecorder.tasks(),
         usageByModel: [
           {
             provider: resolved.provider.id,
             model: resolved.model,
-            turns: finalEnd.turns,
+            agentLoopTurns: finalEnd.turns,
             usage: finalEnd.usage,
             costUsd: finalEnd.cost.spentUsd,
           },
