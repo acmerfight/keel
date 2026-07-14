@@ -3,6 +3,7 @@ import { compactMessages } from "../../../src/agent/context-compaction.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
 import { createReadVisibilityState } from "../../../src/agent/read-visibility.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
+import { createAgentEventReportRecorder } from "../../../src/cli/report-events.ts";
 import { KeelError } from "../../../src/core/error.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
@@ -17,6 +18,84 @@ import {
 } from "../../../src/testing/context-compaction-fixtures.ts";
 
 describe("Context Compaction Agent Recovery", () => {
+  test(`Given overflow recovery only produces length-truncated summaries,
+    When bounded recovery cannot create a complete checkpoint,
+    Then Keel surfaces the compaction failure and leaves the original history unchanged`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Remember constraint alpha." },
+      {
+        role: "assistant",
+        content: "Constraint alpha recorded.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Remember decision beta." },
+      { role: "assistant", content: "Decision beta recorded.", toolCalls: [] },
+      { role: "user", content: "Remember evidence gamma." },
+      { role: "assistant", content: "Evidence gamma recorded.", toolCalls: [] },
+      { role: "user", content: "Continue." },
+    ];
+    const originalMessages = structuredClone(messages);
+    const recorder = createAgentEventReportRecorder();
+    recorder.beginTask("user_prompt");
+    recorder.beginAgentRun("user_prompt");
+    let mainRequests = 0;
+    let summaryRequests = 0;
+    const provider: LLMProvider = {
+      id: "truncated-overflow-recovery-provider",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          yield { type: "text", text: "Partial recovery checkpoint" };
+          yield { type: "stop", reason: "length", usage: ZERO_USAGE };
+          return;
+        }
+        mainRequests++;
+        throw new KeelError(
+          "provider_context_overflow",
+          "Original request overflowed",
+        );
+      },
+    };
+
+    // When / Then
+    await expect(
+      collect(
+        runAgentTurn({
+          workspace: workspace(),
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          allowBash: false,
+          stopPolicy: defaultStopPolicy(),
+          contextCompaction: { keepRecentTokens: 1 },
+          modelOperations: {
+            recorder,
+            owner: { type: "current_agent_run" },
+            provider: provider.id,
+            model: "test-model",
+            costModel: {
+              type: "fixed",
+              uncachedInputPerMillionTokens: 0,
+              cachedInputPerMillionTokens: 0,
+              outputPerMillionTokens: 0,
+            },
+          },
+        }),
+      ),
+    ).rejects.toThrow(
+      "truncated-overflow-recovery-provider returned length-truncated context compaction summaries after 3 attempts.",
+    );
+    expect(mainRequests).toBe(1);
+    expect(summaryRequests).toBe(3);
+    expect(messages).toEqual(originalMessages);
+    expect(recorder.modelOperations()).toMatchObject([
+      { purpose: "agent_turn", outcome: "context_overflow" },
+      { purpose: "context_compaction", outcome: "terminal_error" },
+    ]);
+  });
+
   test(`Given the compaction summary request itself exceeds provider context,
     When the smaller retry succeeds,
     Then the original turn retries with the compacted transcript`, async () => {

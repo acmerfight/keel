@@ -11,7 +11,10 @@ import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
   ForcedExit,
+  ONE_DOLLAR_PER_MILLION_INPUT,
   resolvedProvider,
+  withProviderRequestAttemptAccounting,
+  withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
 } from "../../../src/testing/interactive-session-fixtures.ts";
@@ -31,7 +34,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     let targetProviderSummaryRequests = 0;
     const targetRequestContexts: Message[][] = [];
     const largePrompt = "large history ".repeat(3_000).trim();
-    const oldProvider: LLMProvider = {
+    const oldProvider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
         if (options.toolChoice === "none") {
@@ -44,7 +47,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
         yield { type: "text", text: `old provider ${oldProviderTurns}` };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
-    };
+    });
     const targetProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
@@ -140,9 +143,28 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     expect(sigintHandlers.size).toBe(0);
   });
 
-  test(`Given model-switch compaction fails,
+  test.each([
+    {
+      mode: "max-cost metered",
+      cliArgs: { bashMode: "disabled" as const, maxCostUsd: 1 },
+      expectsCostOutput: true,
+    },
+    {
+      mode: "report-only metered",
+      cliArgs: { bashMode: "disabled" as const, reportFile: "session.json" },
+      expectsCostOutput: false,
+    },
+    {
+      mode: "unmetered",
+      cliArgs: { bashMode: "disabled" as const },
+      expectsCostOutput: false,
+    },
+  ])(`Given $mode model-switch compaction fails,
     When user enters /model for a smaller target,
-    Then the old provider remains active and the transcript is unchanged`, async () => {
+    Then the old provider remains active and the transcript is unchanged`, async ({
+    cliArgs,
+    expectsCostOutput,
+  }) => {
     // Given
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
@@ -152,20 +174,26 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     let oldProviderSummaryRequests = 0;
     let targetProviderTurns = 0;
     const oldRequestContexts: Message[][] = [];
+    const persistedReasons: string[] = [];
     const largePrompt = "large history ".repeat(3_000).trim();
-    const oldProvider: LLMProvider = {
+    const oldProvider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
         if (options.toolChoice === "none") {
           oldProviderSummaryRequests++;
-          throw new Error("summary model unavailable");
+          yield {
+            type: "text",
+            text: "Partial model-switch checkpoint that must not commit",
+          };
+          yield { type: "stop", reason: "length", usage: ZERO_USAGE };
+          return;
         }
         oldProviderTurns++;
         oldRequestContexts.push(structuredClone([...options.messages]));
         yield { type: "text", text: `old provider ${oldProviderTurns}` };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
-    };
+    });
     const targetProvider: LLMProvider = {
       id: "fake",
       async *stream() {
@@ -175,7 +203,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs,
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -223,7 +251,13 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
         }
         return finalEnd;
       },
-      formatCostReport: () => "",
+      formatCostReport: () => "Rejected compaction cost recorded.\n",
+      persistSessionMessages: (_messages, reason) => {
+        persistedReasons.push(reason);
+      },
+      persistModelSwitch: () => {
+        throw new Error("rejected model switch must not persist");
+      },
     });
 
     // When
@@ -232,7 +266,10 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     // Then
     await session;
     expect(stderr).toContain(
-      "Context compaction failed: summary model unavailable",
+      "Context compaction failed: fake returned length-truncated context compaction summaries after 1 attempt.",
+    );
+    expect(stderr.includes("Rejected compaction cost recorded.")).toBe(
+      expectsCostOutput,
     );
     expect(stdout).toContain("old provider 1");
     expect(stdout).toContain("old provider 2");
@@ -246,7 +283,236 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       { role: "assistant", content: "old provider 1", toolCalls: [] },
       { role: "user", content: "second prompt" },
     ]);
+    expect(JSON.stringify(oldRequestContexts[1])).not.toContain(
+      "Partial model-switch checkpoint that must not commit",
+    );
+    expect(persistedReasons).not.toContain("compaction");
     expect(sigintHandlers.size).toBe(0);
+  });
+
+  test.each([
+    {
+      mode: "metered",
+      cliArgs: { bashMode: "disabled" as const, reportFile: "session.json" },
+      expectedUsage: {
+        inputTokens: 8,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 8,
+        outputTokens: 2,
+      },
+    },
+    {
+      mode: "unmetered",
+      cliArgs: { bashMode: "disabled" as const },
+      expectedUsage: undefined,
+    },
+  ])(`Given $mode model-switch compaction completes after interruption,
+    When the provider returns its billed result,
+    Then Keel rolls back the switch and records usage only when metering is active`, async ({
+    cliArgs,
+    expectedUsage,
+  }) => {
+    // Given
+    const initialMessages: readonly Message[] = [
+      { role: "user", content: "large history ".repeat(3_000).trim() },
+      { role: "assistant", content: "old provider answer", toolCalls: [] },
+    ];
+    let receiveSummaryRequest: () => void = () => {};
+    const summaryRequested = new Promise<void>((resolve) => {
+      receiveSummaryRequest = resolve;
+    });
+    let targetProviderTurns = 0;
+    const currentProvider = withProviderRequestAttemptAccounting({
+      id: "fake",
+      async *stream(options) {
+        receiveSummaryRequest();
+        if (!options.signal.aborted) {
+          await new Promise<void>((resolve) => {
+            options.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+        }
+        yield { type: "text", text: "Cancelled model-switch checkpoint" };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 8,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 8,
+            outputTokens: 2,
+          },
+        };
+      },
+    });
+    const targetProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        targetProviderTurns++;
+        yield { type: "text", text: "unexpected target" };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    const persistedReasons: string[] = [];
+    const session = runInteractiveSession({
+      cliArgs,
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialMessages,
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) =>
+        selection?.providerId === "qwen"
+          ? resolvedProvider(
+              "qwen",
+              selection.model ?? "tiny",
+              targetProvider,
+              ZERO_COST_MODEL,
+              {
+                contextWindowTokens: 2_000,
+                reserveTokens: 0,
+                keepRecentTokens: 1,
+              },
+            )
+          : resolvedProvider("fake", "fake", currentProvider),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error(
+          "interrupted model switch must not start an agent turn",
+        );
+      },
+      formatCostReport: () => "",
+      persistSessionMessages: (_messages, reason) => {
+        persistedReasons.push(reason);
+      },
+      persistModelSwitch: () => {
+        throw new Error("interrupted model switch must not persist");
+      },
+    });
+
+    // When
+    input.write("/model qwen/tiny\n");
+    await withTimeout(summaryRequested, 5_000, "summary did not start");
+    for (const handler of [...sigintHandlers]) {
+      handler();
+    }
+    input.end();
+
+    // Then
+    const result = await withTimeout(session, 5_000, "session did not end");
+    expect(result.report?.end.usage).toEqual(expectedUsage);
+    expect(targetProviderTurns).toBe(0);
+    expect(persistedReasons).not.toContain("compaction");
+    expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given a billed model-switch summary is truncated before its retry exhausts the cost budget,
+    When the retry is denied admission,
+    Then Keel rejects the switch and reports the completed attempt as budget-limited`, async () => {
+    // Given
+    const initialMessages: readonly Message[] = [
+      { role: "user", content: "Remember alpha." },
+      { role: "assistant", content: "Alpha recorded.", toolCalls: [] },
+      { role: "user", content: "Remember beta." },
+      { role: "assistant", content: "Beta recorded.", toolCalls: [] },
+      { role: "user", content: "Remember gamma." },
+      { role: "assistant", content: "Gamma recorded.", toolCalls: [] },
+    ];
+    let summaryRequests = 0;
+    let targetProviderTurns = 0;
+    let stderr = "";
+    const currentProvider = withProviderRequestAttemptAccounting({
+      id: "fake",
+      estimateInputTokens: () => 1,
+      async *stream() {
+        summaryRequests++;
+        yield { type: "text", text: "Billed partial model-switch checkpoint" };
+        yield {
+          type: "stop",
+          reason: "length",
+          usage: {
+            inputTokens: 2_000,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 2_000,
+            outputTokens: 1,
+          },
+        };
+      },
+    });
+    const targetProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        targetProviderTurns++;
+        yield { type: "text", text: "unexpected target" };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const session = runInteractiveSession({
+      cliArgs: {
+        bashMode: "disabled",
+        maxCostUsd: 0.001,
+        reportFile: "session.json",
+      },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialMessages,
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) =>
+        selection?.providerId === "qwen"
+          ? resolvedProvider(
+              "qwen",
+              selection.model ?? "tiny",
+              targetProvider,
+              ONE_DOLLAR_PER_MILLION_INPUT,
+              { contextWindowTokens: 1, reserveTokens: 0, keepRecentTokens: 1 },
+            )
+          : resolvedProvider("fake", "fake", currentProvider),
+      requireKnownCostModel: () => ONE_DOLLAR_PER_MILLION_INPUT,
+      printAgentEvents: async () => {
+        throw new Error("budget-limited switch must not start an agent turn");
+      },
+      formatCostReport: (cost, maxUsd) =>
+        `Cost: ${cost.spentUsd.toFixed(3)} / ${maxUsd.toFixed(3)} limited=${cost.budgetLimited}\n`,
+      persistModelSwitch: () => {
+        throw new Error("budget-limited switch must not persist");
+      },
+    });
+
+    // When
+    input.end("/model qwen/tiny\n");
+
+    // Then
+    const result = await session;
+    expect(summaryRequests).toBe(1);
+    expect(targetProviderTurns).toBe(0);
+    expect(stderr).toContain("Cost: 0.002 / 0.001 limited=true");
+    expect(result.report?.end.stopReason).toBe("cost_budget");
+    expect(result.report?.end.usage.inputTokens).toBe(2_000);
   });
 
   test(`Given model-switch compaction still exceeds the target context window,

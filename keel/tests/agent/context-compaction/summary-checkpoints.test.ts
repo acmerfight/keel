@@ -298,6 +298,308 @@ describe("Context Compaction Summary Checkpoints", () => {
     });
   });
 
+  test.each([
+    [
+      "partial text",
+      "## Current Task\nInvestigate auth.\n\n## Constraints\nDo not",
+    ],
+    ["empty text", ""],
+  ])(`Given every compaction summary returns %s with a length stop,
+    When compaction exhausts its safe retries,
+    Then no incomplete checkpoint replaces the original history`, async (_case, summaryText) => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Remember constraint alpha." },
+      {
+        role: "assistant",
+        content: "Constraint alpha recorded.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Remember decision beta." },
+      { role: "assistant", content: "Decision beta recorded.", toolCalls: [] },
+      { role: "user", content: "Remember evidence gamma." },
+      { role: "assistant", content: "Evidence gamma recorded.", toolCalls: [] },
+      { role: "user", content: "Continue." },
+    ];
+    const originalMessages = structuredClone(messages);
+    let summaryRequests = 0;
+    const provider: LLMProvider = {
+      id: "length-limited-summary-provider",
+      async *stream() {
+        summaryRequests++;
+        if (summaryText !== "") {
+          yield { type: "text", text: summaryText };
+        }
+        yield {
+          type: "stop",
+          reason: "length",
+          usage: {
+            inputTokens: 10,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 10,
+            outputTokens: 2,
+          },
+        };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: { keepRecentTokens: 1 },
+    });
+
+    // Then
+    expect(result).toEqual({
+      compacted: false,
+      failure: {
+        code: "summary_truncated",
+        message:
+          "length-limited-summary-provider returned length-truncated context compaction summaries after 3 attempts.",
+      },
+      usage: {
+        inputTokens: 30,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 30,
+        outputTokens: 6,
+      },
+    });
+    expect(summaryRequests).toBe(3);
+    expect(messages).toEqual(originalMessages);
+    expect(JSON.stringify(messages)).not.toContain("conversation-checkpoint");
+    expect(JSON.stringify(messages)).not.toContain("(no summary available)");
+  });
+
+  test(`Given a compaction summary first stops at length and a smaller safe prefix completes,
+    When compaction retries,
+    Then only the complete summary is committed and excluded source messages remain verbatim`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Old phase alpha." },
+      { role: "assistant", content: "Alpha completed.", toolCalls: [] },
+      { role: "user", content: "Middle phase beta." },
+      {
+        role: "assistant",
+        content: "Beta remains in progress.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue with the latest phase." },
+    ];
+    const summaryPrompts: string[] = [];
+    let summaryRequests = 0;
+    const provider: LLMProvider = {
+      id: "recovering-length-summary-provider",
+      async *stream(options) {
+        summaryRequests++;
+        summaryPrompts.push(options.messages[0]?.content ?? "");
+        if (summaryRequests === 1) {
+          yield { type: "text", text: "Partial summary that must not commit" };
+          yield {
+            type: "stop",
+            reason: "length",
+            usage: {
+              inputTokens: 20,
+              cachedInputTokens: 2,
+              uncachedInputTokens: 18,
+              outputTokens: 5,
+            },
+          };
+          return;
+        }
+        yield { type: "text", text: "Complete alpha summary." };
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 10,
+            cachedInputTokens: 1,
+            uncachedInputTokens: 9,
+            outputTokens: 3,
+          },
+        };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: { keepRecentTokens: 1 },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    expect(result.usage).toEqual({
+      inputTokens: 30,
+      cachedInputTokens: 3,
+      uncachedInputTokens: 27,
+      outputTokens: 8,
+    });
+    expect(summaryPrompts).toHaveLength(2);
+    expect(summaryPrompts[0]).toContain("Middle phase beta.");
+    expect(summaryPrompts[1]).not.toContain("Middle phase beta.");
+    expect(messages).toEqual([
+      {
+        role: "user",
+        content: generatedCheckpoint("Complete alpha summary."),
+        origin: { type: "compaction_checkpoint" },
+      },
+      { role: "user", content: "Middle phase beta." },
+      {
+        role: "assistant",
+        content: "Beta remains in progress.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue with the latest phase." },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain(
+      "Partial summary that must not commit",
+    );
+  });
+
+  test(`Given a length-truncated summary consumes usage before a later provider failure,
+    When compaction stops retrying,
+    Then the failure retains the consumed usage and leaves history unchanged`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Old phase alpha." },
+      { role: "assistant", content: "Alpha completed.", toolCalls: [] },
+      { role: "user", content: "Middle phase beta." },
+      {
+        role: "assistant",
+        content: "Beta remains in progress.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue with the latest phase." },
+    ];
+    const originalMessages = structuredClone(messages);
+    const retryError = new KeelError(
+      "provider_server_error",
+      "Summary retry failed upstream",
+    );
+    let summaryRequests = 0;
+    const provider: LLMProvider = {
+      id: "failing-length-summary-provider",
+      async *stream() {
+        summaryRequests++;
+        if (summaryRequests === 1) {
+          yield { type: "text", text: "Partial billed summary" };
+          yield {
+            type: "stop",
+            reason: "length",
+            usage: {
+              inputTokens: 10,
+              cachedInputTokens: 2,
+              uncachedInputTokens: 8,
+              outputTokens: 2,
+            },
+          };
+          return;
+        }
+        throw retryError;
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: { keepRecentTokens: 1 },
+    });
+
+    // Then
+    expect(result).toEqual({
+      compacted: false,
+      failure: {
+        code: "summary_error",
+        message: "Summary retry failed upstream",
+        error: retryError,
+      },
+      usage: {
+        inputTokens: 10,
+        cachedInputTokens: 2,
+        uncachedInputTokens: 8,
+        outputTokens: 2,
+      },
+    });
+    expect(summaryRequests).toBe(2);
+    expect(messages).toEqual(originalMessages);
+  });
+
+  test(`Given a billed length-truncated summary is followed by repeated summary overflows,
+    When the shared retry budget is exhausted,
+    Then the final overflow is preserved together with the earlier usage`, async () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Old phase alpha." },
+      { role: "assistant", content: "Alpha completed.", toolCalls: [] },
+      { role: "user", content: "Middle phase beta." },
+      { role: "assistant", content: "Beta in progress.", toolCalls: [] },
+      { role: "user", content: "Continue." },
+    ];
+    const originalMessages = structuredClone(messages);
+    const overflow = new KeelError(
+      "provider_context_overflow",
+      "Summary retry still exceeds context",
+    );
+    let summaryRequests = 0;
+    const provider: LLMProvider = {
+      id: "overflowing-length-summary-provider",
+      async *stream() {
+        summaryRequests++;
+        if (summaryRequests === 1) {
+          yield { type: "text", text: "Partial billed summary" };
+          yield {
+            type: "stop",
+            reason: "length",
+            usage: {
+              inputTokens: 10,
+              cachedInputTokens: 2,
+              uncachedInputTokens: 8,
+              outputTokens: 2,
+            },
+          };
+          return;
+        }
+        throw overflow;
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: { keepRecentTokens: 1 },
+    });
+
+    // Then
+    expect(result).toEqual({
+      compacted: false,
+      failure: {
+        code: "summary_error",
+        message: "Summary retry still exceeds context",
+        error: overflow,
+      },
+      usage: {
+        inputTokens: 10,
+        cachedInputTokens: 2,
+        uncachedInputTokens: 8,
+        outputTokens: 2,
+      },
+    });
+    expect(summaryRequests).toBe(4);
+    expect(messages).toEqual(originalMessages);
+  });
+
   test(`Given a conversation has already been compacted once,
     When Keel compacts it again,
     Then the previous checkpoint is summarized as historical checkpoint context`, async () => {

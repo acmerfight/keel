@@ -2361,12 +2361,13 @@ export async function runInteractiveSession(
         activeAbortController = compactAbortController;
         setComposerMode("queue");
         let compactCost: CostReport | undefined;
+        let compactCommitted = false;
         try {
           const remainingCostUsd = remainingMaxCostUsd();
           const modelOperations = reportModelOperations(compactResolved, {
             type: "session",
           });
-          compactCost = await executeManualCompaction({
+          const compaction = await executeManualCompaction({
             command: interactiveCommand,
             resolved: compactResolved,
             workspace: options.workspace,
@@ -2384,11 +2385,13 @@ export async function runInteractiveSession(
             costBudgetLimitedReport: currentSessionCostBudgetLimitedReport,
             modelOperations,
           });
+          compactCost = compaction.cost;
+          compactCommitted = compaction.status === "committed";
         } finally {
           activeAbortController = null;
           setComposerMode("ready");
         }
-        if (compactAbortController.signal.aborted) {
+        if (compactAbortController.signal.aborted || !compactCommitted) {
           consumeQueuedInputLines([rawInput]);
         } else {
           options.persistSessionMessages?.(

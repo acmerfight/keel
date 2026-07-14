@@ -50,9 +50,14 @@ export interface ManualCompactContext {
   readonly modelOperations: ModelOperationInstrumentation | null;
 }
 
+export interface ManualCompactionResult {
+  readonly status: "committed" | "not_committed";
+  readonly cost?: CostReport;
+}
+
 export async function executeManualCompaction(
   ctx: ManualCompactContext,
-): Promise<CostReport | undefined> {
+): Promise<ManualCompactionResult> {
   const {
     command,
     resolved,
@@ -118,8 +123,15 @@ export async function executeManualCompaction(
     });
     if (signal.aborted) {
       messages.splice(0, messages.length, ...messagesBeforeCompact);
+      const cost =
+        manualCostModel === undefined
+          ? undefined
+          : recordCompactionCost(result.usage, manualCostModel);
       options.writeStdout("\n");
-      return undefined;
+      return {
+        status: "not_committed",
+        ...(cost !== undefined ? { cost } : {}),
+      };
     }
     if (result.compacted) {
       await restorePostCompactionReads({
@@ -151,19 +163,52 @@ export async function executeManualCompaction(
             options.formatCostReport(cost, options.cliArgs.maxCostUsd),
           );
         }
-        return cost;
+        return { status: "committed", cost };
+      }
+      return { status: "committed" };
+    }
+    if (result.failure !== undefined) {
+      messages.splice(0, messages.length, ...messagesBeforeCompact);
+      const failedCost =
+        manualCostModel === undefined
+          ? undefined
+          : recordCompactionCost(result.usage, manualCostModel);
+      if (
+        result.failure.code === "summary_error" &&
+        result.failure.error instanceof CostBudgetAdmissionError
+      ) {
+        const cost = costBudgetLimitedReport();
+        /* v8 ignore else -- CostBudgetAdmissionError is created only by --max-cost's budget wrapper. */
+        if (options.cliArgs.maxCostUsd !== undefined) {
+          options.writeStderr(
+            options.formatCostReport(cost, options.cliArgs.maxCostUsd),
+          );
+        }
+        return { status: "not_committed", cost };
+      }
+      options.writeStderr(
+        formatManualCompactionFailure(result.failure.message),
+      );
+      if (failedCost !== undefined) {
+        const cost = failedCost;
+        if (options.cliArgs.maxCostUsd !== undefined) {
+          options.writeStderr(
+            options.formatCostReport(cost, options.cliArgs.maxCostUsd),
+          );
+        }
+        return { status: "not_committed", cost };
       }
     } else {
       options.writeStderr(
         "Context compaction skipped: no safe history to compact.\n",
       );
     }
-    return undefined;
+    return { status: "not_committed" };
   } catch (error) {
     messages.splice(0, messages.length, ...messagesBeforeCompact);
     if (signal.aborted) {
       options.writeStdout("\n");
-      return undefined;
+      return { status: "not_committed" };
     }
     if (error instanceof CostBudgetAdmissionError) {
       const cost = costBudgetLimitedReport();
@@ -173,9 +218,9 @@ export async function executeManualCompaction(
           options.formatCostReport(cost, options.cliArgs.maxCostUsd),
         );
       }
-      return cost;
+      return { status: "not_committed", cost };
     }
     options.writeStderr(formatManualCompactionFailure(error));
-    return undefined;
+    return { status: "not_committed" };
   }
 }

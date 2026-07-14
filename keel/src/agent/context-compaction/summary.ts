@@ -1,9 +1,14 @@
-import { KeelError } from "../../core/error.ts";
+import { errorMessage, KeelError } from "../../core/error.ts";
 import {
   appendSessionTaskProgressToSummary,
   type SessionTaskProgress,
 } from "../../core/task-progress.ts";
-import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
+import type {
+  LLMProvider,
+  LLMStopReason,
+  Message,
+  Usage,
+} from "../../llm/types.ts";
 import type {
   ModelOperationHandle,
   ModelOperationPurpose,
@@ -31,6 +36,7 @@ import {
   MIN_SUMMARY_INPUT_MAX_CHARS,
   type ResolvedContextCompactionOptions,
 } from "./options.ts";
+import { smallerCompactionPrefixMessageCount } from "./planning.ts";
 import {
   compactStaleToolOutputs,
   compactStaleToolOutputsWithArtifacts,
@@ -41,7 +47,7 @@ import {
   type ToolOutputProjectionContext,
 } from "./tool-output-preview.ts";
 
-const MAX_SUMMARY_OVERFLOW_RETRIES = 3;
+const MAX_SUMMARY_RETRIES = 3;
 const MAX_COMPACTION_EVIDENCE_CHARS = 12_000;
 const MIN_COMPACTION_EVIDENCE_CHARS = 1_000;
 const MIN_COMPACTION_CONVERSATION_CHARS = Math.floor(
@@ -51,11 +57,60 @@ const MIN_COMPACTION_CONVERSATION_CHARS = Math.floor(
 interface TextOnlyTurn {
   readonly text: string;
   readonly usage: Usage;
+  readonly stopReason: LLMStopReason;
 }
 
 interface CompactionSummaryTurn extends TextOnlyTurn {
   readonly summaryInputMaxChars: number;
+  readonly summarizedMessageCount: number;
 }
+
+export type CompactionSummaryFailure =
+  | {
+      readonly code: "summary_truncated";
+      readonly message: string;
+    }
+  | {
+      readonly code: "summary_error";
+      readonly message: string;
+      readonly error: unknown;
+    };
+
+export interface CompactionSummaryErrorDetails {
+  readonly error: unknown;
+  readonly usage: Usage;
+}
+
+class CompactionSummaryAttemptsError extends Error {
+  readonly originalError: unknown;
+  readonly usage: Usage;
+
+  constructor(error: unknown, usage: Usage) {
+    super(errorMessage(error));
+    this.name = "CompactionSummaryAttemptsError";
+    this.originalError = error;
+    this.usage = usage;
+  }
+}
+
+export function compactionSummaryErrorDetails(
+  error: unknown,
+): CompactionSummaryErrorDetails | null {
+  return error instanceof CompactionSummaryAttemptsError
+    ? { error: error.originalError, usage: error.usage }
+    : null;
+}
+
+type CollectCompactionSummaryResult =
+  | {
+      readonly complete: true;
+      readonly turn: CompactionSummaryTurn;
+    }
+  | {
+      readonly complete: false;
+      readonly failure: CompactionSummaryFailure;
+      readonly usage: Usage;
+    };
 
 export interface BuildCompactedMessagesResult {
   readonly messages: readonly Message[];
@@ -356,6 +411,7 @@ async function collectTextOnlyTurn(options: {
 }): Promise<TextOnlyTurn> {
   let text = "";
   let usage: Usage | null = null;
+  let stopReason: LLMStopReason | null = null;
   for await (const event of options.provider.stream({
     systemPrompt: options.systemPrompt,
     messages: options.messages,
@@ -380,16 +436,33 @@ async function collectTextOnlyTurn(options: {
         break;
       case "stop":
         usage = event.usage;
+        stopReason = event.reason;
         break;
     }
   }
-  if (usage === null) {
+  if (usage === null || stopReason === null) {
     throw new KeelError(
       "agent_missing_stop",
       "LLM stream ended without stop event",
     );
   }
-  return { text, usage };
+  return { text, usage, stopReason };
+}
+
+const ZERO_USAGE: Usage = {
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  uncachedInputTokens: 0,
+  outputTokens: 0,
+};
+
+function addUsage(left: Usage, right: Usage): Usage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
+    uncachedInputTokens: left.uncachedInputTokens + right.uncachedInputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+  };
 }
 
 function isProviderContextOverflow(error: unknown): boolean {
@@ -441,36 +514,44 @@ function beginCompactionModelOperation(
 
 export async function collectCompactionSummary(
   options: CollectCompactionSummaryOptions,
-): Promise<CompactionSummaryTurn> {
+): Promise<CollectCompactionSummaryResult> {
   const operation = beginCompactionModelOperation(
     options.modelOperation ?? null,
   );
-  let turn: CompactionSummaryTurn;
+  let result: CollectCompactionSummaryResult;
   try {
-    turn = await collectCompactionSummaryAttempts(options, operation);
+    result = await collectCompactionSummaryAttempts(options, operation);
   } catch (error) {
-    operation?.finishFromError(error);
+    const details = compactionSummaryErrorDetails(error);
+    operation?.finishFromError(details?.error ?? error);
     throw error;
   }
-  operation?.finish({ outcome: "completed" });
-  return turn;
+  operation?.finish({
+    outcome: result.complete ? "completed" : "terminal_error",
+  });
+  return result;
 }
 
 async function collectCompactionSummaryAttempts(
   options: CollectCompactionSummaryOptions,
   operation: ModelOperationHandle | null,
-): Promise<CompactionSummaryTurn> {
+): Promise<CollectCompactionSummaryResult> {
   let summaryInputMaxChars = options.contextCompaction.summaryInputMaxChars;
+  let messagesToSummarize = options.messagesToSummarize;
+  let usage = ZERO_USAGE;
 
-  let attempt = 0;
+  let retryCount = 0;
+  let attemptCount = 0;
+  let completedAttemptCount = 0;
   while (true) {
     const prompt = buildSummaryPrompt(
-      options.messagesToSummarize,
+      messagesToSummarize,
       options.contextCompaction,
       summaryInputMaxChars,
       options.focusInstruction,
       options.toolOutputArtifacts?.store,
     );
+    attemptCount++;
     try {
       const turn = await collectTextOnlyTurn({
         provider: options.provider,
@@ -479,19 +560,51 @@ async function collectCompactionSummaryAttempts(
         signal: options.signal,
         operation,
       });
-      return { ...turn, summaryInputMaxChars };
+      completedAttemptCount++;
+      usage = addUsage(usage, turn.usage);
+      if (turn.stopReason === "stop") {
+        return {
+          complete: true,
+          turn: {
+            ...turn,
+            usage,
+            summaryInputMaxChars,
+            summarizedMessageCount: messagesToSummarize.length,
+          },
+        };
+      }
+
+      const smallerMessageCount =
+        smallerCompactionPrefixMessageCount(messagesToSummarize);
+      if (retryCount === MAX_SUMMARY_RETRIES || smallerMessageCount === null) {
+        const attemptLabel = attemptCount === 1 ? "attempt" : "attempts";
+        return {
+          complete: false,
+          failure: {
+            code: "summary_truncated",
+            message: `${options.provider.id} returned length-truncated context compaction summaries after ${attemptCount} ${attemptLabel}.`,
+          },
+          usage,
+        };
+      }
+      retryCount++;
+      messagesToSummarize = messagesToSummarize.slice(0, smallerMessageCount);
     } catch (error) {
       if (!isProviderContextOverflow(error)) {
-        throw error;
+        throw completedAttemptCount === 0
+          ? error
+          : new CompactionSummaryAttemptsError(error, usage);
       }
       const reduced = Math.floor(summaryInputMaxChars / 2);
       if (
-        attempt === MAX_SUMMARY_OVERFLOW_RETRIES ||
+        retryCount === MAX_SUMMARY_RETRIES ||
         reduced < MIN_SUMMARY_INPUT_MAX_CHARS
       ) {
-        throw error;
+        throw completedAttemptCount === 0
+          ? error
+          : new CompactionSummaryAttemptsError(error, usage);
       }
-      attempt++;
+      retryCount++;
       summaryInputMaxChars = reduced;
     }
   }
