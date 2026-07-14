@@ -2687,10 +2687,12 @@ describe("Interactive Session - Reports And Queued Input", () => {
 
     // Then
     expect(providerCalls).toBe(9);
-    expect(persistedMessages).toContainEqual({
-      role: "user",
-      content: "inspect a different file next",
-    });
+    expect(persistedMessages).toContainEqual(
+      expect.objectContaining({
+        role: "user",
+        content: "inspect a different file next",
+      }),
+    );
     expect(
       persistedMessages.filter(
         (message) =>
@@ -2893,7 +2895,14 @@ describe("Interactive Session - Reports And Queued Input", () => {
           message.role === "user" &&
           message.content.includes('source="goal_continuation"'),
       ),
-    ).toHaveLength(2);
+    ).toEqual([
+      expect.objectContaining({
+        origin: { type: "runtime_goal_continuation" },
+      }),
+      expect.objectContaining({
+        origin: { type: "runtime_goal_continuation" },
+      }),
+    ]);
     expect(sigintHandlers.size).toBe(0);
   });
 
@@ -3068,7 +3077,11 @@ describe("Interactive Session - Reports And Queued Input", () => {
     expect(observedUserContexts).toEqual([["continue with beta"]]);
     expect(consumedInputIds).toEqual([["queued-follow-up"]]);
     expect(persistedMessages).toEqual([
-      { role: "user", content: "continue with beta" },
+      {
+        role: "user",
+        content: "continue with beta",
+        origin: { type: "queued_followup" },
+      },
       { role: "assistant", content: "Queued turn done.", toolCalls: [] },
     ]);
   });
@@ -3116,6 +3129,139 @@ describe("Interactive Session - Reports And Queued Input", () => {
 
     // Then
     expect(consumedInputIds).toEqual([["blank-queued-input"]]);
+  });
+
+  test(`Given a queued prompt is typed while a named session turn is running,
+    When the active run drains it before persistence,
+    Then the queued prompt is persisted as steering in the original turn`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-steer-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    let now = 0;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? home : undefined),
+      now: () => now,
+    };
+    const session = createSessionStore({
+      sessionId: "drained-steering",
+      workspace,
+      runtime,
+    });
+    let persistedMessages: readonly Message[] = session.messages;
+    const consumedInputIds: string[][] = [];
+    const observedUserContexts: string[][] = [];
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        providerCalls++;
+        observedUserContexts.push(
+          options.messages
+            .filter((message) => message.role === "user")
+            .map((message) => message.content),
+        );
+        if (providerCalls === 1) {
+          yield {
+            type: "tool_call",
+            id: "drained_steering_read",
+            tool: "read",
+            path: "package.json",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "Steering applied." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const run = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      initialMessages: session.messages,
+      initialQueuedInputs: session.pendingInputs,
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "tool_start") {
+            now = 1;
+            input.write("inspect beta next\n");
+            await setImmediate();
+            input.end();
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      persistQueuedInput: (input) =>
+        persistSessionQueuedInput({
+          session,
+          sequence: input.sequence,
+          line: input.line,
+          runtime,
+        }),
+      persistSessionMessages: (messages, reason, inputIds) => {
+        now = 2;
+        consumedInputIds.push([...inputIds]);
+        persistedMessages = persistSessionMessages({
+          session,
+          previousMessages: persistedMessages,
+          currentMessages: messages,
+          runtime,
+          reason,
+          consumedInputIds: inputIds,
+        });
+      },
+    });
+
+    try {
+      input.write("start slow tool\n");
+
+      // When
+      await withTimeout(run, 5000, "queued steering was not drained");
+      const resumed = resumeSessionStore({
+        sessionId: "drained-steering",
+        workspace,
+        runtime,
+      });
+
+      // Then
+      expect(providerCalls).toBe(2);
+      expect(observedUserContexts).toEqual([
+        ["start slow tool"],
+        ["start slow tool", "inspect beta next"],
+      ]);
+      expect(consumedInputIds).toHaveLength(1);
+      expect(consumedInputIds[0]).toHaveLength(1);
+      expect(resumed.pendingInputs).toEqual([]);
+      expect(resumed.messages).toContainEqual({
+        role: "user",
+        content: "inspect beta next",
+        origin: { type: "steer" },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given a queued prompt is typed while a named session turn is running,
@@ -3304,7 +3450,11 @@ describe("Interactive Session - Reports And Queued Input", () => {
       expect(observedUserContexts).toEqual([["continue after restart"]]);
       expect(finalResume.pendingInputs).toEqual([]);
       expect(finalResume.messages).toEqual([
-        { role: "user", content: "continue after restart" },
+        {
+          role: "user",
+          content: "continue after restart",
+          origin: { type: "queued_followup" },
+        },
         {
           role: "assistant",
           content: "Recovered queued prompt.",

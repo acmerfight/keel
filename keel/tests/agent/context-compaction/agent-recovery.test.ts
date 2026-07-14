@@ -177,6 +177,7 @@ describe("Context Compaction Agent Recovery", () => {
       {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
+        origin: { type: "compaction_checkpoint" },
       },
       { role: "user", content: "Now continue with beta." },
       {
@@ -607,6 +608,7 @@ describe("Context Compaction Agent Recovery", () => {
       {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
+        origin: { type: "compaction_checkpoint" },
       },
       { role: "user", content: "Now continue with beta." },
       {
@@ -669,6 +671,7 @@ describe("Context Compaction Agent Recovery", () => {
       {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
+        origin: { type: "compaction_checkpoint" },
       },
       {
         role: "assistant",

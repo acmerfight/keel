@@ -85,6 +85,51 @@ describe("Conversation History", () => {
     ]);
   });
 
+  test(`Given user messages carry internal provenance,
+    When the next turn is sent to the model,
+    Then provider-visible history omits the internal origin`, async () => {
+    // Given
+    const messages: Message[] = [
+      {
+        role: "user",
+        content: "Remember alpha.",
+        origin: { type: "user_prompt" },
+      },
+    ];
+    let providerMessages: readonly Message[] | null = null;
+    const provider: LLMProvider = {
+      id: "ledger-origin-provider",
+      async *stream(options) {
+        providerMessages = options.messages;
+        yield { type: "text", text: "Alpha." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+      }),
+    );
+
+    // Then
+    expect(receivedMessages(providerMessages)).toEqual([
+      { role: "user", content: "Remember alpha." },
+    ]);
+    expect(messages[0]).toEqual({
+      role: "user",
+      content: "Remember alpha.",
+      origin: { type: "user_prompt" },
+    });
+  });
+
   test(`Given an agent turn executes a tool,
     When the model is called again,
     Then the follow-up request includes the assistant tool call and tool result`, async () => {
@@ -312,6 +357,7 @@ describe("Conversation History", () => {
       {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
+        origin: { type: "compaction_checkpoint" },
       },
       { role: "user", content: "Continue with the latest step." },
       {

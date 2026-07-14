@@ -81,7 +81,11 @@ describe("Session Store Task Progress", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const largeMessages: readonly Message[] = [
-      { role: "user", content: "x".repeat(16 * 1024 * 1024) },
+      {
+        role: "user",
+        content: "x".repeat(16 * 1024 * 1024),
+        origin: { type: "user_prompt" },
+      },
     ];
 
     try {
@@ -187,7 +191,11 @@ describe("Session Store Task Progress", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const originalMessages: readonly Message[] = [
-      { role: "user", content: "remember alpha" },
+      {
+        role: "user",
+        content: "remember alpha",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "Remembered: remember alpha",
@@ -195,7 +203,11 @@ describe("Session Store Task Progress", () => {
       },
     ];
     const replacedMessages: readonly Message[] = [
-      { role: "user", content: "remember beta" },
+      {
+        role: "user",
+        content: "remember beta",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "Remembered: remember beta",
@@ -269,7 +281,11 @@ describe("Session Store Task Progress", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const firstTurn: readonly Message[] = [
-      { role: "user", content: "remember alpha" },
+      {
+        role: "user",
+        content: "remember alpha",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "Remembered: remember alpha",
@@ -278,7 +294,11 @@ describe("Session Store Task Progress", () => {
     ];
     const allMessages: readonly Message[] = [
       ...firstTurn,
-      { role: "user", content: "remember beta" },
+      {
+        role: "user",
+        content: "remember beta",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "Remembered: remember beta",

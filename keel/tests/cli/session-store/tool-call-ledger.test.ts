@@ -133,7 +133,7 @@ describe("Session Store Tool Call Ledger", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const messages: readonly Message[] = [
-      { role: "user", content: "read note" },
+      { role: "user", content: "read note", origin: { type: "user_prompt" } },
       {
         role: "assistant",
         content: "I need to inspect note.txt.",
@@ -369,7 +369,7 @@ describe("Session Store Tool Call Ledger", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const messages: readonly Message[] = [
-      { role: "user", content: "list files" },
+      { role: "user", content: "list files", origin: { type: "user_prompt" } },
       {
         role: "assistant",
         content: "",
@@ -378,7 +378,11 @@ describe("Session Store Tool Call Ledger", () => {
       { role: "tool", toolCallId: "list_src", content: "index.ts\n" },
       { role: "assistant", content: "Found index.ts.", toolCalls: [] },
     ];
-    const followUp = { role: "user" as const, content: "thanks" };
+    const followUp = {
+      role: "user" as const,
+      content: "thanks",
+      origin: { type: "user_prompt" as const },
+    };
 
     try {
       const session = createSessionStore({
@@ -436,7 +440,11 @@ describe("Session Store Tool Call Ledger", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const messages: readonly Message[] = [
-      { role: "user", content: "update settings" },
+      {
+        role: "user",
+        content: "update settings",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "",
@@ -459,7 +467,11 @@ describe("Session Store Tool Call Ledger", () => {
       },
       { role: "assistant", content: "Updated settings.", toolCalls: [] },
     ];
-    const followUp = { role: "user" as const, content: "thanks" };
+    const followUp = {
+      role: "user" as const,
+      content: "thanks",
+      origin: { type: "user_prompt" as const },
+    };
 
     try {
       const session = createSessionStore({
@@ -515,7 +527,11 @@ describe("Session Store Tool Call Ledger", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const persistedMessages: readonly Message[] = [
-      { role: "user", content: "update settings" },
+      {
+        role: "user",
+        content: "update settings",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "",
@@ -535,7 +551,11 @@ describe("Session Store Tool Call Ledger", () => {
       },
     ];
     const changedMessages: readonly Message[] = [
-      { role: "user", content: "update settings" },
+      {
+        role: "user",
+        content: "update settings",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "",
@@ -697,7 +717,11 @@ describe("Session Store Tool Call Ledger", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const messages: readonly Message[] = [
-      { role: "user", content: "write the file" },
+      {
+        role: "user",
+        content: "write the file",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "",
@@ -756,7 +780,7 @@ describe("Session Store Tool Call Ledger", () => {
           },
         ],
       },
-      { role: "user", content: "new request" },
+      { role: "user", content: "new request", origin: { type: "user_prompt" } },
     ];
 
     try {
@@ -872,12 +896,13 @@ describe("Session Store Tool Call Ledger", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const originalMessages: readonly Message[] = [
-      { role: "user", content: "old task" },
+      { role: "user", content: "old task", origin: { type: "user_prompt" } },
       { role: "assistant", content: "old progress", toolCalls: [] },
     ];
     const compactedMessages: readonly Message[] = [
       {
         role: "user",
+        origin: { type: "compaction_checkpoint" },
         content:
           "<conversation-checkpoint>\n<summary>\nOld task summarized.\n</summary>\n</conversation-checkpoint>",
       },

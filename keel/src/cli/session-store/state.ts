@@ -6,7 +6,7 @@ import {
   type SessionTaskProgress,
   sessionTaskProgressesEqual,
 } from "../../core/task-progress.ts";
-import type { Message, ToolCall } from "../../llm/types.ts";
+import type { Message, SessionMessage, ToolCall } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
 import type {
   SkillActivation,
@@ -112,7 +112,15 @@ function toolCallsEqual(left: ToolCall, right: ToolCall): boolean {
 function messagesEqual(left: Message, right: Message): boolean {
   switch (left.role) {
     case "user":
-      return right.role === "user" && left.content === right.content;
+      return (
+        right.role === "user" &&
+        left.content === right.content &&
+        stableValuesEqual(left.origin ?? null, right.origin ?? null) &&
+        stableValuesEqual(
+          left.contextCompaction ?? null,
+          right.contextCompaction ?? null,
+        )
+      );
     case "assistant":
       return (
         right.role === "assistant" &&
@@ -531,10 +539,12 @@ function storedMessageId(): string {
 }
 
 function storedMessagesForProviderMessages(options: {
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly previousStoredMessages: readonly StoredMessage[];
 }): readonly StoredMessage[] {
-  const redactedMessages = options.messages.map(redactMessageForPersistence);
+  const redactedMessages = options.messages.map((message) =>
+    redactMessageForPersistence(message),
+  );
   return redactedMessages.map((message, index) => {
     const previous = options.previousStoredMessages[index];
     if (previous !== undefined && messagesEqual(previous.message, message)) {

@@ -944,6 +944,7 @@ describe("Interactive Session - Goals", () => {
     let stdout = "";
     let stderr = "";
     const persistedGoals: SessionGoal[] = [];
+    let persistedMessages: readonly Message[] = [];
     const providerPrompts: string[] = [];
     const providerMessages: (readonly Message[])[] = [];
     const provider: LLMProvider = {
@@ -978,6 +979,9 @@ describe("Interactive Session - Goals", () => {
         if (goal === null) return undefined;
         persistedGoals.push(goal);
         return goal;
+      },
+      persistSessionMessages: (messages) => {
+        persistedMessages = [...messages];
       },
       resolveProvider: () => ({
         provider,
@@ -1021,6 +1025,11 @@ describe("Interactive Session - Goals", () => {
     expect(providerMessages[0]?.at(-1)).toEqual({
       role: "user",
       content: expect.stringContaining('source="goal_activation"'),
+    });
+    expect(persistedMessages.at(-2)).toMatchObject({
+      role: "user",
+      content: expect.stringContaining('source="goal_activation"'),
+      origin: { type: "runtime_goal_activation" },
     });
     expect(stdout).toContain("Goal set: active\n");
     expect(stdout).toContain("Goal work started.\n");
@@ -1543,6 +1552,7 @@ describe("Interactive Session - Goals", () => {
     let stdout = "";
     let stderr = "";
     let persistedGoal: SessionGoal | undefined = initialGoal;
+    let persistedMessages: readonly Message[] = [];
     const providerMessages: (readonly Message[])[] = [];
     const provider: LLMProvider = {
       id: "goal-resume-provider",
@@ -1575,6 +1585,9 @@ describe("Interactive Session - Goals", () => {
       persistSessionGoal: ({ goal }) => {
         persistedGoal = goal ?? undefined;
         return persistedGoal;
+      },
+      persistSessionMessages: (messages) => {
+        persistedMessages = [...messages];
       },
       resolveProvider: () => ({
         provider,
@@ -1618,6 +1631,11 @@ describe("Interactive Session - Goals", () => {
     expect(providerMessages[0]?.at(-1)).toEqual({
       role: "user",
       content: expect.stringContaining('source="goal_resumption"'),
+    });
+    expect(persistedMessages.at(-2)).toMatchObject({
+      role: "user",
+      content: expect.stringContaining('source="goal_resumption"'),
+      origin: { type: "runtime_goal_resumption" },
     });
     expect(stderr).toContain(
       "Automatic goal continuation stopped after 1 continuation turns without completing the active goal.",

@@ -260,7 +260,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-03-05T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-03-05T00:00:01.000Z", [
-          { role: "user", content: "resume the durable goal" },
+          {
+            role: "user",
+            content: "resume the durable goal",
+            origin: { type: "user_prompt" },
+          },
         ]),
         sessionGoalRecordLine({
           timestamp: "2026-03-05T00:00:02.000Z",
@@ -1571,7 +1575,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
-          { role: "user", content: "remember alpha" },
+          {
+            role: "user",
+            content: "remember alpha",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered alpha.",
@@ -1587,7 +1595,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-02T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
-          { role: "user", content: "remember beta" },
+          {
+            role: "user",
+            content: "remember beta",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered beta.",
@@ -1654,7 +1666,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-03-01T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-03-01T00:00:01.000Z", [
-          { role: "user", content: "fix resume status" },
+          {
+            role: "user",
+            content: "fix resume status",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "I will inspect session recovery.",
@@ -1754,7 +1770,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
-          { role: "user", content: "remember alpha" },
+          {
+            role: "user",
+            content: "remember alpha",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered alpha.",
@@ -1770,7 +1790,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-02T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
-          { role: "user", content: "remember beta" },
+          {
+            role: "user",
+            content: "remember beta",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered beta.",
@@ -1829,7 +1853,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-02T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
-          { role: "user", content: "remember beta" },
+          {
+            role: "user",
+            content: "remember beta",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered beta.",
@@ -1888,7 +1916,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-02T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
-          { role: "user", content: "remember beta" },
+          {
+            role: "user",
+            content: "remember beta",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered beta.",
@@ -1946,7 +1978,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-02T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
-          { role: "user", content: "remember beta" },
+          {
+            role: "user",
+            content: "remember beta",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered beta.",
@@ -2007,7 +2043,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-02T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
-          { role: "user", content: "remember beta" },
+          {
+            role: "user",
+            content: "remember beta",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered beta.",
@@ -2064,7 +2104,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-02T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
-          { role: "user", content: "remember beta" },
+          {
+            role: "user",
+            content: "remember beta",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered beta.",
@@ -2130,7 +2174,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-02T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
-          { role: "user", content: "remember beta" },
+          {
+            role: "user",
+            content: "remember beta",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered beta.",
@@ -2192,7 +2240,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
-          { role: "user", content: "remember alpha" },
+          {
+            role: "user",
+            content: "remember alpha",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered alpha.",
@@ -2208,7 +2260,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-02T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
-          { role: "user", content: "remember beta" },
+          {
+            role: "user",
+            content: "remember beta",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered beta.",
@@ -2224,7 +2280,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-03T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-03T00:00:05.000Z", [
-          { role: "user", content: "remember elsewhere" },
+          {
+            role: "user",
+            content: "remember elsewhere",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered elsewhere.",
@@ -2298,7 +2358,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
-          { role: "user", content: "remember cancel demo" },
+          {
+            role: "user",
+            content: "remember cancel demo",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered cancel demo.",
@@ -2362,7 +2426,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
-          { role: "user", content: "remember eof demo" },
+          {
+            role: "user",
+            content: "remember eof demo",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered eof demo.",

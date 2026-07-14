@@ -116,7 +116,13 @@ describe("Session Store - Title", () => {
       records: [
         snapshotSessionRecordLine(
           "1970-01-01T00:00:01.000Z",
-          [{ role: "user", content: "remember release title" }],
+          [
+            {
+              role: "user",
+              content: "remember release title",
+              origin: { type: "user_prompt" },
+            },
+          ],
           "Release QA",
         ),
       ],

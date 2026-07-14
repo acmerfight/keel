@@ -273,14 +273,18 @@ describe("Session Store Oversized Snapshot", () => {
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const ledgerPath = join(home, "sessions", "boundary-tail", "ledger.jsonl");
     const snapshottedMessages: readonly Message[] = [
-      { role: "user", content: "remember boundary" },
+      {
+        role: "user",
+        content: "remember boundary",
+        origin: { type: "user_prompt" },
+      },
       { role: "assistant", content: "Boundary retained.", toolCalls: [] },
     ];
     const snapshotRecord = `${snapshotLine(snapshottedMessages, [], {
       title: "Bounded tail title",
     })}\n`;
     const emptyPaddingRecord = `${appendLine([
-      { role: "user", content: "" },
+      { role: "user", content: "", origin: { type: "user_prompt" } },
     ])}\n`;
     const paddingContentLength =
       32 * 1024 * 1024 -
@@ -288,7 +292,11 @@ describe("Session Store Oversized Snapshot", () => {
       Buffer.byteLength(emptyPaddingRecord, "utf8");
     expect(paddingContentLength).toBeGreaterThan(0);
     const tail = `${appendLine([
-      { role: "user", content: "x".repeat(paddingContentLength) },
+      {
+        role: "user",
+        content: "x".repeat(paddingContentLength),
+        origin: { type: "user_prompt" },
+      },
     ])}\n${snapshotRecord}`;
     expect(Buffer.byteLength(tail, "utf8")).toBe(32 * 1024 * 1024);
     await mkdir(join(home, "sessions", "boundary-tail"), { recursive: true });
@@ -389,11 +397,19 @@ describe("Session Store Oversized Snapshot", () => {
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const ledgerPath = join(home, "sessions", "snapshot-huge", "ledger.jsonl");
     const snapshottedMessages: readonly Message[] = [
-      { role: "user", content: "remember alpha" },
+      {
+        role: "user",
+        content: "remember alpha",
+        origin: { type: "user_prompt" },
+      },
       { role: "assistant", content: "Remembered alpha.", toolCalls: [] },
     ];
     const suffixMessages: readonly Message[] = [
-      { role: "user", content: "continue with beta" },
+      {
+        role: "user",
+        content: "continue with beta",
+        origin: { type: "user_prompt" },
+      },
       { role: "assistant", content: "Beta complete.", toolCalls: [] },
     ];
     const retainedInput: SessionQueuedInput = {
@@ -459,11 +475,19 @@ describe("Session Store Oversized Snapshot", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const largeMessages: readonly Message[] = [
-      { role: "user", content: "x".repeat(16 * 1024 * 1024) },
+      {
+        role: "user",
+        content: "x".repeat(16 * 1024 * 1024),
+        origin: { type: "user_prompt" },
+      },
       { role: "assistant", content: "Large context noted.", toolCalls: [] },
     ];
     const compactedMessages: readonly Message[] = [
-      { role: "user", content: "summary: alpha is important" },
+      {
+        role: "user",
+        content: "summary: alpha is important",
+        origin: { type: "user_prompt" },
+      },
       { role: "assistant", content: "Summary retained.", toolCalls: [] },
     ];
 
@@ -551,7 +575,11 @@ describe("Session Store Oversized Snapshot", () => {
       command: "npm test",
     } satisfies BashApprovalGrant;
     const largeMessages: readonly Message[] = [
-      { role: "user", content: "x".repeat(16 * 1024 * 1024) },
+      {
+        role: "user",
+        content: "x".repeat(16 * 1024 * 1024),
+        origin: { type: "user_prompt" },
+      },
     ];
 
     try {

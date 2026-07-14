@@ -32,7 +32,6 @@ import {
 } from "./provider-turn.ts";
 import {
   projectSessionLedgerToProviderMessages,
-  restoreSessionResourceObservations,
   type SessionLedger,
   sessionLedgerFromMessages,
   sessionLedgerMessages,
@@ -107,9 +106,7 @@ async function attemptContextCompaction(
   options: AttemptContextCompactionOptions,
 ): Promise<CompactMessagesResult> {
   const sourceMessages = sessionLedgerMessages(streamOptions.getLedger());
-  const targetMessages = [
-    ...projectSessionLedgerToProviderMessages(streamOptions.getLedger()),
-  ];
+  const targetMessages = [...sourceMessages];
   const requestMetadata = requestMetadataForStream(streamOptions);
   const taskProgress = config.taskProgress?.();
   const result = await compactMessages({
@@ -161,7 +158,6 @@ async function attemptContextCompaction(
   });
   let finalResult = result;
   if (result.compacted) {
-    restoreSessionResourceObservations(targetMessages, sourceMessages);
     let finalization = NO_CONTEXT_COMPACTION_FINALIZATION;
     if (options.restoreAfterCompaction !== false) {
       finalization = await config.onContextCompacted(targetMessages);

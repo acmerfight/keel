@@ -41,7 +41,11 @@ describe("Session Store Transcript Workflow Redaction", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const messages: readonly Message[] = [
-      { role: "user", content: "remember alpha" },
+      {
+        role: "user",
+        content: "remember alpha",
+        origin: { type: "user_prompt" },
+      },
       { role: "assistant", content: "Remembered alpha.", toolCalls: [] },
     ];
 
@@ -83,6 +87,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
     const messages: readonly Message[] = [
       {
         role: "user",
+        origin: { type: "compaction_checkpoint" },
         content: "checkpoint with evidence metadata",
         contextCompaction: {
           evidence: [
@@ -134,6 +139,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
       expect(ledger).not.toContain("live-secret-329-token");
       expect(resumed.messages[0]).toEqual({
         role: "user",
+        origin: { type: "compaction_checkpoint" },
         content: "checkpoint with evidence metadata",
         contextCompaction: {
           evidence: [
@@ -379,7 +385,11 @@ describe("Session Store Transcript Workflow Redaction", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const largeMessages: readonly Message[] = [
-      { role: "user", content: "x".repeat(16 * 1024 * 1024) },
+      {
+        role: "user",
+        content: "x".repeat(16 * 1024 * 1024),
+        origin: { type: "user_prompt" },
+      },
     ];
     const githubToken = `ghp_${"A".repeat(36)}`;
     const googleApiKey = `AIza${"B".repeat(35)}`;
@@ -387,6 +397,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
     const secretMessages: readonly Message[] = [
       {
         role: "user",
+        origin: { type: "user_prompt" },
         content: `inspect API_KEY=sk-secret-213 and ${googleApiKey}`,
       },
       {
@@ -511,7 +522,11 @@ describe("Session Store Transcript Workflow Redaction", () => {
     const ledgerWorkspace = await realpath(workspace);
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const largeMessages: readonly Message[] = [
-      { role: "user", content: "x".repeat(16 * 1024 * 1024) },
+      {
+        role: "user",
+        content: "x".repeat(16 * 1024 * 1024),
+        origin: { type: "user_prompt" },
+      },
     ];
     const grant = {
       type: "exact",

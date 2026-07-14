@@ -50,6 +50,7 @@ describe("Interactive Session - Restored Compaction Evidence", () => {
     const persistedMessages: readonly Message[] = [
       {
         role: "user",
+        origin: { type: "compaction_checkpoint" },
         content: checkpointWithDecoyVisibleEvidence,
         contextCompaction: { evidence },
       },
@@ -58,7 +59,11 @@ describe("Interactive Session - Restored Compaction Evidence", () => {
         content: "Resumed from restored checkpoint.",
         toolCalls: [],
       },
-      { role: "user", content: "Continue after restore." },
+      {
+        role: "user",
+        content: "Continue after restore.",
+        origin: { type: "user_prompt" },
+      },
     ];
 
     try {

@@ -26,9 +26,12 @@ import {
   sessionTaskPlanSchema,
   sessionTaskProgressSchema,
 } from "../../core/task-progress.ts";
-import type {
-  Message,
-  UserMessageContextCompactionMetadata,
+import {
+  type Message,
+  type SessionMessage,
+  type UserMessageContextCompactionMetadata,
+  type UserMessageOrigin,
+  userMessageOriginTypes,
 } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
 import { copySkillActivation } from "../../skills/lifecycle.ts";
@@ -94,10 +97,17 @@ const userMessageContextCompactionSchema = z
   })
   .strict();
 
+const userMessageOriginSchema = z
+  .object({
+    type: z.enum(userMessageOriginTypes),
+  })
+  .strict();
+
 const userMessageSchema = z
   .object({
     role: z.literal("user"),
     content: z.string(),
+    origin: userMessageOriginSchema,
     contextCompaction: userMessageContextCompactionSchema.optional(),
   })
   .strict();
@@ -479,6 +489,7 @@ type RawStoredMessage = z.infer<typeof storedMessageSchema>;
 type RawUserMessageContextCompactionMetadata = z.infer<
   typeof userMessageContextCompactionSchema
 >;
+type RawUserMessageOrigin = z.infer<typeof userMessageOriginSchema>;
 type RawSessionQueuedInput = z.infer<typeof queuedInputSchema>;
 type RawBashApprovalGrant = z.infer<typeof bashApprovalGrantSchema>;
 type RawSessionModelSelection = z.infer<typeof sessionModelSelectionSchema>;
@@ -510,6 +521,14 @@ function copyUserContextCompactionMetadata(
   };
 }
 
+function copyUserMessageOrigin(origin: UserMessageOrigin): UserMessageOrigin {
+  return { type: origin.type };
+}
+
+function toUserMessageOrigin(origin: RawUserMessageOrigin): UserMessageOrigin {
+  return { type: origin.type };
+}
+
 function toUserContextCompactionMetadata(
   metadata: RawUserMessageContextCompactionMetadata,
 ): UserMessageContextCompactionMetadata {
@@ -534,12 +553,13 @@ function toUserContextCompactionMetadata(
   };
 }
 
-function toMessage(message: RawMessage): Message {
+function toMessage(message: RawMessage): SessionMessage {
   switch (message.role) {
     case "user":
       return {
         role: "user",
         content: message.content,
+        origin: toUserMessageOrigin(message.origin),
         ...(message.contextCompaction === undefined
           ? {}
           : {
@@ -576,12 +596,13 @@ function toMessage(message: RawMessage): Message {
   }
 }
 
-function copyMessage(message: Message): Message {
+function copyMessage(message: SessionMessage): SessionMessage {
   switch (message.role) {
     case "user":
       return {
         role: "user",
         content: message.content,
+        origin: copyUserMessageOrigin(message.origin),
         ...(message.contextCompaction === undefined
           ? {}
           : {
@@ -643,7 +664,7 @@ function redactStoredMessageForPersistence(
 
 function messagesFromStoredMessages(
   storedMessages: readonly StoredMessage[],
-): readonly Message[] {
+): readonly SessionMessage[] {
   return storedMessages.map((storedMessage) =>
     copyMessage(storedMessage.message),
   );
@@ -1545,15 +1566,15 @@ function parseSnapshotSessionMutationRecord(
   return record.type === "snapshot" ? record : null;
 }
 
-function parseProviderVisibleMessages(
+function parseSessionMessages(
   sessionId: string,
   messages: readonly Message[],
   action: "persist" | "fork",
-): readonly Message[] {
+): readonly SessionMessage[] {
   const parsed = z.array(messageSchema).safeParse(messages);
   if (!parsed.success) {
     sessionStoreError(
-      `Error: cannot ${action} session "${sessionId}": ledger contains invalid provider-visible messages.`,
+      `Error: cannot ${action} session "${sessionId}": ledger contains invalid session messages.`,
     );
   }
   return parsed.data.map(toMessage);
@@ -1611,8 +1632,8 @@ export {
   copyStoredMessage,
   messagesFromStoredMessages,
   normalizeSessionTitleForPersistence,
-  parseProviderVisibleMessages,
   parseSessionHeaderRecord,
+  parseSessionMessages,
   parseSessionMutationRecord,
   parseSnapshotSessionMutationRecord,
   redactBashApprovalGrantForPersistence,

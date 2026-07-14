@@ -4,7 +4,7 @@ import type {
   SessionTask,
   SessionTaskProgress,
 } from "../../core/task-progress.ts";
-import type { Message } from "../../llm/types.ts";
+import type { SessionMessage } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
 import type {
   SkillActivation,
@@ -32,7 +32,7 @@ export const SUMMARY_CLOSE = "</summary>";
 
 export interface StoredMessage {
   readonly id: string;
-  readonly message: Message;
+  readonly message: SessionMessage;
 }
 
 export interface SessionForkPolicyRecord {
@@ -255,7 +255,7 @@ export interface SessionState {
   readonly graph: SessionGraphRecord;
   readonly title?: string;
   readonly goal?: SessionGoal;
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly storedMessages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
   readonly bashApprovalGrants: readonly BashApprovalGrant[];

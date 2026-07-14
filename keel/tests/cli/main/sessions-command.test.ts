@@ -121,7 +121,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-03-03T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-03-03T00:00:01.000Z", [
-          { role: "user", content: "fix resume status" },
+          {
+            role: "user",
+            content: "fix resume status",
+            origin: { type: "user_prompt" },
+          },
         ]),
         sessionGoalRecordLine({
           timestamp: "2026-03-03T00:00:02.000Z",
@@ -143,7 +147,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-03-03T00:00:03.000Z",
       records: [
         appendSessionRecordLine("2026-03-03T00:00:04.000Z", [
-          { role: "user", content: "ship release notes" },
+          {
+            role: "user",
+            content: "ship release notes",
+            origin: { type: "user_prompt" },
+          },
         ]),
         sessionGoalRecordLine({
           timestamp: "2026-03-03T00:00:05.000Z",
@@ -211,7 +219,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-03-04T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-03-04T00:00:01.000Z", [
-          { role: "user", content: "clean stale goal state" },
+          {
+            role: "user",
+            content: "clean stale goal state",
+            origin: { type: "user_prompt" },
+          },
         ]),
         sessionTitleRecordLine(
           "2026-03-04T00:00:02.000Z",
@@ -272,7 +284,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-03-01T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-03-01T00:00:01.000Z", [
-          { role: "user", content: "fix resume status" },
+          {
+            role: "user",
+            content: "fix resume status",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "I will inspect session recovery.",
@@ -340,7 +356,11 @@ describe("CLI Main - Sessions Command", () => {
         snapshotSessionRecordLine(
           "2026-03-02T00:00:01.000Z",
           [
-            { role: "user", content: "continue snapshot task" },
+            {
+              role: "user",
+              content: "continue snapshot task",
+              origin: { type: "user_prompt" },
+            },
             {
               role: "assistant",
               content: "Continuing.",
@@ -644,6 +664,7 @@ describe("CLI Main - Sessions Command", () => {
         appendSessionRecordLine("2026-02-01T00:00:01.000Z", [
           {
             role: "user",
+            origin: { type: "user_prompt" },
             content: `Use ${openAiKey} and \u001b[31mred text`,
           },
           {
@@ -810,9 +831,14 @@ describe("CLI Main - Sessions Command", () => {
         replaceSessionRecordLine("2026-02-06T00:00:01.000Z", [
           {
             role: "user",
+            origin: { type: "compaction_checkpoint" },
             content: conversationCheckpoint("Old task summarized."),
           },
-          { role: "user", content: "continue from the summary" },
+          {
+            role: "user",
+            content: "continue from the summary",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Continuing.",
@@ -1112,7 +1138,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-02-04T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-02-04T00:00:01.000Z", [
-          { role: "user", content: "do not reveal elsewhere" },
+          {
+            role: "user",
+            content: "do not reveal elsewhere",
+            origin: { type: "user_prompt" },
+          },
         ]),
       ],
     });
@@ -1205,6 +1235,7 @@ describe("CLI Main - Sessions Command", () => {
         appendSessionRecordLine(detailTimestamp(index + 1), [
           {
             role: "user",
+            origin: { type: "user_prompt" },
             content: `prompt ${(index + 1).toString().padStart(2, "0")}`,
           },
           {
@@ -1314,7 +1345,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-01-04T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-04T00:00:05.000Z", [
-          { role: "user", content: longPrompt },
+          {
+            role: "user",
+            content: longPrompt,
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered long prompt.",
@@ -1331,7 +1366,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
-          { role: "user", content: "remember alpha" },
+          {
+            role: "user",
+            content: "remember alpha",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered alpha.",
@@ -1339,7 +1378,11 @@ describe("CLI Main - Sessions Command", () => {
           },
         ]),
         appendSessionRecordLine("2026-01-01T00:00:06.000Z", [
-          { role: "user", content: "remember alpha later" },
+          {
+            role: "user",
+            content: "remember alpha later",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered later alpha.",
@@ -1356,7 +1399,11 @@ describe("CLI Main - Sessions Command", () => {
       parentSessionId: "older",
       records: [
         appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
-          { role: "user", content: "remember beta\nwith spacing" },
+          {
+            role: "user",
+            content: "remember beta\nwith spacing",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered beta.",
@@ -1379,7 +1426,11 @@ describe("CLI Main - Sessions Command", () => {
         }),
         records: [
           appendSessionRecordLine("2026-01-02T00:00:06.000Z", [
-            { role: "user", content: `remember ${branchId}` },
+            {
+              role: "user",
+              content: `remember ${branchId}`,
+              origin: { type: "user_prompt" },
+            },
             {
               role: "assistant",
               content: `Remembered ${branchId}.`,
@@ -1396,7 +1447,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-01-01T18:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-01T18:00:01.000Z", [
-          { role: "user", content: "old compacted prompt" },
+          {
+            role: "user",
+            content: "old compacted prompt",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Old compacted answer.",
@@ -1406,9 +1461,14 @@ describe("CLI Main - Sessions Command", () => {
         replaceSessionRecordLine("2026-01-01T18:00:02.000Z", [
           {
             role: "user",
+            origin: { type: "compaction_checkpoint" },
             content: conversationCheckpoint("Old task summarized."),
           },
-          { role: "user", content: "remember compacted" },
+          {
+            role: "user",
+            content: "remember compacted",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered compacted.",
@@ -1426,6 +1486,7 @@ describe("CLI Main - Sessions Command", () => {
         replaceSessionRecordLine("2026-01-01T18:30:02.000Z", [
           {
             role: "user",
+            origin: { type: "compaction_checkpoint" },
             content: conversationCheckpoint(
               "Only checkpoint summary remains.",
               true,
@@ -1441,7 +1502,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-01-01T17:00:00.000Z",
       records: [
         snapshotSessionRecordLine("2026-01-01T17:00:02.000Z", [
-          { role: "user", content: "remember snapshot" },
+          {
+            role: "user",
+            content: "remember snapshot",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered snapshot.",
@@ -1473,7 +1538,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-01-01T15:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-01T15:00:01.000Z", [
-          { role: "user", content: "remember tie a" },
+          {
+            role: "user",
+            content: "remember tie a",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered tie a.",
@@ -1489,7 +1558,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-01-01T15:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-01T15:00:01.000Z", [
-          { role: "user", content: "remember tie b" },
+          {
+            role: "user",
+            content: "remember tie b",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered tie b.",
@@ -1511,7 +1584,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-01-03T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-03T00:00:05.000Z", [
-          { role: "user", content: "do not show this session" },
+          {
+            role: "user",
+            content: "do not show this session",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Hidden.",
@@ -1614,7 +1691,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-01-01T18:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-01T18:00:01.000Z", [
-          { role: "user", content: malformedCheckpoint },
+          {
+            role: "user",
+            content: malformedCheckpoint,
+            origin: { type: "user_prompt" },
+          },
         ]),
       ],
     });
@@ -1696,7 +1777,11 @@ describe("CLI Main - Sessions Command", () => {
       skillState: skillState(workflowSkill),
       records: [
         appendSessionRecordLine("2026-01-01T00:00:01.000Z", [
-          { role: "user", content: "review PR" },
+          {
+            role: "user",
+            content: "review PR",
+            origin: { type: "user_prompt" },
+          },
         ]),
       ],
     });
@@ -1714,7 +1799,11 @@ describe("CLI Main - Sessions Command", () => {
       }),
       records: [
         appendSessionRecordLine("2026-01-01T00:00:03.000Z", [
-          { role: "user", content: "continue review" },
+          {
+            role: "user",
+            content: "continue review",
+            origin: { type: "user_prompt" },
+          },
         ]),
       ],
     });
@@ -1760,7 +1849,11 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-01T00:00:01.000Z", [
-          { role: "user", content: "remember good" },
+          {
+            role: "user",
+            content: "remember good",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered good.",

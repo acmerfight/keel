@@ -55,7 +55,11 @@ describe("Session Store Skill Lifecycle", () => {
       "1970-01-01T00:00:00.000Z",
     );
     const messages = [
-      { role: "user", content: "review alpha" },
+      {
+        role: "user",
+        content: "review alpha",
+        origin: { type: "user_prompt" },
+      },
       { role: "assistant", content: "Reviewed alpha.", toolCalls: [] },
     ] as const;
 
@@ -108,7 +112,11 @@ describe("Session Store Skill Lifecycle", () => {
       ).toEqual([expect.objectContaining({ qualifiedName: "repo:review" })]);
 
       const replacementMessages = [
-        { role: "user", content: "review replacement" },
+        {
+          role: "user",
+          content: "review replacement",
+          origin: { type: "user_prompt" },
+        },
         {
           role: "assistant",
           content: "Reviewed replacement.",
@@ -135,7 +143,11 @@ describe("Session Store Skill Lifecycle", () => {
       ).toEqual(replacementMessages);
 
       const finalMessages = [
-        { role: "user", content: "review final" },
+        {
+          role: "user",
+          content: "review final",
+          origin: { type: "user_prompt" },
+        },
         { role: "assistant", content: "Reviewed final.", toolCalls: [] },
       ] as const;
       persistSessionMessages({
@@ -261,12 +273,16 @@ describe("Session Store Skill Lifecycle", () => {
       "1970-01-01T00:00:00.001Z",
     );
     const firstMessages = [
-      { role: "user", content: "review alpha" },
+      {
+        role: "user",
+        content: "review alpha",
+        origin: { type: "user_prompt" },
+      },
       { role: "assistant", content: "Reviewed alpha.", toolCalls: [] },
     ] as const;
     const allMessages = [
       ...firstMessages,
-      { role: "user", content: "test beta" },
+      { role: "user", content: "test beta", origin: { type: "user_prompt" } },
       { role: "assistant", content: "Tested beta.", toolCalls: [] },
     ] as const;
 
