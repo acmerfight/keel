@@ -90,9 +90,54 @@ export function withTimeout<T>(
 export function textProvider(text: string): LLMProvider {
   return {
     id: "fake",
-    async *stream() {
+    async *stream(options) {
+      const attempt = options.providerRequestAttempts?.begin();
       yield { type: "text", text };
+      attempt?.finish({ outcome: "completed", usage: ZERO_USAGE });
       yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+    },
+  };
+}
+
+export function withProviderRequestAttemptAccounting(
+  provider: LLMProvider,
+): LLMProvider {
+  return {
+    id: provider.id,
+    ...(provider.estimateInputTokens !== undefined
+      ? { estimateInputTokens: provider.estimateInputTokens }
+      : {}),
+    async *stream(options) {
+      const attempt = options.providerRequestAttempts?.begin();
+      const {
+        providerRequestAttempts: _providerRequestAttempts,
+        ...unobservedOptions
+      } = options;
+      let finished = false;
+      try {
+        for await (const event of provider.stream(unobservedOptions)) {
+          if (event.type === "stop") {
+            finished = true;
+            attempt?.finish({ outcome: "completed", usage: event.usage });
+          }
+          yield event;
+        }
+      } catch (error) {
+        if (!finished) {
+          finished = true;
+          attempt?.finish({
+            outcome: options.signal.aborted ? "aborted" : "terminal_error",
+          });
+        }
+        throw error;
+      } finally {
+        if (!finished) {
+          finished = true;
+          attempt?.finish({
+            outcome: options.signal.aborted ? "aborted" : "terminal_error",
+          });
+        }
+      }
     },
   };
 }

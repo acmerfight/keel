@@ -93,10 +93,11 @@ Session
   separate model work and are not agent-loop turns.
 - A **Model Operation** is one logical model job, such as an agent turn,
   compaction, evaluation, or wrap-up. A **Provider Request Attempt** is one
-  physical upstream request for that operation. Purpose-labelled operations and
-  exact attempt accounting are not yet exposed; `providerRetries` records the
-  existing retry decisions and must not be interpreted as an exact request
-  count.
+  physical upstream request for that operation. Reports expose purpose-labelled
+  operations, their explicit owner, and ordered attempts with exact outcomes.
+  A context-overflow attempt points to its recovery compaction operation;
+  `providerRetries` remains a retry-decision view and is not the request-count
+  source of truth.
 - A **Tool Invocation** is one logical tool request. Its provider tool-call id
   correlates the pending request and result; it is not a session-global id.
 - **Agent Run end** means `runAgentTurn()` returned. **Task terminal** means no
@@ -112,13 +113,14 @@ Session
   when no Run, retry, continuation, accepted input, queued Task, or runtime hook
   can produce more work.
 
-`keel --report <file>` writes report schema 10. `tasks[].ordinal` and nested
+`keel --report <file>` writes report schema 11. `tasks[].ordinal` and nested
 `agentRuns[].ordinal` are report-local identities. Each Agent Run owns its
 `agentLoopTurns`, existing provider retry notices, context-compaction records,
-and stop reason. Root `agentLoopTurns` is derived from those Run records;
-`usageByModel[].agentLoopTurns` is the model-attributed projection of the same
-main-loop count. Goal `usage.turns` has a different owner: it increments once
-per Goal Agent Run, including automatic continuation.
+and stop reason. A single model-operation ledger derives root usage, cost,
+operation count, physical-attempt count, `usageByModel`, and root
+`agentLoopTurns`; only completed `agent_turn` operations count as Agent-loop
+turns. Goal `usage.turns` has a different owner: it increments once per Goal
+Agent Run, including automatic continuation.
 
 Resuming a process does not silently continue an old Task. If a persisted Goal
 was active when the process stopped, Keel restores it as paused and requires

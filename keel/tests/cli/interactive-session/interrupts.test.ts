@@ -23,6 +23,7 @@ import {
   expectInterruptedTurnPreservesVisibleScopedInstructions,
   ForcedExit,
   fileExists,
+  withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -190,7 +191,7 @@ describe("Interactive Session - Interrupts", () => {
     });
     const observedUserContexts: string[][] = [];
     let turn = 0;
-    const provider: LLMProvider = {
+    const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
         turn++;
@@ -221,7 +222,7 @@ describe("Interactive Session - Interrupts", () => {
         }
         throw new Error("unexpected provider turn");
       },
-    };
+    });
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
     let stdout = "";

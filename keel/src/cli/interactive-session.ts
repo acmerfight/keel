@@ -1,6 +1,10 @@
 import { createInterface } from "node:readline/promises";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { runAgentTurn } from "../agent/loop.ts";
+import type {
+  ModelOperationInstrumentation,
+  ModelOperationOwner,
+} from "../agent/model-operations.ts";
 import { postCompactionReadToolCallId } from "../agent/post-compaction-read-id.ts";
 import {
   appendWorkflowSkillsToSystemPrompt,
@@ -140,7 +144,6 @@ import type {
   EndEvent,
   EndEventWithCost,
   InteractiveComposerMode,
-  InteractiveReportModelUsage,
   InteractiveResolvedProvider,
   InteractiveSessionOptions,
   InteractiveSessionResult,
@@ -153,6 +156,7 @@ import {
   sanitizeStatusLineText,
 } from "./output.ts";
 import {
+  accountModelOperations,
   createAgentEventReportRecorder,
   type RunReportAgentRunTrigger,
   type RunReportTaskTrigger,
@@ -647,35 +651,6 @@ export async function runInteractiveSession(
   let sessionCostBudgetLimited = false;
   let sessionStopReason = "completed";
   let modelSwitchCount = options.initialModelSwitchCount ?? 0;
-  const reportUsageByModel = new Map<string, InteractiveReportModelUsage>();
-  const reportModelKey = (selection: SessionModelSelection): string =>
-    `${selection.providerId}/${selection.model}`;
-  const recordReportUsage = (
-    selection: SessionModelSelection,
-    usage: Usage,
-    agentLoopTurns: number,
-    costUsd: number,
-  ) => {
-    const key = reportModelKey(selection);
-    const current = reportUsageByModel.get(key);
-    if (current === undefined) {
-      reportUsageByModel.set(key, {
-        provider: selection.providerId,
-        model: selection.model,
-        agentLoopTurns,
-        usage,
-        costUsd,
-      });
-      return;
-    }
-    reportUsageByModel.set(key, {
-      provider: current.provider,
-      model: current.model,
-      agentLoopTurns: current.agentLoopTurns + agentLoopTurns,
-      usage: addUsage(current.usage, usage),
-      costUsd: current.costUsd + costUsd,
-    });
-  };
   const resolveActiveProvider = (
     userMessage: string,
   ): InteractiveResolvedProvider => {
@@ -685,15 +660,19 @@ export async function runInteractiveSession(
     );
     return resolved;
   };
-  const resolvedForUsageAttribution = (): InteractiveResolvedProvider => {
-    /* v8 ignore next 3: usage is only recorded during resolved provider turns or compactions. */
-    if (resolved === null) {
-      throw new Error(
-        "internal: cannot attribute usage before model resolution",
-      );
-    }
-    return resolved;
-  };
+  const reportModelOperations = (
+    operationResolved: InteractiveResolvedProvider,
+    owner: ModelOperationOwner,
+  ): ModelOperationInstrumentation | null =>
+    options.cliArgs.reportFile === undefined
+      ? null
+      : {
+          recorder: reportRecorder,
+          owner,
+          provider: operationResolved.providerId,
+          model: operationResolved.model,
+          costModel: options.requireKnownCostModel(operationResolved),
+        };
   const restoreDrainedInput = (lines: readonly QueuedLine[]) => {
     if (lines.length === 0) {
       return;
@@ -819,12 +798,6 @@ export async function runInteractiveSession(
     );
     sessionUsage = addUsage(sessionUsage, usage);
     sessionCostUsd += costUsd;
-    recordReportUsage(
-      modelSelectionFromResolved(resolvedForUsageAttribution()),
-      usage,
-      0,
-      costUsd,
-    );
     return currentSessionCostReport();
   };
   const recordTurnEnd = (end: EndEvent): CostReport | undefined => {
@@ -836,12 +809,6 @@ export async function runInteractiveSession(
       sessionCostBudgetLimited = true;
     }
     const turnCostUsd = end.cost?.spentUsd ?? 0;
-    recordReportUsage(
-      modelSelectionFromResolved(resolvedForUsageAttribution()),
-      end.usage,
-      end.turns,
-      turnCostUsd,
-    );
     if (end.cost === undefined) {
       return undefined;
     }
@@ -924,6 +891,9 @@ export async function runInteractiveSession(
     options.skillActivation?.beginTurn();
     const goalTurnStartedAt = sessionGoal?.status === "active" ? now() : null;
     resolved = resolveActiveProvider(request.userMessage);
+    const turnModelOperations = reportModelOperations(resolved, {
+      type: "current_agent_run",
+    });
     const exposure = exposeSkillCatalog({
       skills: inactiveImplicitSkills(),
       request: request.userMessage,
@@ -1008,6 +978,9 @@ export async function runInteractiveSession(
             : {}),
           ...(resolved.contextCompaction !== undefined
             ? { contextCompaction: resolved.contextCompaction }
+            : {}),
+          ...(turnModelOperations !== null
+            ? { modelOperations: turnModelOperations }
             : {}),
           ...(options.toolOutputArtifacts !== undefined
             ? { toolOutputArtifacts: options.toolOutputArtifacts }
@@ -2161,6 +2134,9 @@ export async function runInteractiveSession(
             setComposerMode("queue");
             try {
               const remainingCostUsd = remainingMaxCostUsd();
+              const modelOperations = reportModelOperations(currentResolved, {
+                type: "session",
+              });
               const compaction = await executeModelSwitchCompaction({
                 current: currentResolved,
                 target: nextResolved,
@@ -2177,6 +2153,7 @@ export async function runInteractiveSession(
                 recordCompactionCost,
                 ...(remainingCostUsd !== undefined ? { remainingCostUsd } : {}),
                 costBudgetLimitedReport: currentSessionCostBudgetLimitedReport,
+                modelOperations,
               });
               if (compaction.status === "rejected") {
                 if (compaction.cost?.budgetLimited === true) {
@@ -2340,6 +2317,9 @@ export async function runInteractiveSession(
         let compactCost: CostReport | undefined;
         try {
           const remainingCostUsd = remainingMaxCostUsd();
+          const modelOperations = reportModelOperations(compactResolved, {
+            type: "session",
+          });
           compactCost = await executeManualCompaction({
             command: interactiveCommand,
             resolved: compactResolved,
@@ -2356,6 +2336,7 @@ export async function runInteractiveSession(
             recordCompactionCost,
             ...(remainingCostUsd !== undefined ? { remainingCostUsd } : {}),
             costBudgetLimitedReport: currentSessionCostBudgetLimitedReport,
+            modelOperations,
           });
         } finally {
           activeAbortController = null;
@@ -2464,15 +2445,19 @@ export async function runInteractiveSession(
     if (reportEnd === undefined) {
       return finalGoal;
     }
+    const operationAccounting = accountModelOperations(
+      reportRecorder.modelOperations(),
+    );
     return {
       ...finalGoal,
       report: {
         tasks: reportRecorder.tasks(),
-        modelsUsed: [...reportUsageByModel.values()].map((entry) => ({
-          provider: entry.provider,
-          model: entry.model,
-        })),
-        usageByModel: [...reportUsageByModel.values()],
+        modelsUsed: operationAccounting.modelsUsed,
+        usageByModel: operationAccounting.usageByModel,
+        modelOperations: operationAccounting.modelOperations,
+        modelOperationCount: operationAccounting.modelOperationCount,
+        providerRequestAttemptCount:
+          operationAccounting.providerRequestAttemptCount,
         end: reportEnd,
         skillCatalog: {
           exposed: latestCatalogExposure.skills.length,

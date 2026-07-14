@@ -1354,7 +1354,7 @@ async function runSessionCli(
             : undefined;
         writeRunReport(cliArgs.reportFile, {
           tasks: interactiveResult.report.tasks,
-          usageByModel: interactiveResult.report.usageByModel,
+          modelOperations: interactiveResult.report.modelOperations,
           end:
             headlessStopReason === undefined
               ? interactiveResult.report.end

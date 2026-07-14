@@ -7,6 +7,7 @@ import {
   createCostBudgetedProvider,
 } from "../../agent/cost-budget.ts";
 import type { CostReport } from "../../agent/events.ts";
+import type { ModelOperationInstrumentation } from "../../agent/model-operations.ts";
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
 import type { ReadVisibilityState } from "../../agent/read-visibility.ts";
 import type { CostModel } from "../../core/cost.ts";
@@ -46,6 +47,7 @@ export interface ManualCompactContext {
   ) => CostReport;
   readonly remainingCostUsd?: number;
   readonly costBudgetLimitedReport: () => CostReport;
+  readonly modelOperations: ModelOperationInstrumentation | null;
 }
 
 export async function executeManualCompaction(
@@ -66,6 +68,7 @@ export async function executeManualCompaction(
     recordCompactionCost,
     remainingCostUsd,
     costBudgetLimitedReport,
+    modelOperations,
   } = ctx;
   const manualCostModel = !shouldTrackInteractiveCost(options.cliArgs)
     ? undefined
@@ -103,6 +106,15 @@ export async function executeManualCompaction(
         ? { toolOutputArtifacts: options.toolOutputArtifacts }
         : {}),
       taskProgress,
+      ...(modelOperations !== null
+        ? {
+            modelOperation: {
+              instrumentation: modelOperations,
+              purpose: "manual_compaction" as const,
+              recoveryFor: null,
+            },
+          }
+        : {}),
     });
     if (signal.aborted) {
       messages.splice(0, messages.length, ...messagesBeforeCompact);

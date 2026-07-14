@@ -18,6 +18,7 @@ import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
   ForcedExit,
+  withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -1165,7 +1166,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       receiveFirstEnd = resolve;
     });
     let requestTurn = 0;
-    const provider: LLMProvider = {
+    const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
         if (options.toolChoice === "none") {
@@ -1187,7 +1188,7 @@ describe("Interactive Session - Manual Compact Success", () => {
         yield { type: "text", text: "First done" };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
-    };
+    });
     const input = new PassThrough();
     let stdout = "";
     let stderr = "";
@@ -1270,7 +1271,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       receiveFirstEnd = resolve;
     });
     let requestTurn = 0;
-    const provider: LLMProvider = {
+    const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       estimateInputTokens: () => 1,
       async *stream(options) {
@@ -1293,7 +1294,7 @@ describe("Interactive Session - Manual Compact Success", () => {
         yield { type: "text", text: "First done" };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
-    };
+    });
     const input = new PassThrough();
     let stdout = "";
     let stderr = "";
@@ -1377,7 +1378,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     });
     let requestTurns = 0;
     let summaryRequests = 0;
-    const provider: LLMProvider = {
+    const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       estimateInputTokens: () => 1,
       async *stream(options) {
@@ -1400,7 +1401,7 @@ describe("Interactive Session - Manual Compact Success", () => {
           },
         };
       },
-    };
+    });
     const input = new PassThrough();
     let stdout = "";
     let stderr = "";

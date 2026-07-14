@@ -168,9 +168,19 @@ describe("Cost Budget", () => {
       id: "ambiguous-retry-spend",
       estimateInputTokens: () => 1,
       async *stream(options) {
-        options.beforeRequestAttempt?.();
+        const firstAttempt = options.providerRequestAttempts?.begin();
         physicalRequests++;
-        options.beforeRequestAttempt?.();
+        firstAttempt?.finish({
+          outcome: "retryable_error",
+          retryDecision: {
+            provider: "ambiguous-retry-spend",
+            reason: "provider_network_error",
+            attempt: 1,
+            maxRetries: 1,
+            delayMs: 0,
+          },
+        });
+        options.providerRequestAttempts?.begin();
         physicalRequests++;
         yield { type: "text", text: "unexpected retry" };
       },
@@ -224,7 +234,7 @@ describe("Cost Budget", () => {
       id: "unaffordable-assertion-evaluator",
       estimateInputTokens: () => 1,
       async *stream(options) {
-        options.beforeRequestAttempt?.();
+        const attempt = options.providerRequestAttempts?.begin();
         providerCalls++;
         yield {
           type: "tool_call",
@@ -232,15 +242,17 @@ describe("Cost Budget", () => {
           tool: "update_goal",
           status: "completed",
         };
+        const usage = {
+          inputTokens: 499_800,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 499_800,
+          outputTokens: 0,
+        };
+        attempt?.finish({ outcome: "completed", usage });
         yield {
           type: "stop",
           reason: "stop",
-          usage: {
-            inputTokens: 499_800,
-            cachedInputTokens: 0,
-            uncachedInputTokens: 499_800,
-            outputTokens: 0,
-          },
+          usage,
         };
       },
     };
@@ -404,7 +416,8 @@ describe("Cost Budget", () => {
     const provider: LLMProvider = {
       id: "unaffordable-wrap-up",
       estimateInputTokens: () => 1,
-      async *stream() {
+      async *stream(options) {
+        const attempt = options.providerRequestAttempts?.begin();
         providerCalls++;
         yield {
           type: "tool_call",
@@ -412,15 +425,17 @@ describe("Cost Budget", () => {
           tool: "read",
           path: "note.txt",
         };
+        const usage = {
+          inputTokens: 499_800,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 499_800,
+          outputTokens: 0,
+        };
+        attempt?.finish({ outcome: "completed", usage });
         yield {
           type: "stop",
           reason: "stop",
-          usage: {
-            inputTokens: 499_800,
-            cachedInputTokens: 0,
-            uncachedInputTokens: 499_800,
-            outputTokens: 0,
-          },
+          usage,
         };
       },
     };

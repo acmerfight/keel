@@ -3,7 +3,11 @@ import {
   toolCallArguments,
   toolCallFromParsedArguments,
 } from "../../tools/tool-call.ts";
-import type { LLMProvider, Usage } from "../types.ts";
+import type {
+  LLMProvider,
+  ProviderRequestAttemptFinish,
+  Usage,
+} from "../types.ts";
 
 interface FakeTextResponse {
   readonly type: "text";
@@ -75,7 +79,7 @@ export function createFakeProvider(
         }),
       ).length;
     },
-    async *stream() {
+    async *stream(options) {
       const response = script[turn];
       turn++;
 
@@ -83,33 +87,48 @@ export function createFakeProvider(
         throw new Error("fake provider: script exhausted");
       }
 
-      switch (response.type) {
-        case "text":
-          if (response.tokenize) {
-            for (const char of response.text) {
-              yield { type: "text", text: char };
-            }
-          } else {
-            yield { type: "text", text: response.text };
-          }
-          break;
-        case "tool": {
-          const toolCall = toolCallFromParsedArguments(
-            `fake_tool_call_${turn}`,
-            response.tool,
-            response.args,
-          );
-          if (toolCall === null) {
-            throw new Error(
-              `Invalid fake tool response arguments for ${response.tool}`,
-            );
-          }
-          yield { type: "tool_call", ...toolCall };
-          break;
-        }
-      }
+      const attempt = options.providerRequestAttempts?.begin() ?? null;
+      let attemptFinished = false;
+      const finishAttempt = (result: ProviderRequestAttemptFinish): void => {
+        if (attempt === null || attemptFinished) return;
+        attemptFinished = true;
+        attempt.finish(result);
+      };
 
-      yield { type: "stop", reason: "stop", usage: response.usage };
+      try {
+        switch (response.type) {
+          case "text":
+            if (response.tokenize) {
+              for (const char of response.text) {
+                yield { type: "text", text: char };
+              }
+            } else {
+              yield { type: "text", text: response.text };
+            }
+            break;
+          case "tool": {
+            const toolCall = toolCallFromParsedArguments(
+              `fake_tool_call_${turn}`,
+              response.tool,
+              response.args,
+            );
+            if (toolCall === null) {
+              throw new Error(
+                `Invalid fake tool response arguments for ${response.tool}`,
+              );
+            }
+            yield { type: "tool_call", ...toolCall };
+            break;
+          }
+        }
+
+        finishAttempt({ outcome: "completed", usage: response.usage });
+        yield { type: "stop", reason: "stop", usage: response.usage };
+      } finally {
+        finishAttempt({
+          outcome: options.signal.aborted ? "aborted" : "terminal_error",
+        });
+      }
     },
   };
 }

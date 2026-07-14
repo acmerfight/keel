@@ -27,6 +27,10 @@ import {
   buildCompactedMessages,
   collectCompactionSummary,
 } from "./context-compaction/summary.ts";
+import type {
+  ModelOperationPurpose,
+  ModelOperationRequest,
+} from "./model-operations.ts";
 
 export { conversationCheckpointSummaryFromMessage } from "./context-compaction/checkpoint.ts";
 export { currentToolRound } from "./context-compaction/current-tool-round.ts";
@@ -91,6 +95,12 @@ interface CompactMessagesOptions {
   readonly currentToolOutputMaxCharsOverride?: number;
   readonly allowPreflightCurrentToolOutputRecompaction?: boolean;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
+  readonly modelOperation?: ModelOperationRequest<
+    Extract<
+      ModelOperationPurpose,
+      "context_compaction" | "manual_compaction" | "model_switch_compaction"
+    >
+  >;
 }
 
 export type CompactMessagesResult =
@@ -460,6 +470,9 @@ export async function compactMessages(
       : {}),
     ...(options.focusInstruction !== undefined
       ? { focusInstruction: options.focusInstruction }
+      : {}),
+    ...(options.modelOperation !== undefined
+      ? { modelOperation: options.modelOperation }
       : {}),
   });
   const compacted = await buildCompactedMessages(

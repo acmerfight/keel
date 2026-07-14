@@ -245,6 +245,13 @@ export async function runOneShotCli(
     const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
       resolved.modelMetadata,
     );
+    const trackedCostModel =
+      cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
+        ? requireKnownCostModel(resolved)
+        : undefined;
+    const reportRecorder = createAgentEventReportRecorder();
+    reportRecorder.beginTask("user_prompt");
+    reportRecorder.beginAgentRun("user_prompt");
     let transcriptMessages: readonly Message[] | undefined;
     const stream = runAgent({
       workspace,
@@ -260,16 +267,27 @@ export async function runOneShotCli(
       ...(bashPermission.policy !== undefined
         ? { bashPermission: bashPermission.policy }
         : {}),
-      ...(cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
+      ...(trackedCostModel !== undefined
         ? {
             costTracking: {
-              model: requireKnownCostModel(resolved),
+              model: trackedCostModel,
               ...(modelMaxOutputTokens !== undefined
                 ? { modelMaxOutputTokens }
                 : {}),
               ...(cliArgs.maxCostUsd !== undefined
                 ? { maxCostUsd: cliArgs.maxCostUsd }
                 : {}),
+            },
+          }
+        : {}),
+      ...(cliArgs.reportFile !== undefined && trackedCostModel !== undefined
+        ? {
+            modelOperations: {
+              recorder: reportRecorder,
+              owner: { type: "current_agent_run" },
+              provider: resolved.provider.id,
+              model: resolved.model,
+              costModel: trackedCostModel,
             },
           }
         : {}),
@@ -285,9 +303,6 @@ export async function runOneShotCli(
         : {}),
     });
 
-    const reportRecorder = createAgentEventReportRecorder();
-    reportRecorder.beginTask("user_prompt");
-    reportRecorder.beginAgentRun("user_prompt");
     const writeUndoProtectionWarning = (): void => {
       if (reportRecorder.undoProtection().status === "unavailable") {
         runtime.writeStderr(`${formatUndoCheckpointWarning()}\n`);
@@ -318,15 +333,7 @@ export async function runOneShotCli(
       assertEndEventHasCost(finalEnd);
       writeRunReport(cliArgs.reportFile, {
         tasks: reportRecorder.tasks(),
-        usageByModel: [
-          {
-            provider: resolved.provider.id,
-            model: resolved.model,
-            agentLoopTurns: finalEnd.turns,
-            usage: finalEnd.usage,
-            costUsd: finalEnd.cost.spentUsd,
-          },
-        ],
+        modelOperations: reportRecorder.modelOperations(),
         end: finalEnd,
         durationMs: runtime.now() - startedAt,
         contextCompactions: reportRecorder.contextCompactions(),

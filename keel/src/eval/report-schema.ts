@@ -89,9 +89,82 @@ const taskSchema = z.object({
   outcome: z.string(),
 });
 
+const retryDecisionSchema = z.object({
+  provider: z.string(),
+  reason: z.string(),
+  attempt: z.number().int().positive(),
+  maxRetries: z.number().int().nonnegative(),
+  delayMs: z.number().nonnegative(),
+});
+
+const providerRequestAttemptBase = {
+  ordinal: z.number().int().positive(),
+};
+
+const providerRequestAttemptSchema = z.discriminatedUnion("outcome", [
+  z.object({
+    ...providerRequestAttemptBase,
+    outcome: z.literal("completed"),
+    usage: usageSchema,
+    costUsd: z.number().nonnegative(),
+  }),
+  z.object({
+    ...providerRequestAttemptBase,
+    outcome: z.literal("retryable_error"),
+    retryDecision: retryDecisionSchema,
+  }),
+  z.object({
+    ...providerRequestAttemptBase,
+    outcome: z.literal("context_overflow"),
+    recoveryOperationOrdinal: z.number().int().positive().nullable(),
+  }),
+  z.object({
+    ...providerRequestAttemptBase,
+    outcome: z.enum(["terminal_error", "aborted"]),
+  }),
+]);
+
+const modelOperationBase = {
+  ordinal: z.number().int().positive(),
+  owner: z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("agent_run"),
+      taskOrdinal: z.number().int().positive(),
+      agentRunOrdinal: z.number().int().positive(),
+    }),
+    z.object({ type: z.literal("session") }),
+    z.object({ type: z.literal("invocation") }),
+  ]),
+  purpose: z.enum([
+    "agent_turn",
+    "turn_limit_summary",
+    "context_compaction",
+    "goal_assertion_evaluation",
+    "manual_compaction",
+    "model_switch_compaction",
+  ]),
+  provider: z.string(),
+  model: z.string(),
+  providerRequestAttempts: z.array(providerRequestAttemptSchema),
+  outcome: z.enum([
+    "completed",
+    "context_overflow",
+    "terminal_error",
+    "aborted",
+    "admission_rejected",
+  ]),
+  usage: usageSchema,
+  costUsd: z.number().nonnegative(),
+};
+
+const modelOperationSchema = z.object(modelOperationBase);
+
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(10),
+  schemaVersion: z.literal(11),
   tasks: z.array(taskSchema),
+  modelOperations: z.array(modelOperationSchema),
+  modelOperationCount: z.number().int().nonnegative(),
+  providerRequestAttemptCount: z.number().int().nonnegative(),
   modelsUsed: z.array(
     z.object({
       provider: z.string(),

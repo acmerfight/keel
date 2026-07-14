@@ -3,6 +3,7 @@ import type {
   LLMProvider,
   LLMStopReason,
   Message,
+  ProviderRequestAttemptObserver,
   ToolCall,
   Usage,
 } from "../llm/types.ts";
@@ -39,6 +40,7 @@ export interface StreamTurnOptions {
   readonly allowSkill?: boolean;
   readonly toolChoice?: "none";
   readonly textPrefix?: string;
+  readonly providerRequestAttempts?: ProviderRequestAttemptObserver;
 }
 
 interface ProviderTurnOptions extends StreamTurnOptions {
@@ -94,6 +96,9 @@ export async function* streamAgentTurn(
     ...(allowSkill === true ? { allowSkill: true } : {}),
     ...(options.toolChoice !== undefined
       ? { toolChoice: options.toolChoice }
+      : {}),
+    ...(options.providerRequestAttempts !== undefined
+      ? { providerRequestAttempts: options.providerRequestAttempts }
       : {}),
   });
 

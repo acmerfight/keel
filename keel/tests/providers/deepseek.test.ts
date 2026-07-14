@@ -2348,8 +2348,11 @@ describe("DeepSeek Provider", () => {
         systemPrompt: "You are helpful.",
         messages: [{ role: "user", content: "transient-rate-limit" }],
         signal: freshSignal(),
-        beforeRequestAttempt: () => {
-          admittedAttempts++;
+        providerRequestAttempts: {
+          begin: () => {
+            admittedAttempts++;
+            return { finish: () => {} };
+          },
         },
       }),
     );

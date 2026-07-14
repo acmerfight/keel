@@ -70,6 +70,11 @@ export interface OpenAICompatibleStreamConfig<
 
 type ToolCallEvent = Extract<LLMEvent, { readonly type: "tool_call" }>;
 
+export interface OpenAICompatibleFinalStream {
+  readonly events: readonly LLMEvent[];
+  readonly usage: Usage;
+}
+
 class MissingDoneSignalError extends KeelError {
   constructor(providerName: string) {
     super(
@@ -329,7 +334,7 @@ export async function* readSseEvents<Chunk extends OpenAICompatibleChunk>(
 export function finalStreamEvents(
   state: OpenAICompatibleStreamState,
   providerName: string,
-): readonly LLMEvent[] {
+): OpenAICompatibleFinalStream {
   if (!state.receivedDone) {
     throw new MissingDoneSignalError(providerName);
   }
@@ -353,5 +358,8 @@ export function finalStreamEvents(
     );
   }
 
-  return [...state.pendingToolCalls, { type: "stop", reason, usage }];
+  return {
+    events: [...state.pendingToolCalls, { type: "stop", reason, usage }],
+    usage,
+  };
 }

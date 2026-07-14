@@ -55,6 +55,39 @@ export type Message = UserMessage | AssistantMessage | ToolMessage;
 
 export type LLMStopReason = "stop" | "length";
 
+export type ProviderRequestAttemptOutcome =
+  | "completed"
+  | "retryable_error"
+  | "context_overflow"
+  | "terminal_error"
+  | "aborted";
+
+export interface ProviderRequestRetryDecision {
+  readonly provider: string;
+  readonly reason: string;
+  readonly attempt: number;
+  readonly maxRetries: number;
+  readonly delayMs: number;
+}
+
+export type ProviderRequestAttemptFinish =
+  | { readonly outcome: "completed"; readonly usage: Usage }
+  | {
+      readonly outcome: "retryable_error";
+      readonly retryDecision: ProviderRequestRetryDecision;
+    }
+  | {
+      readonly outcome: "context_overflow" | "terminal_error" | "aborted";
+    };
+
+export interface ProviderRequestAttemptHandle {
+  readonly finish: (result: ProviderRequestAttemptFinish) => void;
+}
+
+export interface ProviderRequestAttemptObserver {
+  readonly begin: () => ProviderRequestAttemptHandle;
+}
+
 export type LLMEvent =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "reasoning"; readonly text: string }
@@ -84,7 +117,7 @@ export interface StreamOptions {
   // limit; providers enforce it at the protocol level.
   readonly toolChoice?: "none";
   readonly maxOutputTokens?: number;
-  readonly beforeRequestAttempt?: () => void;
+  readonly providerRequestAttempts?: ProviderRequestAttemptObserver;
 }
 
 export interface LLMProvider {
