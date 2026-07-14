@@ -596,17 +596,13 @@ function toMessage(message: RawMessage): SessionMessage {
   }
 }
 
-function copyMessage(message: SessionMessage): SessionMessage;
-function copyMessage(message: Message): Message;
-function copyMessage(message: Message): Message {
+function copyMessage(message: SessionMessage): SessionMessage {
   switch (message.role) {
     case "user":
       return {
         role: "user",
         content: message.content,
-        ...(message.origin === undefined
-          ? {}
-          : { origin: copyUserMessageOrigin(message.origin) }),
+        origin: copyUserMessageOrigin(message.origin),
         ...(message.contextCompaction === undefined
           ? {}
           : {
