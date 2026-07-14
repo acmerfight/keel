@@ -645,7 +645,11 @@ describe("Session Store Goal", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const largeMessages: readonly Message[] = [
-      { role: "user", content: "x".repeat(16 * 1024 * 1024) },
+      {
+        role: "user",
+        content: "x".repeat(16 * 1024 * 1024),
+        origin: { type: "user_prompt" },
+      },
     ];
 
     try {

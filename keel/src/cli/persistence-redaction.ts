@@ -6,6 +6,7 @@ import {
 import type {
   AssistantProviderMetadata,
   Message,
+  SessionMessage,
   UserMessageContextCompactionMetadata,
   UserMessageOrigin,
 } from "../llm/types.ts";
@@ -88,6 +89,10 @@ function copyUserMessageOrigin(origin: UserMessageOrigin): UserMessageOrigin {
   return { type: origin.type };
 }
 
+export function redactMessageForPersistence(
+  message: SessionMessage,
+): SessionMessage;
+export function redactMessageForPersistence(message: Message): Message;
 export function redactMessageForPersistence(message: Message): Message {
   switch (message.role) {
     case "user":

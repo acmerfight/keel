@@ -11,7 +11,7 @@ import {
   type SessionTaskProgress,
   sessionTaskProgressesEqual,
 } from "../../core/task-progress.ts";
-import type { Message } from "../../llm/types.ts";
+import type { Message, SessionMessage } from "../../llm/types.ts";
 import {
   type BashApprovalGrant,
   bashApprovalGrantKey,
@@ -59,7 +59,7 @@ import {
   copyStoredMessage,
   messagesFromStoredMessages,
   normalizeSessionTitleForPersistence,
-  parseProviderVisibleMessages,
+  parseSessionMessages,
   redactBashApprovalGrantForPersistence,
   redactSessionGoalForPersistence,
   redactSessionQueuedInputForPersistence,
@@ -258,7 +258,7 @@ export function forkSessionStore(options: {
   };
   readonly runtime: SessionStoreRuntime;
 }): SessionState {
-  parseProviderVisibleMessages(
+  parseSessionMessages(
     options.targetSessionId,
     options.source.messages,
     "fork",
@@ -780,8 +780,8 @@ export function persistSessionMessages(options: {
   readonly reason: SessionPersistenceReason;
   readonly skillState?: SkillLifecycleState;
   readonly consumedInputIds?: readonly string[];
-}): readonly Message[] {
-  const currentMessages = parseProviderVisibleMessages(
+}): readonly SessionMessage[] {
+  const currentMessages = parseSessionMessages(
     options.session.id,
     options.currentMessages,
     "persist",
@@ -816,7 +816,7 @@ export function persistSessionMessages(options: {
         runtime: options.runtime,
       });
     }
-    return [...options.previousMessages];
+    return [...currentMessages];
   }
 
   if (hasMessagePrefix(currentMessages, options.previousMessages)) {

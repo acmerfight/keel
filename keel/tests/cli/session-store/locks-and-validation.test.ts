@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -667,7 +675,13 @@ describe("Session Store Locks And Validation", () => {
         persistSessionMessages({
           session,
           previousMessages: [],
-          currentMessages: [{ role: "user", content: "hello" }],
+          currentMessages: [
+            {
+              role: "user",
+              content: "hello",
+              origin: { type: "user_prompt" },
+            },
+          ],
           runtime: runtime(home, 1),
           reason: "turn",
         }),
@@ -897,6 +911,7 @@ describe("Session Store Locks And Validation", () => {
     Then it fails closed with a session-load error`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const ledgerWorkspace = await realpath(workspace);
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     await mkdir(join(home, "sessions", "malformed-origin"), {
       recursive: true,
@@ -904,7 +919,7 @@ describe("Session Store Locks And Validation", () => {
     await writeFile(
       join(home, "sessions", "malformed-origin", "ledger.jsonl"),
       [
-        headerLine("malformed-origin", workspace),
+        headerLine("malformed-origin", ledgerWorkspace),
         JSON.stringify({
           schemaVersion: 4,
           type: "append",
@@ -930,6 +945,54 @@ describe("Session Store Locks And Validation", () => {
       expect(() =>
         resumeSessionStore({
           sessionId: "malformed-origin",
+          workspace,
+          runtime: runtime(home),
+        }),
+      ).toThrow(SessionStoreError);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a persisted user message omits its required origin,
+    When the session is resumed,
+    Then it fails closed with a session-load error`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    await mkdir(join(home, "sessions", "missing-origin"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(home, "sessions", "missing-origin", "ledger.jsonl"),
+      [
+        headerLine("missing-origin", ledgerWorkspace),
+        JSON.stringify({
+          schemaVersion: 4,
+          type: "append",
+          timestamp: "1970-01-01T00:00:00.001Z",
+          reason: "turn",
+          messages: [
+            {
+              id: "msg_missing_origin",
+              message: {
+                role: "user",
+                content: "hello",
+              },
+            },
+          ],
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      // When / Then
+      expect(() =>
+        resumeSessionStore({
+          sessionId: "missing-origin",
           workspace,
           runtime: runtime(home),
         }),

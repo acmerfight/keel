@@ -716,7 +716,7 @@ describe("Interactive Session - Undo", () => {
 
   test(`Given a named session has queued undo input,
     When undo restores a checkpoint,
-    Then resume preserves the restore status without replaying the undo command`, async () => {
+    Then resume preserves its runtime provenance without replaying the undo command`, async () => {
     // Given
     const workspace = await createGitWorkspace("keel-interactive-undo-resume-");
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
@@ -863,6 +863,7 @@ describe("Interactive Session - Undo", () => {
           role: "user",
           content:
             "Keel local command /undo restored note.txt. Treat this as workspace state, not as a new user request.",
+          origin: { type: "runtime_undo_restoration" },
         },
       ]);
       expect(observedContexts).toEqual([

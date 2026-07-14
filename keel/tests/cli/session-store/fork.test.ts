@@ -37,7 +37,11 @@ describe("Session Store Fork", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const firstTurn: readonly Message[] = [
-      { role: "user", content: "remember alpha" },
+      {
+        role: "user",
+        content: "remember alpha",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "Remembered: remember alpha",
@@ -46,7 +50,11 @@ describe("Session Store Fork", () => {
     ];
     const allMessages: readonly Message[] = [
       ...firstTurn,
-      { role: "user", content: "remember beta" },
+      {
+        role: "user",
+        content: "remember beta",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "Remembered: remember beta",
@@ -143,7 +151,11 @@ describe("Session Store Fork", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const sourceMessages: readonly Message[] = [
-      { role: "user", content: "remember alpha" },
+      {
+        role: "user",
+        content: "remember alpha",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "Remembered: remember alpha",
@@ -286,7 +298,11 @@ describe("Session Store Fork", () => {
       resumeCapBytes - Buffer.byteLength(emptySnapshotLine, "utf8"),
     );
     const snapshottedMessages: readonly Message[] = [
-      { role: "user", content: "x".repeat(contentLength) },
+      {
+        role: "user",
+        content: "x".repeat(contentLength),
+        origin: { type: "user_prompt" },
+      },
     ];
     const snapshotRecord = `${snapshotLine(snapshottedMessages, [])}\n`;
     expect(Buffer.byteLength(snapshotRecord, "utf8")).toBeLessThan(
@@ -417,7 +433,11 @@ describe("Session Store Fork", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const sourceMessages: readonly Message[] = [
-      { role: "user", content: "remember alpha" },
+      {
+        role: "user",
+        content: "remember alpha",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "Remembered: remember alpha",
@@ -513,7 +533,11 @@ describe("Session Store Fork", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const retainedMessages: readonly Message[] = [
-      { role: "user", content: "inspect workspace" },
+      {
+        role: "user",
+        content: "inspect workspace",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "",
@@ -534,7 +558,11 @@ describe("Session Store Fork", () => {
     ];
     const sourceMessages: readonly Message[] = [
       ...retainedMessages,
-      { role: "user", content: "now remember beta" },
+      {
+        role: "user",
+        content: "now remember beta",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "Remembered: now remember beta",
@@ -609,7 +637,11 @@ describe("Session Store Fork", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const retainedMessages: readonly Message[] = [
-      { role: "user", content: "remember alpha" },
+      {
+        role: "user",
+        content: "remember alpha",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "Remembered: remember alpha",
@@ -618,7 +650,11 @@ describe("Session Store Fork", () => {
     ];
     const sourceMessages: readonly Message[] = [
       ...retainedMessages,
-      { role: "user", content: "now remember beta" },
+      {
+        role: "user",
+        content: "now remember beta",
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "Remembered: now remember beta",

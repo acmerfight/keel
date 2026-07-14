@@ -84,6 +84,9 @@ export function renderConversationCheckpoint(
 function parseConversationCheckpointMessage(
   message: Extract<Message, { readonly role: "user" }>,
 ): ConversationCheckpoint | null {
+  if (message.origin?.type !== "compaction_checkpoint") {
+    return null;
+  }
   const lines = message.content.split("\n");
   if (
     lines.length < 5 ||

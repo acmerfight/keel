@@ -479,7 +479,11 @@ describe("CLI Main - Session Resume Transcript", () => {
       createdAt: "1970-01-01T00:00:00.000Z",
       records: [
         appendSessionRecordLine("1970-01-01T00:00:00.001Z", [
-          { role: "user", content: "remember alpha" },
+          {
+            role: "user",
+            content: "remember alpha",
+            origin: { type: "user_prompt" },
+          },
           { role: "assistant", content: "Remembered alpha.", toolCalls: [] },
         ]),
       ],

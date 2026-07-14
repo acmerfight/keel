@@ -128,7 +128,11 @@ describe("CLI Main - Session Errors", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       records: [
         appendSessionRecordLine("2026-01-01T00:00:01.000Z", [
-          { role: "user", content: "remember alpha" },
+          {
+            role: "user",
+            content: "remember alpha",
+            origin: { type: "user_prompt" },
+          },
           {
             role: "assistant",
             content: "Remembered: remember alpha",
@@ -384,7 +388,11 @@ describe("CLI Main - Session Errors", () => {
         reason: "size_threshold",
         messages: storedMessages(
           [
-            { role: "user", content: "remember alpha" },
+            {
+              role: "user",
+              content: "remember alpha",
+              origin: { type: "user_prompt" },
+            },
             {
               role: "assistant",
               content: "Remembered: remember alpha",

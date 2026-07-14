@@ -28,6 +28,7 @@ import {
 } from "../../core/task-progress.ts";
 import {
   type Message,
+  type SessionMessage,
   type UserMessageContextCompactionMetadata,
   type UserMessageOrigin,
   userMessageOriginTypes,
@@ -106,7 +107,7 @@ const userMessageSchema = z
   .object({
     role: z.literal("user"),
     content: z.string(),
-    origin: userMessageOriginSchema.optional(),
+    origin: userMessageOriginSchema,
     contextCompaction: userMessageContextCompactionSchema.optional(),
   })
   .strict();
@@ -552,15 +553,13 @@ function toUserContextCompactionMetadata(
   };
 }
 
-function toMessage(message: RawMessage): Message {
+function toMessage(message: RawMessage): SessionMessage {
   switch (message.role) {
     case "user":
       return {
         role: "user",
         content: message.content,
-        ...(message.origin === undefined
-          ? {}
-          : { origin: toUserMessageOrigin(message.origin) }),
+        origin: toUserMessageOrigin(message.origin),
         ...(message.contextCompaction === undefined
           ? {}
           : {
@@ -597,6 +596,8 @@ function toMessage(message: RawMessage): Message {
   }
 }
 
+function copyMessage(message: SessionMessage): SessionMessage;
+function copyMessage(message: Message): Message;
 function copyMessage(message: Message): Message {
   switch (message.role) {
     case "user":
@@ -667,7 +668,7 @@ function redactStoredMessageForPersistence(
 
 function messagesFromStoredMessages(
   storedMessages: readonly StoredMessage[],
-): readonly Message[] {
+): readonly SessionMessage[] {
   return storedMessages.map((storedMessage) =>
     copyMessage(storedMessage.message),
   );
@@ -1569,15 +1570,15 @@ function parseSnapshotSessionMutationRecord(
   return record.type === "snapshot" ? record : null;
 }
 
-function parseProviderVisibleMessages(
+function parseSessionMessages(
   sessionId: string,
   messages: readonly Message[],
   action: "persist" | "fork",
-): readonly Message[] {
+): readonly SessionMessage[] {
   const parsed = z.array(messageSchema).safeParse(messages);
   if (!parsed.success) {
     sessionStoreError(
-      `Error: cannot ${action} session "${sessionId}": ledger contains invalid provider-visible messages.`,
+      `Error: cannot ${action} session "${sessionId}": ledger contains invalid session messages.`,
     );
   }
   return parsed.data.map(toMessage);
@@ -1635,8 +1636,8 @@ export {
   copyStoredMessage,
   messagesFromStoredMessages,
   normalizeSessionTitleForPersistence,
-  parseProviderVisibleMessages,
   parseSessionHeaderRecord,
+  parseSessionMessages,
   parseSessionMutationRecord,
   parseSnapshotSessionMutationRecord,
   redactBashApprovalGrantForPersistence,

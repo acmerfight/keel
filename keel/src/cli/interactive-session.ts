@@ -294,6 +294,9 @@ const RUNTIME_GOAL_RESUMPTION_ORIGIN = {
 const RUNTIME_GOAL_STAGNATION_RECOVERY_ORIGIN = {
   type: "runtime_goal_stagnation_recovery",
 } satisfies UserMessageOrigin;
+const RUNTIME_UNDO_RESTORATION_ORIGIN = {
+  type: "runtime_undo_restoration",
+} satisfies UserMessageOrigin;
 
 const GOAL_BUDGET_LIMIT_REASON =
   "Session cost budget could not admit another provider request before the active goal completed.";
@@ -2092,6 +2095,7 @@ export async function runInteractiveSession(
             messages.push({
               role: "user",
               content: undoRestoredContextMessage(result.restoredLabel),
+              origin: RUNTIME_UNDO_RESTORATION_ORIGIN,
             });
             if (options.persistSessionMessages !== undefined) {
               options.persistSessionMessages(

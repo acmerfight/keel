@@ -16,6 +16,7 @@ export const userMessageOriginTypes = [
   "runtime_goal_continuation",
   "runtime_goal_resumption",
   "runtime_goal_stagnation_recovery",
+  "runtime_undo_restoration",
   "compaction_checkpoint",
 ] as const;
 
@@ -70,6 +71,11 @@ interface ToolMessage {
 }
 
 export type Message = UserMessage | AssistantMessage | ToolMessage;
+
+export type SessionMessage =
+  | (UserMessage & { readonly origin: UserMessageOrigin })
+  | AssistantMessage
+  | ToolMessage;
 
 export type LLMStopReason = "stop" | "length";
 

@@ -86,13 +86,52 @@ describe("Session Store Persistence Validation", () => {
     }
   });
 
+  test(`Given a user message omits its required origin,
+    When persistence attempts to save it,
+    Then the ledger is rejected before any history is appended`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+
+    try {
+      const session = createSessionStore({
+        sessionId: "reject-missing-origin",
+        workspace,
+        runtime: runtime(home),
+      });
+      const before = await readFile(session.filePath, "utf8");
+
+      const persistMalformedMessage = () =>
+        persistSessionMessages({
+          session,
+          previousMessages: [],
+          currentMessages: [{ role: "user", content: "hello" }],
+          runtime: runtime(home, 1),
+          reason: "turn",
+        });
+
+      // When / Then
+      expect(persistMalformedMessage).toThrow(SessionStoreError);
+      expect(await readFile(session.filePath, "utf8")).toBe(before);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given no new messages were added after the last persisted state,
     When persistence is asked to save again,
     Then the ledger is left unchanged`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [{ role: "user", content: "hello" }];
+    const messages: readonly Message[] = [
+      {
+        role: "user",
+        content: "hello",
+        origin: { type: "user_prompt" },
+      },
+    ];
 
     try {
       const session = createSessionStore({
@@ -135,7 +174,11 @@ describe("Session Store Persistence Validation", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const firstTurn: readonly Message[] = [
-      { role: "user", content: "start" },
+      {
+        role: "user",
+        content: "start",
+        origin: { type: "user_prompt" },
+      },
       { role: "assistant", content: "started", toolCalls: [] },
     ];
     const malformedFollowUp: readonly Message[] = [

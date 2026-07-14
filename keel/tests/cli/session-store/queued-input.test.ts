@@ -79,7 +79,11 @@ describe("Session Store Queued Input", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const messages: readonly Message[] = [
-      { role: "user", content: "continue with beta" },
+      {
+        role: "user",
+        content: "continue with beta",
+        origin: { type: "user_prompt" },
+      },
       { role: "assistant", content: "Beta complete.", toolCalls: [] },
     ];
 
@@ -290,7 +294,11 @@ describe("Session Store Queued Input", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const messages: readonly Message[] = [
-      { role: "user", content: "remember alpha" },
+      {
+        role: "user",
+        content: "remember alpha",
+        origin: { type: "user_prompt" },
+      },
       { role: "assistant", content: "Remembered alpha.", toolCalls: [] },
     ];
 

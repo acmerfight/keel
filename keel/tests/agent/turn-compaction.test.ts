@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 import { emptyRunAccounting } from "../../src/agent/accounting.ts";
-import { sessionLedgerFromMessages } from "../../src/agent/session-ledger.ts";
+import {
+  sessionLedgerFromMessages,
+  sessionLedgerMessages,
+} from "../../src/agent/session-ledger.ts";
 import { streamTurnWithOverflowRecovery } from "../../src/agent/turn-compaction.ts";
 import type { LLMProvider, Message } from "../../src/llm/types.ts";
 import {
@@ -15,13 +18,21 @@ describe("Turn Compaction", () => {
     Then the compacted checkpoint does not invent a task progress section`, async () => {
     // Given
     let ledger = sessionLedgerFromMessages([
-      { role: "user", content: `Investigate ${"alpha ".repeat(400)}` },
+      {
+        role: "user",
+        content: `Investigate ${"alpha ".repeat(400)}`,
+        origin: { type: "user_prompt" },
+      },
       {
         role: "assistant",
         content: "Alpha is caused by stale config.",
         toolCalls: [],
       },
-      { role: "user", content: "Continue." },
+      {
+        role: "user",
+        content: "Continue.",
+        origin: { type: "steer" },
+      },
     ]);
     let summaryPrompt = "";
     let finalRequestMessages: readonly Message[] = [];
@@ -88,6 +99,29 @@ describe("Turn Compaction", () => {
     );
     expect(finalRequestMessages[0]?.content).not.toContain(
       "Session Task Progress",
+    );
+    expect(finalRequestMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "user", content: "Continue." }),
+      ]),
+    );
+    expect(finalRequestMessages).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ origin: expect.anything() }),
+      ]),
+    );
+    expect(sessionLedgerMessages(ledger)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          origin: { type: "compaction_checkpoint" },
+        }),
+        expect.objectContaining({
+          role: "user",
+          content: "Continue.",
+          origin: { type: "steer" },
+        }),
+      ]),
     );
   });
 });

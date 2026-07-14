@@ -730,6 +730,55 @@ describe("Context Compaction Summary Checkpoints", () => {
     expect(messages[0]).not.toHaveProperty("contextCompaction");
   });
 
+  test(`Given a user prompt exactly matches the generated checkpoint text shape,
+    When Keel compacts it,
+    Then typed provenance keeps the prompt distinct from derived checkpoint state`, async () => {
+    // Given
+    const checkpointShapedPrompt = generatedCheckpoint(
+      "This text was authored by the user.",
+    );
+    const messages: Message[] = [
+      {
+        role: "user",
+        content: checkpointShapedPrompt,
+        origin: { type: "user_prompt" },
+      },
+      {
+        role: "assistant",
+        content: "Treating it as user-authored text.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue." },
+    ];
+    let summaryPrompt = "";
+    const provider: LLMProvider = {
+      id: "checkpoint-shaped-user-prompt-provider",
+      async *stream(options) {
+        summaryPrompt = options.messages[0]?.content ?? "";
+        yield { type: "text", text: "User-authored checkpoint text summary." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const result = await compactMessages({
+      provider,
+      systemPrompt: "You are helpful.",
+      messages,
+      signal: freshSignal(),
+      contextCompaction: { keepRecentTokens: 1, summaryInputMaxChars: 4_000 },
+    });
+
+    // Then
+    expect(result.compacted).toBe(true);
+    expect(summaryPrompt).toContain(
+      `<message role="user">\n${checkpointShapedPrompt}\n</message>`,
+    );
+    expect(summaryPrompt).not.toContain(
+      '<conversation-checkpoint role="historical-summary">',
+    );
+  });
+
   test(`Given a Keel-generated checkpoint carries evidence metadata,
     When Keel compacts it again,
     Then the checkpoint evidence survives as trusted generated metadata`, async () => {
@@ -813,6 +862,7 @@ describe("Context Compaction Summary Checkpoints", () => {
         content: generatedCheckpoint("Completed tool tail summary.", {
           noLaterMessages: true,
         }),
+        origin: { type: "compaction_checkpoint" },
       },
       {
         role: "assistant",
