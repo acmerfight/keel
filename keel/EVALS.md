@@ -98,7 +98,7 @@ Each trial appends one JSON line:
   "wallMs": 9182,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
-    "schemaVersion": 10,
+    "schemaVersion": 11,
     "tasks": [
       {
         "ordinal": 1,
@@ -107,7 +107,7 @@ Each trial appends one JSON line:
           {
             "ordinal": 1,
             "trigger": "user_prompt",
-            "agentLoopTurns": 3,
+            "agentLoopTurns": 1,
             "providerRetries": [],
             "contextCompactions": [],
             "stopReason": "completed"
@@ -116,17 +116,39 @@ Each trial appends one JSON line:
         "outcome": "completed"
       }
     ],
+    "modelOperations": [
+      {
+        "ordinal": 1,
+        "owner": { "type": "agent_run", "taskOrdinal": 1, "agentRunOrdinal": 1 },
+        "purpose": "agent_turn",
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "providerRequestAttempts": [
+          {
+            "ordinal": 1,
+            "outcome": "completed",
+            "usage": { "inputTokens": 5210, "cachedInputTokens": 4100, "uncachedInputTokens": 1110, "outputTokens": 240 },
+            "costUsd": 0.000234
+          }
+        ],
+        "outcome": "completed",
+        "usage": { "inputTokens": 5210, "cachedInputTokens": 4100, "uncachedInputTokens": 1110, "outputTokens": 240 },
+        "costUsd": 0.000234
+      }
+    ],
+    "modelOperationCount": 1,
+    "providerRequestAttemptCount": 1,
     "modelsUsed": [{ "provider": "deepseek", "model": "deepseek-v4-flash" }],
     "usageByModel": [
       {
         "provider": "deepseek",
         "model": "deepseek-v4-flash",
-        "agentLoopTurns": 3,
+        "agentLoopTurns": 1,
         "usage": { "inputTokens": 5210, "cachedInputTokens": 4100, "uncachedInputTokens": 1110, "outputTokens": 240 },
         "costUsd": 0.000234
       }
     ],
-    "agentLoopTurns": 3,
+    "agentLoopTurns": 1,
     "stopReason": "completed",
     "usage": { "inputTokens": 5210, "cachedInputTokens": 4100, "uncachedInputTokens": 1110, "outputTokens": 240 },
     "durationMs": 8455,

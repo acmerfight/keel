@@ -6,6 +6,7 @@ import type { SessionQueuedInput } from "../../../src/cli/session-store.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   ForcedExit,
+  withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -19,7 +20,7 @@ describe("Interactive Session - Queued Input", () => {
     let turn = 0;
     let steeringWritten = false;
     const observedContexts: Message[][] = [];
-    const provider: LLMProvider = {
+    const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
         turn++;
@@ -39,7 +40,7 @@ describe("Interactive Session - Queued Input", () => {
         }
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
-    };
+    });
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({

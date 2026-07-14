@@ -7,9 +7,12 @@ import type {
   SkillActivationRecord,
 } from "../skills/model.ts";
 import type { EndEvent } from "./output.ts";
-import type {
-  RunReportContextCompaction,
-  RunReportTask,
+import {
+  accountModelOperations,
+  type RunReportContextCompaction,
+  type RunReportModelOperation,
+  type RunReportModelUsage,
+  type RunReportTask,
 } from "./report-events.ts";
 import type { SkillPolicyReport } from "./skill-user-config.ts";
 
@@ -18,7 +21,7 @@ import type { SkillPolicyReport } from "./skill-user-config.ts";
 // breaking change to the shape.
 interface RunReportInput {
   readonly tasks: readonly RunReportTask[];
-  readonly usageByModel: readonly RunReportModelUsage[];
+  readonly modelOperations: readonly RunReportModelOperation[];
   readonly end: EndEventWithCost;
   readonly durationMs: number;
   readonly contextCompactions: readonly RunReportContextCompaction[];
@@ -52,17 +55,12 @@ export interface RunReportGoalOutcome {
   readonly evidenceKind?: "command" | "assertion_evaluator" | "user_override";
 }
 
-interface RunReportModelUsage {
-  readonly provider: string;
-  readonly model: string;
-  readonly agentLoopTurns: number;
-  readonly usage: Extract<AgentEvent, { readonly type: "end" }>["usage"];
-  readonly costUsd: number;
-}
-
 interface RunReport {
-  readonly schemaVersion: 10;
+  readonly schemaVersion: 11;
   readonly tasks: readonly RunReportTask[];
+  readonly modelOperations: readonly RunReportModelOperation[];
+  readonly modelOperationCount: number;
+  readonly providerRequestAttemptCount: number;
   readonly modelsUsed: readonly {
     readonly provider: string;
     readonly model: string;
@@ -109,36 +107,26 @@ export function assertEndEventHasCost(
 }
 
 export function writeRunReport(filePath: string, input: RunReportInput): void {
-  const cost = input.end.cost;
+  const accounting = accountModelOperations(input.modelOperations);
+  const costBudgetUsd = input.end.cost.maxUsd;
   const report: RunReport = {
-    schemaVersion: 10,
+    schemaVersion: 11,
     tasks: input.tasks,
-    modelsUsed: input.usageByModel.map((entry) => ({
-      provider: entry.provider,
-      model: entry.model,
-    })),
-    usageByModel: input.usageByModel.map((entry) => ({
-      provider: entry.provider,
-      model: entry.model,
-      agentLoopTurns: entry.agentLoopTurns,
-      usage: entry.usage,
-      costUsd: entry.costUsd,
-    })),
-    agentLoopTurns: input.tasks.reduce(
-      (taskTotal, task) =>
-        taskTotal +
-        task.agentRuns.reduce(
-          (runTotal, agentRun) => runTotal + agentRun.agentLoopTurns,
-          0,
-        ),
-      0,
-    ),
+    modelOperations: accounting.modelOperations,
+    modelOperationCount: accounting.modelOperationCount,
+    providerRequestAttemptCount: accounting.providerRequestAttemptCount,
+    modelsUsed: accounting.modelsUsed,
+    usageByModel: accounting.usageByModel,
+    agentLoopTurns: accounting.agentLoopTurns,
     stopReason: input.end.stopReason,
-    usage: input.end.usage,
+    usage: accounting.usage,
     durationMs: input.durationMs,
-    costUsd: cost.spentUsd,
-    ...(cost.maxUsd !== undefined ? { costBudgetUsd: cost.maxUsd } : {}),
-    costOvershootUsd: cost.overshootUsd,
+    costUsd: accounting.costUsd,
+    ...(costBudgetUsd !== undefined ? { costBudgetUsd } : {}),
+    costOvershootUsd:
+      costBudgetUsd === undefined
+        ? 0
+        : Math.max(0, accounting.costUsd - costBudgetUsd),
     contextCompactions: input.contextCompactions,
     skillActivations: input.skillActivations,
     activeSkills: input.activeSkills,

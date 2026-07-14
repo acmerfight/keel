@@ -1,11 +1,22 @@
 import type { ContextCompactionStats } from "../agent/context-compaction.ts";
 import type { AgentEvent } from "../agent/events.ts";
+import type { ModelOperationRecorder } from "../agent/model-operations.ts";
 import type { ToolOutputArtifactCompactionArtifact } from "../agent/tool-output-artifacts.ts";
 import {
   createUndoProtectionTracker,
   type UndoProtectionSummary,
 } from "../core/undo-protection.ts";
 import type { SkillActivationRecord } from "../skills/model.ts";
+import {
+  createModelOperationReportLedger,
+  type RunReportModelOperation,
+} from "./report-model-operations.ts";
+
+export {
+  accountModelOperations,
+  type RunReportModelOperation,
+  type RunReportModelUsage,
+} from "./report-model-operations.ts";
 
 type ContextCompactionEvent = Extract<
   AgentEvent,
@@ -70,6 +81,7 @@ export interface RunReportTask {
 }
 
 export interface AgentEventReportRecorder {
+  readonly beginModelOperation: ModelOperationRecorder["beginModelOperation"];
   readonly beginTask: (trigger: RunReportTaskTrigger) => void;
   readonly beginAgentRun: (trigger: RunReportAgentRunTrigger) => void;
   readonly record: (event: AgentEvent) => void;
@@ -80,6 +92,7 @@ export interface AgentEventReportRecorder {
   readonly abortAgentRun: (agentLoopTurns: number) => void;
   readonly endTask: (outcome?: string) => void;
   readonly tasks: () => readonly RunReportTask[];
+  readonly modelOperations: () => readonly RunReportModelOperation[];
   readonly contextCompactions: () => readonly RunReportContextCompaction[];
   readonly skillActivations: () => readonly SkillActivationRecord[];
   readonly undoProtection: () => UndoProtectionSummary;
@@ -166,6 +179,14 @@ export function createAgentEventReportRecorder(): AgentEventReportRecorder {
   const undoProtection = createUndoProtectionTracker();
   let activeTask: ActiveRunReportTask | null = null;
   let activeAgentRun: ActiveRunReportAgentRun | null = null;
+  const modelOperationLedger = createModelOperationReportLedger(() =>
+    activeTask === null || activeAgentRun === null
+      ? null
+      : {
+          taskOrdinal: activeTask.ordinal,
+          agentRunOrdinal: activeAgentRun.ordinal,
+        },
+  );
   const finishAgentRun = (agentLoopTurns: number, stopReason: string): void => {
     if (activeTask === null) {
       throw new Error("internal: report Agent Run requires an active Task");
@@ -184,6 +205,7 @@ export function createAgentEventReportRecorder(): AgentEventReportRecorder {
     activeAgentRun = null;
   };
   return {
+    beginModelOperation: modelOperationLedger.beginModelOperation,
     beginTask: (trigger) => {
       if (activeTask !== null) {
         throw new Error("internal: report Task already active");
@@ -259,6 +281,7 @@ export function createAgentEventReportRecorder(): AgentEventReportRecorder {
           contextCompactions: [...agentRun.contextCompactions],
         })),
       })),
+    modelOperations: modelOperationLedger.modelOperations,
     contextCompactions: () => [...contextCompactions],
     skillActivations: () => [...skillActivations],
     undoProtection: undoProtection.summary,

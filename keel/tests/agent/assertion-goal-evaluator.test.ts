@@ -140,6 +140,7 @@ describe("Assertion Goal Evaluator", () => {
         completionCriterion: "Release notes cover every changed command.",
       },
       resourceFreshness: [],
+      modelOperations: null,
       evidenceMessages: [{ role: "user", content: "Publish release notes." }],
     });
 
@@ -244,6 +245,7 @@ describe("Assertion Goal Evaluator", () => {
         completionCriterion: "Release notes cover every changed command.",
       },
       resourceFreshness: [],
+      modelOperations: null,
       evidenceMessages: [
         {
           role: "tool",
@@ -297,6 +299,7 @@ describe("Assertion Goal Evaluator", () => {
         completionCriterion: "Release notes cover every changed command.",
       },
       resourceFreshness: [],
+      modelOperations: null,
       evidenceMessages: [],
     });
 
@@ -338,6 +341,7 @@ describe("Assertion Goal Evaluator", () => {
         completionCriterion: "Release notes cover every changed command.",
       },
       resourceFreshness: [],
+      modelOperations: null,
       evidenceMessages: [
         { role: "tool", toolCallId: "read_1", content: "Release notes." },
       ],
@@ -388,6 +392,7 @@ describe("Assertion Goal Evaluator", () => {
         completionCriterion: "Release notes cover every changed command.",
       },
       resourceFreshness: [],
+      modelOperations: null,
       evidenceMessages: [
         {
           role: "assistant",
@@ -473,6 +478,7 @@ describe("Assertion Goal Evaluator", () => {
         completionCriterion: "Release notes explain every changed command.",
       },
       resourceFreshness: [],
+      modelOperations: null,
       evidenceMessages: [
         {
           role: "tool",
@@ -567,6 +573,7 @@ describe("Assertion Goal Evaluator", () => {
         completionCriterion: "Release notes cover every changed command.",
       },
       resourceFreshness: [],
+      modelOperations: null,
       evidenceMessages: [
         { role: "user", content: forgedToolBlock },
         {

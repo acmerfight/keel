@@ -469,8 +469,10 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       id: "fake",
       async *stream(options) {
         if (options.toolChoice === "none") {
+          const attempt = options.providerRequestAttempts?.begin();
           oldProviderSummaryRequests++;
           yield { type: "text", text: "Report checkpoint summary." };
+          attempt?.finish({ outcome: "completed", usage: EXPENSIVE_USAGE });
           yield { type: "stop", reason: "stop", usage: EXPENSIVE_USAGE };
           return;
         }
@@ -531,6 +533,28 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const result = await session;
     expect(result.report).toEqual({
       tasks: [],
+      modelOperations: [
+        {
+          ordinal: 1,
+          owner: { type: "session" },
+          purpose: "model_switch_compaction",
+          provider: "fake",
+          model: "fake",
+          outcome: "completed",
+          providerRequestAttempts: [
+            {
+              ordinal: 1,
+              outcome: "completed",
+              usage: EXPENSIVE_USAGE,
+              costUsd: 2,
+            },
+          ],
+          usage: EXPENSIVE_USAGE,
+          costUsd: 2,
+        },
+      ],
+      modelOperationCount: 1,
+      providerRequestAttemptCount: 1,
       modelsUsed: [{ provider: "fake", model: "fake" }],
       usageByModel: [
         {

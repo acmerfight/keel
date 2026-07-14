@@ -23,6 +23,7 @@ import {
   ForcedExit,
   ONE_DOLLAR_PER_MILLION_INPUT,
   resolvedProvider,
+  withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -53,17 +54,21 @@ describe("Interactive Session - Reports And Queued Input", () => {
     };
     const fakeReportProvider: LLMProvider = {
       id: "fake",
-      async *stream() {
+      async *stream(options) {
+        const attempt = options.providerRequestAttempts?.begin();
         fakeReportTurns++;
         yield { type: "text", text: `fake report ${fakeReportTurns}` };
+        attempt?.finish({ outcome: "completed", usage: fakeUsage });
         yield { type: "stop", reason: "stop", usage: fakeUsage };
       },
     };
     const qwenReportProvider: LLMProvider = {
       id: "fake",
-      async *stream() {
+      async *stream(options) {
+        const attempt = options.providerRequestAttempts?.begin();
         qwenReportTurns++;
         yield { type: "text", text: `qwen report ${qwenReportTurns}` };
+        attempt?.finish({ outcome: "completed", usage: qwenUsage });
         yield { type: "stop", reason: "stop", usage: qwenUsage };
       },
     };
@@ -1443,7 +1448,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       id: "interactive-unaffordable-assertion-evaluator",
       estimateInputTokens: () => 1,
       async *stream(options) {
-        options.beforeRequestAttempt?.();
+        const attempt = options.providerRequestAttempts?.begin();
         providerCalls++;
         yield {
           type: "tool_call",
@@ -1451,15 +1456,17 @@ describe("Interactive Session - Reports And Queued Input", () => {
           tool: "update_goal",
           status: "completed",
         };
+        const usage = {
+          inputTokens: 499_800,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 499_800,
+          outputTokens: 0,
+        };
+        attempt?.finish({ outcome: "completed", usage });
         yield {
           type: "stop",
           reason: "stop",
-          usage: {
-            inputTokens: 499_800,
-            cachedInputTokens: 0,
-            uncachedInputTokens: 499_800,
-            outputTokens: 0,
-          },
+          usage,
         };
       },
     };
@@ -1713,7 +1720,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     When the provider turn itself completed normally,
     Then the report exposes the goal budget stop instead of false completion`, async () => {
     const input = new PassThrough();
-    const provider: LLMProvider = {
+    const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream() {
         yield { type: "text", text: "Reached token budget." };
@@ -1728,7 +1735,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
           },
         };
       },
-    };
+    });
     const session = runInteractiveSession({
       cliArgs: {
         bashMode: "disabled",
@@ -1781,13 +1788,13 @@ describe("Interactive Session - Reports And Queued Input", () => {
     When Keel starts the goal and builds the interactive report,
     Then the terminal session cost reason takes precedence`, async () => {
     const input = new PassThrough();
-    const provider: LLMProvider = {
+    const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream() {
         yield { type: "text", text: "Reached both budgets." };
         yield { type: "stop", reason: "stop", usage: EXPENSIVE_USAGE };
       },
-    };
+    });
     const session = runInteractiveSession({
       cliArgs: {
         bashMode: "disabled",
@@ -3381,7 +3388,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       Array<{ readonly role: Message["role"]; readonly content: string }>
     > = [];
     let turn = 0;
-    const provider: LLMProvider = {
+    const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
         turn++;
@@ -3401,7 +3408,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
         }
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
-    };
+    });
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({

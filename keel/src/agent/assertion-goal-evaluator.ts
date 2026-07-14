@@ -2,6 +2,10 @@ import { z } from "zod";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
 import type { AssertionEvidenceResourceFreshness } from "./assertion-evidence-freshness.ts";
 import type { AgentEvent } from "./events.ts";
+import type {
+  ModelOperationHandle,
+  ModelOperationInstrumentation,
+} from "./model-operations.ts";
 import { type AgentTurn, streamAgentTurn } from "./provider-turn.ts";
 
 const ASSERTION_GOAL_EVALUATOR_SYSTEM_PROMPT = [
@@ -61,6 +65,7 @@ interface AssertionGoalEvaluatorOptions {
   readonly goal: AssertionGoalContract;
   readonly evidenceMessages: readonly Message[];
   readonly resourceFreshness: readonly AssertionEvidenceResourceFreshness[];
+  readonly modelOperations: ModelOperationInstrumentation | null;
 }
 
 async function drainAgentTurn(
@@ -335,22 +340,41 @@ function balancedJsonObjects(text: string): readonly string[] {
 export async function evaluateAssertionGoalCompletionWithProvider(
   options: AssertionGoalEvaluatorOptions,
 ): Promise<AssertionGoalEvaluation> {
-  const turn = await drainAgentTurn(
-    streamAgentTurn({
-      provider: options.provider,
-      systemPrompt: ASSERTION_GOAL_EVALUATOR_SYSTEM_PROMPT,
-      messages: [
-        evaluatorUserMessage(
-          options.goal,
-          options.evidenceMessages,
-          options.resourceFreshness,
-        ),
-      ],
-      signal: options.signal,
-      allowBash: false,
-      toolChoice: "none",
-    }),
-  );
+  const instrumentation = options.modelOperations;
+  const operation: ModelOperationHandle | null =
+    instrumentation === null
+      ? null
+      : instrumentation.recorder.beginModelOperation({
+          ...instrumentation,
+          purpose: "goal_assertion_evaluation",
+          recoveryFor: null,
+        });
+  let turn: AgentTurn;
+  try {
+    turn = await drainAgentTurn(
+      streamAgentTurn({
+        provider: options.provider,
+        systemPrompt: ASSERTION_GOAL_EVALUATOR_SYSTEM_PROMPT,
+        messages: [
+          evaluatorUserMessage(
+            options.goal,
+            options.evidenceMessages,
+            options.resourceFreshness,
+          ),
+        ],
+        signal: options.signal,
+        allowBash: false,
+        toolChoice: "none",
+        ...(operation !== null
+          ? { providerRequestAttempts: operation.providerRequestAttempts }
+          : {}),
+      }),
+    );
+  } catch (error) {
+    operation?.finishFromError(error);
+    throw error;
+  }
+  operation?.finish({ outcome: "completed" });
 
   if (turn.toolCalls.length > 0) {
     return invalidEvaluation(

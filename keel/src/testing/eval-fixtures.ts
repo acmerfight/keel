@@ -48,8 +48,42 @@ export function evalRunReport(
   };
   const costUsd = options.costUsd ?? 0.001;
   const agentLoopTurns = options.turns ?? 3;
+  const modelOperations = Array.from({ length: agentLoopTurns }, (_, index) => {
+    const operationUsage =
+      index === 0
+        ? usage
+        : {
+            inputTokens: 0,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 0,
+            outputTokens: 0,
+          };
+    const operationCostUsd = index === 0 ? costUsd : 0;
+    return {
+      ordinal: index + 1,
+      owner: {
+        type: "agent_run" as const,
+        taskOrdinal: 1,
+        agentRunOrdinal: 1,
+      },
+      purpose: "agent_turn" as const,
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      outcome: "completed" as const,
+      providerRequestAttempts: [
+        {
+          ordinal: 1,
+          outcome: "completed" as const,
+          usage: operationUsage,
+          costUsd: operationCostUsd,
+        },
+      ],
+      usage: operationUsage,
+      costUsd: operationCostUsd,
+    };
+  });
   return {
-    schemaVersion: 10,
+    schemaVersion: 11,
     tasks: [
       {
         ordinal: 1,
@@ -67,6 +101,9 @@ export function evalRunReport(
         outcome: "completed",
       },
     ],
+    modelOperations,
+    modelOperationCount: modelOperations.length,
+    providerRequestAttemptCount: modelOperations.length,
     modelsUsed: [{ provider: "deepseek", model: "deepseek-v4-flash" }],
     usageByModel: [
       {

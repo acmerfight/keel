@@ -18,6 +18,12 @@ import {
   shouldCompactCurrentToolOutputBeforeHistoricalCompaction,
 } from "./context-compaction.ts";
 import type { AgentEvent } from "./events.ts";
+import type {
+  ModelOperationHandle,
+  ModelOperationInstrumentation,
+  ModelOperationPurpose,
+  ModelOperationRecoveryTarget,
+} from "./model-operations.ts";
 import {
   type AgentTurn,
   ContextOverflowBeforeAssistantError,
@@ -41,6 +47,7 @@ export interface CompactionConfig {
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly taskProgress?: () => SessionTaskProgress;
   readonly costTracking: CostTrackingOptions | undefined;
+  readonly modelOperations: ModelOperationInstrumentation | null;
   readonly onContextCompacted: (
     messages: Message[],
   ) => Promise<ContextCompactionFinalization>;
@@ -62,6 +69,10 @@ export type CompactionState = {
 export interface LedgerTurnOptions extends StreamTurnOptions {
   readonly getLedger: () => SessionLedger;
   readonly setLedger: (ledger: SessionLedger) => void;
+  readonly modelOperationPurpose: Extract<
+    ModelOperationPurpose,
+    "agent_turn" | "turn_limit_summary"
+  >;
 }
 
 interface AttemptContextCompactionOptions {
@@ -72,6 +83,7 @@ interface AttemptContextCompactionOptions {
   readonly allowPreflightCurrentToolOutputRecompaction?: boolean;
   readonly requireShrinkingHistoryCompaction?: boolean;
   readonly restoreAfterCompaction?: boolean;
+  readonly modelOperationRecoveryFor: ModelOperationRecoveryTarget | null;
 }
 
 function requestMetadataForStream(
@@ -92,7 +104,7 @@ async function attemptContextCompaction(
   config: CompactionConfig,
   state: CompactionState,
   streamOptions: LedgerTurnOptions,
-  options?: AttemptContextCompactionOptions,
+  options: AttemptContextCompactionOptions,
 ): Promise<CompactMessagesResult> {
   const sourceMessages = sessionLedgerMessages(streamOptions.getLedger());
   const targetMessages = [
@@ -116,33 +128,42 @@ async function attemptContextCompaction(
       : {}),
     requestMetadata,
     ...(taskProgress !== undefined ? { taskProgress } : {}),
-    ...(options?.allowCurrentToolOutputCompaction === true
+    ...(options.allowCurrentToolOutputCompaction === true
       ? { allowCurrentToolOutputCompaction: true }
       : {}),
-    ...(options?.currentToolOutputCompactionReason !== undefined
+    ...(options.currentToolOutputCompactionReason !== undefined
       ? {
           currentToolOutputCompactionReason:
             options.currentToolOutputCompactionReason,
         }
       : {}),
-    ...(options?.onlyCurrentToolOutputCompaction === true
+    ...(options.onlyCurrentToolOutputCompaction === true
       ? { onlyCurrentToolOutputCompaction: true }
       : {}),
-    ...(options?.currentToolOutputMaxCharsOverride !== undefined
+    ...(options.currentToolOutputMaxCharsOverride !== undefined
       ? {
           currentToolOutputMaxCharsOverride:
             options.currentToolOutputMaxCharsOverride,
         }
       : {}),
-    ...(options?.allowPreflightCurrentToolOutputRecompaction === true
+    ...(options.allowPreflightCurrentToolOutputRecompaction === true
       ? { allowPreflightCurrentToolOutputRecompaction: true }
+      : {}),
+    ...(config.modelOperations !== null
+      ? {
+          modelOperation: {
+            instrumentation: config.modelOperations,
+            purpose: "context_compaction" as const,
+            recoveryFor: options.modelOperationRecoveryFor,
+          },
+        }
       : {}),
   });
   let finalResult = result;
   if (result.compacted) {
     restoreSessionResourceObservations(targetMessages, sourceMessages);
     let finalization = NO_CONTEXT_COMPACTION_FINALIZATION;
-    if (options?.restoreAfterCompaction !== false) {
+    if (options.restoreAfterCompaction !== false) {
       finalization = await config.onContextCompacted(targetMessages);
     }
 
@@ -153,7 +174,7 @@ async function attemptContextCompaction(
       requestMetadata,
     });
     const rejectsGrowingHistoryCompaction =
-      options?.requireShrinkingHistoryCompaction === true &&
+      options.requireShrinkingHistoryCompaction === true &&
       result.historyCompacted &&
       finalStats.afterEstimatedTokens >= finalStats.beforeEstimatedTokens;
     if (rejectsGrowingHistoryCompaction) {
@@ -193,6 +214,7 @@ async function* attemptPreflightCurrentOutputCompaction(
       currentToolOutputCompactionReason: "preflight",
       onlyCurrentToolOutputCompaction: true,
       restoreAfterCompaction: false,
+      modelOperationRecoveryFor: null,
     },
   );
   if (!compaction.compacted) {
@@ -218,153 +240,212 @@ export async function* streamTurnWithOverflowRecovery(
   let overflowRecoveryAttempted = false;
   let historicalCompactionAttemptedBeforeRequest = false;
   let preflightCurrentOutputCompactionAttempted = false;
+  const operationPurpose: ModelOperationPurpose =
+    streamOptions.modelOperationPurpose;
+  let operation: ModelOperationHandle | null = null;
+  let operationFinished = false;
+  const startOperation = (): ModelOperationHandle | null => {
+    if (operation !== null || config.modelOperations === null) {
+      return operation;
+    }
+    operation = config.modelOperations.recorder.beginModelOperation({
+      ...config.modelOperations,
+      purpose: operationPurpose,
+      recoveryFor: null,
+    });
+    return operation;
+  };
+  const finishOperation = (
+    outcome: Parameters<ModelOperationHandle["finish"]>[0]["outcome"],
+  ): void => {
+    if (operation === null || operationFinished) {
+      return;
+    }
+    operationFinished = true;
+    operation.finish({ outcome });
+  };
+  const finishOperationFromError = (error: unknown): void => {
+    if (operation === null || operationFinished) {
+      return;
+    }
+    operationFinished = true;
+    operation.finishFromError(error);
+  };
 
-  for (;;) {
-    const requestMessages = projectSessionLedgerToProviderMessages(
-      streamOptions.getLedger(),
-    );
-    if (
-      !preflightCurrentOutputCompactionAttempted &&
-      shouldCompactCurrentToolOutputBeforeHistoricalCompaction(
-        config.systemPrompt,
-        requestMessages,
-        config.contextCompaction,
-        state.contextAccounting,
-        requestMetadataForStream(streamOptions),
-      )
-    ) {
-      preflightCurrentOutputCompactionAttempted = true;
-      yield* attemptPreflightCurrentOutputCompaction(
-        config,
-        state,
-        streamOptions,
-      );
-    }
-    const historicalRequestMessages = projectSessionLedgerToProviderMessages(
-      streamOptions.getLedger(),
-    );
-    if (
-      !historicalCompactionAttemptedBeforeRequest &&
-      shouldCompactBeforeRequest(
-        config.systemPrompt,
-        historicalRequestMessages,
-        config.contextCompaction,
-        state.contextAccounting,
-        requestMetadataForStream(streamOptions),
-      )
-    ) {
-      historicalCompactionAttemptedBeforeRequest = true;
-      const compaction = await attemptContextCompaction(
-        config,
-        state,
-        streamOptions,
-        {
-          requireShrinkingHistoryCompaction: true,
-        },
-      );
-      if (compaction.compacted) {
-        yield {
-          type: "context_compacted",
-          reason: "proactive",
-          historyCompacted: compaction.historyCompacted,
-          artifacts: compaction.artifactReports ?? [],
-          ...compaction.stats,
-        };
-        for (const notice of compaction.artifactNotices ?? []) {
-          yield { type: "tool_output_artifact", ...notice };
-        }
-      }
-    }
-    const preflightRequestMessages = projectSessionLedgerToProviderMessages(
-      streamOptions.getLedger(),
-    );
-    if (
-      !preflightCurrentOutputCompactionAttempted &&
-      // After historical compaction, any remaining over-budget request is
-      // worth a current-output-only preflight attempt even when the original
-      // overage was not dominated by the current tool round.
-      shouldCompactBeforeRequest(
-        config.systemPrompt,
-        preflightRequestMessages,
-        config.contextCompaction,
-        state.contextAccounting,
-        requestMetadataForStream(streamOptions),
-      )
-    ) {
-      preflightCurrentOutputCompactionAttempted = true;
-      yield* attemptPreflightCurrentOutputCompaction(
-        config,
-        state,
-        streamOptions,
-      );
-    }
-    try {
-      const currentRequestMessages = projectSessionLedgerToProviderMessages(
+  try {
+    for (;;) {
+      const requestMessages = projectSessionLedgerToProviderMessages(
         streamOptions.getLedger(),
       );
-      const turn = yield* streamAgentTurn({
-        provider: streamOptions.provider,
-        systemPrompt: streamOptions.systemPrompt,
-        messages: currentRequestMessages,
-        signal: streamOptions.signal,
-        allowBash: streamOptions.allowBash,
-        ...(streamOptions.allowSkill !== undefined
-          ? { allowSkill: streamOptions.allowSkill }
-          : {}),
-        ...(streamOptions.toolChoice !== undefined
-          ? { toolChoice: streamOptions.toolChoice }
-          : {}),
-        ...(streamOptions.textPrefix !== undefined
-          ? { textPrefix: streamOptions.textPrefix }
-          : {}),
-      });
-      state.contextAccounting =
-        config.contextCompaction === undefined
-          ? undefined
-          : captureContextCompactionAccountingSnapshot({
-              systemPrompt: config.systemPrompt,
-              messages: currentRequestMessages,
-              usage: turn.usage,
-              requestMetadata: requestMetadataForStream(streamOptions),
-            });
-      return turn;
-    } catch (error) {
-      if (error instanceof ContextOverflowBeforeAssistantError) {
-        if (!overflowRecoveryAttempted) {
-          overflowRecoveryAttempted = true;
-          const compaction = await attemptContextCompaction(
-            config,
-            state,
-            streamOptions,
-            {
-              allowCurrentToolOutputCompaction: true,
-              ...(preflightCurrentOutputCompactionAttempted
-                ? {
-                    currentToolOutputMaxCharsOverride: 1,
-                    allowPreflightCurrentToolOutputRecompaction: true,
-                  }
-                : {}),
-            },
-          );
-          if (compaction.compacted) {
-            yield {
-              type: "context_compacted",
-              reason: "overflow_recovery",
-              historyCompacted: compaction.historyCompacted,
-              artifacts: compaction.artifactReports ?? [],
-              ...compaction.stats,
-            };
-            for (const notice of compaction.artifactNotices ?? []) {
-              yield { type: "tool_output_artifact", ...notice };
-            }
-            historicalCompactionAttemptedBeforeRequest = true;
-            preflightCurrentOutputCompactionAttempted = true;
-            continue;
+      if (
+        !preflightCurrentOutputCompactionAttempted &&
+        shouldCompactCurrentToolOutputBeforeHistoricalCompaction(
+          config.systemPrompt,
+          requestMessages,
+          config.contextCompaction,
+          state.contextAccounting,
+          requestMetadataForStream(streamOptions),
+        )
+      ) {
+        preflightCurrentOutputCompactionAttempted = true;
+        yield* attemptPreflightCurrentOutputCompaction(
+          config,
+          state,
+          streamOptions,
+        );
+      }
+      const historicalRequestMessages = projectSessionLedgerToProviderMessages(
+        streamOptions.getLedger(),
+      );
+      if (
+        !historicalCompactionAttemptedBeforeRequest &&
+        shouldCompactBeforeRequest(
+          config.systemPrompt,
+          historicalRequestMessages,
+          config.contextCompaction,
+          state.contextAccounting,
+          requestMetadataForStream(streamOptions),
+        )
+      ) {
+        historicalCompactionAttemptedBeforeRequest = true;
+        const compaction = await attemptContextCompaction(
+          config,
+          state,
+          streamOptions,
+          {
+            requireShrinkingHistoryCompaction: true,
+            modelOperationRecoveryFor: null,
+          },
+        );
+        if (compaction.compacted) {
+          yield {
+            type: "context_compacted",
+            reason: "proactive",
+            historyCompacted: compaction.historyCompacted,
+            artifacts: compaction.artifactReports ?? [],
+            ...compaction.stats,
+          };
+          for (const notice of compaction.artifactNotices ?? []) {
+            yield { type: "tool_output_artifact", ...notice };
           }
         }
-        throw error.error;
       }
-      throw error;
+      const preflightRequestMessages = projectSessionLedgerToProviderMessages(
+        streamOptions.getLedger(),
+      );
+      if (
+        !preflightCurrentOutputCompactionAttempted &&
+        // After historical compaction, any remaining over-budget request is
+        // worth a current-output-only preflight attempt even when the original
+        // overage was not dominated by the current tool round.
+        shouldCompactBeforeRequest(
+          config.systemPrompt,
+          preflightRequestMessages,
+          config.contextCompaction,
+          state.contextAccounting,
+          requestMetadataForStream(streamOptions),
+        )
+      ) {
+        preflightCurrentOutputCompactionAttempted = true;
+        yield* attemptPreflightCurrentOutputCompaction(
+          config,
+          state,
+          streamOptions,
+        );
+      }
+      try {
+        const currentRequestMessages = projectSessionLedgerToProviderMessages(
+          streamOptions.getLedger(),
+        );
+        const currentOperation = startOperation();
+        const turn = yield* streamAgentTurn({
+          provider: streamOptions.provider,
+          systemPrompt: streamOptions.systemPrompt,
+          messages: currentRequestMessages,
+          signal: streamOptions.signal,
+          allowBash: streamOptions.allowBash,
+          ...(streamOptions.allowSkill !== undefined
+            ? { allowSkill: streamOptions.allowSkill }
+            : {}),
+          ...(streamOptions.toolChoice !== undefined
+            ? { toolChoice: streamOptions.toolChoice }
+            : {}),
+          ...(streamOptions.textPrefix !== undefined
+            ? { textPrefix: streamOptions.textPrefix }
+            : {}),
+          ...(currentOperation !== null
+            ? {
+                providerRequestAttempts:
+                  currentOperation.providerRequestAttempts,
+              }
+            : {}),
+        });
+        finishOperation("completed");
+        state.contextAccounting =
+          config.contextCompaction === undefined
+            ? undefined
+            : captureContextCompactionAccountingSnapshot({
+                systemPrompt: config.systemPrompt,
+                messages: currentRequestMessages,
+                usage: turn.usage,
+                requestMetadata: requestMetadataForStream(streamOptions),
+              });
+        return turn;
+      } catch (error) {
+        if (error instanceof ContextOverflowBeforeAssistantError) {
+          if (!overflowRecoveryAttempted) {
+            overflowRecoveryAttempted = true;
+            const recoveryOperation = startOperation();
+            const recoveryFor =
+              recoveryOperation === null
+                ? null
+                : recoveryOperation.latestContextOverflowRecoveryTarget();
+            let compaction: CompactMessagesResult;
+            try {
+              compaction = await attemptContextCompaction(
+                config,
+                state,
+                streamOptions,
+                {
+                  allowCurrentToolOutputCompaction: true,
+                  modelOperationRecoveryFor: recoveryFor,
+                  ...(preflightCurrentOutputCompactionAttempted
+                    ? {
+                        currentToolOutputMaxCharsOverride: 1,
+                        allowPreflightCurrentToolOutputRecompaction: true,
+                      }
+                    : {}),
+                },
+              );
+            } catch (recoveryError) {
+              finishOperationFromError(error.error);
+              throw recoveryError;
+            }
+            if (compaction.compacted) {
+              yield {
+                type: "context_compacted",
+                reason: "overflow_recovery",
+                historyCompacted: compaction.historyCompacted,
+                artifacts: compaction.artifactReports ?? [],
+                ...compaction.stats,
+              };
+              for (const notice of compaction.artifactNotices ?? []) {
+                yield { type: "tool_output_artifact", ...notice };
+              }
+              historicalCompactionAttemptedBeforeRequest = true;
+              preflightCurrentOutputCompactionAttempted = true;
+              continue;
+            }
+          }
+          finishOperationFromError(error.error);
+          throw error.error;
+        }
+        finishOperationFromError(error);
+        throw error;
+      }
     }
+  } catch (error) {
+    finishOperationFromError(error);
+    throw error;
   }
 }

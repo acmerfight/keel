@@ -4,7 +4,6 @@ import type { ProjectInstructions } from "../../agent/prompt.ts";
 import type { ToolOutputArtifactsOptions } from "../../agent/tool-output-artifacts.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";
-import type { ProviderId } from "../../core/provider-id.ts";
 import type { SessionGoal } from "../../core/session-goal.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
 import type { UndoProtectionSummary } from "../../core/undo-protection.ts";
@@ -26,6 +25,7 @@ import type { SessionForkPoints } from "../fork-points.ts";
 import type { ModelSource, ProviderSelection } from "../provider-config.ts";
 import type {
   AgentEventReportRecorder,
+  RunReportModelOperation,
   RunReportTask,
 } from "../report-events.ts";
 import type {
@@ -192,8 +192,8 @@ export type InteractiveInputDisposition =
   | "queue"
   | "steer/next";
 
-export interface InteractiveReportModelUsage {
-  readonly provider: ProviderId;
+interface InteractiveReportModelUsage {
+  readonly provider: string;
   readonly model: string;
   readonly agentLoopTurns: number;
   readonly usage: Usage;
@@ -205,10 +205,13 @@ export interface InteractiveSessionResult {
   readonly report?: {
     readonly tasks: readonly RunReportTask[];
     readonly modelsUsed: readonly {
-      readonly provider: ProviderId;
+      readonly provider: string;
       readonly model: string;
     }[];
     readonly usageByModel: readonly InteractiveReportModelUsage[];
+    readonly modelOperations: readonly RunReportModelOperation[];
+    readonly modelOperationCount: number;
+    readonly providerRequestAttemptCount: number;
     readonly end: EndEventWithCost;
     readonly skillCatalog: {
       readonly exposed: number;

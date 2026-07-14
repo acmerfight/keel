@@ -1,5 +1,9 @@
 import { KeelError } from "../../core/error.ts";
-import type { LLMEvent, LLMProvider } from "../types.ts";
+import type {
+  LLMEvent,
+  LLMProvider,
+  ProviderRequestAttemptFinish,
+} from "../types.ts";
 import {
   createChatCompletionsBody,
   type OpenAICompatibleMessageOptions,
@@ -8,6 +12,7 @@ import {
   type ProviderConfig,
   ProviderRetryController,
   requestChatCompletions,
+  requestRetryDecisionForReport,
   waitForProviderRetry,
 } from "./openai-compatible-retry.ts";
 import {
@@ -44,6 +49,12 @@ function isRetryablePreOutputStreamError(
   return isMissingDoneSignalError(error);
 }
 
+function terminalAttemptOutcome(
+  error: KeelError,
+): "terminal_error" | "aborted" {
+  return error.code === "provider_aborted" ? "aborted" : "terminal_error";
+}
+
 export function createOpenAICompatibleProvider<
   Chunk extends OpenAICompatibleChunk,
 >(providerConfig: OpenAICompatibleProviderConfig<Chunk>): LLMProvider {
@@ -77,11 +88,19 @@ export function createOpenAICompatibleProvider<
           options.signal,
           providerConfig.providerName,
           retry,
-          options.beforeRequestAttempt,
+          options.providerRequestAttempts ?? null,
         );
+        let attemptFinished = false;
+        const finishAttempt = (result: ProviderRequestAttemptFinish): void => {
+          if (response.attempt === null || attemptFinished) {
+            return;
+          }
+          attemptFinished = true;
+          response.attempt.finish(result);
+        };
         try {
           const reader = getResponseReader(
-            response,
+            response.response,
             providerConfig.providerName,
           );
           const state = createStreamState();
@@ -95,10 +114,15 @@ export function createOpenAICompatibleProvider<
             emittedAssistantOutput = true;
             yield event;
           }
-          for (const event of finalStreamEvents(
+          const finalStream = finalStreamEvents(
             state,
             providerConfig.providerName,
-          )) {
+          );
+          finishAttempt({
+            outcome: "completed",
+            usage: finalStream.usage,
+          });
+          for (const event of finalStream.events) {
             if (event.type === "tool_call") {
               emittedAssistantOutput = true;
             }
@@ -108,24 +132,40 @@ export function createOpenAICompatibleProvider<
         } catch (error) {
           /* v8 ignore next 3: supported stream helpers normalize expected failures to KeelError; preserve unexpected bugs. */
           if (!(error instanceof KeelError)) {
+            finishAttempt({ outcome: "terminal_error" });
             throw error;
           }
           if (
             emittedAssistantOutput ||
             !isRetryablePreOutputStreamError(error)
           ) {
+            finishAttempt({
+              outcome: terminalAttemptOutcome(error),
+            });
             throw error;
           }
           const decision = retry.transportDecision(error.code);
           if (decision === null) {
+            finishAttempt({ outcome: "terminal_error" });
             throw error;
           }
+          finishAttempt({
+            outcome: "retryable_error",
+            retryDecision: requestRetryDecisionForReport(
+              providerConfig.providerName,
+              decision,
+            ),
+          });
           yield* waitForProviderRetry(
             retry,
             providerConfig.providerName,
             options.signal,
             decision,
           );
+        } finally {
+          finishAttempt({
+            outcome: options.signal.aborted ? "aborted" : "terminal_error",
+          });
         }
       }
     },

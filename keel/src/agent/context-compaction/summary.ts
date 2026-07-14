@@ -5,6 +5,11 @@ import {
 } from "../../core/task-progress.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
 import type {
+  ModelOperationHandle,
+  ModelOperationPurpose,
+  ModelOperationRequest,
+} from "../model-operations.ts";
+import type {
   ToolOutputArtifactCompactionArtifact,
   ToolOutputArtifactNotice,
   ToolOutputArtifactStore,
@@ -346,6 +351,7 @@ async function collectTextOnlyTurn(options: {
   readonly systemPrompt: string;
   readonly messages: readonly Message[];
   readonly signal: AbortSignal;
+  readonly operation: ModelOperationHandle | null;
 }): Promise<TextOnlyTurn> {
   let text = "";
   let usage: Usage | null = null;
@@ -354,6 +360,9 @@ async function collectTextOnlyTurn(options: {
     messages: options.messages,
     signal: options.signal,
     toolChoice: "none",
+    ...(options.operation !== null
+      ? { providerRequestAttempts: options.operation.providerRequestAttempts }
+      : {}),
   })) {
     switch (event.type) {
       case "text":
@@ -388,7 +397,14 @@ function isProviderContextOverflow(error: unknown): boolean {
   );
 }
 
-export async function collectCompactionSummary(options: {
+type CompactionModelOperationRequest = ModelOperationRequest<
+  Extract<
+    ModelOperationPurpose,
+    "context_compaction" | "manual_compaction" | "model_switch_compaction"
+  >
+>;
+
+interface CollectCompactionSummaryOptions {
   readonly provider: LLMProvider;
   readonly systemPrompt: string;
   readonly messagesToSummarize: readonly Message[];
@@ -396,7 +412,53 @@ export async function collectCompactionSummary(options: {
   readonly contextCompaction: ResolvedContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly focusInstruction?: string;
-}): Promise<CompactionSummaryTurn> {
+  readonly modelOperation?: CompactionModelOperationRequest;
+}
+
+function beginCompactionModelOperation(
+  request: CompactionModelOperationRequest | null,
+): ModelOperationHandle | null {
+  if (request === null) {
+    return null;
+  }
+  switch (request.purpose) {
+    case "context_compaction":
+      return request.instrumentation.recorder.beginModelOperation({
+        ...request.instrumentation,
+        purpose: request.purpose,
+        recoveryFor: request.recoveryFor,
+      });
+    case "manual_compaction":
+    case "model_switch_compaction":
+      return request.instrumentation.recorder.beginModelOperation({
+        ...request.instrumentation,
+        purpose: request.purpose,
+        recoveryFor: null,
+      });
+  }
+}
+
+export async function collectCompactionSummary(
+  options: CollectCompactionSummaryOptions,
+): Promise<CompactionSummaryTurn> {
+  const operation = beginCompactionModelOperation(
+    options.modelOperation ?? null,
+  );
+  let turn: CompactionSummaryTurn;
+  try {
+    turn = await collectCompactionSummaryAttempts(options, operation);
+  } catch (error) {
+    operation?.finishFromError(error);
+    throw error;
+  }
+  operation?.finish({ outcome: "completed" });
+  return turn;
+}
+
+async function collectCompactionSummaryAttempts(
+  options: CollectCompactionSummaryOptions,
+  operation: ModelOperationHandle | null,
+): Promise<CompactionSummaryTurn> {
   let summaryInputMaxChars = options.contextCompaction.summaryInputMaxChars;
 
   let attempt = 0;
@@ -414,6 +476,7 @@ export async function collectCompactionSummary(options: {
         systemPrompt: options.systemPrompt,
         messages: [{ role: "user", content: await prompt }],
         signal: options.signal,
+        operation,
       });
       return { ...turn, summaryInputMaxChars };
     } catch (error) {

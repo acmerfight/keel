@@ -107,7 +107,7 @@ export const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 export const VALID_REPORT = {
-  schemaVersion: 10,
+  schemaVersion: 11,
   tasks: [
     {
       ordinal: 1,
@@ -125,6 +125,38 @@ export const VALID_REPORT = {
       outcome: "completed",
     },
   ],
+  modelOperations: [
+    {
+      ordinal: 1,
+      owner: { type: "agent_run", taskOrdinal: 1, agentRunOrdinal: 1 },
+      purpose: "agent_turn",
+      provider: "fake",
+      model: "fake",
+      outcome: "completed",
+      providerRequestAttempts: [
+        {
+          ordinal: 1,
+          outcome: "completed",
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          },
+          costUsd: 0,
+        },
+      ],
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+      costUsd: 0,
+    },
+  ],
+  modelOperationCount: 1,
+  providerRequestAttemptCount: 1,
   modelsUsed: [{ provider: "fake", model: "fake" }],
   usageByModel: [
     {

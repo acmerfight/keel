@@ -54,6 +54,7 @@ describe("Turn Compaction", () => {
             keepRecentTokens: 1,
           },
           costTracking: undefined,
+          modelOperations: null,
           onContextCompacted: async () => ({ rollback: () => {} }),
         },
         {
@@ -65,6 +66,7 @@ describe("Turn Compaction", () => {
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           allowBash: false,
+          modelOperationPurpose: "agent_turn",
           getLedger: () => ledger,
           setLedger: (next) => {
             ledger = next;

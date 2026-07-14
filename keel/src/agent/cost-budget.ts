@@ -4,7 +4,12 @@ import {
   calculateRequestCostBatchUsd,
   maxAffordableOutputTokens,
 } from "../core/cost.ts";
-import type { LLMProvider, StreamOptions } from "../llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderRequestAttemptHandle,
+  ProviderRequestAttemptObserver,
+  StreamOptions,
+} from "../llm/types.ts";
 
 const MIN_USEFUL_OUTPUT_TOKENS = 256;
 const UNKNOWN_PROVIDER_TOOL_SCHEMA_TOKEN_RESERVE = 16_384;
@@ -53,12 +58,12 @@ function conservativeFallbackInputTokens(options: StreamOptions): number {
 function admittedStreamOptions(
   options: StreamOptions,
   maxOutputTokens: number,
-  beforeRequestAttempt: () => void,
+  providerRequestAttempts: ProviderRequestAttemptObserver,
 ): StreamOptions {
   if (maxOutputTokens === Number.MAX_SAFE_INTEGER) {
-    return { ...options, beforeRequestAttempt };
+    return { ...options, providerRequestAttempts };
   }
-  return { ...options, maxOutputTokens, beforeRequestAttempt };
+  return { ...options, maxOutputTokens, providerRequestAttempts };
 }
 
 export function createCostBudgetedProvider(options: {
@@ -118,32 +123,51 @@ export function createCostBudgetedProvider(options: {
         maxOutputTokens,
         options.model,
       );
+      const reserveAttempt = (): void => {
+        const remainingUsd = Math.max(
+          0,
+          maxCostUsd - observedSpendUsd - reservedAttemptSpendUsd,
+        );
+        if (requestReservationUsd > remainingUsd) {
+          throw new CostBudgetAdmissionError({
+            remainingUsd,
+            estimatedInputTokens,
+          });
+        }
+        reservedAttemptSpendUsd += requestReservationUsd;
+        currentAttemptReservationUsd = requestReservationUsd;
+      };
+      const releaseCompletedAttempt = (): void => {
+        reservedAttemptSpendUsd -= currentAttemptReservationUsd;
+        currentAttemptReservationUsd = 0;
+      };
+      const providerRequestAttempts: ProviderRequestAttemptObserver = {
+        begin: (): ProviderRequestAttemptHandle => {
+          reserveAttempt();
+          const attempt =
+            streamOptions.providerRequestAttempts?.begin() ?? null;
+          return {
+            finish: (result) => {
+              if (result.outcome === "completed") {
+                releaseCompletedAttempt();
+                observedSpendUsd += calculateRequestCostBatchUsd(
+                  { requests: [{ usage: result.usage }] },
+                  options.model,
+                );
+              }
+              attempt?.finish(result);
+            },
+          };
+        },
+      };
 
       for await (const event of options.provider.stream(
-        admittedStreamOptions(streamOptions, maxOutputTokens, () => {
-          streamOptions.beforeRequestAttempt?.();
-          const remainingUsd = Math.max(
-            0,
-            maxCostUsd - observedSpendUsd - reservedAttemptSpendUsd,
-          );
-          if (requestReservationUsd > remainingUsd) {
-            throw new CostBudgetAdmissionError({
-              remainingUsd,
-              estimatedInputTokens,
-            });
-          }
-          reservedAttemptSpendUsd += requestReservationUsd;
-          currentAttemptReservationUsd = requestReservationUsd;
-        }),
+        admittedStreamOptions(
+          streamOptions,
+          maxOutputTokens,
+          providerRequestAttempts,
+        ),
       )) {
-        if (event.type === "stop") {
-          reservedAttemptSpendUsd -= currentAttemptReservationUsd;
-          currentAttemptReservationUsd = 0;
-          observedSpendUsd += calculateRequestCostBatchUsd(
-            { requests: [{ usage: event.usage }] },
-            options.model,
-          );
-        }
         yield event;
       }
     },

@@ -4,7 +4,12 @@ import {
   type KeelErrorCode,
   type RecoverableToolErrorCode,
 } from "../../core/error.ts";
-import type { LLMEvent } from "../types.ts";
+import type {
+  LLMEvent,
+  ProviderRequestAttemptHandle,
+  ProviderRequestAttemptObserver,
+  ProviderRequestRetryDecision,
+} from "../types.ts";
 
 export interface ProviderRetryConfig {
   readonly maxRetries?: number;
@@ -345,6 +350,22 @@ function providerRetryEvent(
   };
 }
 
+function providerRequestRetryDecision(
+  providerName: string,
+  reason: KeelErrorCode,
+  attempt: number,
+  maxRetries: number,
+  delayMs: number,
+): ProviderRequestRetryDecision {
+  return {
+    provider: providerName,
+    reason,
+    attempt: attempt + 1,
+    maxRetries,
+    delayMs,
+  };
+}
+
 export async function* waitForProviderRetry(
   retry: ProviderRetryController,
   providerName: string,
@@ -362,16 +383,34 @@ export async function* waitForProviderRetry(
   await sleepWithAbort(decision.delayMs, signal, providerName);
 }
 
+export function requestRetryDecisionForReport(
+  providerName: string,
+  decision: RetryDecision,
+): ProviderRequestRetryDecision {
+  return providerRequestRetryDecision(
+    providerName,
+    decision.reason,
+    decision.attemptIndex,
+    decision.maxRetries,
+    decision.delayMs,
+  );
+}
+
+export interface ChatCompletionsResponse {
+  readonly response: Response;
+  readonly attempt: ProviderRequestAttemptHandle | null;
+}
+
 export async function* requestChatCompletions(
   config: ProviderConfig,
   body: string,
   signal: AbortSignal,
   providerName: string,
-  retry: ProviderRetryController = new ProviderRetryController(config.retry),
-  beforeRequestAttempt?: () => void,
-): AsyncGenerator<LLMEvent, Response> {
+  retry: ProviderRetryController,
+  providerRequestAttempts: ProviderRequestAttemptObserver | null,
+): AsyncGenerator<LLMEvent, ChatCompletionsResponse> {
   for (;;) {
-    beforeRequestAttempt?.();
+    const attempt = providerRequestAttempts?.begin() ?? null;
     let response: Response;
     try {
       response = await fetch(chatCompletionsUrl(config.baseUrl), {
@@ -390,33 +429,75 @@ export async function* requestChatCompletions(
         providerName,
         `${providerName} request failed before response`,
       );
+      if (keelError.code === "provider_aborted") {
+        attempt?.finish({ outcome: "aborted" });
+      }
+      /* v8 ignore next 5 -- fetch throws aborts or network failures; transportError only preserves a third KeelError class for non-fetch callers. */
       if (keelError.code !== "provider_network_error") {
+        if (keelError.code !== "provider_aborted") {
+          attempt?.finish({ outcome: "terminal_error" });
+        }
         throw keelError;
       }
       const decision = retry.transportDecision(keelError.code);
       if (decision === null) {
+        attempt?.finish({ outcome: "terminal_error" });
         throw keelError;
       }
+      attempt?.finish({
+        outcome: "retryable_error",
+        retryDecision: requestRetryDecisionForReport(providerName, decision),
+      });
       yield* waitForProviderRetry(retry, providerName, signal, decision);
       continue;
     }
 
     if (response.ok) {
-      return response;
+      return { response, attempt };
     }
 
     const retryDecision = retry.responseDecision(response);
     if (retryDecision !== null) {
       await discardResponseBody(response);
+      attempt?.finish({
+        outcome: "retryable_error",
+        retryDecision: requestRetryDecisionForReport(
+          providerName,
+          retryDecision,
+        ),
+      });
       yield* waitForProviderRetry(retry, providerName, signal, retryDecision);
       continue;
     }
 
-    const text = await response.text();
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      const keelError = transportError(
+        error,
+        signal,
+        providerName,
+        `${providerName} response body failed before streaming`,
+      );
+      attempt?.finish({
+        /* v8 ignore next -- abort can race before or during response-body reading; provider conformance covers the same aborted physical-attempt result. */
+        outcome:
+          keelError.code === "provider_aborted" ? "aborted" : "terminal_error",
+      });
+      throw keelError;
+    }
+    const code = isContextOverflowHttpError(response.status, text)
+      ? "provider_context_overflow"
+      : httpErrorCode(response.status);
+    attempt?.finish({
+      outcome:
+        code === "provider_context_overflow"
+          ? "context_overflow"
+          : "terminal_error",
+    });
     throw new KeelError(
-      isContextOverflowHttpError(response.status, text)
-        ? "provider_context_overflow"
-        : httpErrorCode(response.status),
+      code,
       `${providerName} API error (${response.status}): ${text}`,
     );
   }

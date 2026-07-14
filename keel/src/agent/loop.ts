@@ -46,6 +46,7 @@ import {
   createCostBudgetedProvider,
 } from "./cost-budget.ts";
 import type { AgentEvent } from "./events.ts";
+import type { ModelOperationInstrumentation } from "./model-operations.ts";
 import { postCompactionReadToolCallId } from "./post-compaction-read-id.ts";
 import { restorePostCompactionReads } from "./post-compaction-restore.ts";
 import { appendWorkflowSkillsToSystemPrompt } from "./prompt.ts";
@@ -109,6 +110,7 @@ export interface RunAgentOptions {
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly taskProgress?: SessionTaskProgress;
   readonly onTranscriptReady?: (messages: readonly Message[]) => void;
+  readonly modelOperations?: ModelOperationInstrumentation;
 }
 
 type InjectedUserMessage = Extract<Message, { readonly role: "user" }>;
@@ -145,6 +147,7 @@ export interface RunAgentTurnOptions {
   readonly drainInjectedUserMessages?: () =>
     | readonly InjectedUserMessage[]
     | Promise<readonly InjectedUserMessage[]>;
+  readonly modelOperations?: ModelOperationInstrumentation;
 }
 
 function mutatedTargetPathsFromExecution(
@@ -483,7 +486,10 @@ const MISSING_SUMMARY_NOTICE =
 interface WrapUpSummarizeOptions {
   readonly config: CompactionConfig;
   readonly state: CompactionState;
-  readonly streamOptions: Omit<LedgerTurnOptions, "getLedger" | "setLedger">;
+  readonly streamOptions: Omit<
+    LedgerTurnOptions,
+    "getLedger" | "setLedger" | "modelOperationPurpose"
+  >;
   readonly turnText: string;
   readonly turnReasoningContent: string | null;
   readonly sessionLedger: SessionLedger;
@@ -512,6 +518,7 @@ async function* streamWrapUpSummary(
     ...streamOptions,
     getLedger: () => wrapUpLedger,
     setLedger: setWrapUpLedger,
+    modelOperationPurpose: "turn_limit_summary",
     toolChoice: "none",
     textPrefix: turnText === "" || turnText.endsWith("\n") ? "" : "\n",
   });
@@ -590,6 +597,7 @@ export async function* runAgentTurn(
     ...(options.toolOutputArtifacts !== undefined
       ? { toolOutputArtifacts: options.toolOutputArtifacts }
       : {}),
+    modelOperations: options.modelOperations ?? null,
     taskProgress: () => taskProgress,
     costTracking,
     onContextCompacted: async (targetMessages) => {
@@ -653,6 +661,7 @@ export async function* runAgentTurn(
         signal,
         allowBash,
         allowSkill,
+        modelOperationPurpose: "agent_turn",
       });
     } catch (error) {
       if (
@@ -867,6 +876,7 @@ export async function* runAgentTurn(
                 workspace,
                 messages: evidenceMessages,
               }),
+              modelOperations: options.modelOperations ?? null,
             });
           } catch (error) {
             /* v8 ignore else -- non-budget evaluator failures follow the tool layer's existing recoverable-error path. */
@@ -1171,6 +1181,9 @@ export async function* runAgent(
           : {}),
         ...(options.toolOutputArtifacts !== undefined
           ? { toolOutputArtifacts: options.toolOutputArtifacts }
+          : {}),
+        ...(options.modelOperations !== undefined
+          ? { modelOperations: options.modelOperations }
           : {}),
       })) {
         if (event.type === "end") {
