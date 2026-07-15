@@ -80,6 +80,7 @@ export function createFakeProvider(
       ).length;
     },
     async *stream(options) {
+      options.requestSystemPrompt?.();
       const response = script[turn];
       turn++;
 

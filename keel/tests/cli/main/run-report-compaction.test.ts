@@ -50,7 +50,7 @@ function barelyOversizedStaleReadFixture(label: string): string {
 
 const reportSchema = z
   .object({
-    schemaVersion: z.literal(12),
+    schemaVersion: z.literal(13),
     agentLoopTurns: z.number().int().nonnegative(),
     tasks: z.array(z.unknown()),
     skillActivations: z.array(z.unknown()),
@@ -277,7 +277,7 @@ describe("CLI Main - Run Report Compaction", () => {
       expect(run.stderr()).toContain("Context compacted: preflight");
       const report = await readReport(reportPath);
       expect(report).toMatchObject({
-        schemaVersion: 12,
+        schemaVersion: 13,
         tasks: [
           {
             ordinal: 1,
@@ -536,7 +536,7 @@ describe("CLI Main - Run Report Compaction", () => {
       expect(mainBodies).toHaveLength(3);
       const report = await readReport(reportPath);
       expect(report).toMatchObject({
-        schemaVersion: 12,
+        schemaVersion: 13,
         tasks: [
           {
             ordinal: 1,
@@ -673,7 +673,7 @@ describe("CLI Main - Run Report Compaction", () => {
       expect(mainBodies).toHaveLength(2);
       const report = await readReport(reportPath);
       expect(report).toMatchObject({
-        schemaVersion: 12,
+        schemaVersion: 13,
         contextCompactions: [
           {
             reason: "proactive",
@@ -1435,7 +1435,7 @@ describe("CLI Main - Run Report Compaction", () => {
       expect(mainBodies).toHaveLength(4);
       const report = await readReport(reportPath);
       expect(report).toMatchObject({
-        schemaVersion: 12,
+        schemaVersion: 13,
         contextCompactions: [
           {
             reason: "proactive",
@@ -1560,7 +1560,7 @@ describe("CLI Main - Run Report Compaction", () => {
       expect(run.stdout()).toContain("session report ready\n");
       const report = await readReport(reportPath);
       expect(report).toMatchObject({
-        schemaVersion: 12,
+        schemaVersion: 13,
         contextCompactions: [
           {
             reason: "preflight",

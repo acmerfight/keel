@@ -1,7 +1,10 @@
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
-import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
+import {
+  defaultStopPolicy,
+  maxTurnFallbackPolicy,
+} from "../../src/agent/stop-policy.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 
 const ZERO_USAGE: Usage = {
@@ -366,5 +369,135 @@ describe("Conversation History", () => {
         toolCalls: [],
       },
     ]);
+  });
+
+  test(`Given request-time project memory is present during context compaction,
+    When the model summarizes history and continues the turn,
+    Then only normal provider requests receive memory and the session ledger never stores it`, async () => {
+    // Given
+    const memoryFact = "MEMORY_ONLY_RELEASE_RULE";
+    const messages: Message[] = [
+      { role: "user", content: "Older task details ".repeat(80) },
+      {
+        role: "assistant",
+        content: "Older progress ".repeat(80),
+        toolCalls: [],
+      },
+      { role: "user", content: "Continue with the latest step." },
+    ];
+    const requests: {
+      readonly systemPrompt: string;
+      readonly toolChoice: "auto" | "none" | undefined;
+    }[] = [];
+    const provider: LLMProvider = {
+      id: "memory-compaction-provider",
+      async *stream(options) {
+        requests.push({
+          systemPrompt: options.systemPrompt,
+          toolChoice: options.toolChoice,
+        });
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Current Task: continue latest step." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "Continued after checkpoint." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages,
+        systemPrompt: "You are helpful.",
+        memoryPrompt: () => memoryFact,
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+        contextCompaction: {
+          contextWindowTokens: 200,
+          reserveTokens: 0,
+          keepRecentTokens: 10,
+        },
+      }),
+    );
+
+    // Then
+    const summaryRequests = requests.filter(
+      (request) => request.toolChoice === "none",
+    );
+    const normalRequests = requests.filter(
+      (request) => request.toolChoice !== "none",
+    );
+    expect(summaryRequests.length).toBeGreaterThan(0);
+    expect(
+      summaryRequests.every(
+        (request) => !request.systemPrompt.includes(memoryFact),
+      ),
+    ).toBe(true);
+    expect(normalRequests.length).toBeGreaterThan(0);
+    expect(
+      normalRequests.every((request) =>
+        request.systemPrompt.includes(memoryFact),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(messages)).not.toContain(memoryFact);
+  });
+
+  test(`Given project memory changes after one provider request,
+    When the turn-limit wrap-up sends the next request,
+    Then provider assembly resolves memory again instead of reusing the earlier prompt`, async () => {
+    // Given
+    const memoryFact = "MEMORY_REMOVED_BEFORE_WRAP_UP";
+    let memoryActive = true;
+    const requests: {
+      readonly systemPrompt: string;
+      readonly toolChoice: "auto" | "none" | undefined;
+    }[] = [];
+    const provider: LLMProvider = {
+      id: "memory-wrap-up-provider",
+      async *stream(options) {
+        requests.push({
+          systemPrompt: options.systemPrompt,
+          toolChoice: options.toolChoice,
+        });
+        if (options.toolChoice === "none") {
+          yield { type: "text", text: "Stopped after the first tool round." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        memoryActive = false;
+        yield {
+          type: "tool_call",
+          id: "read_package",
+          tool: "read",
+          path: "package.json",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    await collect(
+      runAgentTurn({
+        workspace: workspace(),
+        provider,
+        messages: [{ role: "user", content: "Inspect the package." }],
+        systemPrompt: "You are helpful.",
+        memoryPrompt: () => (memoryActive ? memoryFact : ""),
+        signal: freshSignal(),
+        allowBash: false,
+        stopPolicy: maxTurnFallbackPolicy(1),
+      }),
+    );
+
+    // Then
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.systemPrompt).toContain(memoryFact);
+    expect(requests[1]).toMatchObject({ toolChoice: "none" });
+    expect(requests[1]?.systemPrompt).not.toContain(memoryFact);
   });
 });

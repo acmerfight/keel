@@ -162,7 +162,7 @@ const modelOperationBase = {
 const modelOperationSchema = z.object(modelOperationBase);
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(12),
+  schemaVersion: z.literal(13),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),
@@ -243,6 +243,19 @@ export const runReportSchema = z.object({
         }),
       ])
       .nullable(),
+  }),
+  memory: z.object({
+    enabled: z.boolean(),
+    scope: z
+      .object({
+        kind: z.literal("project"),
+        id: z.string(),
+      })
+      .nullable(),
+    loadedIds: z.array(z.string()),
+    renderedBytes: z.number().int().nonnegative(),
+    estimatedTokens: z.number().int().nonnegative().optional(),
+    error: z.string().optional(),
   }),
   goalOutcome: z
     .object({

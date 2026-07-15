@@ -404,13 +404,14 @@ export interface ChatCompletionsResponse {
 
 export async function* requestChatCompletions(
   config: ProviderConfig,
-  body: string,
+  requestBody: () => string,
   signal: AbortSignal,
   providerName: string,
   retry: ProviderRetryController,
   providerRequestAttempts: ProviderRequestAttemptObserver | null,
 ): AsyncGenerator<LLMEvent, ChatCompletionsResponse> {
   for (;;) {
+    const body = requestBody();
     const attempt = providerRequestAttempts?.begin() ?? null;
     let response: Response;
     try {

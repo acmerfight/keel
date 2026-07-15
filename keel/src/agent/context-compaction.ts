@@ -53,6 +53,7 @@ import {
   captureContextCompactionAccountingSnapshot as captureContextCompactionAccountingSnapshotFromAccounting,
   contextCompactionStatsForCurrentMessages as contextCompactionStatsForCurrentMessagesFromAccounting,
   estimateRequestTokens,
+  estimateTextTokens,
   type ContextCompactionAccountingSnapshot as InternalContextCompactionAccountingSnapshot,
   type ContextCompactionStats as InternalContextCompactionStats,
   shouldCompactBeforeRequest as shouldCompactBeforeRequestFromAccounting,
@@ -70,6 +71,7 @@ export type ContextCompactionAccountingSnapshot =
   InternalContextCompactionAccountingSnapshot;
 export type ContextCompactionStats = InternalContextCompactionStats;
 export type { CurrentToolOutputCompactionReason };
+export { estimateTextTokens };
 
 export function isCompactedCurrentToolOutput(text: string): boolean {
   return isCompactedCurrentToolOutputFromContent(text);
@@ -85,6 +87,7 @@ const ZERO_USAGE: Usage = {
 interface CompactMessagesOptions {
   readonly provider: LLMProvider;
   readonly systemPrompt: string;
+  readonly summarySystemPrompt?: string;
   readonly messages: Message[];
   readonly signal: AbortSignal;
   readonly contextCompaction?: ContextCompactionOptions;
@@ -467,7 +470,7 @@ export async function compactMessages(
   try {
     summaryResult = await collectCompactionSummary({
       provider: options.provider,
-      systemPrompt: options.systemPrompt,
+      systemPrompt: options.summarySystemPrompt ?? options.systemPrompt,
       messagesToSummarize: plan.messagesToSummarize,
       signal: options.signal,
       contextCompaction: resolved,

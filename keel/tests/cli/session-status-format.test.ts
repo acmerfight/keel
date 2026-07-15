@@ -150,6 +150,65 @@ describe("CLI Session Status Format", () => {
     expect(formatted).not.toContain("...");
   });
 
+  test(`Given project memory is disabled, failed, or has no loaded metadata,
+    When the status snapshot is formatted,
+    Then each memory state is explicit without inventing scope or cost data`, () => {
+    // Given
+    const base = {
+      session: "scratch",
+      workspace: "/tmp/workspace",
+      activeModel: "(default for next prompt)",
+      messages: [],
+      messageCount: 0,
+      pendingInputCount: 0,
+      bashApprovalCount: 0,
+      taskProgress: emptySessionTaskProgress(),
+      modelSwitchCount: 0,
+      undoCheckpoints: [],
+      recoveryActions: [],
+    };
+
+    // When
+    const disabled = formatSessionStatusSnapshot({
+      ...base,
+      memory: {
+        enabled: false,
+        scope: null,
+        loadedIds: [],
+        renderedBytes: 0,
+        estimatedTokens: 0,
+      },
+    });
+    const failed = formatSessionStatusSnapshot({
+      ...base,
+      memory: {
+        enabled: true,
+        scope: null,
+        loadedIds: [],
+        renderedBytes: 0,
+        error: "Error: invalid memory\nignored detail",
+      },
+    });
+    const unavailable = formatSessionStatusSnapshot({
+      ...base,
+      memory: {
+        enabled: true,
+        scope: null,
+        loadedIds: [],
+        renderedBytes: 0,
+      },
+    });
+
+    // Then
+    expect(disabled).toContain("  memory: disabled (--no-memory)\n");
+    expect(failed).toContain(
+      "  memory: error - Error: invalid memory ignored detail\n",
+    );
+    expect(unavailable).toContain(
+      "  memory: 0 loaded for project unknown; IDs: none (0 bytes, token estimate unavailable)\n",
+    );
+  });
+
   test(`Given no visible session tasks exist,
     When the task list is formatted,
     Then the user sees an explicit empty state`, () => {

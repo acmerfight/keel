@@ -132,6 +132,7 @@ export type LLMEvent =
 
 export interface StreamOptions {
   readonly systemPrompt: string;
+  readonly requestSystemPrompt?: () => string;
   readonly messages: readonly Message[];
   readonly signal: AbortSignal;
   readonly allowBash?: boolean;

@@ -91,8 +91,8 @@ function sanitizeToolLabel(label: string): string {
     : `${escaped.slice(0, TOOL_LABEL_MAX_LENGTH)}...`;
 }
 
-export function sanitizeStatusLineText(text: string): string {
-  const escaped = text.replace(
+export function escapeTerminalText(text: string): string {
+  return text.replace(
     // biome-ignore lint/suspicious/noControlCharactersInRegex lint/suspicious/noMisleadingCharacterClass: status lines must render untrusted invisible and control bytes visibly.
     /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufeff\uffa0\u{e0001}\u{e0020}-\u{e007f}]/gu,
     (char) => {
@@ -102,6 +102,10 @@ export function sanitizeStatusLineText(text: string): string {
         : `\\u{${code.toString(16)}}`;
     },
   );
+}
+
+export function sanitizeStatusLineText(text: string): string {
+  const escaped = escapeTerminalText(text);
   return escaped.length <= STATUS_LINE_TEXT_MAX_LENGTH
     ? escaped
     : `${escaped.slice(0, STATUS_LINE_TEXT_MAX_LENGTH)}...`;

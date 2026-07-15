@@ -35,6 +35,7 @@ interface AgentTurnStop {
 export interface StreamTurnOptions {
   readonly provider: LLMProvider;
   readonly systemPrompt: string;
+  readonly requestSystemPrompt?: () => string;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
   readonly allowSkill?: boolean;
@@ -90,6 +91,9 @@ export async function* streamAgentTurn(
   let textPrefix = options.textPrefix ?? "";
   const stream = provider.stream({
     systemPrompt,
+    ...(options.requestSystemPrompt !== undefined
+      ? { requestSystemPrompt: options.requestSystemPrompt }
+      : {}),
     messages,
     signal,
     ...(allowBash ? { allowBash: true } : {}),

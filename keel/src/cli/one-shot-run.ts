@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { runAgent } from "../agent/loop.ts";
 import {
+  appendProjectMemoryToSystemPrompt,
   appendWorkflowSkillsToSystemPrompt,
   buildAgentSystemPrompt,
 } from "../agent/prompt.ts";
@@ -45,12 +46,17 @@ import {
   ProjectInstructionsError,
 } from "./project-instructions.ts";
 import {
+  loadRenderedProjectMemory,
+  ProjectMemoryError,
+} from "./project-memory.ts";
+import {
   ProviderConfigError,
   requireKnownCostModel,
   resolveProvider,
 } from "./provider-config.ts";
 import {
   assertEndEventHasCost,
+  type RunReportMemory,
   reportActiveSkills,
   writeRunReport,
 } from "./report.ts";
@@ -242,6 +248,46 @@ export async function runOneShotCli(
         ? { skillCatalog: catalogExposure.skills }
         : {}),
     });
+    const exposedMemoryIds = new Set<string>();
+    let exposedMemoryBytes = 0;
+    let exposedMemoryTokens = 0;
+    let transcriptMemoryPrompt = "";
+    let memoryPrompt: (() => string) | undefined;
+    let memoryReport: () => RunReportMemory;
+    if (cliArgs.memoryEnabled) {
+      let loadedMemory = loadRenderedProjectMemory(runtime, workspace);
+      memoryPrompt = () => {
+        loadedMemory = loadRenderedProjectMemory(runtime, workspace);
+        for (const entry of loadedMemory.entries)
+          exposedMemoryIds.add(entry.id);
+        exposedMemoryBytes = Math.max(
+          exposedMemoryBytes,
+          loadedMemory.renderedBytes,
+        );
+        exposedMemoryTokens = Math.max(
+          exposedMemoryTokens,
+          loadedMemory.estimatedTokens,
+        );
+        if (loadedMemory.prompt !== "")
+          transcriptMemoryPrompt = loadedMemory.prompt;
+        return loadedMemory.prompt;
+      };
+      memoryReport = () => ({
+        enabled: true,
+        scope: loadedMemory.scope,
+        loadedIds: [...exposedMemoryIds],
+        renderedBytes: exposedMemoryBytes,
+        estimatedTokens: exposedMemoryTokens,
+      });
+    } else {
+      memoryReport = () => ({
+        enabled: false,
+        scope: null,
+        loadedIds: [],
+        renderedBytes: 0,
+        estimatedTokens: 0,
+      });
+    }
     const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
       resolved.modelMetadata,
     );
@@ -258,6 +304,7 @@ export async function runOneShotCli(
       provider: resolved.provider,
       userMessage,
       systemPrompt,
+      ...(memoryPrompt !== undefined ? { memoryPrompt } : {}),
       signal: abortController.signal,
       allowBash: bashModeExposesTool(cliArgs.bashMode),
       ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
@@ -353,6 +400,7 @@ export async function runOneShotCli(
         },
         skillPolicy: skillPolicyReport(skillPolicy, cliArgs.skillsEnabled),
         undoProtection,
+        memory: memoryReport(),
       });
     }
     if (
@@ -362,9 +410,12 @@ export async function runOneShotCli(
       writeRunTranscript(cliArgs.transcriptFile, {
         provider: resolved.provider.id,
         model: resolved.model,
-        systemPrompt: appendWorkflowSkillsToSystemPrompt(
-          systemPrompt,
-          skillActivation?.active().map(workflowSkillFromActivation) ?? [],
+        systemPrompt: appendProjectMemoryToSystemPrompt(
+          appendWorkflowSkillsToSystemPrompt(
+            systemPrompt,
+            skillActivation?.active().map(workflowSkillFromActivation) ?? [],
+          ),
+          transcriptMemoryPrompt,
         ),
         messages: transcriptMessages,
       });
@@ -375,6 +426,10 @@ export async function runOneShotCli(
       return 1;
     }
     if (error instanceof ProjectInstructionsError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof ProjectMemoryError) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }

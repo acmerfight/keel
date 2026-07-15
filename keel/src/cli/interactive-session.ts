@@ -988,6 +988,9 @@ export async function runInteractiveSession(
           provider: resolved.provider,
           messages,
           systemPrompt: baseSystemPromptWithGoal(),
+          ...(options.memoryPrompt !== undefined
+            ? { memoryPrompt: options.memoryPrompt }
+            : {}),
           signal: turnAbortController.signal,
           allowBash: bashModeExposesTool(options.cliArgs.bashMode),
           hiddenWorkspacePaths,
@@ -1570,6 +1573,9 @@ export async function runInteractiveSession(
             modelSwitchCount,
             undoCheckpoints: listUndoCheckpoints(options.workspace),
             undoProtection: undoProtection.summary(),
+            ...(options.memoryStatus !== undefined
+              ? { memory: options.memoryStatus() }
+              : {}),
             recoveryActions: statusRecoveryActions(),
           }),
         );
@@ -2192,6 +2198,7 @@ export async function runInteractiveSession(
                 workspace: options.workspace,
                 messages,
                 systemPrompt: currentSystemPrompt(),
+                summarySystemPrompt: currentSystemPrompt(),
                 signal: compactAbortController.signal,
                 readVisibility,
                 projectInstructionVisibility,
@@ -2376,6 +2383,7 @@ export async function runInteractiveSession(
             workspace: options.workspace,
             messages,
             systemPrompt: currentSystemPrompt(),
+            summarySystemPrompt: currentSystemPrompt(),
             signal: compactAbortController.signal,
             readVisibility,
             projectInstructionVisibility,

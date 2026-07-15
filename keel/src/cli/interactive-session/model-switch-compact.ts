@@ -34,6 +34,7 @@ export interface ModelSwitchCompactionContext {
   readonly workspace: string;
   readonly messages: Message[];
   readonly systemPrompt: string;
+  readonly summarySystemPrompt: string;
   readonly signal: AbortSignal;
   readonly readVisibility: ReadVisibilityState;
   readonly projectInstructionVisibility: ProjectInstructionVisibilityState;
@@ -164,6 +165,7 @@ export async function executeModelSwitchCompaction(
     workspace,
     messages,
     systemPrompt,
+    summarySystemPrompt,
     signal,
     readVisibility,
     projectInstructionVisibility,
@@ -213,6 +215,7 @@ export async function executeModelSwitchCompaction(
     const result = await compactMessages({
       provider,
       systemPrompt,
+      summarySystemPrompt,
       messages,
       signal,
       ...(target.contextCompaction !== undefined

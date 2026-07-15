@@ -27,6 +27,7 @@ const RUN_OPTIONS = [
   "--report",
   "--transcript",
   "--ephemeral",
+  "--no-memory",
   "--session",
   "--resume",
   "--pick",
@@ -43,6 +44,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   let reportFile: string | undefined;
   let transcriptFile: string | undefined;
   let ephemeral = false;
+  let memoryEnabled = true;
   let sessionId: string | undefined;
   let resumeSession: RunCliArgs["resumeSession"] | undefined;
   let resumePick = false;
@@ -227,6 +229,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
 
     if (arg === "--ephemeral") {
       ephemeral = true;
+      continue;
+    }
+
+    if (arg === "--no-memory") {
+      memoryEnabled = false;
       continue;
     }
 
@@ -442,6 +449,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     ...(reportFile !== undefined ? { reportFile } : {}),
     ...(transcriptFile !== undefined ? { transcriptFile } : {}),
     ephemeral,
+    memoryEnabled,
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(parsedResumeSession !== undefined
       ? { resumeSession: parsedResumeSession }

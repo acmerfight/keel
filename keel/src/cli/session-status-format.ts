@@ -13,6 +13,7 @@ import type { UndoProtectionSummary } from "../core/undo-protection.ts";
 import type { Message } from "../llm/types.ts";
 import { sanitizeStatusLineText } from "./output.ts";
 import { redactTextForPersistence } from "./persistence-redaction.ts";
+import type { RunReportMemory } from "./report.ts";
 
 interface SessionStatusWorkflowSkill {
   readonly qualifiedName: string;
@@ -45,6 +46,7 @@ export interface SessionStatusSnapshotOptions {
   readonly modelSwitchCount: number;
   readonly undoCheckpoints: readonly { readonly restoredLabel: string }[];
   readonly undoProtection?: UndoProtectionSummary;
+  readonly memory?: RunReportMemory;
   readonly recoveryActions: readonly SessionStatusRecoveryAction[];
 }
 
@@ -147,6 +149,23 @@ function formatUndoProtectionStatus(summary: UndoProtectionSummary): string {
   return `${summary.status} overall (latest: ${latestStatus}; ${failed} failed, ${summary.checkpointsWritten} written)`;
 }
 
+function formatMemoryStatus(memory: RunReportMemory | undefined): string {
+  if (memory === undefined) return "not available";
+  if (!memory.enabled) return "disabled (--no-memory)";
+  if (memory.error !== undefined)
+    return `error - ${formatStatusText(memory.error)}`;
+  const scope = memory.scope?.id ?? "unknown";
+  const estimatedTokens =
+    memory.estimatedTokens === undefined
+      ? "token estimate unavailable"
+      : `~${memory.estimatedTokens} tokens`;
+  const loadedIds =
+    memory.loadedIds.length === 0
+      ? "none"
+      : memory.loadedIds.map(formatStatusText).join(", ");
+  return `${memory.loadedIds.length} loaded for project ${formatStatusText(scope)}; IDs: ${loadedIds} (${memory.renderedBytes} bytes, ${estimatedTokens})`;
+}
+
 export function formatSessionStatusSnapshot(
   options: SessionStatusSnapshotOptions,
 ): string {
@@ -171,6 +190,7 @@ export function formatSessionStatusSnapshot(
     `  messages: ${options.messageCount}`,
     `  pending inputs: ${options.pendingInputCount}`,
     `  bash approvals: ${options.bashApprovalCount}`,
+    `  memory: ${formatMemoryStatus(options.memory)}`,
     `  tasks: ${formatStatusText(formatSessionTaskProgressSummary(options.taskProgress))}`,
     `  model switches: ${options.modelSwitchCount}`,
     `  latest checkpoint: ${latestCheckpointSummary(options.messages) ?? "none"}`,

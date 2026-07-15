@@ -216,6 +216,7 @@ function headlessGoalRunArgs(
     bashMode: cliArgs.bashMode,
     skillsEnabled: cliArgs.skillsEnabled,
     ephemeral: false,
+    memoryEnabled: true,
     ...(cliArgs.mode === "launch"
       ? {
           sessionId: cliArgs.sessionId ?? createAutomaticSessionId(),

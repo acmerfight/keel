@@ -30,7 +30,17 @@ interface RunReportInput {
   readonly skillCatalog: RunReportSkillCatalog;
   readonly skillPolicy: SkillPolicyReport;
   readonly undoProtection: UndoProtectionSummary;
+  readonly memory: RunReportMemory;
   readonly goalOutcome?: RunReportGoalOutcome;
+}
+
+export interface RunReportMemory {
+  readonly enabled: boolean;
+  readonly scope: { readonly kind: "project"; readonly id: string } | null;
+  readonly loadedIds: readonly string[];
+  readonly renderedBytes: number;
+  readonly estimatedTokens?: number;
+  readonly error?: string;
 }
 
 interface RunReportSkillCatalog {
@@ -56,7 +66,7 @@ export interface RunReportGoalOutcome {
 }
 
 interface RunReport {
-  readonly schemaVersion: 12;
+  readonly schemaVersion: 13;
   readonly tasks: readonly RunReportTask[];
   readonly humanInterventionCount: number;
   readonly modelOperations: readonly RunReportModelOperation[];
@@ -80,6 +90,7 @@ interface RunReport {
   readonly skillCatalog: RunReportSkillCatalog;
   readonly skillPolicy: SkillPolicyReport;
   readonly undoProtection: UndoProtectionSummary;
+  readonly memory: RunReportMemory;
   readonly goalOutcome?: RunReportGoalOutcome;
 }
 
@@ -111,7 +122,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
   const accounting = accountModelOperations(input.modelOperations);
   const costBudgetUsd = input.end.cost.maxUsd;
   const report: RunReport = {
-    schemaVersion: 12,
+    schemaVersion: 13,
     tasks: input.tasks,
     humanInterventionCount: input.tasks.reduce(
       (total, task) => total + task.humanInterventionCount,
@@ -138,6 +149,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     skillCatalog: input.skillCatalog,
     skillPolicy: input.skillPolicy,
     undoProtection: input.undoProtection,
+    memory: input.memory,
     ...(input.goalOutcome !== undefined
       ? { goalOutcome: input.goalOutcome }
       : {}),
