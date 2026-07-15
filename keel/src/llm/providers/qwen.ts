@@ -122,5 +122,6 @@ export function createQwenProvider(config: QwenConfig) {
     config,
     parseChunk: parseQwenChunk,
     captureUsage: captureQwenUsage,
+    messageOptions: { maxOutputTokensField: "max_completion_tokens" },
   });
 }

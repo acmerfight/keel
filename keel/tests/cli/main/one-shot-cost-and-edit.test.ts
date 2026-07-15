@@ -318,6 +318,76 @@ describe("CLI Main - One Shot Cost And Edit", () => {
     expect(fixture.stderr()).toBe("Cost: $0.000000 (budget $1.0000)\n");
   });
 
+  test(`Given Qwen runs under a max-cost budget,
+    When the CLI sends the admitted provider request,
+    Then it bounds reasoning plus answer output with max_completion_tokens`, async () => {
+    // Given
+    let requestBody: unknown;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        requestBody = JSON.parse(body);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.end(
+          sseTextReplyWithUsage("Qwen budget respected.", {
+            prompt_tokens: 100,
+            completion_tokens: 10,
+          }),
+        );
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "--provider",
+        "qwen",
+        "--model",
+        "qwen3.7-plus",
+        "--max-cost",
+        "0.1",
+        "hello",
+      ],
+      {
+        env: {
+          DASHSCOPE_API_KEY: "test-key",
+          QWEN_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Qwen budget respected.\n");
+      expect(
+        z
+          .object({
+            max_completion_tokens: z.number().int().positive(),
+            max_tokens: z.undefined().optional(),
+          })
+          .passthrough()
+          .parse(requestBody),
+      ).toMatchObject({ max_completion_tokens: expect.any(Number) });
+    } finally {
+      await close(server);
+    }
+  });
+
   test(`Given DeepSeek is selected with unknown model pricing and a max cost,
     When the CLI main resolves cost tracking,
     Then it rejects the run before calling the provider`, async () => {

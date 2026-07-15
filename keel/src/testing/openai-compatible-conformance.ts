@@ -407,6 +407,9 @@ function chunksForPrompt(
   if (prompt === "conformance-output-budget") {
     return textResponse(provider, "bounded");
   }
+  if (prompt === "conformance-unbounded-output") {
+    return textResponse(provider, "unbounded");
+  }
   for (const row of [...successCases, ...failureCases]) {
     if (row.prompt === prompt) {
       return row.chunks(provider);
@@ -564,6 +567,20 @@ export function runOpenAICompatibleConformance(
           ? "max_completion_tokens"
           : "max_tokens";
       expect(parsed[otherField]).toBeUndefined();
+    });
+
+    test(`Given no completion token budget,
+      When the enrolled provider sends its request,
+      Then it omits both supported output limit fields`, async () => {
+      // When
+      await streamFor(provider, "conformance-unbounded-output");
+
+      // Then
+      const body = requestBodies.get("conformance-unbounded-output");
+      expect(body).toBeDefined();
+      const parsed = requestBodySchema.parse(JSON.parse(body ?? ""));
+      expect(parsed.max_tokens).toBeUndefined();
+      expect(parsed.max_completion_tokens).toBeUndefined();
     });
 
     test.each(failureCases)(`Given the enrolled provider streams $label,
