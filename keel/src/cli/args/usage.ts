@@ -1,8 +1,8 @@
 export const USAGE = [
   "Usage: keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--transcript <file>] [--skill <[scope:]name>]... [--no-skills] [--no-memory] <message>",
   "       keel [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--allow-bash] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--skill <name>] [--no-skills] [--ephemeral | --session <id> | --resume [<id>] | --resume --pick | --resume <id> --fork-points | --resume <id> --fork <new-id> [--fork-before-message <id>]]",
-  "       keel goal --objective <text> (--verify <command> [--timeout 30s] | --done-when <criterion>) [--turns N] [--tokens N] [--time 30m] [--session <id>] [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--skill <name>] [--no-skills]",
-  "       keel goal resume (<session-id> | --last) [--turns N] [--tokens N] [--time 30m] [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--skill <name>] [--no-skills]",
+  "       keel goal --objective <text> (--verify <command> [--timeout 30s] | --done-when <criterion>) [--turns N] [--tokens N] [--time 30m] [--session <id>] [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--skill <name>] [--no-skills] [--no-memory]",
+  "       keel goal resume (<session-id> | --last) [--turns N] [--tokens N] [--time 30m] [--provider <fake|deepseek|kimi|qwen>] [--model <id>] [--bash-policy <ask|deny|trusted>] [--max-cost <usd>] [--report <file>] [--skill <name>] [--no-skills] [--no-memory]",
   "       keel --doctor [--offline] [--provider <fake|deepseek|kimi|qwen>] [--model <id>]",
   "       keel auth login <deepseek|kimi|qwen> --with-api-key",
   "       keel auth status",

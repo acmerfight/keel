@@ -149,4 +149,34 @@ describe("CLI Project Memory Race Handling", () => {
       await rm(keelHome, { recursive: true, force: true });
     }
   });
+
+  test(`Given the filesystem fails while writing a private identity candidate,
+    When first-time project discovery still owns the open descriptor,
+    Then Keel closes it and removes the incomplete candidate`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-memory-marker-write-failure-",
+    );
+    const keelHome = mkdtempSync(join(tmpdir(), "keel-memory-race-home-"));
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => 0,
+    };
+    const projectMemory = await importProjectMemoryWithFs({
+      writeSync: () => {
+        throw errno("EIO");
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        projectMemory.loadRenderedProjectMemory(runtime, workspace),
+      ).toThrow("cannot create project memory identity marker");
+      expect(await readdir(join(workspace, ".git", "keel"))).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
 });

@@ -18,6 +18,7 @@ import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
+import { addProjectMemory } from "../../../src/cli/project-memory.ts";
 import {
   createGitWorkspace,
   runCli as runCliProcess,
@@ -83,6 +84,36 @@ async function runCli(
 }
 
 describe("CLI project memory", () => {
+  test(`Given a normalized memory write contains no durable fact,
+    When the storage owner validates it,
+    Then it rejects before discovering project identity or creating storage`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-memory-empty-owner-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-memory-empty-owner-home-"),
+    );
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => 0,
+    };
+
+    try {
+      // When / Then
+      expect(() => addProjectMemory(runtime, workspace, " \n\t ")).toThrow(
+        "project memory requires a non-empty durable fact",
+      );
+      await expect(
+        access(join(workspace, ".git", "keel")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(access(join(keelHome, "memory"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a user asks how project memory works,
     When memory help is shown,
     Then it explains the explicit low-authority contract without discovering a store`, async () => {

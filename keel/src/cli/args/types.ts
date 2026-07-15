@@ -176,6 +176,7 @@ interface GoalCliCommonArgs {
   readonly command: "goal";
   readonly bashMode: BashMode;
   readonly skillsEnabled: boolean;
+  readonly memoryEnabled: boolean;
   readonly maxCostUsd?: number;
   readonly reportFile?: string;
   readonly providerId?: ProviderId;

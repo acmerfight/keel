@@ -636,6 +636,7 @@ describe("CLI Args", () => {
         providerId: "fake",
         model: "test-model",
         skillsEnabled: true,
+        memoryEnabled: true,
         skillNames: ["release"],
         maxCostUsd: 1.25,
         reportFile: "goal.json",
@@ -671,9 +672,34 @@ describe("CLI Args", () => {
         budget: { turns: 12 },
         bashMode: "disabled",
         skillsEnabled: true,
+        memoryEnabled: true,
         providerId: "fake",
         sessionId: "release-narrative",
       },
+    });
+  });
+
+  test.each([
+    [
+      [
+        "goal",
+        "--objective=Review without memory",
+        "--done-when=the review is complete",
+        "--no-memory",
+      ],
+      "launch",
+    ],
+    [["goal", "resume", "review-session", "--no-memory"], "resume"],
+  ])(`Given a headless Goal %s requests --no-memory,
+    When the CLI parses the Goal,
+    Then it propagates clean mode into the shared runtime contract`, (args, mode) => {
+    // When
+    const parsed = parseCliArgs(args);
+
+    // Then
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: { command: "goal", mode, memoryEnabled: false },
     });
   });
 
@@ -726,6 +752,7 @@ describe("CLI Args", () => {
         resumeSession,
         bashMode: args.includes("--bash-policy=deny") ? "disabled" : "trusted",
         skillsEnabled: true,
+        memoryEnabled: true,
         budget: args.includes("--turns=12")
           ? {
               turns: 12,

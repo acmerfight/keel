@@ -509,6 +509,9 @@ export function addProjectMemory(
   rawText: string,
 ): { readonly scope: ProjectMemoryScope; readonly entry: ProjectMemoryEntry } {
   const text = rawText.trim();
+  if (text === "") {
+    fail("Error: project memory requires a non-empty durable fact.");
+  }
   const secretLabel = secretLikeTextLabel(text);
   if (secretLabel !== undefined) {
     fail(

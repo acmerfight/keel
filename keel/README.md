@@ -85,6 +85,7 @@ not save anything, and Keel does not automatically extract, consolidate, or
 promote conversation text. `--ephemeral` only disables the session ledger; it
 does not disable project memory. Use `--no-memory` when a run must skip memory
 identity discovery, storage reads, prompt injection, and memory observability.
+One-shot, interactive, and headless Goal launch/resume runs all support it.
 That flag prevents fresh use by the memory subsystem; it cannot remove the same
 information if it was already written by the user or tools into a resumed
 conversation transcript.
