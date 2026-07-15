@@ -35,7 +35,7 @@ const providers = [
     id: "qwen",
     name: "Qwen",
     model: "qwen3.7-max",
-    maxOutputTokensField: "max_tokens",
+    maxOutputTokensField: "max_completion_tokens",
     createProvider: createQwenProvider,
     usage: ({ inputTokens, outputTokens }) => ({
       prompt_tokens: inputTokens,
