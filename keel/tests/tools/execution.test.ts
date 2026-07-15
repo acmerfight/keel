@@ -303,6 +303,115 @@ describe("Tool Execution", () => {
     }
   });
 
+  test(`Given memory is enabled but no eligible current-user message exists,
+    When the provider calls memory_forget,
+    Then the execution layer rejects the call before invoking the capability`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tool-memory-"));
+    let forgetCalls = 0;
+    const memory: AgentMemoryToolContext = {
+      capability: {
+        list: () => [
+          { id: "mem_release", text: "The release tag prefix is v." },
+        ],
+        add: () => {
+          throw new Error("add should not run");
+        },
+        forget: () => {
+          forgetCalls++;
+          return { id: "mem_release", scope: { kind: "project", id: "p" } };
+        },
+      },
+      currentUserMessage: () => null,
+      claimSourceMutation: () => {
+        throw new Error("claimSourceMutation should not run");
+      },
+    };
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        toolCall: {
+          id: "memory_forget_1",
+          tool: "memory_forget",
+          memoryId: "mem_release",
+          sourceText: "Forget the release tag prefix.",
+        },
+        signal: new AbortController().signal,
+        allowBash: false,
+        memory,
+      });
+
+      // Then
+      expect(forgetCalls).toBe(0);
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain(
+        "no eligible current-user message authorizes memory mutation",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one current-user message already authorized a memory add,
+    When the provider next calls memory_forget with the same source,
+    Then the execution layer rejects the second mutation`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tool-memory-"));
+    const sourceText = "Forget the release tag prefix.";
+    const currentUserMessage = {
+      role: "user" as const,
+      content: sourceText,
+      origin: { type: "user_prompt" as const },
+    };
+    let forgetCalls = 0;
+    const memory: AgentMemoryToolContext = {
+      capability: {
+        list: () => [
+          { id: "mem_release", text: "The release tag prefix is v." },
+        ],
+        add: () => {
+          throw new Error("add should not run");
+        },
+        forget: () => {
+          forgetCalls++;
+          return {
+            id: "mem_release",
+            scope: { kind: "project", id: "project_release" },
+          };
+        },
+      },
+      currentUserMessage: () => currentUserMessage,
+      claimSourceMutation: () => false,
+    };
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        toolCall: {
+          id: "memory_forget_1",
+          tool: "memory_forget",
+          memoryId: "mem_release",
+          sourceText,
+        },
+        signal: new AbortController().signal,
+        allowBash: false,
+        memory,
+      });
+
+      // Then
+      expect(forgetCalls).toBe(0);
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain(
+        "this current-user source already authorized one memory mutation",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an ls tool call targets a file,
     When the tool execution layer handles the call,
     Then it returns a recoverable tool failure message for the next model turn`, async () => {

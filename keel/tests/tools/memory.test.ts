@@ -65,6 +65,79 @@ describe("agent memory intent validation", () => {
     ).toEqual({ ok: true });
   });
 
+  test(`Given sourceText is a standalone line in the current-user message,
+    When the runtime verifies a remember request,
+    Then a preceding newline is accepted as a source boundary`, () => {
+    const sourceText = "Remember that release approvals need two reviewers.";
+
+    expect(
+      validateAgentMemoryAdd({
+        currentUserMessage: {
+          role: "user",
+          content: `Context:\n${sourceText}`,
+          origin: { type: "user_prompt" },
+        },
+        sourceText,
+        text: "release approvals need two reviewers",
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  test(`Given sourceText is followed by another sentence in the current-user message,
+    When the runtime verifies a remember request,
+    Then sentence-ending punctuation plus whitespace is accepted as a source boundary`, () => {
+    const sourceText = "Remember that release approvals need two reviewers.";
+
+    expect(
+      validateAgentMemoryAdd({
+        currentUserMessage: {
+          role: "user",
+          content: `${sourceText} Then update docs.`,
+          origin: { type: "user_prompt" },
+        },
+        sourceText,
+        text: "release approvals need two reviewers",
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  test(`Given sourceText is followed by non-whitespace text in the current-user message,
+    When the runtime verifies a remember request,
+    Then the claimed source is rejected as a partial span`, () => {
+    const sourceText = "Remember that release approvals need two reviewers.";
+
+    expect(
+      validateAgentMemoryAdd({
+        currentUserMessage: {
+          role: "user",
+          content: `${sourceText}Then update docs.`,
+          origin: { type: "user_prompt" },
+        },
+        sourceText,
+        text: "release approvals need two reviewers",
+      }),
+    ).toEqual({
+      ok: false,
+      reason:
+        "sourceText must be one exact current-user sentence or standalone line",
+    });
+  });
+
+  test(`Given there is no eligible current-user message,
+    When the runtime verifies a remember request,
+    Then it rejects the memory mutation authority`, () => {
+    expect(
+      validateAgentMemoryAdd({
+        currentUserMessage: null,
+        sourceText: "Remember that release approvals need two reviewers.",
+        text: "release approvals need two reviewers",
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "no eligible current-user message authorizes memory mutation",
+    });
+  });
+
   test.each([
     {
       caseName: "duplicate source text",

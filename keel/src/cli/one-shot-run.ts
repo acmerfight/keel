@@ -255,9 +255,7 @@ export async function runOneShotCli(
     let transcriptMemoryPrompt = "";
     let memoryPrompt: (() => string) | undefined;
     let memoryReport: () => RunReportMemory;
-    const agentMemory = cliArgs.memoryEnabled
-      ? createAgentProjectMemory({ runtime, workspace })
-      : undefined;
+    const agentMemory = createAgentProjectMemory({ runtime, workspace });
     if (cliArgs.memoryEnabled) {
       let loadedMemory = loadRenderedProjectMemory(runtime, workspace);
       memoryPrompt = () => {
@@ -282,7 +280,7 @@ export async function runOneShotCli(
         loadedIds: [...exposedMemoryIds],
         renderedBytes: exposedMemoryBytes,
         estimatedTokens: exposedMemoryTokens,
-        operations: agentMemory?.operations() ?? [],
+        operations: agentMemory.operations(),
       });
     } else {
       memoryReport = () => ({
@@ -311,7 +309,7 @@ export async function runOneShotCli(
       userMessage,
       systemPrompt,
       ...(memoryPrompt !== undefined ? { memoryPrompt } : {}),
-      ...(agentMemory !== undefined
+      ...(cliArgs.memoryEnabled
         ? { memoryMutation: agentMemory.capability }
         : {}),
       signal: abortController.signal,

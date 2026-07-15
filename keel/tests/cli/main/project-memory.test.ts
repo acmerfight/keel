@@ -18,7 +18,11 @@ import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
-import { addProjectMemory } from "../../../src/cli/project-memory.ts";
+import {
+  addProjectMemory,
+  forgetProjectMemory,
+  loadRenderedProjectMemory,
+} from "../../../src/cli/project-memory.ts";
 import {
   createGitWorkspace,
   runCli as runCliProcess,
@@ -117,6 +121,51 @@ describe("CLI project memory", () => {
       await expect(access(join(keelHome, "memory"))).rejects.toMatchObject({
         code: "ENOENT",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given memory source evidence resembles a secret,
+    When the storage owner validates add and forget events,
+    Then it rejects the event before appending sensitive evidence`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-memory-secret-source-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-memory-secret-source-home-"),
+    );
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => 0,
+    };
+    const secret = `ghp_${"S".repeat(36)}`;
+
+    try {
+      // When / Then
+      expect(() =>
+        addProjectMemory(runtime, workspace, "Use pnpm.", {
+          type: "user_explicit",
+          channel: "agent",
+          evidence: `Remember ${secret}.`,
+        }),
+      ).toThrow("project memory was not saved because it resembles");
+
+      const saved = addProjectMemory(runtime, workspace, "Use pnpm.", {
+        type: "user_explicit",
+        channel: "cli",
+        evidence: "memory add",
+      });
+      expect(loadRenderedProjectMemory(runtime, workspace).prompt).toContain(
+        `[${saved.entry.id}] "Use pnpm." (source: user_explicit:cli; saved:`,
+      );
+      expect(() =>
+        forgetProjectMemory(runtime, workspace, saved.entry.id, {
+          type: "user_explicit",
+          channel: "agent",
+          evidence: `Forget ${secret}.`,
+        }),
+      ).toThrow("project memory was not changed because the source evidence");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(keelHome, { recursive: true, force: true });
