@@ -1,6 +1,6 @@
 import type { Message } from "../llm/types.ts";
 
-export interface AgentMemoryScope {
+interface AgentMemoryScope {
   readonly kind: "project";
   readonly id: string;
 }
