@@ -95,6 +95,9 @@ function requestMetadataForStream(
     ...(options.allowSkill !== undefined
       ? { allowSkill: options.allowSkill }
       : {}),
+    ...(options.allowMemory !== undefined
+      ? { allowMemory: options.allowMemory }
+      : {}),
     ...(options.toolChoice !== undefined
       ? { toolChoice: options.toolChoice }
       : {}),
@@ -386,6 +389,9 @@ export async function* streamTurnWithOverflowRecovery(
           allowBash: streamOptions.allowBash,
           ...(streamOptions.allowSkill !== undefined
             ? { allowSkill: streamOptions.allowSkill }
+            : {}),
+          ...(streamOptions.allowMemory !== undefined
+            ? { allowMemory: streamOptions.allowMemory }
             : {}),
           ...(streamOptions.toolChoice !== undefined
             ? { toolChoice: streamOptions.toolChoice }

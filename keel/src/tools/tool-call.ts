@@ -26,7 +26,12 @@ type BuiltinToolForName<Name extends ToolName> = Extract<
 
 export type ValidToolCall = z.infer<typeof builtinToolCallSchema>;
 
-const recoverableAgentStateToolNames = ["update_plan", "update_goal"] as const;
+const recoverableAgentStateToolNames = [
+  "update_plan",
+  "update_goal",
+  "memory_add",
+  "memory_forget",
+] as const;
 
 type RecoverableAgentStateToolName =
   (typeof recoverableAgentStateToolNames)[number];
@@ -63,12 +68,18 @@ const INVALID_UPDATE_PLAN_RECOVERY =
   "Provide the full replacement plan using non-empty step strings, statuses pending, in_progress, or completed, and at most one in_progress task.";
 const INVALID_UPDATE_GOAL_RECOVERY =
   "Set status to completed only when the active session goal is actually achieved and no required work remains; Runtime will evaluate the assertion evidence or run the configured command verifier. Set status to blocked only with a concise reason after the required blocker audit.";
+const INVALID_MEMORY_ADD_RECOVERY =
+  "Provide one exact claim and the exact current-user sentence or standalone line that directly asks Keel to remember it.";
+const INVALID_MEMORY_FORGET_RECOVERY =
+  "Provide one exact active project-memory ID and the exact current-user sentence or standalone line that unambiguously asks Keel to forget it.";
 
 const agentStateRecovery: Readonly<
   Record<RecoverableAgentStateToolName, string>
 > = {
   update_plan: INVALID_UPDATE_PLAN_RECOVERY,
   update_goal: INVALID_UPDATE_GOAL_RECOVERY,
+  memory_add: INVALID_MEMORY_ADD_RECOVERY,
+  memory_forget: INVALID_MEMORY_FORGET_RECOVERY,
 };
 
 const builtinToolNames: ReadonlySet<string> = new Set(
@@ -92,6 +103,8 @@ function isRecoverableAgentStateToolName(
   switch (name) {
     case "update_plan":
     case "update_goal":
+    case "memory_add":
+    case "memory_forget":
       return true;
     /* v8 ignore next 2: current agent-state tools are exactly the recoverable tools above; registry tests pin the set. */
     default:
@@ -172,13 +185,15 @@ function toOpenAICompatibleToolDefinition(
 
 export function openAICompatibleTools(
   allowBash: boolean,
-  allowSkill = false,
+  allowSkill: boolean,
+  allowMemory: boolean,
 ): readonly OpenAICompatibleToolDefinition[] {
   return builtinTools
     .filter(
       (tool) =>
         (allowBash || tool.risk.kind !== "trusted-shell") &&
-        (allowSkill || tool.availability !== "skill-catalog"),
+        (allowSkill || tool.availability !== "skill-catalog") &&
+        (allowMemory || tool.availability !== "memory"),
     )
     .map(toOpenAICompatibleToolDefinition);
 }

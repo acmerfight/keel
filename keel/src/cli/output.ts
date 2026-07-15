@@ -8,6 +8,7 @@ import {
   type SessionGoal,
 } from "../core/session-goal.ts";
 import { formatSessionTaskProgressSummary } from "../core/task-progress.ts";
+import type { AgentMemoryOperation } from "../tools/memory.ts";
 import { toolCallLabel } from "../tools/registry.ts";
 import type { AgentEventReportRecorder } from "./report-events.ts";
 
@@ -24,6 +25,12 @@ interface StableInteractiveOutputRuntime {
 }
 
 export type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
+
+function formatMemoryOperation(operation: AgentMemoryOperation): string {
+  return operation.outcome === "saved"
+    ? `Saved project memory ${operation.id} for ${operation.scope.id}.`
+    : `Forgot project memory ${operation.id} for ${operation.scope.id}.`;
+}
 
 function formatUsd(value: number): string {
   return value < 0.0001 ? value.toFixed(6) : value.toFixed(4);
@@ -266,6 +273,10 @@ export async function printAgentEvents(
         runtime.writeStderr(
           `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}\n`,
         );
+      } else if (event.memoryOperation !== undefined) {
+        runtime.writeStderr(
+          `${formatMemoryOperation(event.memoryOperation)}\n`,
+        );
       }
     } else if (event.type === "task_progress_updated") {
       runtime.writeStderr(
@@ -348,6 +359,10 @@ export async function printStableInteractiveAgentEvents(
           if (!event.ok) {
             runtime.writeStatusLine(
               `Tool failed: ${sanitizeToolLabel(toolCallLabel(event.toolCall))}`,
+            );
+          } else if (event.memoryOperation !== undefined) {
+            runtime.writeStatusLine(
+              formatMemoryOperation(event.memoryOperation),
             );
           }
           break;

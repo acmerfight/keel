@@ -1,0 +1,80 @@
+import { describe, expect, test } from "vitest";
+import type { AgentEvent } from "../../src/agent/events.ts";
+import { runAgentTurn } from "../../src/agent/loop.ts";
+import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
+import {
+  createFakeProvider,
+  fakeResponse,
+  fakeToolResponse,
+} from "../../src/llm/providers/fake.ts";
+import type { Message } from "../../src/llm/types.ts";
+import type { AgentMemoryMutationCapability } from "../../src/tools/memory.ts";
+
+describe("agent memory source provenance", () => {
+  test(`Given a runtime-generated user message contains syntactically valid remember text,
+    When the provider attempts to use it as memory authority,
+    Then the agent rejects the tool call before the mutation capability`, async () => {
+    const sourceText = "Remember that release tags use a v prefix.";
+    const messages: Message[] = [
+      {
+        role: "user",
+        content: sourceText,
+        origin: { type: "runtime_goal_activation" },
+      },
+    ];
+    let addCalls = 0;
+    const memoryMutation: AgentMemoryMutationCapability = {
+      list: () => [],
+      add: () => {
+        addCalls++;
+        return {
+          id: "mem_unexpected",
+          scope: { kind: "project", id: "project_unexpected" },
+        };
+      },
+      forget: () => {
+        throw new Error("forget should not run");
+      },
+    };
+    const events: AgentEvent[] = [];
+    const workspace = await mkdtemp(join(tmpdir(), "keel-memory-origin-"));
+
+    try {
+      for await (const event of runAgentTurn({
+        workspace,
+        provider: createFakeProvider([
+          fakeToolResponse("memory_add", {
+            text: "release tags use a v prefix",
+            sourceText,
+          }),
+          fakeResponse("Not saved."),
+        ]),
+        messages,
+        systemPrompt: "system",
+        memoryMutation,
+        signal: new AbortController().signal,
+        allowBash: false,
+        stopPolicy: defaultStopPolicy(),
+      })) {
+        events.push(event);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+
+    expect(addCalls).toBe(0);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_end",
+        ok: false,
+      }),
+    );
+    expect(
+      messages.find((message) => message.role === "tool")?.content,
+    ).toContain("no eligible current-user message authorizes memory mutation");
+  });
+});
+
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";

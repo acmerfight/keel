@@ -40,8 +40,23 @@ export interface RunReportMemory {
   readonly loadedIds: readonly string[];
   readonly renderedBytes: number;
   readonly estimatedTokens?: number;
+  readonly operations: readonly RunReportMemoryOperation[];
   readonly error?: string;
 }
+
+export type RunReportMemoryOperation =
+  | {
+      readonly operation: "add";
+      readonly id: string;
+      readonly scope: { readonly kind: "project"; readonly id: string };
+      readonly outcome: "saved";
+    }
+  | {
+      readonly operation: "forget";
+      readonly id: string;
+      readonly scope: { readonly kind: "project"; readonly id: string };
+      readonly outcome: "forgotten";
+    };
 
 interface RunReportSkillCatalog {
   readonly exposed: number;
@@ -66,7 +81,7 @@ export interface RunReportGoalOutcome {
 }
 
 interface RunReport {
-  readonly schemaVersion: 13;
+  readonly schemaVersion: 14;
   readonly tasks: readonly RunReportTask[];
   readonly humanInterventionCount: number;
   readonly modelOperations: readonly RunReportModelOperation[];
@@ -122,7 +137,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
   const accounting = accountModelOperations(input.modelOperations);
   const costBudgetUsd = input.end.cost.maxUsd;
   const report: RunReport = {
-    schemaVersion: 13,
+    schemaVersion: 14,
     tasks: input.tasks,
     humanInterventionCount: input.tasks.reduce(
       (total, task) => total + task.humanInterventionCount,

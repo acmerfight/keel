@@ -98,7 +98,7 @@ const modelOperationSchema = z.object(modelOperationBase);
 
 const modelOperationReportSchema = z
   .object({
-    schemaVersion: z.literal(13),
+    schemaVersion: z.literal(14),
     modelOperations: z.array(modelOperationSchema),
     modelOperationCount: z.number().int().nonnegative(),
     providerRequestAttemptCount: z.number().int().nonnegative(),
@@ -458,7 +458,7 @@ describe("CLI Run Report - Model Operations", () => {
     expect(stderr).toContain("Context compacted: manual");
     expect(result.report).toBeDefined();
     const rawReport = {
-      schemaVersion: 13,
+      schemaVersion: 14,
       tasks: result.report?.tasks ?? [],
       modelOperations: result.report?.modelOperations ?? [],
       modelOperationCount: result.report?.modelOperationCount ?? 0,

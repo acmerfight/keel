@@ -23,10 +23,18 @@ import { secretLikeTextLabel } from "../core/secret-text.ts";
 import { escapeTerminalText } from "./output.ts";
 import { sessionHome } from "./session-store.ts";
 
-const MEMORY_SCHEMA_VERSION = 1;
+const MEMORY_SCHEMA_VERSION = 2;
 const MAX_ACTIVE_ENTRIES = 100;
 const MAX_RENDERED_BYTES = 4096;
 const MEMORY_ID_PATTERN = /^mem_[0-9a-f-]+$/u;
+
+const memorySourceSchema = z
+  .object({
+    type: z.literal("user_explicit"),
+    channel: z.enum(["agent", "cli"]),
+    evidence: z.string().min(1),
+  })
+  .strict();
 
 const addEventSchema = z
   .object({
@@ -34,7 +42,7 @@ const addEventSchema = z
     type: z.literal("add"),
     id: z.string().regex(MEMORY_ID_PATTERN),
     text: z.string().min(1),
-    source: z.literal("cli"),
+    source: memorySourceSchema,
     createdAt: z.string().datetime({ offset: true }),
   })
   .strict();
@@ -43,6 +51,7 @@ const forgetEventSchema = z
     version: z.literal(MEMORY_SCHEMA_VERSION),
     type: z.literal("forget"),
     targetId: z.string().regex(MEMORY_ID_PATTERN),
+    source: memorySourceSchema,
     createdAt: z.string().datetime({ offset: true }),
   })
   .strict();
@@ -65,10 +74,12 @@ export interface ProjectMemoryScope {
   readonly id: string;
 }
 
+export type ProjectMemorySource = z.infer<typeof memorySourceSchema>;
+
 export interface ProjectMemoryEntry {
   readonly id: string;
   readonly text: string;
-  readonly source: "cli";
+  readonly source: ProjectMemorySource;
   readonly createdAt: string;
 }
 
@@ -406,7 +417,7 @@ function renderProjectMemoryPrompt(
   const renderedEntries = entries
     .map(
       (entry) =>
-        `- [${entry.id}] ${encodedMemoryText(entry.text)} (source: ${entry.source}; saved: ${entry.createdAt})`,
+        `- [${entry.id}] ${encodedMemoryText(entry.text)} (source: ${entry.source.type}:${entry.source.channel}; saved: ${entry.createdAt})`,
     )
     .join("\n");
   return [
@@ -507,12 +518,14 @@ export function addProjectMemory(
   runtime: ProjectMemoryRuntime,
   workspace: string,
   rawText: string,
+  source: ProjectMemorySource,
 ): { readonly scope: ProjectMemoryScope; readonly entry: ProjectMemoryEntry } {
   const text = rawText.trim();
   if (text === "") {
     fail("Error: project memory requires a non-empty durable fact.");
   }
-  const secretLabel = secretLikeTextLabel(text);
+  const secretLabel =
+    secretLikeTextLabel(text) ?? secretLikeTextLabel(source.evidence);
   if (secretLabel !== undefined) {
     fail(
       `Error: project memory was not saved because it resembles a ${secretLabel}. Secret detection is best-effort; do not store credentials or sensitive personal data in memory.`,
@@ -526,7 +539,7 @@ export function addProjectMemory(
       type: "add",
       id: `mem_${randomUUID()}`,
       text,
-      source: "cli",
+      source,
       createdAt: new Date(runtime.now()).toISOString(),
     };
     const entry: ProjectMemoryEntry = {
@@ -563,9 +576,16 @@ export function forgetProjectMemory(
   runtime: ProjectMemoryRuntime,
   workspace: string,
   id: string,
+  source: ProjectMemorySource,
 ): ProjectMemoryScope {
   if (!MEMORY_ID_PATTERN.test(id)) {
     fail(`Error: invalid project memory id "${id}".`);
+  }
+  const secretLabel = secretLikeTextLabel(source.evidence);
+  if (secretLabel !== undefined) {
+    fail(
+      `Error: project memory was not changed because the source evidence resembles a ${secretLabel}. Secret detection is best-effort; do not store credentials or sensitive personal data in memory.`,
+    );
   }
   const scope = resolveProjectMemoryScope(workspace);
   withWriteLock(runtime, scope, (filePath) => {
@@ -581,6 +601,7 @@ export function forgetProjectMemory(
       version: MEMORY_SCHEMA_VERSION,
       type: "forget",
       targetId: id,
+      source,
       createdAt: new Date(runtime.now()).toISOString(),
     });
   });
@@ -601,6 +622,11 @@ export function clearProjectMemory(
         version: MEMORY_SCHEMA_VERSION,
         type: "forget",
         targetId: entry.id,
+        source: {
+          type: "user_explicit",
+          channel: "cli",
+          evidence: "memory clear",
+        },
         createdAt,
       });
     }

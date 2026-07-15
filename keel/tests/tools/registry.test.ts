@@ -517,6 +517,8 @@ describe("tool registry", () => {
     expect(names).toEqual([
       "update_plan",
       "update_goal",
+      "memory_add",
+      "memory_forget",
       "skill_resource",
       "skill_search",
       "skill",
@@ -555,6 +557,20 @@ describe("tool registry", () => {
       },
       {
         name: "update_goal",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "memory_add",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "memory_forget",
         permission: "none",
         output: "text",
         risk: { kind: "agent-state" },
@@ -833,7 +849,7 @@ describe("tool registry", () => {
     When the registry metadata is inspected,
     Then each tool lists its provider-visible arguments and required fields`, () => {
     const argumentsByTool = Object.fromEntries(
-      openAICompatibleTools(true, true).map((tool) => [
+      openAICompatibleTools(true, true, true).map((tool) => [
         tool.function.name,
         {
           fields: Object.keys(tool.function.parameters.properties),
@@ -845,6 +861,14 @@ describe("tool registry", () => {
     expect(argumentsByTool).toEqual({
       update_plan: { fields: ["plan"], required: ["plan"] },
       update_goal: { fields: ["status", "reason"], required: ["status"] },
+      memory_add: {
+        fields: ["text", "sourceText"],
+        required: ["text", "sourceText"],
+      },
+      memory_forget: {
+        fields: ["memoryId", "sourceText"],
+        required: ["memoryId", "sourceText"],
+      },
       skill_resource: {
         fields: ["skill", "path"],
         required: ["skill", "path"],
@@ -876,7 +900,7 @@ describe("tool registry", () => {
   test(`Given builtin tools declare arguments in Zod,
     When provider metadata is compared with generated JSON schema,
     Then keys requiredness types and numeric bounds stay equivalent`, () => {
-    const providerTools = openAICompatibleTools(true, true);
+    const providerTools = openAICompatibleTools(true, true, true);
 
     for (const tool of builtinTools) {
       const providerTool = providerToolByName(providerTools, tool.name);
@@ -929,34 +953,42 @@ describe("tool registry", () => {
 
   test(`Given provider exposure is derived from the builtin registry,
     When builtin metadata is compared with provider tools,
-    Then bash filtering matches the explicit trusted shell risk`, () => {
+    Then shell, Skill, and memory filtering match explicit availability metadata`, () => {
     const allBuiltinToolNames = builtinTools.map((tool) => tool.name);
     const defaultBuiltinToolNames = builtinTools
       .filter(
         (tool) =>
           tool.risk.kind !== "trusted-shell" &&
-          tool.availability !== "skill-catalog",
+          tool.availability !== "skill-catalog" &&
+          tool.availability !== "memory",
       )
       .map((tool) => tool.name);
-    const nonShellBuiltinToolNames = builtinTools
-      .filter((tool) => tool.risk.kind !== "trusted-shell")
+    const skillBuiltinToolNames = builtinTools
+      .filter(
+        (tool) =>
+          tool.risk.kind !== "trusted-shell" && tool.availability !== "memory",
+      )
       .map((tool) => tool.name);
 
     expect(
-      openAICompatibleTools(false).map((tool) => tool.function.name),
+      openAICompatibleTools(false, false, false).map(
+        (tool) => tool.function.name,
+      ),
     ).toEqual(defaultBuiltinToolNames);
     expect(
-      openAICompatibleTools(false, true).map((tool) => tool.function.name),
-    ).toEqual(nonShellBuiltinToolNames);
+      openAICompatibleTools(false, true, false).map(
+        (tool) => tool.function.name,
+      ),
+    ).toEqual(skillBuiltinToolNames);
     expect(
-      openAICompatibleTools(true, true).map((tool) => tool.function.name),
+      openAICompatibleTools(true, true, true).map((tool) => tool.function.name),
     ).toEqual(allBuiltinToolNames);
   });
 
   test(`Given provider tools are requested,
     When OpenAI-compatible definitions are built,
     Then descriptions match the builtin registry and parameters are strict objects`, () => {
-    const providerTools = openAICompatibleTools(true, true);
+    const providerTools = openAICompatibleTools(true, true, true);
 
     expect(
       providerTools.map((tool) => ({
@@ -1000,7 +1032,7 @@ describe("tool registry", () => {
   test(`Given bash is disabled,
     When provider tools are requested,
     Then only file tools are exposed in stable order`, () => {
-    const tools = openAICompatibleTools(false);
+    const tools = openAICompatibleTools(false, false, false);
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "update_plan",
@@ -1020,7 +1052,7 @@ describe("tool registry", () => {
   test(`Given bash is enabled,
     When provider tools are requested,
     Then the bash tool is exposed after the file tools`, () => {
-    const tools = openAICompatibleTools(true);
+    const tools = openAICompatibleTools(true, false, false);
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "update_plan",
@@ -1135,7 +1167,7 @@ describe("tool registry", () => {
   test(`Given provider tools are requested,
     When the edit schema is rendered for the model,
     Then edit exposes one edits array of replacement objects`, () => {
-    const editTool = openAICompatibleTools(true).find(
+    const editTool = openAICompatibleTools(true, false, false).find(
       (tool) => tool.function.name === "edit",
     );
     const { edits } = editTool?.function.parameters.properties ?? {};
@@ -1172,7 +1204,7 @@ describe("tool registry", () => {
   test(`Given provider tools are requested,
     When the edit description is rendered for the model,
     Then edit explains how to use recovery diagnostics`, () => {
-    const editTool = openAICompatibleTools(true).find(
+    const editTool = openAICompatibleTools(true, false, false).find(
       (tool) => tool.function.name === "edit",
     );
     const description = editTool?.function.description ?? "";

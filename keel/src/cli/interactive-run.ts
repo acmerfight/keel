@@ -21,6 +21,7 @@ import type {
   SkillLifecycleState,
 } from "../skills/model.ts";
 import { repositoryWorkflowSkillRootPaths } from "../skills/project.ts";
+import { createAgentProjectMemory } from "./agent-project-memory.ts";
 import type { CliArgs } from "./args.ts";
 import { USAGE } from "./args.ts";
 import {
@@ -1221,12 +1222,16 @@ async function runSessionCli(
       const exposedMemoryIds = new Set<string>();
       let exposedMemoryBytes = 0;
       let exposedMemoryTokens = 0;
+      const agentMemory = cliArgs.memoryEnabled
+        ? createAgentProjectMemory({ runtime, workspace })
+        : undefined;
       const disabledMemoryReport = (): RunReportMemory => ({
         enabled: false,
         scope: null,
         loadedIds: [],
         renderedBytes: 0,
         estimatedTokens: 0,
+        operations: [],
       });
       const loadedMemoryReport = (
         memory: RenderedProjectMemory,
@@ -1236,6 +1241,7 @@ async function runSessionCli(
         loadedIds: memory.entries.map((entry) => entry.id),
         renderedBytes: memory.renderedBytes,
         estimatedTokens: memory.estimatedTokens,
+        operations: agentMemory?.operations() ?? [],
       });
       const lastLoadedMemoryScope = () => loadedMemory?.scope ?? null;
       const readMemory = (): RenderedProjectMemory => {
@@ -1267,6 +1273,7 @@ async function runSessionCli(
             loadedIds: [...exposedMemoryIds],
             renderedBytes: exposedMemoryBytes,
             estimatedTokens: exposedMemoryTokens,
+            operations: agentMemory?.operations() ?? [],
             error: memoryLoadError,
           };
         }
@@ -1280,6 +1287,7 @@ async function runSessionCli(
             loadedIds: [...exposedMemoryIds],
             renderedBytes: exposedMemoryBytes,
             estimatedTokens: exposedMemoryTokens,
+            operations: agentMemory?.operations() ?? [],
             error: errorMessage(error),
           };
         }
@@ -1289,6 +1297,7 @@ async function runSessionCli(
           loadedIds: [...exposedMemoryIds],
           renderedBytes: exposedMemoryBytes,
           estimatedTokens: exposedMemoryTokens,
+          operations: agentMemory?.operations() ?? [],
         };
       };
       const inspectMemoryStatus = (): RunReportMemory => {
@@ -1301,6 +1310,7 @@ async function runSessionCli(
             scope: lastLoadedMemoryScope(),
             loadedIds: [],
             renderedBytes: 0,
+            operations: agentMemory?.operations() ?? [],
             error: errorMessage(error),
           };
         }
@@ -1312,6 +1322,9 @@ async function runSessionCli(
         workspace,
         reportRecorder,
         ...(cliArgs.memoryEnabled ? { memoryPrompt: loadMemoryPrompt } : {}),
+        ...(agentMemory !== undefined
+          ? { memoryMutation: agentMemory.capability }
+          : {}),
         memoryStatus: inspectMemoryStatus,
         ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
         platform: runtime.platform,

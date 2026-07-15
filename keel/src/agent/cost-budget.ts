@@ -44,6 +44,7 @@ function conservativeFallbackInputTokens(options: StreamOptions): number {
       messages: options.messages,
       allowBash: options.allowBash === true,
       allowSkill: options.allowSkill === true,
+      allowMemory: options.allowMemory === true,
       toolChoice: options.toolChoice ?? "auto",
     }),
   ).length;

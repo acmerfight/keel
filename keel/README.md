@@ -80,9 +80,15 @@ keel memory clear --yes    # explicit non-interactive confirmation
 keel --no-memory "Run without project memory."
 ```
 
-Memory writes are manual in this release. Saying “remember this” in chat does
-not save anything, and Keel does not automatically extract, consolidate, or
-promote conversation text. `--ephemeral` only disables the session ledger; it
+Memory writes require an explicit current-user action. In addition to the CLI
+commands, a direct request such as “Remember that release tags use a v prefix”
+lets the agent save that exact claim, and an unambiguous “Forget the memory
+about release tags” request can forget one active entry. The runtime verifies
+the exact current-user source span, rejects negated, hypothetical, quoted,
+third-party, interrogative, inferred, or broadened claims, and asks for an ID
+instead of guessing when a forget request could match multiple entries. Keel
+does not automatically extract, consolidate, or promote conversation text.
+`--ephemeral` only disables the session ledger; it
 does not disable project memory. Use `--no-memory` when a run must skip memory
 identity discovery, storage reads, prompt injection, and memory observability.
 One-shot, interactive, and headless Goal launch/resume runs all support it.
@@ -114,9 +120,11 @@ never directly feeds tool policy, approvals, shell arguments, or file paths. A
 one-shot transcript header retains the most recent non-empty memory block that
 was actually sent. A run report retains the union of IDs exposed during that
 run and the maximum rendered cost, while `/status` shows the current active
-view. The rendered block is all-or-nothing: at most 4,096 UTF-8 bytes and 100
-active entries. Reports and `/status` also expose whether memory is enabled,
-its project scope, rendered bytes, and an approximate token count.
+view. Successful agent add/forget operations also expose their stable memory
+ID, project scope, and outcome in tool results, transcripts, and run reports.
+The rendered block is all-or-nothing: at most 4,096 UTF-8 bytes and 100 active
+entries. Reports and `/status` also expose whether memory is enabled, its
+project scope, rendered bytes, and an approximate token count.
 
 Known secret formats are rejected before persistence without echoing the input,
 but detection is best-effort and is not a privacy guarantee. Do not store API
@@ -172,7 +180,7 @@ Session
   when no Run, retry, continuation, accepted input, queued Task, or runtime hook
   can produce more work.
 
-`keel --report <file>` writes report schema 13. `tasks[].ordinal` and nested
+`keel --report <file>` writes report schema 14. `tasks[].ordinal` and nested
 `agentRuns[].ordinal` are report-local identities. Each Agent Run owns its
 `humanInterventionCount`, `agentLoopTurns`, existing provider retry notices,
 context-compaction records, and stop reason. A human intervention is one user
