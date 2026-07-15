@@ -127,6 +127,31 @@ export type ApprovalsCliArgs =
       readonly index: number;
     };
 
+export type MemoryCliArgs =
+  | {
+      readonly command: "memory";
+      readonly mode: "help";
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "add";
+      readonly text: string;
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "list";
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "forget";
+      readonly id: string;
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "clear";
+      readonly confirmed: boolean;
+    };
+
 export interface RunCliArgs {
   readonly command: "run";
   readonly bashMode: BashMode;
@@ -136,6 +161,7 @@ export interface RunCliArgs {
   readonly reportFile?: string;
   readonly transcriptFile?: string;
   readonly ephemeral: boolean;
+  readonly memoryEnabled: boolean;
   readonly sessionId?: string;
   readonly resumeSession?: ResumeSessionCliArg;
   readonly forkSessionId?: string;
@@ -150,6 +176,7 @@ interface GoalCliCommonArgs {
   readonly command: "goal";
   readonly bashMode: BashMode;
   readonly skillsEnabled: boolean;
+  readonly memoryEnabled: boolean;
   readonly maxCostUsd?: number;
   readonly reportFile?: string;
   readonly providerId?: ProviderId;
@@ -218,6 +245,7 @@ export type CliArgs =
   | SkillsCliArgs
   | ArtifactsCliArgs
   | ApprovalsCliArgs
+  | MemoryCliArgs
   | SessionsCliArgs
   | EvalCliArgs
   | GoalCliArgs

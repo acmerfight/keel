@@ -41,6 +41,8 @@ import type { ToolOutputArtifactsOptions } from "./tool-output-artifacts.ts";
 export interface CompactionConfig {
   readonly provider: LLMProvider;
   readonly systemPrompt: string;
+  readonly requestSystemPrompt?: () => string;
+  readonly summarySystemPrompt?: string;
   readonly signal: AbortSignal;
   readonly contextCompaction: ContextCompactionOptions | undefined;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
@@ -112,6 +114,9 @@ async function attemptContextCompaction(
   const result = await compactMessages({
     provider: config.provider,
     systemPrompt: config.systemPrompt,
+    ...(config.summarySystemPrompt !== undefined
+      ? { summarySystemPrompt: config.summarySystemPrompt }
+      : {}),
     messages: targetMessages,
     signal: config.signal,
     ...(config.contextCompaction !== undefined
@@ -357,9 +362,25 @@ export async function* streamTurnWithOverflowRecovery(
           streamOptions.getLedger(),
         );
         const currentOperation = startOperation();
+        let currentSystemPrompt =
+          config.requestSystemPrompt?.() ?? streamOptions.systemPrompt;
+        let firstPhysicalRequest = true;
+        const refreshSystemPrompt = config.requestSystemPrompt;
+        const requestSystemPrompt =
+          refreshSystemPrompt === undefined
+            ? undefined
+            : () => {
+                if (firstPhysicalRequest) {
+                  firstPhysicalRequest = false;
+                  return currentSystemPrompt;
+                }
+                currentSystemPrompt = refreshSystemPrompt();
+                return currentSystemPrompt;
+              };
         const turn = yield* streamAgentTurn({
           provider: streamOptions.provider,
-          systemPrompt: streamOptions.systemPrompt,
+          systemPrompt: currentSystemPrompt,
+          ...(requestSystemPrompt !== undefined ? { requestSystemPrompt } : {}),
           messages: currentRequestMessages,
           signal: streamOptions.signal,
           allowBash: streamOptions.allowBash,
@@ -384,7 +405,7 @@ export async function* streamTurnWithOverflowRecovery(
           config.contextCompaction === undefined
             ? undefined
             : captureContextCompactionAccountingSnapshot({
-                systemPrompt: config.systemPrompt,
+                systemPrompt: currentSystemPrompt,
                 messages: currentRequestMessages,
                 usage: turn.usage,
                 requestMetadata: requestMetadataForStream(streamOptions),

@@ -23,6 +23,7 @@ import type {
 } from "../../skills/model.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
 import type { ModelSource, ProviderSelection } from "../provider-config.ts";
+import type { RunReportMemory } from "../report.ts";
 import type {
   AgentEventReportRecorder,
   RunReportModelOperation,
@@ -109,6 +110,8 @@ export interface InteractiveSessionOptions {
   readonly bashPermission?: SessionBashPermissionPolicy;
   readonly goalAutomaticContinuationTurnLimit?: number;
   readonly reportRecorder?: AgentEventReportRecorder;
+  readonly memoryPrompt?: () => string;
+  readonly memoryStatus?: () => RunReportMemory;
   readonly exitOnTurnAbort?: boolean;
   readonly now?: () => number;
   readonly persistProjectBashApprovalGrant?: (

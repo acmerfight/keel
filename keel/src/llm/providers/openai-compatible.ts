@@ -73,11 +73,16 @@ export function createOpenAICompatibleProvider<
       ).length;
     },
     async *stream(options): AsyncIterable<LLMEvent> {
-      const body = createChatCompletionsBody(
-        providerConfig.config.model,
-        options,
-        providerConfig.messageOptions,
-      );
+      const body = (): string =>
+        createChatCompletionsBody(
+          providerConfig.config.model,
+          {
+            ...options,
+            systemPrompt:
+              options.requestSystemPrompt?.() ?? options.systemPrompt,
+          },
+          providerConfig.messageOptions,
+        );
       const retry = new ProviderRetryController(providerConfig.config.retry);
 
       for (;;) {

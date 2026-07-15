@@ -1,4 +1,5 @@
 import {
+  access,
   mkdir,
   mkdtemp,
   readFile,
@@ -15,6 +16,7 @@ import {
   SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
   SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
 } from "../../../src/core/session-goal.ts";
+import { createGitWorkspace } from "../../../src/testing/cli-harness.ts";
 import {
   requestWithMessagesSchema,
   requestWithToolsSchema,
@@ -37,6 +39,79 @@ import {
 } from "../../../src/testing/session-ledger-fixtures.ts";
 
 describe("CLI Main - Headless Goal", () => {
+  test(`Given project memory is corrupt before a headless Goal,
+    When launch and resume explicitly use --no-memory,
+    Then both runs bypass memory discovery and report clean mode`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-headless-no-memory-workspace-",
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-headless-no-memory-home-"));
+    const markerDirectory = join(workspace, ".git", "keel");
+    const markerPath = join(markerDirectory, "project-id");
+    const launchReportPath = join(workspace, "launch-no-memory-report.json");
+    const resumeReportPath = join(workspace, "resume-no-memory-report.json");
+    await mkdir(markerDirectory, { recursive: true });
+    await writeFile(markerPath, "not-a-project-id\n", "utf8");
+    const runtimeOptions = {
+      cwd: workspace,
+      env: { KEEL_HOME: home, KEEL_PROVIDER: "fake" },
+    } as const;
+    const launch = createRuntime(
+      [
+        "goal",
+        "--objective=Complete without project memory",
+        "--verify=false",
+        "--turns=1",
+        "--session=headless-no-memory",
+        "--bash-policy=trusted",
+        "--no-memory",
+        `--report=${launchReportPath}`,
+      ],
+      runtimeOptions,
+    );
+    const resume = createRuntime(
+      [
+        "goal",
+        "resume",
+        "headless-no-memory",
+        "--turns=2",
+        "--bash-policy=trusted",
+        "--no-memory",
+        `--report=${resumeReportPath}`,
+      ],
+      runtimeOptions,
+    );
+
+    try {
+      // When
+      const launchExitCode = await runCliMain(launch.runtime);
+      const resumeExitCode = await runCliMain(resume.runtime);
+
+      // Then
+      expect(launchExitCode).toBe(4);
+      expect(resumeExitCode).toBe(4);
+      for (const reportPath of [launchReportPath, resumeReportPath]) {
+        expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+          memory: {
+            enabled: false,
+            scope: null,
+            loadedIds: [],
+            renderedBytes: 0,
+            estimatedTokens: 0,
+          },
+        });
+      }
+      expect(await readFile(markerPath, "utf8")).toBe("not-a-project-id\n");
+      await expect(access(join(home, "memory"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test.each([
     {
       label: "--no-skills",
@@ -1719,7 +1794,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(4);
       expect(providerCalls).toBe(1);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 12,
+        schemaVersion: 13,
         stopReason: "cost_budget",
         costBudgetUsd: 0.01,
         costUsd: 0.14,
@@ -2180,7 +2255,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(0);
       expect(providerCalls).toBe(3);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 12,
+        schemaVersion: 13,
         agentLoopTurns: 3,
         tasks: [
           {

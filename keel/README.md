@@ -63,6 +63,65 @@ keel config show
 keel sessions
 ```
 
+## Project Memory
+
+Project memory is a small, explicit store for durable facts that should survive
+new Keel sessions in one project. It is suitable for stable rules, preferences,
+decisions, and observable facts such as “release tags use a `v` prefix.” It is
+not conversation history, a task handoff, or a place for credentials and
+sensitive personal data.
+
+```bash
+keel memory add "Release tags use the v-prefixed version."
+keel memory list
+keel memory forget <id>
+keel memory clear          # asks for confirmation in a TTY
+keel memory clear --yes    # explicit non-interactive confirmation
+keel --no-memory "Run without project memory."
+```
+
+Memory writes are manual in this release. Saying “remember this” in chat does
+not save anything, and Keel does not automatically extract, consolidate, or
+promote conversation text. `--ephemeral` only disables the session ledger; it
+does not disable project memory. Use `--no-memory` when a run must skip memory
+identity discovery, storage reads, prompt injection, and memory observability.
+One-shot, interactive, and headless Goal launch/resume runs all support it.
+That flag prevents fresh use by the memory subsystem; it cannot remove the same
+information if it was already written by the user or tools into a resumed
+conversation transcript.
+
+Git projects use a random identity marker under the Git common directory, so
+subdirectories, repository renames, and linked worktrees share one scope.
+Non-Git directories use their canonical path, so moving one creates a new
+scope. Events live outside the repository under
+`KEEL_HOME/memory/projects/<project-id>/events.jsonl` (default `~/.keel`) with
+private directory and file permissions. Storage assumes one machine and a
+reliable local filesystem; cloud-synced directories and concurrent multi-host
+writes are unsupported.
+
+The store is an append-only event log in physical file order. Timestamps are
+display metadata, not conflict-ordering authority. `forget` and `clear` append
+tombstones and remove entries from the active view; they do not physically
+erase prior payload bytes. The writer fsyncs complete newline-terminated events.
+After a crash, reads use the last complete event and a later locked write drops
+only an incomplete final tail. Malformed or unknown schema versions fail closed
+and remain untouched.
+
+Keel injects the complete active view as quoted, low-authority reference data.
+It is reloaded for every normal provider request attempt, never serialized as transcript
+messages, session-ledger records, checkpoints, or compaction summaries, and
+never directly feeds tool policy, approvals, shell arguments, or file paths. A
+one-shot transcript header retains the most recent non-empty memory block that
+was actually sent. A run report retains the union of IDs exposed during that
+run and the maximum rendered cost, while `/status` shows the current active
+view. The rendered block is all-or-nothing: at most 4,096 UTF-8 bytes and 100
+active entries. Reports and `/status` also expose whether memory is enabled,
+its project scope, rendered bytes, and an approximate token count.
+
+Known secret formats are rejected before persistence without echoing the input,
+but detection is best-effort and is not a privacy guarantee. Do not store API
+keys, passwords, private keys, personal addresses, or other sensitive data.
+
 ## Execution Lifecycle And Reports
 
 Keel separates user work from the runtime segments and provider requests used
@@ -113,7 +172,7 @@ Session
   when no Run, retry, continuation, accepted input, queued Task, or runtime hook
   can produce more work.
 
-`keel --report <file>` writes report schema 12. `tasks[].ordinal` and nested
+`keel --report <file>` writes report schema 13. `tasks[].ordinal` and nested
 `agentRuns[].ordinal` are report-local identities. Each Agent Run owns its
 `humanInterventionCount`, `agentLoopTurns`, existing provider retry notices,
 context-compaction records, and stop reason. A human intervention is one user

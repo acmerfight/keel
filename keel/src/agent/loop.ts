@@ -49,7 +49,10 @@ import type { AgentEvent } from "./events.ts";
 import type { ModelOperationInstrumentation } from "./model-operations.ts";
 import { postCompactionReadToolCallId } from "./post-compaction-read-id.ts";
 import { restorePostCompactionReads } from "./post-compaction-restore.ts";
-import { appendWorkflowSkillsToSystemPrompt } from "./prompt.ts";
+import {
+  appendProjectMemoryToSystemPrompt,
+  appendWorkflowSkillsToSystemPrompt,
+} from "./prompt.ts";
 import type { AgentTurn } from "./provider-turn.ts";
 import {
   createReadVisibilityState,
@@ -99,6 +102,7 @@ export interface RunAgentOptions {
   readonly provider: LLMProvider;
   readonly userMessage: string;
   readonly systemPrompt: string;
+  readonly memoryPrompt?: () => string;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
   readonly hiddenWorkspacePaths?: readonly string[];
@@ -122,6 +126,7 @@ export interface RunAgentTurnOptions {
   // agent turns append assistant/tool messages so later turns share context.
   readonly messages: Message[];
   readonly systemPrompt: string;
+  readonly memoryPrompt?: () => string;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
   readonly hiddenWorkspacePaths?: readonly string[];
@@ -641,21 +646,32 @@ export async function* runAgentTurn(
   };
 
   for (let completedTurns = 1; ; completedTurns++) {
-    const turnSystemPrompt = appendWorkflowSkillsToSystemPrompt(
+    const baseTurnSystemPrompt = appendWorkflowSkillsToSystemPrompt(
       systemPrompt,
       options.skillActivation === undefined
         ? []
         : options.skillActivation.active().map(workflowSkillFromActivation),
     );
+    const memoryPrompt = options.memoryPrompt;
+    const requestSystemPrompt =
+      memoryPrompt === undefined
+        ? undefined
+        : (): string =>
+            appendProjectMemoryToSystemPrompt(
+              baseTurnSystemPrompt,
+              memoryPrompt(),
+            );
     const turnConfig: CompactionConfig = {
       ...config,
-      systemPrompt: turnSystemPrompt,
+      systemPrompt: baseTurnSystemPrompt,
+      ...(requestSystemPrompt !== undefined ? { requestSystemPrompt } : {}),
+      summarySystemPrompt: baseTurnSystemPrompt,
     };
     let turnResult: AgentTurn;
     try {
       turnResult = yield* streamTurnWithOverflowRecovery(turnConfig, state, {
         provider: requestProvider,
-        systemPrompt: turnSystemPrompt,
+        systemPrompt: baseTurnSystemPrompt,
         getLedger: () => sessionLedger,
         setLedger: applySessionLedger,
         signal,
@@ -735,7 +751,7 @@ export async function* runAgentTurn(
           state,
           streamOptions: {
             provider: requestProvider,
-            systemPrompt: turnSystemPrompt,
+            systemPrompt: baseTurnSystemPrompt,
             signal,
             allowBash,
             allowSkill,
@@ -1158,6 +1174,9 @@ export async function* runAgent(
         provider: options.provider,
         messages,
         systemPrompt: options.systemPrompt,
+        ...(options.memoryPrompt !== undefined
+          ? { memoryPrompt: options.memoryPrompt }
+          : {}),
         signal: options.signal,
         allowBash: options.allowBash,
         hiddenWorkspacePaths: options.hiddenWorkspacePaths ?? [],

@@ -35,6 +35,7 @@ export interface ManualCompactContext {
   readonly workspace: string;
   readonly messages: Message[];
   readonly systemPrompt: string;
+  readonly summarySystemPrompt: string;
   readonly signal: AbortSignal;
   readonly readVisibility: ReadVisibilityState;
   readonly projectInstructionVisibility: ProjectInstructionVisibilityState;
@@ -64,6 +65,7 @@ export async function executeManualCompaction(
     workspace,
     messages,
     systemPrompt,
+    summarySystemPrompt,
     signal,
     readVisibility,
     projectInstructionVisibility,
@@ -99,6 +101,7 @@ export async function executeManualCompaction(
     const result = await compactMessages({
       provider,
       systemPrompt,
+      summarySystemPrompt,
       messages,
       signal,
       ...(resolved.contextCompaction !== undefined

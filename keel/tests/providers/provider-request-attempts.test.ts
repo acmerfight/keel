@@ -297,6 +297,48 @@ describe("Provider Request Attempt Conformance", () => {
     ]);
   });
 
+  test(`Given provider-visible context changes after a rate-limited attempt,
+    When the provider sends its physical retry,
+    Then it rebuilds the request with the latest system prompt`, async () => {
+    let currentSystemPrompt = "first physical prompt";
+    const receivedSystemPrompts: string[] = [];
+    const { baseUrl } = await localServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        receivedSystemPrompts.push(body.messages[0].content);
+        if (receivedSystemPrompts.length === 1) {
+          currentSystemPrompt = "second physical prompt";
+          res.writeHead(429, { "retry-after-ms": "0" });
+          res.end("rate limited");
+          return;
+        }
+        respondWithSse(res);
+      });
+    });
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+      retry: { maxRetries: 1, initialDelayMs: 0, maxDelayMs: 0 },
+    });
+
+    await collect(
+      provider.stream({
+        systemPrompt: currentSystemPrompt,
+        requestSystemPrompt: () => currentSystemPrompt,
+        messages: [{ role: "user", content: "retry with fresh context" }],
+        signal: new AbortController().signal,
+      }),
+    );
+
+    expect(receivedSystemPrompts).toEqual([
+      "first physical prompt",
+      "second physical prompt",
+    ]);
+  });
+
   test(`Given request setup fails before a server can receive bytes,
     When the provider attempts the invalid upstream URL once,
     Then the setup attempt is still recorded as terminal`, async () => {

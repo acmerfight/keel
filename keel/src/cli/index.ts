@@ -7,6 +7,7 @@ import { parseCliArgs, USAGE } from "./args.ts";
 import { runForkPointsCommand } from "./fork-points-command.ts";
 import { runHeadlessGoalCli } from "./headless-goal-run.ts";
 import { runInteractiveCli } from "./interactive-run.ts";
+import { runMemoryCommand } from "./memory-command.ts";
 import { runOneShotCli } from "./one-shot-run.ts";
 import {
   type CliRuntime,
@@ -77,6 +78,10 @@ async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
 
   if (cliArgs.command === "approvals") {
     return runApprovalsCommand(cliArgs, runtime);
+  }
+
+  if (cliArgs.command === "memory") {
+    return await runMemoryCommand(cliArgs, runtime);
   }
 
   if (cliArgs.command === "sessions") {

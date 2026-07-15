@@ -38,6 +38,7 @@ const GOAL_OPTIONS = [
   "--model",
   "--skill",
   "--no-skills",
+  "--no-memory",
   "--max-cost",
   "--report",
   "--session",
@@ -54,6 +55,7 @@ const GOAL_RESUME_OPTIONS = [
   "--model",
   "--skill",
   "--no-skills",
+  "--no-memory",
   "--max-cost",
   "--report",
 ];
@@ -95,6 +97,7 @@ function parseGoalLaunchArgs(
   let model: string | undefined;
   const skillNames: string[] = [];
   let skillsEnabled = true;
+  let memoryEnabled = true;
   let maxCostUsd: number | undefined;
   let reportFile: string | undefined;
   let sessionId: string | undefined;
@@ -114,9 +117,17 @@ function parseGoalLaunchArgs(
       return duplicateOption(option);
     seen.add(option);
 
-    if (option === "--allow-bash" || option === "--no-skills") {
+    if (
+      option === "--allow-bash" ||
+      option === "--no-skills" ||
+      option === "--no-memory"
+    ) {
       if (inlineValue !== undefined) {
         return parseError(`Error: ${option} does not accept a value.`);
+      }
+      if (option === "--no-memory") {
+        memoryEnabled = false;
+        continue;
       }
       if (option === "--no-skills") {
         skillsEnabled = false;
@@ -269,6 +280,7 @@ function parseGoalLaunchArgs(
     budget: budget satisfies SessionGoalBudget,
     bashMode,
     skillsEnabled,
+    memoryEnabled,
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(skillNames.length > 0 ? { skillNames } : {}),
@@ -288,6 +300,7 @@ function parseGoalResumeArgs(
   let model: string | undefined;
   const skillNames: string[] = [];
   let skillsEnabled = true;
+  let memoryEnabled = true;
   let maxCostUsd: number | undefined;
   let reportFile: string | undefined;
   const budget: {
@@ -322,13 +335,18 @@ function parseGoalResumeArgs(
     if (
       option === "--last" ||
       option === "--allow-bash" ||
-      option === "--no-skills"
+      option === "--no-skills" ||
+      option === "--no-memory"
     ) {
       if (inlineValue !== undefined) {
         return parseError(`Error: ${option} does not accept a value.`);
       }
       if (option === "--last") {
         useLast = true;
+        continue;
+      }
+      if (option === "--no-memory") {
+        memoryEnabled = false;
         continue;
       }
       if (option === "--no-skills") {
@@ -422,6 +440,7 @@ function parseGoalResumeArgs(
     budget: budget satisfies SessionGoalBudget,
     bashMode,
     skillsEnabled,
+    memoryEnabled,
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(skillNames.length > 0 ? { skillNames } : {}),

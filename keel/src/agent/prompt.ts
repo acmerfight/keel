@@ -76,6 +76,15 @@ export function appendWorkflowSkillsToSystemPrompt(
   return `${systemPrompt}${skills.map(workflowSkillSection).join("")}`;
 }
 
+export function appendProjectMemoryToSystemPrompt(
+  systemPrompt: string,
+  memoryPrompt: string,
+): string {
+  return memoryPrompt === ""
+    ? systemPrompt
+    : `${systemPrompt}\n\n${memoryPrompt}`;
+}
+
 export function buildAgentSystemPrompt(
   options: BuildAgentSystemPromptOptions,
 ): string {

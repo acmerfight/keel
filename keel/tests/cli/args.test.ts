@@ -636,6 +636,7 @@ describe("CLI Args", () => {
         providerId: "fake",
         model: "test-model",
         skillsEnabled: true,
+        memoryEnabled: true,
         skillNames: ["release"],
         maxCostUsd: 1.25,
         reportFile: "goal.json",
@@ -671,9 +672,34 @@ describe("CLI Args", () => {
         budget: { turns: 12 },
         bashMode: "disabled",
         skillsEnabled: true,
+        memoryEnabled: true,
         providerId: "fake",
         sessionId: "release-narrative",
       },
+    });
+  });
+
+  test.each([
+    [
+      [
+        "goal",
+        "--objective=Review without memory",
+        "--done-when=the review is complete",
+        "--no-memory",
+      ],
+      "launch",
+    ],
+    [["goal", "resume", "review-session", "--no-memory"], "resume"],
+  ])(`Given a headless Goal %s requests --no-memory,
+    When the CLI parses the Goal,
+    Then it propagates clean mode into the shared runtime contract`, (args, mode) => {
+    // When
+    const parsed = parseCliArgs(args);
+
+    // Then
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: { command: "goal", mode, memoryEnabled: false },
     });
   });
 
@@ -726,6 +752,7 @@ describe("CLI Args", () => {
         resumeSession,
         bashMode: args.includes("--bash-policy=deny") ? "disabled" : "trusted",
         skillsEnabled: true,
+        memoryEnabled: true,
         budget: args.includes("--turns=12")
           ? {
               turns: 12,
@@ -998,5 +1025,74 @@ describe("CLI Args", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe(message);
+  });
+
+  test.each([
+    [
+      ["memory", "add", "Use pnpm."],
+      { command: "memory", mode: "add", text: "Use pnpm." },
+    ],
+    [["memory", "list"], { command: "memory", mode: "list" }],
+    [
+      ["memory", "forget", "mem_1234"],
+      { command: "memory", mode: "forget", id: "mem_1234" },
+    ],
+    [
+      ["memory", "clear", "--yes"],
+      { command: "memory", mode: "clear", confirmed: true },
+    ],
+    [["memory", "--help"], { command: "memory", mode: "help" }],
+  ])(`Given explicit project-memory arguments %j,
+    When the CLI parses them,
+    Then it preserves the deterministic command contract`, (args, value) => {
+    expect(parseCliArgs(args)).toEqual({ ok: true, value });
+  });
+
+  test(`Given the user combines ephemeral session state with default memory,
+    When the CLI parses the run,
+    Then ephemeral does not silently disable project memory`, () => {
+    expect(parseCliArgs(["--ephemeral"])).toMatchObject({
+      ok: true,
+      value: {
+        command: "run",
+        ephemeral: true,
+        memoryEnabled: true,
+      },
+    });
+    expect(parseCliArgs(["--no-memory", "inspect"])).toMatchObject({
+      ok: true,
+      value: {
+        command: "run",
+        userMessage: "inspect",
+        memoryEnabled: false,
+      },
+    });
+  });
+
+  test.each([
+    [
+      ["memory"],
+      "Error: memory requires a subcommand: add, list, forget, or clear.",
+    ],
+    [["memory", "add"], "Error: memory add requires <durable-fact>."],
+    [
+      ["memory", "add", "Use pnpm.", "extra"],
+      'Error: unknown memory add option "extra"',
+    ],
+    [["memory", "list", "--all"], 'Error: unknown memory list option "--all"'],
+    [["memory", "forget"], "Error: memory forget requires <id>."],
+    [
+      ["memory", "forget", "mem_1234", "extra"],
+      'Error: unknown memory forget option "extra"',
+    ],
+    [
+      ["memory", "clear", "--force"],
+      'Error: unknown memory clear option "--force"',
+    ],
+    [["memory", "remember"], 'Error: unknown memory subcommand "remember"'],
+  ])(`Given invalid project-memory arguments %j,
+    When the CLI parses them,
+    Then it returns a precise validation error`, (args, message) => {
+    expect(parseCliArgs(args)).toEqual({ ok: false, message });
   });
 });

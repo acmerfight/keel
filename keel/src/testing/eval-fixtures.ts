@@ -85,7 +85,7 @@ export function evalRunReport(
     };
   });
   return {
-    schemaVersion: 12,
+    schemaVersion: 13,
     tasks: [
       {
         ordinal: 1,
@@ -141,6 +141,13 @@ export function evalRunReport(
       checkpointsWritten: 0,
       failures: [],
       latestCheckpoint: null,
+    },
+    memory: {
+      enabled: false,
+      scope: null,
+      loadedIds: [],
+      renderedBytes: 0,
+      estimatedTokens: 0,
     },
   };
 }

@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { isAbortThrow } from "../core/error.ts";
+import { errorMessage, isAbortThrow } from "../core/error.ts";
 import {
   pauseActiveSessionGoal,
   type SessionGoal,
@@ -47,12 +47,18 @@ import {
   ProjectInstructionsError,
 } from "./project-instructions.ts";
 import {
+  loadRenderedProjectMemory,
+  ProjectMemoryError,
+  type RenderedProjectMemory,
+} from "./project-memory.ts";
+import {
   ProviderConfigError,
   requireKnownCostModel,
   resolveInteractiveProvider,
 } from "./provider-config.ts";
 import {
   type RunReportGoalOutcome,
+  type RunReportMemory,
   reportActiveSkills,
   writeRunReport,
 } from "./report.ts";
@@ -1210,12 +1216,103 @@ async function runSessionCli(
             })
           : undefined);
       const reportRecorder = createAgentEventReportRecorder();
+      let loadedMemory: RenderedProjectMemory | undefined;
+      let memoryLoadError: string | undefined;
+      const exposedMemoryIds = new Set<string>();
+      let exposedMemoryBytes = 0;
+      let exposedMemoryTokens = 0;
+      const disabledMemoryReport = (): RunReportMemory => ({
+        enabled: false,
+        scope: null,
+        loadedIds: [],
+        renderedBytes: 0,
+        estimatedTokens: 0,
+      });
+      const loadedMemoryReport = (
+        memory: RenderedProjectMemory,
+      ): RunReportMemory => ({
+        enabled: true,
+        scope: memory.scope,
+        loadedIds: memory.entries.map((entry) => entry.id),
+        renderedBytes: memory.renderedBytes,
+        estimatedTokens: memory.estimatedTokens,
+      });
+      const lastLoadedMemoryScope = () => loadedMemory?.scope ?? null;
+      const readMemory = (): RenderedProjectMemory => {
+        try {
+          loadedMemory = loadRenderedProjectMemory(runtime, workspace);
+          memoryLoadError = undefined;
+          return loadedMemory;
+        } catch (error) {
+          memoryLoadError = errorMessage(error);
+          throw error;
+        }
+      };
+      const loadMemoryPrompt = (): string => {
+        const memory = readMemory();
+        for (const entry of memory.entries) exposedMemoryIds.add(entry.id);
+        exposedMemoryBytes = Math.max(exposedMemoryBytes, memory.renderedBytes);
+        exposedMemoryTokens = Math.max(
+          exposedMemoryTokens,
+          memory.estimatedTokens,
+        );
+        return memory.prompt;
+      };
+      const memoryReport = (): RunReportMemory => {
+        if (!cliArgs.memoryEnabled) return disabledMemoryReport();
+        if (memoryLoadError !== undefined) {
+          return {
+            enabled: true,
+            scope: lastLoadedMemoryScope(),
+            loadedIds: [...exposedMemoryIds],
+            renderedBytes: exposedMemoryBytes,
+            estimatedTokens: exposedMemoryTokens,
+            error: memoryLoadError,
+          };
+        }
+        let currentMemory = loadedMemory;
+        try {
+          currentMemory ??= readMemory();
+        } catch (error) {
+          return {
+            enabled: true,
+            scope: lastLoadedMemoryScope(),
+            loadedIds: [...exposedMemoryIds],
+            renderedBytes: exposedMemoryBytes,
+            estimatedTokens: exposedMemoryTokens,
+            error: errorMessage(error),
+          };
+        }
+        return {
+          enabled: true,
+          scope: currentMemory.scope,
+          loadedIds: [...exposedMemoryIds],
+          renderedBytes: exposedMemoryBytes,
+          estimatedTokens: exposedMemoryTokens,
+        };
+      };
+      const inspectMemoryStatus = (): RunReportMemory => {
+        if (!cliArgs.memoryEnabled) return disabledMemoryReport();
+        try {
+          return loadedMemoryReport(readMemory());
+        } catch (error) {
+          return {
+            enabled: true,
+            scope: lastLoadedMemoryScope(),
+            loadedIds: [],
+            renderedBytes: 0,
+            error: errorMessage(error),
+          };
+        }
+      };
       interactiveDisplay?.writeIntro();
       interactiveTerminalDisplay?.start();
       const interactiveSessionOptions: InteractiveSessionOptions = {
         cliArgs,
         workspace,
         reportRecorder,
+        ...(cliArgs.memoryEnabled ? { memoryPrompt: loadMemoryPrompt } : {}),
+        memoryStatus: inspectMemoryStatus,
         ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
         platform: runtime.platform,
         ...(mode.kind === "headless-goal" ? { exitOnTurnAbort: true } : {}),
@@ -1374,6 +1471,7 @@ async function runSessionCli(
           skillCatalog: interactiveResult.report.skillCatalog,
           skillPolicy: skillPolicyReport(skillPolicy, cliArgs.skillsEnabled),
           undoProtection: interactiveResult.report.undoProtection,
+          memory: memoryReport(),
           ...(goalOutcome !== undefined ? { goalOutcome } : {}),
         });
       }
@@ -1393,6 +1491,10 @@ async function runSessionCli(
       return 1;
     }
     if (error instanceof ProjectInstructionsError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof ProjectMemoryError) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
