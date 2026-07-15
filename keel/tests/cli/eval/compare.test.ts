@@ -46,6 +46,7 @@ describe("CLI Eval", () => {
           inputTokens: 50,
           outputTokens: 10,
           costUsd: 0.0005,
+          humanInterventions: 0,
         }),
         wallMs: 500,
       }),
@@ -94,12 +95,13 @@ describe("CLI Eval", () => {
         trial: 1,
         pass: true,
         report: runReport({
-          turns: 3,
-          inputTokens: 80,
-          outputTokens: 15,
-          costUsd: 0.0009,
+          turns: 2,
+          inputTokens: 50,
+          outputTokens: 10,
+          costUsd: 0.0005,
+          humanInterventions: 1,
         }),
-        wallMs: 800,
+        wallMs: 500,
       }),
       resultLine({
         taskId: "harness-task",
@@ -135,6 +137,9 @@ describe("CLI Eval", () => {
       );
       expect(result.stdout).toContain("turns avg: 3.0 -> 4.0 (+1.0)");
       expect(result.stdout).toContain(
+        "human interventions avg: 0.0 -> 0.0 (+0.0)",
+      );
+      expect(result.stdout).toContain(
         "input tokens avg: 100.0 -> 150.0 (+50.0)",
       );
       expect(result.stdout).toContain(
@@ -147,7 +152,10 @@ describe("CLI Eval", () => {
       expect(result.stdout).toContain("regression transcripts:");
       expect(result.stdout).toContain("/tmp/head/edit-note-2.jsonl");
       expect(result.stdout).toContain("task: stable-task");
-      expect(result.stdout).toContain("status: EFFICIENCY REGRESSION");
+      expect(result.stdout).toContain("status: INTERVENTION REGRESSION");
+      expect(result.stdout).toContain(
+        "human interventions avg: 0.0 -> 1.0 (+1.0)",
+      );
       expect(result.stdout).toContain("task: harness-task");
       expect(result.stdout).toContain("status: HARNESS FAILURE");
       expect(result.stdout).toContain("head harness failures: 1");

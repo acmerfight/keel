@@ -113,14 +113,18 @@ Session
   when no Run, retry, continuation, accepted input, queued Task, or runtime hook
   can produce more work.
 
-`keel --report <file>` writes report schema 11. `tasks[].ordinal` and nested
+`keel --report <file>` writes report schema 12. `tasks[].ordinal` and nested
 `agentRuns[].ordinal` are report-local identities. Each Agent Run owns its
-`agentLoopTurns`, existing provider retry notices, context-compaction records,
-and stop reason. A single model-operation ledger derives root usage, cost,
-operation count, physical-attempt count, `usageByModel`, and root
-`agentLoopTurns`; only completed `agent_turn` operations count as Agent-loop
-turns. Goal `usage.turns` has a different owner: it increments once per Goal
-Agent Run, including automatic continuation.
+`humanInterventionCount`, `agentLoopTurns`, existing provider retry notices,
+context-compaction records, and stop reason. A human intervention is one user
+message actually injected as steering into an active Agent Run; a prompt that
+starts a later Task and runtime-generated Goal or recovery messages do not
+count. Task and root intervention totals derive from the Agent Run counts. A
+single model-operation ledger derives root usage, cost, operation count,
+physical-attempt count, `usageByModel`, and root `agentLoopTurns`; only
+completed `agent_turn` operations count as Agent-loop turns. Goal `usage.turns`
+has a different owner: it increments once per Goal Agent Run, including
+automatic continuation.
 
 Resuming a process does not silently continue an old Task. If a persisted Goal
 was active when the process stopped, Keel restores it as paused and requires

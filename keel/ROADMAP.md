@@ -138,9 +138,10 @@ What a user can do today:
   post-response accounting.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
-  turns, retry and context-recovery attribution, stop reason, token usage,
-  duration, provider/model, cost when tracked, and whether changed files
-  received an undo checkpoint.
+  turns, human interventions attributed to the active Task and Agent Run,
+  retry and context-recovery attribution, stop reason, token usage, duration,
+  provider/model, cost when tracked, and whether changed files received an undo
+  checkpoint.
 - `keel --transcript <file>` — write provider-visible one-shot messages as
   schema-versioned JSONL.
 - `keel eval [--check] [--trials <n>]` — run a repeatable harness eval suite
@@ -226,14 +227,14 @@ Known limits that shape the priorities below:
    sessions persist transcripts, compaction replacement records, unconsumed
    queued input, active model switches, and workflow-skill activation history and
    active snapshots;
-   interactive `--report` attributes report-local Tasks, Agent Runs, main-loop
-   turns, and recovery events while retaining session-level usage,
-   provider/model, models used, and cost. Real TTY sessions now have a multiline composer with
-   differential redraw, bracketed paste, history draft restoration, and resize
-   handling, plus active-turn steering, deferred-command, approval, and
-   operation-queue modes, transient activity, and persistent durable Goal
-   status. Remaining work includes richer branch browsing and future sub-agent
-   state.
+   interactive `--report` attributes report-local Tasks, Agent Runs, injected
+   human interventions, main-loop turns, and recovery events while retaining
+   session-level usage, provider/model, models used, and cost. Real TTY sessions
+   now have a multiline composer with differential redraw, bracketed paste,
+   history draft restoration, and resize handling, plus active-turn steering,
+   deferred-command, approval, and operation-queue modes, transient activity,
+   and persistent durable Goal status. Remaining work includes richer branch
+   browsing and future sub-agent state.
    Real coding is conversational:
    follow-ups, corrections, "now also fix the tests" —
    including while a run is in progress. Daily use also generates the real-task
@@ -268,14 +269,14 @@ Known limits that shape the priorities below:
    multi-file rename, new file creation, bash-driven test fixing, long-file
    editing, stale edit recovery, repeated-string disambiguation,
    test-preserving bug fixes, and pattern-following feature additions. Result
-   comparison now reports per-task score and efficiency deltas with transcript
-   paths for regressions. This baseline is enough to keep the quality goal
-   falsifiable while replacement work continues. Add or update eval tasks when
-   a real daily-use failure is being fixed or preserved, but do not pick
-   standalone corpus growth, external agent runners, or cross-agent same-model
-   comparisons before the unresolved daily-use gaps in interactive UX, provider
-   breadth/profile metadata, context reliability, edit reliability, session
-   workflow, and approval ergonomics.
+   comparison now reports per-task score, human-intervention, and efficiency
+   deltas with transcript paths for regressions. This baseline is enough to keep
+   the quality goal falsifiable while replacement work continues. Add or update
+   eval tasks when a real daily-use failure is being fixed or preserved, but do
+   not pick standalone corpus growth, external agent runners, or cross-agent
+   same-model comparisons before the unresolved daily-use gaps in interactive
+   UX, provider breadth/profile metadata, context reliability, edit reliability,
+   session workflow, and approval ergonomics.
 5. **Completed P0 foundations.** ✅ Done/partial (2026-06): provider retry
    with backoff now handles request setup failures and pre-stream HTTP
    408 / 409 / 429 / 5xx, honors `retry-after-ms` / `Retry-After`, emits a

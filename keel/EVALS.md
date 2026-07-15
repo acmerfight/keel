@@ -98,15 +98,17 @@ Each trial appends one JSON line:
   "wallMs": 9182,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
-    "schemaVersion": 11,
+    "schemaVersion": 12,
     "tasks": [
       {
         "ordinal": 1,
         "trigger": "user_prompt",
+        "humanInterventionCount": 0,
         "agentRuns": [
           {
             "ordinal": 1,
             "trigger": "user_prompt",
+            "humanInterventionCount": 0,
             "agentLoopTurns": 1,
             "providerRetries": [],
             "contextCompactions": [],
@@ -116,6 +118,7 @@ Each trial appends one JSON line:
         "outcome": "completed"
       }
     ],
+    "humanInterventionCount": 0,
     "modelOperations": [
       {
         "ordinal": 1,
@@ -169,8 +172,11 @@ Each trial appends one JSON line:
   environment or harness broke and the trial must not be read as agent
   quality.
 - `report.tasks` attributes each admitted user Task to one or more Agent Runs.
-  `agentLoopTurns` counts only completed main model/tool-loop iterations; it
-  excludes turn-limit wrap-up, compaction, and independent Goal evaluation.
+  `humanInterventionCount` counts user messages actually injected as steering
+  into an active Agent Run, while later Task prompts and runtime messages stay
+  excluded. `agentLoopTurns` counts only completed main model/tool-loop
+  iterations; it excludes turn-limit wrap-up, compaction, and independent Goal
+  evaluation.
 - `wallMs` is measured around the spawned agent CLI run. It excludes the
   later verifier step, so read it as agent wall time rather than full
   trial wall time.
@@ -182,10 +188,10 @@ Each trial appends one JSON line:
   assistant / tool message.
 - Regression comparison is `diff`-shaped by design: run the suite on two
   keel versions, then run `keel eval compare --base <old.jsonl> --head
-  <new.jsonl>`. It prints per-task pass, outcome, turn, token, cost, and
-  wall-time deltas, separates `timeout` / `crashed` harness failures from
-  verifier failures, and includes failed head-side `transcriptPath` values
-  for regression rows.
+  <new.jsonl>`. It prints per-task pass, outcome, human-intervention, turn,
+  token, cost, and wall-time deltas, separates `timeout` / `crashed` harness
+  failures from verifier failures, and includes failed head-side
+  `transcriptPath` values for regression rows.
 - One trial says little: agent behavior varies between runs. Use
   `--trials 3` or more before claiming a change helped. Per-task pass
   fractions give you pass^k-style reliability reading; a task passing
@@ -260,7 +266,5 @@ for that task version as invalid.
 
 - No cross-agent comparison until a dedicated cross-agent runner provides a
   same-model comparison path; the JSONL schema already records provider/model
-  so old results stay usable.
+  so current-schema results remain attributable when that runner arrives.
 - No LLM-graded rubrics; deterministic outcome checks only.
-- `interventions` (human steering count) becomes meaningful with
-  **Interactive session with steering** and will be added to the schema then.

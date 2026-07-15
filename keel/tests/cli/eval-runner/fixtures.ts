@@ -107,15 +107,17 @@ export const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 export const VALID_REPORT = {
-  schemaVersion: 11,
+  schemaVersion: 12,
   tasks: [
     {
       ordinal: 1,
       trigger: "user_prompt",
+      humanInterventionCount: 0,
       agentRuns: [
         {
           ordinal: 1,
           trigger: "user_prompt",
+          humanInterventionCount: 0,
           agentLoopTurns: 1,
           providerRetries: [],
           contextCompactions: [],
@@ -125,6 +127,7 @@ export const VALID_REPORT = {
       outcome: "completed",
     },
   ],
+  humanInterventionCount: 0,
   modelOperations: [
     {
       ordinal: 1,

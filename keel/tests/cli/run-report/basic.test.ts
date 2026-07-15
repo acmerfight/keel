@@ -47,14 +47,17 @@ describe("CLI Run Report", () => {
         },
       ]);
       expect(report.agentLoopTurns).toBe(3);
+      expect(report.humanInterventionCount).toBe(0);
       expect(report.tasks).toEqual([
         {
           ordinal: 1,
           trigger: "user_prompt",
+          humanInterventionCount: 0,
           agentRuns: [
             {
               ordinal: 1,
               trigger: "user_prompt",
+              humanInterventionCount: 0,
               agentLoopTurns: 3,
               providerRetries: [],
               contextCompactions: [],

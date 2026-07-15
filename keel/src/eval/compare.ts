@@ -40,6 +40,7 @@ interface TaskSummary {
   readonly harnessFailures: number;
   readonly harnessFailureRate: number;
   readonly failedTranscripts: readonly string[];
+  readonly humanInterventions: MetricSummary;
   readonly turns: MetricSummary;
   readonly inputTokens: MetricSummary;
   readonly outputTokens: MetricSummary;
@@ -150,6 +151,10 @@ function summarizeTask(
     harnessFailures,
     harnessFailureRate: harnessFailures / lines.length,
     failedTranscripts,
+    humanInterventions: reportMetric(
+      lines,
+      (report) => report.humanInterventionCount,
+    ),
     turns: reportMetric(lines, (report) => report.agentLoopTurns),
     inputTokens: reportMetric(lines, (report) => report.usage.inputTokens),
     outputTokens: reportMetric(lines, (report) => report.usage.outputTokens),
@@ -277,6 +282,12 @@ function statusFor(
   }
   if (head.passRate < base.passRate) return "REGRESSION";
   if (head.passRate > base.passRate) return "IMPROVEMENT";
+  if (metricIncreased(base.humanInterventions, head.humanInterventions)) {
+    return "INTERVENTION REGRESSION";
+  }
+  if (metricDecreased(base.humanInterventions, head.humanInterventions)) {
+    return "INTERVENTION IMPROVEMENT";
+  }
   if (efficiencyRegressed(base, head)) return "EFFICIENCY REGRESSION";
   if (efficiencyImproved(base, head)) return "EFFICIENCY IMPROVEMENT";
   return "UNCHANGED";
@@ -293,6 +304,12 @@ function renderTaskComparison(
     `  status: ${status}`,
     `  pass: ${formatPassComparison(base, head)}`,
     `  outcomes: ${formatOutcomeCounts(base)} -> ${formatOutcomeCounts(head)}`,
+    `  human interventions avg: ${formatMetricComparison(
+      base?.humanInterventions,
+      head?.humanInterventions,
+      (value) => value.toFixed(1),
+      (value) => formatSignedFixed(value, 1),
+    )}`,
     `  turns avg: ${formatMetricComparison(
       base?.turns,
       head?.turns,

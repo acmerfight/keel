@@ -76,6 +76,7 @@ const agentRunSchema = z.object({
     "goal_resume",
     "goal_continuation",
   ]),
+  humanInterventionCount: z.number().int().nonnegative(),
   agentLoopTurns: z.number().int().nonnegative(),
   providerRetries: z.array(providerRetrySchema),
   contextCompactions: z.array(contextCompactionSchema),
@@ -85,6 +86,7 @@ const agentRunSchema = z.object({
 const taskSchema = z.object({
   ordinal: z.number().int().positive(),
   trigger: z.enum(["user_prompt", "goal_activation", "goal_resume"]),
+  humanInterventionCount: z.number().int().nonnegative(),
   agentRuns: z.array(agentRunSchema).min(1),
   outcome: z.string(),
 });
@@ -160,8 +162,9 @@ const modelOperationBase = {
 const modelOperationSchema = z.object(modelOperationBase);
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(11),
+  schemaVersion: z.literal(12),
   tasks: z.array(taskSchema),
+  humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),
   modelOperationCount: z.number().int().nonnegative(),
   providerRequestAttemptCount: z.number().int().nonnegative(),

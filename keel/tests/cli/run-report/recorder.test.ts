@@ -2,6 +2,35 @@ import { describe, expect, test } from "vitest";
 import { createAgentEventReportRecorder } from "../../../src/cli/report-events.ts";
 
 describe("CLI Run Report Recorder", () => {
+  test(`Given one Task contains multiple Agent Runs and user corrections,
+    When the report recorder completes their lifecycle,
+    Then each Run owns its interventions and the Task derives their total`, () => {
+    // Given
+    const recorder = createAgentEventReportRecorder();
+    recorder.beginTask("goal_activation");
+    recorder.beginAgentRun("goal_activation");
+    recorder.recordHumanIntervention();
+    recorder.completeAgentRun(1, "completed");
+    recorder.beginAgentRun("goal_continuation");
+    recorder.recordHumanIntervention();
+    recorder.recordHumanIntervention();
+    recorder.completeAgentRun(2, "completed");
+
+    // When
+    recorder.endTask();
+
+    // Then
+    expect(recorder.tasks()).toMatchObject([
+      {
+        humanInterventionCount: 3,
+        agentRuns: [
+          { ordinal: 1, humanInterventionCount: 1 },
+          { ordinal: 2, humanInterventionCount: 2 },
+        ],
+      },
+    ]);
+  });
+
   test(`Given no Task owns an Agent Run,
     When the recorder starts or completes that Run,
     Then it rejects the invalid lifecycle transition`, () => {
@@ -14,6 +43,9 @@ describe("CLI Run Report Recorder", () => {
     );
     expect(() => recorder.completeAgentRun(1, "completed")).toThrow(
       "internal: report Agent Run requires an active Task",
+    );
+    expect(() => recorder.recordHumanIntervention()).toThrow(
+      "internal: report human intervention requires an active Agent Run",
     );
   });
 

@@ -1049,11 +1049,14 @@ export async function runInteractiveSession(
               deferRemainingInjectedInput = true;
               deferredInputLines.push(...queuedLines.slice(firstCommandIndex));
             }
-            return injectableLines.map((content) => ({
-              role: "user",
-              content: content.line,
-              origin: STEER_ORIGIN,
-            }));
+            return injectableLines.map((content) => {
+              reportRecorder.recordHumanIntervention();
+              return {
+                role: "user",
+                content: content.line,
+                origin: STEER_ORIGIN,
+              };
+            });
           },
         }),
         (toolExecution) => {
