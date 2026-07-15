@@ -195,7 +195,9 @@ function uniquelyMatchingMemoryId(
   query: string,
 ): string | null {
   const exactIdMatches = entries.filter((entry) => query.includes(entry.id));
-  if (exactIdMatches.length === 1) return exactIdMatches[0]?.id ?? null;
+  if (exactIdMatches.length === 1) {
+    for (const entry of exactIdMatches) return entry.id;
+  }
   if (exactIdMatches.length > 1) return null;
 
   const queryWords = [...new Set(words(query))];
@@ -205,7 +207,10 @@ function uniquelyMatchingMemoryId(
     const entryWords = new Set(words(entry.text));
     return queryWords.every((word) => entryWords.has(word));
   });
-  return matchingEntries.length === 1 ? (matchingEntries[0]?.id ?? null) : null;
+  if (matchingEntries.length === 1) {
+    for (const entry of matchingEntries) return entry.id;
+  }
+  return null;
 }
 
 export function validateAgentMemoryForget(options: {

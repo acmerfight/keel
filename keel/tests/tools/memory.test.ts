@@ -123,6 +123,24 @@ describe("agent memory intent validation", () => {
     });
   });
 
+  test(`Given a remember request includes meaningful punctuation inside the claim,
+    When the provider copies the claim without the final punctuation,
+    Then the runtime accepts the exact normalized claim`, () => {
+    const sourceText = "Remember that release tags use a v prefix..";
+
+    expect(
+      validateAgentMemoryAdd({
+        currentUserMessage: {
+          role: "user",
+          content: sourceText,
+          origin: { type: "user_prompt" },
+        },
+        sourceText,
+        text: "release tags use a v prefix",
+      }),
+    ).toEqual({ ok: true });
+  });
+
   test(`Given there is no eligible current-user message,
     When the runtime verifies a remember request,
     Then it rejects the memory mutation authority`, () => {
@@ -291,6 +309,29 @@ describe("agent memory intent validation", () => {
     When the provider chooses an arbitrary active memory,
     Then the runtime rejects it as ambiguous`, () => {
     const sourceText = "Forget the memory.";
+
+    expect(
+      validateAgentMemoryForget({
+        currentUserMessage: {
+          role: "user",
+          content: sourceText,
+          origin: { type: "user_prompt" },
+        },
+        sourceText,
+        id: "mem_release",
+        entries: [{ id: "mem_release", text: "Release tags use a v prefix." }],
+      }),
+    ).toEqual({
+      ok: false,
+      reason:
+        "ambiguous current-user forget request; ask the user to choose one active memory ID",
+    });
+  });
+
+  test(`Given a forget request contains no searchable words,
+    When the provider chooses an arbitrary active memory,
+    Then the runtime rejects it instead of matching by an empty query`, () => {
+    const sourceText = "Forget !!!";
 
     expect(
       validateAgentMemoryForget({
