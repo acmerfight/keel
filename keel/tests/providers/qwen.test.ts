@@ -112,6 +112,27 @@ describe("Qwen Provider", () => {
         capturedAuthorization = req.headers.authorization;
         const userMessage = parsed.messages[1]?.content;
 
+        if (userMessage === "input-length-range-error") {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: {
+                message:
+                  "<400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 983616]",
+              },
+            }),
+          );
+          return;
+        }
+
+        if (userMessage === "bad-request") {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({ error: { message: "Invalid request parameter" } }),
+          );
+          return;
+        }
+
         if (userMessage === "length-limit") {
           writeSseResponse(res, [
             sseData({ choices: [{ delta: { content: "partial qwen" } }] }),
@@ -420,6 +441,60 @@ describe("Qwen Provider", () => {
     expect(capturedBody?.messages[2]).toEqual({
       role: "assistant",
       content: "I inspected the file.",
+    });
+  });
+
+  test(`Given Qwen rejects a request with its input-length range error,
+    When Keel classifies the response,
+    Then it exposes a recoverable provider context overflow`, async () => {
+    // Given
+    const provider = createQwenProvider({
+      apiKey: "test-qwen-key",
+      baseUrl,
+      model: "qwen3.7-plus",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [{ role: "user", content: "input-length-range-error" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_context_overflow",
+      message: expect.stringContaining(
+        "Range of input length should be [1, 983616]",
+      ),
+    });
+  });
+
+  test(`Given Qwen returns an unrelated bad-request response,
+    When Keel classifies the response,
+    Then it remains a terminal provider HTTP error`, async () => {
+    // Given
+    const provider = createQwenProvider({
+      apiKey: "test-qwen-key",
+      baseUrl,
+      model: "qwen3.7-plus",
+    });
+
+    // When / Then
+    await expect(
+      collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [{ role: "user", content: "bad-request" }],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "KeelError",
+      code: "provider_http_error",
+      message: expect.stringContaining("Invalid request parameter"),
     });
   });
 

@@ -120,6 +120,7 @@ function isContextOverflowHttpError(status: number, body: string): boolean {
     /prompt too long; exceeded (?:max )?context length/i,
     /too large for model with \d+ maximum context length/i,
     /model_context_window_exceeded/i,
+    /range of input length should be \[1,\s*\d+\]/i,
   ].some((pattern) => pattern.test(body));
 }
 
