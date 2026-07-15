@@ -1094,6 +1094,89 @@ describe("CLI project memory", () => {
     }
   });
 
+  test(`Given an interactive user explicitly asks to remember one fact,
+    When the agent saves it through the governed memory tool,
+    Then the final report records the agent memory operation`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-interactive-memory-add-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-interactive-memory-add-home-"),
+    );
+    const reportPath = join(workspace, "interactive-memory-add-report.json");
+    const userMessage =
+      "Remember that interactive reports include memory operations.";
+    const durableFact = "interactive reports include memory operations";
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_interactive_memory_add", "memory_add", {
+              text: durableFact,
+              sourceText: userMessage,
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Saved interactively."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    const fixture = createRuntime(["--ephemeral", "--report", reportPath], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: keelHome,
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const running = runCliMain(fixture.runtime);
+      input.write(`${userMessage}\n`);
+      await waitForOutputCount(fixture.stdout, "Saved interactively.", 1);
+      input.end();
+      const exitCode = await running;
+
+      // Then
+      expect(exitCode, fixture.stderr()).toBe(0);
+      expect(fixture.stderr()).toContain("Tool: memory_add");
+      expect(capturedBodies).toHaveLength(2);
+      const report = JSON.parse(await readFile(reportPath, "utf8"));
+      const operation = report.memory.operations[0];
+      expect(operation).toEqual({
+        operation: "add",
+        id: expect.stringMatching(/^mem_[a-f0-9-]+$/u),
+        scope: expect.objectContaining({ kind: "project" }),
+        outcome: "saved",
+      });
+      expect(report.memory.loadedIds).toContain(operation.id);
+    } finally {
+      input.end();
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
   test(`Given project memory is corrupt before an interactive request,
     When status is inspected and the session exits,
     Then status and the final report expose the load error without claiming IDs`, async () => {
