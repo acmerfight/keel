@@ -234,11 +234,50 @@ export async function executeModelSwitchCompaction(
     });
     if (signal.aborted) {
       rollback();
+      const cost =
+        compactionCostModel === undefined
+          ? undefined
+          : recordCompactionCost(result.usage, compactionCostModel);
       options.writeStdout("\n");
-      return { status: "rejected" };
+      return {
+        status: "rejected",
+        ...(cost !== undefined ? { cost } : {}),
+      };
     }
     if (!result.compacted) {
       rollback();
+      if (result.failure !== undefined) {
+        const failedCost =
+          compactionCostModel === undefined
+            ? undefined
+            : recordCompactionCost(result.usage, compactionCostModel);
+        if (
+          result.failure.code === "summary_error" &&
+          result.failure.error instanceof CostBudgetAdmissionError
+        ) {
+          const cost = costBudgetLimitedReport();
+          /* v8 ignore else -- CostBudgetAdmissionError is created only by --max-cost's budget wrapper. */
+          if (options.cliArgs.maxCostUsd !== undefined) {
+            options.writeStderr(
+              options.formatCostReport(cost, options.cliArgs.maxCostUsd),
+            );
+          }
+          return { status: "rejected", cost };
+        }
+        options.writeStderr(
+          formatManualCompactionFailure(result.failure.message),
+        );
+        if (failedCost !== undefined) {
+          const cost = failedCost;
+          if (options.cliArgs.maxCostUsd !== undefined) {
+            options.writeStderr(
+              options.formatCostReport(cost, options.cliArgs.maxCostUsd),
+            );
+          }
+          return { status: "rejected", cost };
+        }
+        return { status: "rejected" };
+      }
       options.writeStderr(
         "Context compaction skipped: no safe history to compact.\n",
       );

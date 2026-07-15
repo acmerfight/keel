@@ -5,6 +5,8 @@ import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   ForcedExit,
+  ONE_DOLLAR_PER_MILLION_INPUT,
+  withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -453,9 +455,317 @@ describe("Interactive Session - Manual Compact Failures", () => {
     ]);
   });
 
-  test(`Given manual compaction is interrupted,
+  test(`Given manual compaction repeatedly returns a length-truncated summary,
+    When user continues the saved session,
+    Then Keel reports failure without replacing or persisting the original history`, async () => {
+    // Given
+    const initialMessages: readonly Message[] = [
+      { role: "user", content: "Remember constraint alpha." },
+      {
+        role: "assistant",
+        content: "Constraint alpha recorded.",
+        toolCalls: [],
+      },
+      { role: "user", content: "Remember decision beta." },
+      { role: "assistant", content: "Decision beta recorded.", toolCalls: [] },
+      { role: "user", content: "Remember evidence gamma." },
+      { role: "assistant", content: "Evidence gamma recorded.", toolCalls: [] },
+    ];
+    const observedRequestContexts: Message[][] = [];
+    const persistedReasons: string[] = [];
+    let summaryRequests = 0;
+    const provider: LLMProvider = withProviderRequestAttemptAccounting({
+      id: "fake",
+      async *stream(options) {
+        if (options.toolChoice === "none") {
+          summaryRequests++;
+          yield {
+            type: "text",
+            text: "Partial checkpoint that must not persist",
+          };
+          yield {
+            type: "stop",
+            reason: "length",
+            usage: {
+              inputTokens: 10,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 10,
+              outputTokens: 2,
+            },
+          };
+          return;
+        }
+        observedRequestContexts.push(structuredClone([...options.messages]));
+        yield { type: "text", text: "Second done" };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    });
+    const input = new PassThrough();
+    let stdout = "";
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: {
+        bashMode: "disabled",
+        maxCostUsd: 1,
+        reportFile: "session.json",
+      },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialMessages,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") {
+            stdout += event.text;
+          } else if (event.type === "end") {
+            finalEnd = event;
+          }
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "Compaction cost recorded.\n",
+      persistSessionMessages: (_messages, reason) => {
+        persistedReasons.push(reason);
+      },
+    });
+
+    // When
+    input.end("/compact\nsecond prompt\n");
+
+    // Then
+    const result = await session;
+    expect(stdout).toBe("Second done\n");
+    expect(stderr).toContain(
+      "Context compaction failed: fake returned length-truncated context compaction summaries after 2 attempts.",
+    );
+    expect(stderr).toContain("Compaction cost recorded.");
+    expect(summaryRequests).toBe(2);
+    expect(persistedReasons).not.toContain("compaction");
+    expect(observedRequestContexts).toEqual([
+      [...initialMessages, { role: "user", content: "second prompt" }],
+    ]);
+    expect(JSON.stringify(observedRequestContexts)).not.toContain(
+      "Partial checkpoint that must not persist",
+    );
+    expect(result.report?.end.usage).toEqual({
+      inputTokens: 20,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 20,
+      outputTokens: 4,
+    });
+    expect(result.report?.modelOperations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          purpose: "manual_compaction",
+          outcome: "terminal_error",
+          usage: {
+            inputTokens: 20,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 20,
+            outputTokens: 4,
+          },
+          providerRequestAttempts: [
+            expect.objectContaining({ outcome: "completed" }),
+            expect.objectContaining({ outcome: "completed" }),
+          ],
+        }),
+      ]),
+    );
+  });
+
+  test.each([
+    {
+      mode: "unmetered",
+      cliArgs: { bashMode: "disabled" as const },
+      expectedCostModelResolutions: 0,
+      expectsReport: false,
+    },
+    {
+      mode: "report-only metered",
+      cliArgs: { bashMode: "disabled" as const, reportFile: "session.json" },
+      expectedCostModelResolutions: 2,
+      expectsReport: true,
+    },
+  ])(`Given $mode manual compaction returns a truncated summary,
+    When the command finishes,
+    Then Keel rejects the checkpoint with the configured usage accounting`, async ({
+    cliArgs,
+    expectedCostModelResolutions,
+    expectsReport,
+  }) => {
+    // Given
+    const initialMessages: readonly Message[] = [
+      { role: "user", content: "Remember alpha." },
+      { role: "assistant", content: "Alpha recorded.", toolCalls: [] },
+      { role: "user", content: "Remember beta." },
+      { role: "assistant", content: "Beta recorded.", toolCalls: [] },
+      { role: "user", content: "Remember gamma." },
+      { role: "assistant", content: "Gamma recorded.", toolCalls: [] },
+    ];
+    let summaryRequests = 0;
+    let costModelResolutions = 0;
+    let stderr = "";
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        summaryRequests++;
+        yield { type: "text", text: "Unmetered partial checkpoint" };
+        yield { type: "stop", reason: "length", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const session = runInteractiveSession({
+      cliArgs,
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialMessages,
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => {
+        costModelResolutions++;
+        return ZERO_COST_MODEL;
+      },
+      printAgentEvents: async () => {
+        throw new Error("manual compaction must not start an agent turn");
+      },
+      formatCostReport: () => {
+        throw new Error("unmetered compaction must not format cost");
+      },
+    });
+
+    // When
+    input.end("/compact\n");
+
+    // Then
+    const result = await session;
+    expect(summaryRequests).toBe(2);
+    expect(costModelResolutions).toBe(expectedCostModelResolutions);
+    expect(stderr).toContain("length-truncated context compaction summaries");
+    expect(result.report !== undefined).toBe(expectsReport);
+  });
+
+  test(`Given a billed manual summary is truncated before its retry exhausts the cost budget,
+    When the retry is denied admission,
+    Then Keel records the first attempt and rejects the checkpoint as budget-limited`, async () => {
+    // Given
+    const initialMessages: readonly Message[] = [
+      { role: "user", content: "Remember alpha." },
+      { role: "assistant", content: "Alpha recorded.", toolCalls: [] },
+      { role: "user", content: "Remember beta." },
+      { role: "assistant", content: "Beta recorded.", toolCalls: [] },
+      { role: "user", content: "Remember gamma." },
+      { role: "assistant", content: "Gamma recorded.", toolCalls: [] },
+    ];
+    let summaryRequests = 0;
+    let stderr = "";
+    const provider = withProviderRequestAttemptAccounting({
+      id: "fake",
+      estimateInputTokens: () => 1,
+      async *stream() {
+        summaryRequests++;
+        yield { type: "text", text: "Billed partial checkpoint" };
+        yield {
+          type: "stop",
+          reason: "length",
+          usage: {
+            inputTokens: 2_000,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 2_000,
+            outputTokens: 1,
+          },
+        };
+      },
+    });
+    const input = new PassThrough();
+    const session = runInteractiveSession({
+      cliArgs: {
+        bashMode: "disabled",
+        maxCostUsd: 0.001,
+        reportFile: "session.json",
+      },
+      workspace: process.cwd(),
+      platform: process.platform,
+      initialMessages,
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ONE_DOLLAR_PER_MILLION_INPUT,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => ONE_DOLLAR_PER_MILLION_INPUT,
+      printAgentEvents: async () => {
+        throw new Error(
+          "budget-limited compaction must not start an agent turn",
+        );
+      },
+      formatCostReport: (cost, maxUsd) =>
+        `Cost: ${cost.spentUsd.toFixed(3)} / ${maxUsd.toFixed(3)} limited=${cost.budgetLimited}\n`,
+    });
+
+    // When
+    input.end("/compact\n");
+
+    // Then
+    const result = await session;
+    expect(summaryRequests).toBe(1);
+    expect(stderr).toContain("Cost: 0.002 / 0.001 limited=true");
+    expect(stderr).not.toContain("Billed partial checkpoint");
+    expect(result.report?.end.stopReason).toBe("cost_budget");
+    expect(result.report?.end.usage.inputTokens).toBe(2_000);
+  });
+
+  test(`Given a billed manual compaction result arrives after interruption,
     When user sends another prompt,
-    Then the session restores original history and drops the cancelled checkpoint`, async () => {
+    Then the session restores original history, drops the cancelled checkpoint, and records usage`, async () => {
     // Given
     let receiveFirstEnd: () => void = () => {};
     const firstTurnEnded = new Promise<void>((resolve) => {
@@ -468,7 +778,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const observedRequestContexts: Message[][] = [];
     const compactionPrompts: string[] = [];
     let requestTurn = 0;
-    const provider: LLMProvider = {
+    const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
         if (options.toolChoice === "none") {
@@ -482,7 +792,16 @@ describe("Interactive Session - Manual Compact Failures", () => {
             });
           }
           yield { type: "text", text: "Cancelled manual summary." };
-          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 8,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 8,
+              outputTokens: 2,
+            },
+          };
           return;
         }
 
@@ -494,12 +813,12 @@ describe("Interactive Session - Manual Compact Failures", () => {
         };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
-    };
+    });
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { bashMode: "disabled", reportFile: "session.json" },
       workspace: process.cwd(),
       platform: process.platform,
       input,
@@ -554,7 +873,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     input.end();
 
     // Then
-    await session;
+    const result = await session;
     expect(stdout).toBe("First done\n\nSecond done\n");
     expect(compactionPrompts).toHaveLength(1);
     expect(observedRequestContexts[1]).toEqual([
@@ -568,6 +887,12 @@ describe("Interactive Session - Manual Compact Failures", () => {
     expect(JSON.stringify(observedRequestContexts[1])).not.toContain(
       "/compact",
     );
+    expect(result.report?.end.usage).toEqual({
+      inputTokens: 8,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 8,
+      outputTokens: 2,
+    });
   });
 
   test(`Given queued manual compaction is interrupted,

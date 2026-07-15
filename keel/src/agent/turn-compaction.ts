@@ -193,6 +193,9 @@ async function attemptContextCompaction(
     result.usage,
     config.costTracking,
   );
+  if (!result.compacted && result.failure?.code === "summary_error") {
+    throw result.failure.error;
+  }
   return finalResult;
 }
 
@@ -431,6 +434,11 @@ export async function* streamTurnWithOverflowRecovery(
               historicalCompactionAttemptedBeforeRequest = true;
               preflightCurrentOutputCompactionAttempted = true;
               continue;
+            }
+            if (compaction.failure !== undefined) {
+              const recoveryError = new Error(compaction.failure.message);
+              finishOperationFromError(error.error);
+              throw recoveryError;
             }
           }
           finishOperationFromError(error.error);

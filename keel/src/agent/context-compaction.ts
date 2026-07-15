@@ -1,3 +1,4 @@
+import { errorMessage } from "../core/error.ts";
 import type { SessionTaskProgress } from "../core/task-progress.ts";
 import type { LLMProvider, Message, Usage } from "../llm/types.ts";
 import { currentToolRound } from "./context-compaction/current-tool-round.ts";
@@ -25,7 +26,9 @@ import {
 } from "./context-compaction/stale-tool-output.ts";
 import {
   buildCompactedMessages,
+  type CompactionSummaryFailure,
   collectCompactionSummary,
+  compactionSummaryErrorDetails,
 } from "./context-compaction/summary.ts";
 import type {
   ModelOperationPurpose,
@@ -108,6 +111,7 @@ export type CompactMessagesResult =
       readonly compacted: false;
       readonly usage: Usage;
       readonly stats?: undefined;
+      readonly failure?: CompactionSummaryFailure;
     }
   | {
       readonly compacted: true;
@@ -459,25 +463,50 @@ export async function compactMessages(
     return { compacted: false, usage: ZERO_USAGE };
   }
 
-  const summaryTurn = await collectCompactionSummary({
-    provider: options.provider,
-    systemPrompt: options.systemPrompt,
-    messagesToSummarize: plan.messagesToSummarize,
-    signal: options.signal,
-    contextCompaction: resolved,
-    ...(options.toolOutputArtifacts !== undefined
-      ? { toolOutputArtifacts: options.toolOutputArtifacts }
-      : {}),
-    ...(options.focusInstruction !== undefined
-      ? { focusInstruction: options.focusInstruction }
-      : {}),
-    ...(options.modelOperation !== undefined
-      ? { modelOperation: options.modelOperation }
-      : {}),
-  });
+  let summaryResult: Awaited<ReturnType<typeof collectCompactionSummary>>;
+  try {
+    summaryResult = await collectCompactionSummary({
+      provider: options.provider,
+      systemPrompt: options.systemPrompt,
+      messagesToSummarize: plan.messagesToSummarize,
+      signal: options.signal,
+      contextCompaction: resolved,
+      ...(options.toolOutputArtifacts !== undefined
+        ? { toolOutputArtifacts: options.toolOutputArtifacts }
+        : {}),
+      ...(options.focusInstruction !== undefined
+        ? { focusInstruction: options.focusInstruction }
+        : {}),
+      ...(options.modelOperation !== undefined
+        ? { modelOperation: options.modelOperation }
+        : {}),
+    });
+  } catch (error) {
+    const details = compactionSummaryErrorDetails(error);
+    if (details === null) {
+      throw error;
+    }
+    return {
+      compacted: false,
+      failure: {
+        code: "summary_error",
+        message: errorMessage(details.error),
+        error: details.error,
+      },
+      usage: details.usage,
+    };
+  }
+  if (!summaryResult.complete) {
+    return {
+      compacted: false,
+      failure: summaryResult.failure,
+      usage: summaryResult.usage,
+    };
+  }
+  const summaryTurn = summaryResult.turn;
   const compacted = await buildCompactedMessages(
     options.messages,
-    plan.firstRetainedIndex,
+    summaryTurn.summarizedMessageCount,
     summaryTurn.text,
     resolved,
     options.toolOutputArtifacts,

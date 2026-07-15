@@ -201,3 +201,28 @@ export function planCompaction(
     messagesToSummarize: messages.slice(0, firstRetainedIndex),
   };
 }
+
+export function smallerCompactionPrefixMessageCount(
+  messages: readonly Message[],
+): number | null {
+  const targetTokens = Math.max(
+    1,
+    Math.floor(estimateMessagesTokens(messages) / 2),
+  );
+  let prefixTokens = 0;
+  let latestSafeBoundary: number | null = null;
+
+  const prefixCandidates = messages.slice(0, -1);
+  for (const [index, message] of prefixCandidates.entries()) {
+    prefixTokens += estimateMessageTokens(message);
+    if (!canSplitAfter(message, messages[index + 1])) {
+      continue;
+    }
+    latestSafeBoundary = index + 1;
+    if (prefixTokens >= targetTokens) {
+      return latestSafeBoundary;
+    }
+  }
+
+  return latestSafeBoundary;
+}
