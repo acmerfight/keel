@@ -5,6 +5,7 @@ import {
   closeSync,
   constants,
   fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -172,26 +173,39 @@ function createOrReadProjectMarker(gitCommonDirectory: string): string {
   const keelDirectory = join(gitCommonDirectory, "keel");
   ensurePrivateDirectory(keelDirectory);
   const markerPath = join(keelDirectory, "project-id");
+  if (pathKind(markerPath) !== "missing") {
+    return readProjectMarker(markerPath);
+  }
   const projectId = randomUUID();
+  const candidatePath = join(keelDirectory, `.project-id-${randomUUID()}.tmp`);
   let fd: number | undefined;
   try {
-    fd = openPrivateNewFile(markerPath);
+    fd = openPrivateNewFile(candidatePath);
     writeAll(fd, `${projectId}\n`);
     fsyncSync(fd);
-    chmodSync(markerPath, 0o600);
+    chmodSync(candidatePath, 0o600);
+    closeSync(fd);
+    fd = undefined;
+    try {
+      linkSync(candidatePath, markerPath);
+    } catch (error) {
+      if (hasNodeErrorCode(error, "EEXIST")) {
+        const existingProjectId = readProjectMarker(markerPath);
+        fsyncDirectory(keelDirectory);
+        return existingProjectId;
+      }
+      throw error;
+    }
     fsyncDirectory(keelDirectory);
     return projectId;
   } catch (error) {
-    /* v8 ignore else -- EEXIST is the supported concurrent marker-creation path; other failures are OS faults. */
-    if (hasNodeErrorCode(error, "EEXIST")) {
-      return readProjectMarker(markerPath);
-    } else {
-      throw new ProjectMemoryError(
-        `Error: cannot create project memory identity marker ${markerPath}: ${errorMessage(error)}`,
-      );
-    }
+    if (error instanceof ProjectMemoryError) throw error;
+    throw new ProjectMemoryError(
+      `Error: cannot create project memory identity marker ${markerPath}: ${errorMessage(error)}`,
+    );
   } finally {
     if (fd !== undefined) closeSync(fd);
+    rmSync(candidatePath, { force: true });
   }
 }
 
