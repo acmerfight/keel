@@ -67,6 +67,7 @@ export type RunReportAgentRunTrigger =
 interface RunReportAgentRun {
   readonly ordinal: number;
   readonly trigger: RunReportAgentRunTrigger;
+  readonly humanInterventionCount: number;
   readonly agentLoopTurns: number;
   readonly providerRetries: readonly RunReportProviderRetry[];
   readonly contextCompactions: readonly RunReportContextCompaction[];
@@ -76,6 +77,7 @@ interface RunReportAgentRun {
 export interface RunReportTask {
   readonly ordinal: number;
   readonly trigger: RunReportTaskTrigger;
+  readonly humanInterventionCount: number;
   readonly agentRuns: readonly RunReportAgentRun[];
   readonly outcome: string;
 }
@@ -84,6 +86,7 @@ export interface AgentEventReportRecorder {
   readonly beginModelOperation: ModelOperationRecorder["beginModelOperation"];
   readonly beginTask: (trigger: RunReportTaskTrigger) => void;
   readonly beginAgentRun: (trigger: RunReportAgentRunTrigger) => void;
+  readonly recordHumanIntervention: () => void;
   readonly record: (event: AgentEvent) => void;
   readonly completeAgentRun: (
     agentLoopTurns: number,
@@ -179,6 +182,7 @@ export function createAgentEventReportRecorder(): AgentEventReportRecorder {
   const undoProtection = createUndoProtectionTracker();
   let activeTask: ActiveRunReportTask | null = null;
   let activeAgentRun: ActiveRunReportAgentRun | null = null;
+  let activeAgentRunHumanInterventionCount = 0;
   const modelOperationLedger = createModelOperationReportLedger(() =>
     activeTask === null || activeAgentRun === null
       ? null
@@ -197,12 +201,14 @@ export function createAgentEventReportRecorder(): AgentEventReportRecorder {
     activeTask.agentRuns.push({
       ordinal: activeAgentRun.ordinal,
       trigger: activeAgentRun.trigger,
+      humanInterventionCount: activeAgentRunHumanInterventionCount,
       agentLoopTurns,
       providerRetries: [...activeAgentRun.providerRetries],
       contextCompactions: [...activeAgentRun.contextCompactions],
       stopReason,
     });
     activeAgentRun = null;
+    activeAgentRunHumanInterventionCount = 0;
   };
   return {
     beginModelOperation: modelOperationLedger.beginModelOperation,
@@ -229,6 +235,14 @@ export function createAgentEventReportRecorder(): AgentEventReportRecorder {
         providerRetries: [],
         contextCompactions: [],
       };
+    },
+    recordHumanIntervention: () => {
+      if (activeAgentRun === null) {
+        throw new Error(
+          "internal: report human intervention requires an active Agent Run",
+        );
+      }
+      activeAgentRunHumanInterventionCount++;
     },
     record: (event) => {
       if (event.type === "context_compacted") {
@@ -267,6 +281,10 @@ export function createAgentEventReportRecorder(): AgentEventReportRecorder {
       tasks.push({
         ordinal: activeTask.ordinal,
         trigger: activeTask.trigger,
+        humanInterventionCount: activeTask.agentRuns.reduce(
+          (total, agentRun) => total + agentRun.humanInterventionCount,
+          0,
+        ),
         agentRuns: [...activeTask.agentRuns],
         outcome: outcome ?? finalRun.stopReason,
       });

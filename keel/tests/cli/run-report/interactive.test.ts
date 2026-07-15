@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
 import {
+  sseTextReplyWithUsage as sseDeepseekTextReplyWithUsage,
+  sseToolCall,
+  sseToolFinish,
+} from "../../../src/testing/provider-sse-fixtures.ts";
+import {
   close,
   createServer,
   getPort,
@@ -16,6 +21,115 @@ import {
 } from "./fixtures.ts";
 
 describe("CLI Run Report", () => {
+  test(`Given a user corrects an active interactive task,
+    When the correction is injected into the next model request,
+    Then the run report attributes one human intervention to its Task and Agent Run`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-intervention-report-"),
+    );
+    const reportPath = join(workspace, "session-report.json");
+    let requests = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      req.resume();
+      req.on("end", () => {
+        requests++;
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (requests === 1) {
+          res.end(
+            [
+              sseToolCall("slow_check", "bash", {
+                command: 'node -e "setTimeout(() => {}, 300)"',
+              }),
+              sseToolFinish(),
+              "data: [DONE]\n\n",
+            ].join(""),
+          );
+          return;
+        }
+        res.end(sseDeepseekTextReplyWithUsage("Correction applied."));
+      });
+    });
+    await listen(server);
+    const { child, result } = runCliProcess(
+      [
+        "--ephemeral",
+        "--provider",
+        "deepseek",
+        "--bash-policy",
+        "trusted",
+        "--report",
+        reportPath,
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_FORCE_INTERACTIVE: "1",
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+        stdin: "pipe",
+      },
+    );
+    let correctionSent = false;
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (
+        correctionSent === false &&
+        chunk.toString("utf8").includes("Tool: bash")
+      ) {
+        correctionSent = true;
+        child.stdin?.end("Keep the existing public API.\n");
+      }
+    });
+
+    try {
+      child.stdin?.write("Inspect the project.\n");
+
+      // When
+      const exit = await withTimeout(
+        result,
+        5000,
+        "interactive CLI did not finish after steering",
+      );
+
+      // Then
+      expect(exit.exitCode, exit.stderr).toBe(0);
+      expect(correctionSent).toBe(true);
+      expect(requests).toBe(2);
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report).toMatchObject({
+        humanInterventionCount: 1,
+        tasks: [
+          {
+            ordinal: 1,
+            humanInterventionCount: 1,
+            agentRuns: [
+              {
+                ordinal: 1,
+                humanInterventionCount: 1,
+              },
+            ],
+          },
+        ],
+      });
+    } finally {
+      child.kill("SIGKILL");
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an interactive run only handles local commands,
     When it exits with --report before any provider turn,
     Then Keel still writes a zero-usage machine-readable report`, async () => {
@@ -103,16 +217,19 @@ describe("CLI Run Report", () => {
         },
       ]);
       expect(report.agentLoopTurns).toBe(2);
+      expect(report.humanInterventionCount).toBe(0);
       expect(report.tasks).toMatchObject([
         {
           ordinal: 1,
           trigger: "user_prompt",
+          humanInterventionCount: 0,
           agentRuns: [{ ordinal: 1, trigger: "user_prompt" }],
           outcome: "completed",
         },
         {
           ordinal: 2,
           trigger: "user_prompt",
+          humanInterventionCount: 0,
           agentRuns: [{ ordinal: 1, trigger: "user_prompt" }],
           outcome: "completed",
         },

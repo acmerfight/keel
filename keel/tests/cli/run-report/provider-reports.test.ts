@@ -74,10 +74,12 @@ describe("CLI Run Report", () => {
         {
           ordinal: 1,
           trigger: "user_prompt",
+          humanInterventionCount: 0,
           agentRuns: [
             {
               ordinal: 1,
               trigger: "user_prompt",
+              humanInterventionCount: 0,
               providerRetries: [
                 {
                   provider: "DeepSeek",

@@ -1117,10 +1117,12 @@ describe("CLI Main - Headless Goal", () => {
           {
             ordinal: 1,
             trigger: "goal_resume",
+            humanInterventionCount: 0,
             agentRuns: [
               {
                 ordinal: 1,
                 trigger: "goal_resume",
+                humanInterventionCount: 0,
                 agentLoopTurns: 2,
                 stopReason: "completed",
               },
@@ -1717,7 +1719,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(4);
       expect(providerCalls).toBe(1);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 11,
+        schemaVersion: 12,
         stopReason: "cost_budget",
         costBudgetUsd: 0.01,
         costUsd: 0.14,
@@ -2178,16 +2180,18 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(0);
       expect(providerCalls).toBe(3);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 11,
+        schemaVersion: 12,
         agentLoopTurns: 3,
         tasks: [
           {
             ordinal: 1,
             trigger: "goal_activation",
+            humanInterventionCount: 0,
             agentRuns: [
               {
                 ordinal: 1,
                 trigger: "goal_activation",
+                humanInterventionCount: 0,
                 agentLoopTurns: 1,
                 providerRetries: [],
                 contextCompactions: [],
@@ -2196,6 +2200,7 @@ describe("CLI Main - Headless Goal", () => {
               {
                 ordinal: 2,
                 trigger: "goal_continuation",
+                humanInterventionCount: 0,
                 agentLoopTurns: 2,
                 providerRetries: [],
                 contextCompactions: [],

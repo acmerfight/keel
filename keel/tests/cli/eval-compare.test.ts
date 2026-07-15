@@ -75,6 +75,18 @@ describe("Eval Compare", () => {
         pass: false,
       }),
       resultLine({
+        taskId: "intervention-improved",
+        trial: 1,
+        pass: true,
+        report: report({ turns: 2, humanInterventions: 1 }),
+      }),
+      resultLine({
+        taskId: "intervention-regressed",
+        trial: 1,
+        pass: true,
+        report: report({ turns: 3, humanInterventions: 0 }),
+      }),
+      resultLine({
         taskId: "harness-failure",
         trial: 1,
         pass: true,
@@ -121,6 +133,18 @@ describe("Eval Compare", () => {
         pass: true,
       }),
       resultLine({
+        taskId: "intervention-improved",
+        trial: 1,
+        pass: true,
+        report: report({ turns: 3, humanInterventions: 0 }),
+      }),
+      resultLine({
+        taskId: "intervention-regressed",
+        trial: 1,
+        pass: true,
+        report: report({ turns: 2, humanInterventions: 1 }),
+      }),
+      resultLine({
         taskId: "harness-failure",
         trial: 1,
         pass: false,
@@ -157,6 +181,10 @@ describe("Eval Compare", () => {
       expect(result.stdout).toContain("status: ADDED");
       expect(result.stdout).toContain("task: improved-score");
       expect(result.stdout).toContain("status: IMPROVEMENT");
+      expect(result.stdout).toContain("task: intervention-improved");
+      expect(result.stdout).toContain("status: INTERVENTION IMPROVEMENT");
+      expect(result.stdout).toContain("task: intervention-regressed");
+      expect(result.stdout).toContain("status: INTERVENTION REGRESSION");
       expect(result.stdout).toContain("task: regressed-score");
       expect(result.stdout).toContain("status: REGRESSION");
       expect(result.stdout).toContain("/tmp/head/regressed-score.jsonl");
@@ -171,7 +199,7 @@ describe("Eval Compare", () => {
       expect(result.stdout).toContain("task: unchanged");
       expect(result.stdout).toContain("status: UNCHANGED");
       expect(result.stdout).toContain(
-        "suite pass: 6/7 (85.7%) -> 5/7 (71.4%) (-14.3pp)",
+        "suite pass: 8/9 (88.9%) -> 7/9 (77.8%) (-11.1pp)",
       );
     } finally {
       await rm(root, { recursive: true, force: true });

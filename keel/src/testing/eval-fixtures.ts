@@ -19,6 +19,7 @@ export interface EvalResultLine {
 }
 
 export interface EvalRunReportOptions {
+  readonly humanInterventions?: number;
   readonly turns?: number;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
@@ -39,6 +40,7 @@ export interface EvalResultLineOptions {
 export function evalRunReport(
   options: EvalRunReportOptions = {},
 ): EvalRunReport {
+  const humanInterventionCount = options.humanInterventions ?? 0;
   const inputTokens = options.inputTokens ?? 100;
   const usage = {
     inputTokens,
@@ -83,15 +85,17 @@ export function evalRunReport(
     };
   });
   return {
-    schemaVersion: 11,
+    schemaVersion: 12,
     tasks: [
       {
         ordinal: 1,
         trigger: "user_prompt",
+        humanInterventionCount,
         agentRuns: [
           {
             ordinal: 1,
             trigger: "user_prompt",
+            humanInterventionCount,
             agentLoopTurns,
             providerRetries: [],
             contextCompactions: [],
@@ -101,6 +105,7 @@ export function evalRunReport(
         outcome: "completed",
       },
     ],
+    humanInterventionCount,
     modelOperations,
     modelOperationCount: modelOperations.length,
     providerRequestAttemptCount: modelOperations.length,
