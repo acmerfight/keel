@@ -6,19 +6,39 @@ import { errorMessage } from "../core/error.ts";
 const DEFAULT_TASK_TIMEOUT_MS = 300_000;
 const DEFAULT_SCRIPT_TIMEOUT_MS = 60_000;
 
-const taskConfigSchema = z.object({
-  prompt: z.string().min(1),
-  timeoutMs: z.number().int().positive().default(DEFAULT_TASK_TIMEOUT_MS),
-  scriptTimeoutMs: z
-    .number()
-    .int()
-    .positive()
-    .default(DEFAULT_SCRIPT_TIMEOUT_MS),
-  allowBash: z.boolean().default(false),
-  maxCostUsd: z.number().positive().optional(),
-});
+const standardTaskConfigSchema = z
+  .object({
+    kind: z.literal("standard"),
+    prompt: z.string().min(1),
+    timeoutMs: z.number().int().positive().default(DEFAULT_TASK_TIMEOUT_MS),
+    scriptTimeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .default(DEFAULT_SCRIPT_TIMEOUT_MS),
+    allowBash: z.boolean().default(false),
+    maxCostUsd: z.number().positive().optional(),
+  })
+  .strict();
 
-export interface EvalTask {
+const memoryPairTaskConfigSchema = z
+  .object({
+    kind: z.literal("memory_pair"),
+    prompt: z.string().min(1),
+    timeoutMs: z.number().int().positive(),
+    scriptTimeoutMs: z.number().int().positive(),
+    allowBash: z.boolean(),
+    maxCostUsd: z.number().positive(),
+    memory: z.string().min(1),
+  })
+  .strict();
+
+const taskConfigSchema = z.discriminatedUnion("kind", [
+  standardTaskConfigSchema,
+  memoryPairTaskConfigSchema,
+]);
+
+interface EvalTaskBase {
   readonly id: string;
   readonly workspaceDir: string;
   readonly verifyScript: string;
@@ -27,8 +47,20 @@ export interface EvalTask {
   readonly timeoutMs: number;
   readonly scriptTimeoutMs: number;
   readonly allowBash: boolean;
+}
+
+export interface StandardEvalTask extends EvalTaskBase {
+  readonly kind: "standard";
   readonly maxCostUsd?: number;
 }
+
+export interface MemoryPairEvalTask extends EvalTaskBase {
+  readonly kind: "memory_pair";
+  readonly maxCostUsd: number;
+  readonly memory: string;
+}
+
+export type EvalTask = StandardEvalTask | MemoryPairEvalTask;
 
 function parseTaskConfig(
   id: string,
@@ -78,7 +110,23 @@ function loadTask(suiteDir: string, id: string): EvalTask {
     throw new Error(`eval task "${id}" is missing solution.sh`);
   }
 
+  if (config.kind === "memory_pair") {
+    return {
+      kind: "memory_pair",
+      id,
+      workspaceDir,
+      verifyScript,
+      solutionScript,
+      prompt: config.prompt,
+      timeoutMs: config.timeoutMs,
+      scriptTimeoutMs: config.scriptTimeoutMs,
+      allowBash: config.allowBash,
+      maxCostUsd: config.maxCostUsd,
+      memory: config.memory,
+    };
+  }
   return {
+    kind: "standard",
     id,
     workspaceDir,
     verifyScript,
@@ -87,9 +135,9 @@ function loadTask(suiteDir: string, id: string): EvalTask {
     timeoutMs: config.timeoutMs,
     scriptTimeoutMs: config.scriptTimeoutMs,
     allowBash: config.allowBash,
-    ...(config.maxCostUsd !== undefined
-      ? { maxCostUsd: config.maxCostUsd }
-      : {}),
+    ...(config.maxCostUsd === undefined
+      ? {}
+      : { maxCostUsd: config.maxCostUsd }),
   };
 }
 

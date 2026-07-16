@@ -25,11 +25,13 @@ export {
   z,
 };
 export const resultLineSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   timestamp: z.string(),
   keelVersion: z.string(),
   taskId: z.string(),
   trial: z.number().int().positive(),
+  condition: z.enum(["standard", "memory_disabled", "memory_enabled"]),
+  requiredToPass: z.boolean(),
   pass: z.boolean(),
   outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
   wallMs: z.number().nonnegative(),
@@ -56,6 +58,7 @@ export async function createTask(
   await writeFile(
     join(taskDir, "task.json"),
     JSON.stringify({
+      kind: "standard",
       prompt: fixture.prompt,
       ...(fixture.timeoutMs !== undefined
         ? { timeoutMs: fixture.timeoutMs }

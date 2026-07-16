@@ -6,11 +6,13 @@ type EvalTrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
 export type EvalRunReport = RunReport;
 
 export interface EvalResultLine {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly timestamp: string;
   readonly keelVersion: string;
   readonly taskId: string;
   readonly trial: number;
+  readonly condition: "standard" | "memory_disabled" | "memory_enabled";
+  readonly requiredToPass: boolean;
   readonly pass: boolean;
   readonly outcome: EvalTrialOutcome;
   readonly wallMs: number;
@@ -30,6 +32,7 @@ export interface EvalRunReportOptions {
 export interface EvalResultLineOptions {
   readonly taskId: string;
   readonly trial: number;
+  readonly condition?: "standard" | "memory_disabled" | "memory_enabled";
   readonly pass: boolean;
   readonly outcome?: EvalTrialOutcome;
   readonly wallMs?: number;
@@ -155,12 +158,15 @@ export function evalRunReport(
 }
 
 export function evalResultLine(options: EvalResultLineOptions): EvalResultLine {
+  const condition = options.condition ?? "standard";
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     timestamp: "2026-06-22T00:00:00.000Z",
     keelVersion: "0.0.1",
     taskId: options.taskId,
     trial: options.trial,
+    condition,
+    requiredToPass: condition !== "memory_disabled",
     pass: options.pass,
     outcome:
       options.outcome ?? (options.pass === true ? "verified" : "verify_failed"),

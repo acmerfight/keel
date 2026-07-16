@@ -1,4 +1,5 @@
 {
+  "kind": "standard",
   "prompt": "The script filter.py tries to remove JavaScript from HTML files. Create out.html that demonstrates executable JavaScript can still survive after running `python3 filter.py out.html`. Do not use a `<script>` tag. Include the marker string `keel` in the surviving payload so the proof is easy to identify.",
   "timeoutMs": 240000,
   "allowBash": true,

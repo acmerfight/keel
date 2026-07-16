@@ -1,4 +1,5 @@
 {
+  "kind": "standard",
   "prompt": "Create a new file scripts/greet.js that prints exactly the line \"hello, keel\" (without quotes) when run with node scripts/greet.js.",
   "timeoutMs": 180000,
   "maxCostUsd": 0.05
