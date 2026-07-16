@@ -29,10 +29,12 @@ export interface GitStatusResult extends ToolResult {
 }
 
 interface GitStatusBranch {
-  readonly head?: string;
-  readonly upstream?: string;
-  readonly ahead?: number;
-  readonly behind?: number;
+  readonly head: string;
+  readonly upstream: string | null;
+  readonly aheadBehind: {
+    readonly ahead: number;
+    readonly behind: number;
+  } | null;
 }
 
 interface ParsedGitStatus {
@@ -45,6 +47,18 @@ const gitStatusPathSchema = z
   .min(1)
   .refine((value) => !value.includes("\0"));
 const gitStatusCodeSchema = z.string().regex(STATUS_CODE_PATTERN);
+const branchAheadSchema = z
+  .string()
+  .regex(/^\+\d+$/u)
+  .transform((value) => Number.parseInt(value.slice(1), 10));
+const branchBehindSchema = z
+  .string()
+  .regex(/^-\d+$/u)
+  .transform((value) => Number.parseInt(value.slice(1), 10));
+const branchAheadBehindSchema = z.tuple([
+  branchAheadSchema,
+  branchBehindSchema,
+]);
 
 const ordinaryStatusEntrySchema = z
   .object({
@@ -87,27 +101,14 @@ const gitStatusEntrySchema = z.discriminatedUnion("kind", [
 
 type GitStatusEntry = z.infer<typeof gitStatusEntrySchema>;
 
-function parsePathRecord(
-  record: string,
-  pathFieldIndex: number,
-): readonly string[] | null {
-  const fields = record.split(" ");
-  /* v8 ignore next: malformed porcelain records are ignored defensively; Git owns this record shape. */
-  if (fields.length <= pathFieldIndex) return null;
-  const path = fields.slice(pathFieldIndex).join(" ");
-  return [...fields.slice(0, pathFieldIndex), path];
-}
-
 function parseOrdinaryStatusEntry(record: string): GitStatusEntry | null {
-  const fields = parsePathRecord(record, 8);
-  /* v8 ignore next: malformed porcelain records are ignored defensively; Git owns this record shape. */
-  if (fields === null) return null;
+  const fields = record.split(" ");
   const parsed = ordinaryStatusEntrySchema.safeParse({
     kind: "ordinary",
     xy: fields[1],
-    path: fields[8],
+    path: fields.slice(8).join(" "),
   });
-  /* v8 ignore next: schema rejection is a defensive guard for malformed Git output. */
+  /* v8 ignore next: malformed ordinary records are rejected defensively; Git owns this external shape. */
   return parsed.success ? parsed.data : null;
 }
 
@@ -115,31 +116,25 @@ function parseRenamedStatusEntry(
   record: string,
   oldPath: string | undefined,
 ): GitStatusEntry | null {
-  /* v8 ignore next: malformed porcelain rename records are ignored defensively; Git owns the paired old path. */
-  if (oldPath === undefined) return null;
-  const fields = parsePathRecord(record, 9);
-  /* v8 ignore next: malformed porcelain records are ignored defensively; Git owns this record shape. */
-  if (fields === null) return null;
+  const fields = record.split(" ");
   const parsed = renamedStatusEntrySchema.safeParse({
     kind: "renamed",
     xy: fields[1],
-    path: fields[9],
+    path: fields.slice(9).join(" "),
     oldPath,
   });
-  /* v8 ignore next: schema rejection is a defensive guard for malformed Git output. */
+  /* v8 ignore next: malformed rename records are rejected defensively; Git owns this external shape. */
   return parsed.success ? parsed.data : null;
 }
 
 function parseUnmergedStatusEntry(record: string): GitStatusEntry | null {
-  const fields = parsePathRecord(record, 10);
-  /* v8 ignore next: malformed porcelain records are ignored defensively; Git owns this record shape. */
-  if (fields === null) return null;
+  const fields = record.split(" ");
   const parsed = unmergedStatusEntrySchema.safeParse({
     kind: "unmerged",
     xy: fields[1],
-    path: fields[10],
+    path: fields.slice(10).join(" "),
   });
-  /* v8 ignore next: schema rejection is a defensive guard for malformed Git output. */
+  /* v8 ignore next: malformed unmerged records are rejected defensively; Git owns this external shape. */
   return parsed.success ? parsed.data : null;
 }
 
@@ -148,8 +143,16 @@ function parseUntrackedStatusEntry(record: string): GitStatusEntry | null {
     kind: "untracked",
     path: record.slice(2),
   });
-  /* v8 ignore next: schema rejection is a defensive guard for malformed Git output. */
+  /* v8 ignore next: malformed untracked records are rejected defensively; Git owns this external shape. */
   return parsed.success ? parsed.data : null;
+}
+
+function appendParsedStatusEntry(
+  entries: GitStatusEntry[],
+  entry: GitStatusEntry | null,
+): void {
+  /* v8 ignore next: malformed porcelain records are ignored at the parser boundary. */
+  if (entry !== null) entries.push(entry);
 }
 
 function branchWithHead(
@@ -171,7 +174,7 @@ function branchWithAheadBehind(
   ahead: number,
   behind: number,
 ): GitStatusBranch {
-  return { ...branch, ahead, behind };
+  return { ...branch, aheadBehind: { ahead, behind } };
 }
 
 function parseBranchHeader(
@@ -188,18 +191,12 @@ function parseBranchHeader(
     );
   }
   if (record.startsWith("# branch.ab ")) {
-    const match = /^# branch\.ab \+(\d+) -(\d+)$/u.exec(record);
-    /* v8 ignore next: malformed branch.ab headers are ignored defensively; Git owns this record shape. */
-    if (match === null) return branch;
-    const ahead = match[1];
-    const behind = match[2];
-    /* v8 ignore next: successful branch.ab regex matches always include both captures. */
-    if (ahead === undefined || behind === undefined) return branch;
-    return branchWithAheadBehind(
-      branch,
-      Number.parseInt(ahead, 10),
-      Number.parseInt(behind, 10),
+    const parsed = branchAheadBehindSchema.safeParse(
+      record.slice("# branch.ab ".length).split(" "),
     );
+    /* v8 ignore next: malformed branch.ab headers are ignored defensively; Git owns this external shape. */
+    if (!parsed.success) return branch;
+    return branchWithAheadBehind(branch, ...parsed.data);
   }
   return branch;
 }
@@ -207,14 +204,18 @@ function parseBranchHeader(
 function parseGitStatusOutput(output: string): ParsedGitStatus {
   const records = output.split("\0");
   const entries: GitStatusEntry[] = [];
-  let branch: GitStatusBranch = {};
-  let index = 0;
+  let branch: GitStatusBranch = {
+    head: "unknown",
+    upstream: null,
+    aheadBehind: null,
+  };
+  let skipNextRecord = false;
 
-  while (index < records.length) {
-    const record = records[index];
-    index += 1;
-    /* v8 ignore next: index is bounded by the loop condition. */
-    if (record === undefined) break;
+  for (const [index, record] of records.entries()) {
+    if (skipNextRecord) {
+      skipNextRecord = false;
+      continue;
+    }
     if (record === "") break;
 
     if (record.startsWith("# ")) {
@@ -223,31 +224,26 @@ function parseGitStatusOutput(output: string): ParsedGitStatus {
     }
 
     if (record.startsWith("? ")) {
-      const entry = parseUntrackedStatusEntry(record);
-      /* v8 ignore next: null means malformed Git output; valid untracked records are covered. */
-      if (entry !== null) entries.push(entry);
+      appendParsedStatusEntry(entries, parseUntrackedStatusEntry(record));
       continue;
     }
 
     if (record.startsWith("1 ")) {
-      const entry = parseOrdinaryStatusEntry(record);
-      /* v8 ignore next: null means malformed Git output; valid ordinary records are covered. */
-      if (entry !== null) entries.push(entry);
+      appendParsedStatusEntry(entries, parseOrdinaryStatusEntry(record));
       continue;
     }
 
     if (record.startsWith("2 ")) {
-      const entry = parseRenamedStatusEntry(record, records[index]);
-      index += 1;
-      /* v8 ignore next: null means malformed Git output; valid rename records are covered. */
-      if (entry !== null) entries.push(entry);
+      appendParsedStatusEntry(
+        entries,
+        parseRenamedStatusEntry(record, records[index + 1]),
+      );
+      skipNextRecord = true;
       continue;
     }
 
     if (record.startsWith("u ")) {
-      const entry = parseUnmergedStatusEntry(record);
-      /* v8 ignore next: null means malformed Git output; valid unmerged records are covered. */
-      if (entry !== null) entries.push(entry);
+      appendParsedStatusEntry(entries, parseUnmergedStatusEntry(record));
     }
   }
 
@@ -326,16 +322,15 @@ function statusBuckets(entries: readonly GitStatusEntry[]): {
 }
 
 function formatBranch(branch: GitStatusBranch): string {
-  /* v8 ignore next: git status --branch normally emits branch.head; this fallback is for malformed output. */
-  const head = branch.head ?? "unknown";
   const details: string[] = [];
-  if (branch.upstream !== undefined)
-    details.push(`upstream: ${branch.upstream}`);
-  if (branch.ahead !== undefined && branch.behind !== undefined) {
-    details.push(`ahead ${branch.ahead}, behind ${branch.behind}`);
+  if (branch.upstream !== null) details.push(`upstream: ${branch.upstream}`);
+  if (branch.aheadBehind !== null) {
+    details.push(
+      `ahead ${branch.aheadBehind.ahead}, behind ${branch.aheadBehind.behind}`,
+    );
   }
-  if (details.length === 0) return `Branch: ${head}`;
-  return `Branch: ${head} (${details.join("; ")})`;
+  if (details.length === 0) return `Branch: ${branch.head}`;
+  return `Branch: ${branch.head} (${details.join("; ")})`;
 }
 
 function appendSection(

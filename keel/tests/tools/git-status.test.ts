@@ -358,6 +358,45 @@ describe("git_status tool", () => {
     });
   });
 
+  test(`Given porcelain records contain spaced paths and a status-looking rename source,
+    When git_status consumes the paired rename record,
+    Then it preserves every path and does not parse the source as another entry`, async () => {
+    // Given
+    const statusOutput = [
+      "# branch.head main",
+      "1 M. N... 100644 100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 ordinary  path.txt",
+      "2 R. N... 100644 100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 R100 renamed target.txt",
+      "? old name.txt",
+      "u UU N... 100644 100644 100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 3333333333333333333333333333333333333333 conflict  path.txt",
+      "? later file.txt",
+      "",
+    ].join("\0");
+
+    await withFakeGitStatusOutput({ statusOutput }, async (workspace) => {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "spaced_rename_status",
+          tool: "git_status",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toBe(
+        [
+          "Branch: main",
+          "Staged changes:\n- M ordinary  path.txt\n- R ? old name.txt -> renamed target.txt",
+          "Unmerged paths:\n- UU conflict  path.txt",
+          "Untracked files:\n- later file.txt",
+        ].join("\n\n"),
+      );
+    });
+  });
+
   test(`Given a visible tracked rename,
     When git_status inspects staged changes,
     Then it reports the source and target paths`, async () => {
