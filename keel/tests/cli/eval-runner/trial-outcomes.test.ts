@@ -4,10 +4,11 @@ import {
   createEvalDir,
   createTask,
   FIX_NOTE_TASK,
-  KEEL_PROVIDER_ENV,
+  join,
   readResultLines,
   rm,
   runEvalCommand,
+  writeFile,
 } from "./fixtures.ts";
 
 describe("Eval Runner", () => {
@@ -164,7 +165,8 @@ describe("Eval Runner", () => {
     // Given
     const { root, suiteDir, outFile } = await createEvalDir();
     await createTask(suiteDir, "provider-crash", FIX_NOTE_TASK);
-    process.env[KEEL_PROVIDER_ENV] = "unknown";
+    const cliEntry = join(root, "crashing-cli.js");
+    await writeFile(cliEntry, "process.exitCode = 1;\n", "utf8");
 
     try {
       // When
@@ -173,13 +175,19 @@ describe("Eval Runner", () => {
         outFile,
         trials: 1,
         check: false,
-        cliEntry: CLI_ENTRY,
+        cliEntry,
       });
 
       // Then
       expect(exitCode).toBe(1);
       expect(await readResultLines(outFile)).toMatchObject([
-        { taskId: "provider-crash", pass: false, outcome: "crashed" },
+        {
+          taskId: "provider-crash",
+          provider: "fake",
+          model: "fake",
+          pass: false,
+          outcome: "crashed",
+        },
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });

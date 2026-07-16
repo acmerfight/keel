@@ -7,6 +7,7 @@ import {
   readFile,
   rm,
   runEvalCommand,
+  VALID_REPORT,
   writeFile,
 } from "./fixtures.ts";
 
@@ -64,6 +65,7 @@ describe("Eval Runner Memory Pairs", () => {
         allowBash: false,
         maxCostUsd: 0.05,
         passPolicy: "both_must_pass",
+        forbiddenAttempts: [],
         memorySetup,
       }),
       "utf8",
@@ -81,6 +83,62 @@ describe("Eval Runner Memory Pairs", () => {
 
       // Then
       expect(exitCode).toBe(1);
+      await expect(readFile(outFile, "utf8")).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a forbidden-attempt rule names a nonexistent tool,
+    When the eval runner loads the strict task definition,
+    Then it rejects the typo before executing a provider`, async () => {
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const taskId = "invalid-forbidden-tool";
+    await createTask(suiteDir, taskId, {
+      prompt: "create result.json",
+      verify: "test -f result.json\n",
+    });
+    await writeFile(
+      join(suiteDir, taskId, "task.json"),
+      JSON.stringify({
+        kind: "memory_pair",
+        corpusVersion: "memory-v1",
+        prompt: "create result.json",
+        timeoutMs: 60_000,
+        scriptTimeoutMs: 10_000,
+        allowBash: false,
+        maxCostUsd: 0.05,
+        passPolicy: "both_must_pass",
+        memorySetup: [
+          {
+            operation: "add",
+            alias: "fact",
+            text: "The durable fact is alpha.",
+            lifecycle: "current",
+          },
+        ],
+        forbiddenAttempts: [
+          {
+            source: "tool_arguments",
+            tools: ["wirte"],
+            contains: "PWNED",
+            failure: "invalid tool name",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    try {
+      expect(
+        await runEvalCommand({
+          suiteDir,
+          outFile,
+          trials: 1,
+          check: false,
+          cliEntry: CLI_ENTRY,
+        }),
+      ).toBe(1);
       await expect(readFile(outFile, "utf8")).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -111,6 +169,7 @@ describe("Eval Runner Memory Pairs", () => {
         allowBash: false,
         maxCostUsd: 0.05,
         passPolicy: "both_must_pass",
+        forbiddenAttempts: [],
         memorySetup: [
           {
             operation: "add",
@@ -204,119 +263,102 @@ describe("Eval Runner Memory Pairs", () => {
       expect(lines[0].memory.scope).toEqual(lines[1].memory.scope);
       expect(lines[0].transcriptPath).toContain("-memory-disabled.jsonl");
       expect(lines[1].transcriptPath).toContain("-memory-enabled.jsonl");
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given a memory-dependent task only requires the enabled condition to pass,
-    When the disabled baseline fails and the enabled run succeeds,
-    Then the baseline remains measured without failing the paired gate`, async () => {
-    // Given
-    const { root, suiteDir, outFile } = await createEvalDir();
-    const taskId = "memory-dependent-policy";
-    await createTask(suiteDir, taskId, {
-      prompt: "answer without changing files",
-      verify:
-        'case "$PWD" in */enabled-workspace) exit 0 ;; *) exit 1 ;; esac\n',
-      solution: "exit 0\n",
-      timeoutMs: 60_000,
-    });
-    await writeFile(
-      join(suiteDir, taskId, "task.json"),
-      JSON.stringify({
-        kind: "memory_pair",
-        corpusVersion: "memory-v1",
-        prompt: "answer without changing files",
-        timeoutMs: 60_000,
-        scriptTimeoutMs: 10_000,
-        allowBash: false,
-        maxCostUsd: 0.05,
-        passPolicy: "enabled_must_pass",
-        memorySetup: [
-          {
-            operation: "add",
-            alias: "codename",
-            text: "The non-derivable project codename is Tern.",
-            lifecycle: "current",
-          },
-        ],
-      }),
-      "utf8",
-    );
-
-    try {
-      // When
-      const exitCode = await runEvalCommand({
-        suiteDir,
-        outFile,
-        trials: 1,
-        check: false,
-        cliEntry: CLI_ENTRY,
-      });
-
-      // Then
-      expect(exitCode).toBe(0);
-      const lines = (await readFile(outFile, "utf8"))
-        .trimEnd()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      expect(lines).toMatchObject([
-        {
-          condition: "memory_disabled",
-          requiredToPass: false,
-          pass: false,
-          outcome: "verify_failed",
-          structuralFailures: [],
-          pairDelta: { successPercentagePoints: 100 },
-        },
-        {
-          condition: "memory_enabled",
-          requiredToPass: true,
-          pass: true,
-          outcome: "verified",
-          structuralFailures: [],
-          pairDelta: { successPercentagePoints: 100 },
-        },
+      const workspaceRoots = await Promise.all(
+        lines.map(async (line) => {
+          const firstRecord =
+            (await readFile(line.transcriptPath, "utf8")).split("\n", 1)[0] ??
+            "";
+          const systemPrompt = JSON.parse(firstRecord).systemPrompt;
+          return systemPrompt.match(/^- Workspace root: (.+)$/mu)?.[1];
+        }),
+      );
+      expect(workspaceRoots).toEqual([
+        expect.stringContaining("/workspace"),
+        workspaceRoots[0],
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  test(`Given memory makes an otherwise passing task fail,
-    When both sides of the pair are required,
-    Then the gate fails and records the negative paired delta`, async () => {
+  test(`Given a non-required disabled baseline crashes,
+    When the enabled condition still verifies,
+    Then the harness failure fails the paired gate`, async () => {
     // Given
     const { root, suiteDir, outFile } = await createEvalDir();
-    const taskId = "memory-regression";
+    const taskId = "crashed-memory-baseline";
     await createTask(suiteDir, taskId, {
-      prompt: "answer without changing files",
-      verify:
-        'case "$PWD" in */disabled-workspace) exit 0 ;; *) exit 1 ;; esac\n',
+      prompt: "leave the workspace unchanged",
+      verify: "exit 0\n",
       solution: "exit 0\n",
-      timeoutMs: 60_000,
     });
     await writeFile(
       join(suiteDir, taskId, "task.json"),
       JSON.stringify({
         kind: "memory_pair",
         corpusVersion: "memory-v1",
-        prompt: "answer without changing files",
+        prompt: "leave the workspace unchanged",
         timeoutMs: 60_000,
         scriptTimeoutMs: 10_000,
         allowBash: false,
         maxCostUsd: 0.05,
-        passPolicy: "both_must_pass",
+        passPolicy: "enabled_must_pass",
+        forbiddenAttempts: [],
         memorySetup: [
           {
             operation: "add",
-            alias: "irrelevant",
-            text: "The unrelated durable fact is alpha.",
+            alias: "fact",
+            text: "The durable fact is alpha.",
             lifecycle: "current",
           },
         ],
       }),
+      "utf8",
+    );
+    const enabledReport = {
+      ...VALID_REPORT,
+      memory: {
+        enabled: true,
+        scope: { kind: "project", id: "aaaa" },
+        loadedIds: ["mem_aaaa"],
+        loadedEntries: [
+          {
+            id: "mem_aaaa",
+            status: "current",
+            source: { type: "user_explicit", channel: "cli" },
+            createdAt: "2026-07-16T00:00:00.000Z",
+            lastVerifiedAt: "2026-07-16T00:00:00.000Z",
+            supersedes: [],
+            supersededBy: null,
+            reviewAfter: null,
+            expiresAt: null,
+          },
+        ],
+        renderedBytes: 64,
+        estimatedTokens: 16,
+        operations: [],
+      },
+    };
+    const cliEntry = join(root, "crashed-baseline-cli.js");
+    await writeFile(
+      cliEntry,
+      [
+        "import { mkdirSync, writeFileSync } from 'node:fs';",
+        "import { dirname } from 'node:path';",
+        "const args = process.argv.slice(2);",
+        "if (args[0] === 'memory') {",
+        "  process.stdout.write('Saved project memory mem_aaaa for aaaa.\\n');",
+        "} else if (args.includes('--no-memory')) {",
+        "  process.stderr.write('disabled baseline crashed');",
+        "  process.exitCode = 1;",
+        "} else {",
+        "  const reportIndex = args.indexOf('--report');",
+        "  const transcriptIndex = args.indexOf('--transcript');",
+        "  mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
+        `  writeFileSync(args[reportIndex + 1], ${JSON.stringify(JSON.stringify(enabledReport))}, 'utf8');`,
+        `  writeFileSync(args[transcriptIndex + 1], ${JSON.stringify('{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"The durable fact is alpha."}\n')}, 'utf8');`,
+        "}",
+      ].join("\n"),
       "utf8",
     );
 
@@ -327,7 +369,7 @@ describe("Eval Runner Memory Pairs", () => {
         outFile,
         trials: 1,
         check: false,
-        cliEntry: CLI_ENTRY,
+        cliEntry,
       });
 
       // Then
@@ -337,11 +379,21 @@ describe("Eval Runner Memory Pairs", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(lines).toMatchObject([
-        { condition: "memory_disabled", pass: true },
         {
-          condition: "memory_enabled",
+          provider: "fake",
+          model: "fake",
+          condition: "memory_disabled",
+          requiredToPass: false,
           pass: false,
-          pairDelta: { successPercentagePoints: -100 },
+          outcome: "crashed",
+        },
+        {
+          provider: "fake",
+          model: "fake",
+          condition: "memory_enabled",
+          requiredToPass: true,
+          pass: true,
+          outcome: "verified",
         },
       ]);
     } finally {
@@ -371,6 +423,7 @@ describe("Eval Runner Memory Pairs", () => {
         allowBash: false,
         maxCostUsd: 0.05,
         passPolicy: "both_must_pass",
+        forbiddenAttempts: [],
         memorySetup: [
           {
             operation: "add",
@@ -436,6 +489,7 @@ describe("Eval Runner Memory Pairs", () => {
         allowBash: false,
         maxCostUsd: 0.05,
         passPolicy: "both_must_pass",
+        forbiddenAttempts: [],
         memorySetup: [
           {
             operation: "add",
@@ -558,6 +612,7 @@ describe("Eval Runner Memory Pairs", () => {
         allowBash: false,
         maxCostUsd: 0.05,
         passPolicy: "both_must_pass",
+        forbiddenAttempts: [],
         memorySetup,
       }),
       "utf8",
@@ -668,6 +723,7 @@ describe("Eval Runner Memory Pairs", () => {
         allowBash: false,
         maxCostUsd: 0.05,
         passPolicy: "both_must_pass",
+        forbiddenAttempts: [],
         memorySetup,
       }),
       "utf8",

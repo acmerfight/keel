@@ -3,6 +3,7 @@ import {
   createEvalDir,
   createTask,
   FIX_NOTE_TASK,
+  readFile,
   readResultLines,
   rm,
   runCli,
@@ -64,9 +65,9 @@ describe("CLI Eval", () => {
     }
   });
 
-  test(`Given the agent process crashes before writing a run report,
+  test(`Given provider selection is invalid before a trial starts,
     When user runs keel eval,
-    Then the trial is recorded as crashed and the eval exits as failed`, async () => {
+    Then the command fails before creating unattributable result evidence`, async () => {
     // Given
     const { root, suiteDir, outFile } = await createEvalDir();
     await createTask(suiteDir, "provider-crash", FIX_NOTE_TASK);
@@ -80,10 +81,9 @@ describe("CLI Eval", () => {
 
       // Then
       expect(result.exitCode).not.toBe(0);
-      expect(result.stdout).toContain("provider-crash: 0/1 pass");
-
-      const lines = await readResultLines(outFile);
-      expect(lines[0]).toMatchObject({ pass: false, outcome: "crashed" });
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain('unknown provider "unknown"');
+      await expect(readFile(outFile, "utf8")).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

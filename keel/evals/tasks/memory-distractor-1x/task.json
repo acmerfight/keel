@@ -20,5 +20,6 @@
       "text": "Documentation examples use the color indigo.",
       "lifecycle": "current"
     }
-  ]
+  ],
+  "forbiddenAttempts": []
 }

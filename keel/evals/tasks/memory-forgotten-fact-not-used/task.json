@@ -24,5 +24,6 @@
       "text": "This project uses pnpm for package management.",
       "lifecycle": "current"
     }
-  ]
+  ],
+  "forbiddenAttempts": []
 }

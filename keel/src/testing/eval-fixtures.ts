@@ -16,6 +16,7 @@ export interface EvalRunReportOptions {
 export interface EvalResultLineOptions {
   readonly taskId: string;
   readonly trial: number;
+  readonly repetitionCount?: number;
   readonly pass: boolean;
   readonly outcome?: TrialOutcome;
   readonly wallMs?: number;
@@ -24,6 +25,11 @@ export interface EvalResultLineOptions {
   readonly condition?: "standard" | "memory_disabled" | "memory_enabled";
   readonly requiredToPass?: boolean;
   readonly structuralFailures?: readonly string[];
+  readonly behavioralFailures?: readonly string[];
+  readonly provider?: string;
+  readonly model?: string;
+  readonly corpusVersion?: string;
+  readonly keelRevision?: string | null;
 }
 
 export function evalRunReport(
@@ -146,29 +152,41 @@ export function evalRunReport(
 export function evalResultLine(options: EvalResultLineOptions): EvalResultLine {
   const report = options.report ?? null;
   const condition = options.condition ?? "standard";
+  const outcome =
+    options.outcome ?? (options.pass === true ? "verified" : "verify_failed");
+  const outcomeFailure =
+    outcome === "verified"
+      ? []
+      : outcome === "verify_failed"
+        ? ["task verifier rejected the resulting workspace"]
+        : outcome === "timeout"
+          ? ["agent or verifier timed out"]
+          : ["agent or evaluation harness crashed"];
   return {
     schemaVersion: 2,
     timestamp: "2026-06-22T00:00:00.000Z",
     keelVersion: "0.0.1",
-    keelRevision: "0123456789abcdef0123456789abcdef01234567",
-    corpusVersion: "test-v1",
+    keelRevision:
+      options.keelRevision === undefined
+        ? "0123456789abcdef0123456789abcdef01234567"
+        : options.keelRevision,
+    corpusVersion: options.corpusVersion ?? "test-v1",
     taskId: options.taskId,
     trial: options.trial,
-    repetitionCount: 1,
+    repetitionCount: options.repetitionCount ?? 1,
     seed: null,
-    provider: report?.modelsUsed[0]?.provider ?? null,
-    model: report?.modelsUsed[0]?.model ?? null,
+    provider: options.provider ?? report?.modelsUsed[0]?.provider ?? "deepseek",
+    model: options.model ?? report?.modelsUsed[0]?.model ?? "deepseek-v4-flash",
     modelRevision: null,
     condition,
     requiredToPass: options.requiredToPass ?? true,
     pass: options.pass,
-    outcome:
-      options.outcome ?? (options.pass === true ? "verified" : "verify_failed"),
+    outcome,
     wallMs: options.wallMs ?? 1000,
     structuralFailures: [...(options.structuralFailures ?? [])],
-    behavioralFailures: options.pass
-      ? []
-      : ["task verifier rejected the resulting workspace"],
+    behavioralFailures: [
+      ...(options.behavioralFailures ?? (options.pass ? [] : outcomeFailure)),
+    ],
     memory: {
       mode:
         condition === "standard"
@@ -177,9 +195,16 @@ export function evalResultLine(options: EvalResultLineOptions): EvalResultLine {
             ? "disabled"
             : "enabled",
       configuredIds: [],
-      scope: null,
+      scope:
+        condition === "standard"
+          ? null
+          : { kind: "project", id: "project_test" },
     },
     toolCalls: [],
+    providerEvidence: {
+      transcriptReadable: options.transcriptPath !== undefined,
+      finalAssistantText: "",
+    },
     pairDelta:
       condition === "standard"
         ? null

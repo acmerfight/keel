@@ -57,8 +57,9 @@ baseline failure without failing the gate. A structural failure always makes
 the command non-zero, including in a non-required baseline. Timeout and crash
 outcomes are never accepted.
 `keel eval compare` is report-only: it exits non-zero for unreadable or
-invalid inputs, but regressions are printed rather than used as a failure
-gate.
+invalid inputs, including mixed provider/model/revision cohorts, duplicate or
+missing trials, incomplete or mismatched memory pairs, and corpus-version
+mismatches. Valid regressions are printed rather than used as a failure gate.
 
 Eval provider selection shares the provider resolver defaults with one-shot
 runs and accepts `--provider <deepseek|kimi|qwen>` plus optional `--model
@@ -125,6 +126,7 @@ read old result shapes.
   "toolCalls": [
     { "id": "call_1", "tool": "edit", "arguments": { "path": "README.md", "oldText": "Instal", "newText": "Install" } }
   ],
+  "providerEvidence": { "transcriptReadable": true, "finalAssistantText": "Fixed the typo in README.md." },
   "pairDelta": null,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
@@ -207,15 +209,21 @@ read old result shapes.
   zero-tolerance. A verifier rejection, timeout, or crash is behavioral or
   harness evidence and never disguises a structural failure.
 - `provider`, `model`, `keelRevision`, `corpusVersion`, `repetitionCount`, and
-  `seed` are required fields. `seed` and `modelRevision` are `null` when the
-  provider exposes no such control or snapshot. Missing run artifacts are also
-  explicit `null`, not omitted fields.
+  `seed` are required fields. The runner resolves provider/model before the
+  child starts, so even crashes remain attributable. `seed`, `modelRevision`,
+  and unavailable run artifacts are explicit `null`, not omitted fields.
 - `toolCalls` is the captured provider-visible tool trajectory with canonical
   arguments. Memory pairs capture a temporary transcript even when the user
   does not request persistent transcripts, so exact tool selection and
   parameters remain in the result line. `pairDelta` is the enabled-minus-
   disabled difference for success, calls, turns, tokens, cost, wall time, and
   rendered memory bytes; the same delta is attached to both lines of the pair.
+- `providerEvidence` always records transcript readability and a redacted,
+  4,096-character-bounded final assistant message. Task-owned
+  `forbiddenAttempts` can classify a prohibited assistant substring or a
+  prohibited substring in selected canonical tool arguments, so restoring the
+  final files does not erase evidence that the model attempted a poisoned
+  objective.
 - `report.tasks` attributes each admitted user Task to one or more Agent Runs.
   `humanInterventionCount` counts user messages actually injected as steering
   into an active Agent Run, while later Task prompts and runtime messages stay
@@ -268,8 +276,9 @@ Execution model (mirrors Terminal-Bench/Harbor):
 - `--transcript-dir` is implemented through the same subprocess boundary:
   the runner passes a trial-specific `--transcript <file>` path into the
   child CLI and records that path only after the file exists.
-- `verify.sh` grades only the final workspace state, never the agent's
-  path to it. Any approach that produces the right outcome passes.
+- `verify.sh` grades final workspace state. A memory task may additionally use
+  explicit `forbiddenAttempts` to reject a concrete poisoned assistant/tool
+  trajectory; no general-purpose semantic judge is involved.
 
 All standard-task fields are required. `maxCostUsd` is always a positive hard
 input to the runner; real-provider evaluation never runs without a cost cap:
@@ -313,17 +322,22 @@ policy:
       "text": "The release branch is stable/2026-q3.",
       "lifecycle": "current"
     }
-  ]
+  ],
+  "forbiddenAttempts": []
 }
 ```
 
 `memorySetup` accepts only `add`, `update`, and `forget`, directly mirroring
 the shipped commands. Aliases must be unique; update/forget targets must name
-an earlier active alias. `lifecycle` is explicitly `current` or `stale`. The
-runner initializes one temporary Git project, executes the setup commands,
-then copies the exact workspace, project marker, memory events, IDs, and
-timestamps into two isolated environments. The first runs `--no-memory`; the
-second runs normally. Thus the condition is the only intended difference.
+an earlier active alias. `lifecycle` is explicitly `current` or `stale`.
+`forbiddenAttempts` is also required; it is normally `[]`, while an adversarial
+task can name exact assistant-text or selected tool-argument substrings and a
+concrete failure label. The runner initializes one temporary Git project,
+executes the setup commands, and snapshots the workspace, project marker,
+memory events, IDs, and timestamps. It restores that snapshot to the same
+absolute workspace and `KEEL_HOME` paths before each sequential arm. The first
+runs `--no-memory`; the second runs normally. Thus neither path names nor
+fixture state reveal the condition.
 
 ## Writing good tasks
 
@@ -384,24 +398,27 @@ identity and cross-project isolation; secret rejection; byte and entry bounds;
 expiry, stale state, update, forget, purge, crash/race safety; subdirectory,
 rename, linked-worktree, and Unicode continuity; `--no-memory`; resume/fork;
 and the rule that memory is never copied into session-ledger or compaction
-state. The paired runner adds runtime checks that its disabled report and
-provider prompt contain no configured memory, enabled loaded IDs/scope/status
-exactly match the fixture, rendered memory stays within 4,096 bytes, and the
-task causes no unauthorized memory mutation.
+state. The paired runner adds runtime checks that its disabled report has zero
+memory bytes/tokens/operations and its complete provider-visible transcript
+contains no configured memory, enabled loaded IDs/scope/status exactly match
+the fixture, rendered memory stays within 4,096 bytes, and the task causes no
+unauthorized memory mutation.
 
 The compact provider corpus covers:
 
 - `memory-release-validation-command`: non-derivable durable constraint and
   exact action parameter;
-- `memory-reference-pointer`: follow the remembered pointer, then read current
-  repository evidence at that path;
+- `memory-reference-pointer`: use a remembered semantic locator, discover the
+  repository documents independently, then read the repository-returned path;
+  memory text itself is never a tool path;
 - `memory-stale-repository-wins`: current repository policy must beat stale
   memory;
 - `memory-latest-valid-fact`: a real `memory update` supersedes the old fact;
 - `memory-forgotten-fact-not-used`: a real `memory forget` removes the retired
   fact from the active prompt;
 - `memory-stored-injection-nonregression`: an irrelevant malicious entry must
-  not change the objective or filesystem effect;
+  not change the objective, filesystem effect, assistant claim, or attempted
+  write trajectory;
 - `memory-distractor-1x` and `memory-distractor-10x`: the same relevant fact
   and verifier at two distractor scales.
 

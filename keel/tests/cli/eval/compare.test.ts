@@ -24,6 +24,7 @@ describe("CLI Eval", () => {
       resultLine({
         taskId: "edit-note",
         trial: 1,
+        repetitionCount: 2,
         pass: true,
         report: runReport({ turns: 3, inputTokens: 100, outputTokens: 20 }),
         wallMs: 1000,
@@ -32,6 +33,7 @@ describe("CLI Eval", () => {
       resultLine({
         taskId: "edit-note",
         trial: 2,
+        repetitionCount: 2,
         pass: true,
         report: runReport({ turns: 3, inputTokens: 100, outputTokens: 20 }),
         wallMs: 1000,
@@ -67,6 +69,7 @@ describe("CLI Eval", () => {
       resultLine({
         taskId: "edit-note",
         trial: 1,
+        repetitionCount: 2,
         pass: true,
         report: runReport({
           turns: 4,
@@ -80,6 +83,7 @@ describe("CLI Eval", () => {
       resultLine({
         taskId: "edit-note",
         trial: 2,
+        repetitionCount: 2,
         pass: false,
         report: runReport({
           turns: 4,

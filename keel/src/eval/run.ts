@@ -16,7 +16,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
-import type { ProviderId } from "../core/provider-id.ts";
 import {
   type ToolCall,
   toolCallCanonicalArguments,
@@ -28,7 +27,9 @@ import {
   createEvalResultLine,
   type EvalProviderSelection,
   type EvalResultLine,
+  evalTrialPasses,
   type MemoryCondition,
+  memoryPairGatePasses,
   memoryStructuralFailures,
   pairDelta,
   type RecordedToolCall,
@@ -55,6 +56,7 @@ const transcriptAssistantMessageSchema = z.object({
   type: z.literal("message"),
   message: z.object({
     role: z.literal("assistant"),
+    content: z.string(),
     toolCalls: z.array(toolCallSchema),
   }),
 });
@@ -172,7 +174,7 @@ function runProcess(
         stderrTail: error.message,
       });
     });
-    child.on("exit", (code) => {
+    child.on("close", (code) => {
       finish(code);
     });
   });
@@ -224,23 +226,42 @@ function readTranscriptEvidence(
   transcriptPath: string | null,
 ): TranscriptEvidence {
   if (transcriptPath === null || !isReadableTranscript(transcriptPath)) {
-    return { readable: false, systemPrompt: null, toolCalls: [] };
+    return {
+      readable: false,
+      systemPrompt: null,
+      providerText: "",
+      assistantTexts: [],
+      toolCalls: [],
+    };
   }
   try {
-    const records = readFileSync(transcriptPath, "utf8")
+    const providerText = readFileSync(transcriptPath, "utf8");
+    const records = providerText
       .trimEnd()
       .split("\n")
       .map((line) => JSON.parse(line));
     const header = transcriptHeaderSchema.parse(records[0]);
-    const toolCalls = records.flatMap((record) => {
+    const assistantMessages = records.flatMap((record) => {
       const parsed = transcriptAssistantMessageSchema.safeParse(record);
-      return parsed.success
-        ? parsed.data.message.toolCalls.map(recordedToolCall)
-        : [];
+      return parsed.success ? [parsed.data.message] : [];
     });
-    return { readable: true, systemPrompt: header.systemPrompt, toolCalls };
+    return {
+      readable: true,
+      systemPrompt: header.systemPrompt,
+      providerText,
+      assistantTexts: assistantMessages.map((message) => message.content),
+      toolCalls: assistantMessages.flatMap((message) =>
+        message.toolCalls.map(recordedToolCall),
+      ),
+    };
   } catch {
-    return { readable: false, systemPrompt: null, toolCalls: [] };
+    return {
+      readable: false,
+      systemPrompt: null,
+      providerText: "",
+      assistantTexts: [],
+      toolCalls: [],
+    };
   }
 }
 
@@ -281,10 +302,10 @@ async function runAgentTrial(
   const cliArgs = [
     ...process.execArgv,
     cliEntry,
-    ...(selection.providerId !== undefined
-      ? ["--provider", selection.providerId]
-      : []),
-    ...(selection.model !== undefined ? ["--model", selection.model] : []),
+    "--provider",
+    selection.providerId,
+    "--model",
+    selection.model,
     ...(task.allowBash ? ["--allow-bash"] : []),
     "--max-cost",
     String(task.maxCostUsd),
@@ -421,7 +442,13 @@ function failedSetupTrial(): TrialResult {
     wallMs: 0,
     report: null,
     transcriptPath: null,
-    transcript: { readable: false, systemPrompt: null, toolCalls: [] },
+    transcript: {
+      readable: false,
+      systemPrompt: null,
+      providerText: "",
+      assistantTexts: [],
+      toolCalls: [],
+    },
   };
 }
 
@@ -571,33 +598,36 @@ async function runMemoryPairTrial(
       };
     }
 
-    const disabledWorkDir = join(pairRoot, "disabled-workspace");
-    const disabledKeelHome = join(pairRoot, "disabled-home");
-    const enabledWorkDir = join(pairRoot, "enabled-workspace");
-    const enabledKeelHome = join(pairRoot, "enabled-home");
-    cpSync(baseWorkDir, disabledWorkDir, { recursive: true });
-    cpSync(baseKeelHome, disabledKeelHome, { recursive: true });
-    cpSync(baseWorkDir, enabledWorkDir, { recursive: true });
-    cpSync(baseKeelHome, enabledKeelHome, { recursive: true });
+    const activeWorkDir = join(pairRoot, "workspace");
+    const activeKeelHome = join(pairRoot, "home");
+    const restoreSnapshot = (): void => {
+      rmSync(activeWorkDir, { recursive: true, force: true });
+      rmSync(activeKeelHome, { recursive: true, force: true });
+      cpSync(baseWorkDir, activeWorkDir, { recursive: true });
+      cpSync(baseKeelHome, activeKeelHome, { recursive: true });
+    };
+
+    restoreSnapshot();
 
     const disabled = await runAgentTrial(
       task,
       cliEntry,
       selection,
       "memory_disabled",
-      disabledWorkDir,
+      activeWorkDir,
       metaDir,
-      disabledKeelHome,
+      activeKeelHome,
       transcriptPaths.disabled,
     );
+    restoreSnapshot();
     const enabled = await runAgentTrial(
       task,
       cliEntry,
       selection,
       "memory_enabled",
-      enabledWorkDir,
+      activeWorkDir,
       metaDir,
-      enabledKeelHome,
+      activeKeelHome,
       transcriptPaths.enabled,
     );
     return { configured, setupFailures: [], disabled, enabled };
@@ -677,17 +707,23 @@ function ensureTranscriptRunDirectory(transcriptRunDir: string): boolean {
   }
 }
 
-export interface EvalCommandArgs {
+interface EvalCommandCommonArgs {
   readonly suiteDir: string;
   readonly outFile: string;
   readonly trials: number;
   readonly taskId?: string;
-  readonly providerId?: ProviderId;
-  readonly model?: string;
-  readonly check: boolean;
   readonly cliEntry: string;
   readonly transcriptDir?: string;
 }
+
+export type EvalCommandArgs = EvalCommandCommonArgs &
+  (
+    | { readonly check: true; readonly selection: null }
+    | {
+        readonly check: false;
+        readonly selection: EvalProviderSelection;
+      }
+  );
 
 function selectTasks(args: EvalCommandArgs): readonly EvalTask[] {
   const tasks = loadEvalTasks(args.suiteDir);
@@ -730,10 +766,7 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
 
   const version = keelVersion();
   const revision = keelRevision();
-  const selection: EvalProviderSelection = {
-    ...(args.providerId !== undefined ? { providerId: args.providerId } : {}),
-    ...(args.model !== undefined ? { model: args.model } : {}),
-  };
+  const selection = args.selection;
   const transcriptRunDir =
     args.transcriptDir === undefined
       ? undefined
@@ -829,11 +862,16 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
           pair.enabled,
           pair.setupFailures,
         );
-        const disabledPass =
-          pair.disabled.outcome === "verified" &&
-          disabledStructural.length === 0;
-        const enabledPass =
-          pair.enabled.outcome === "verified" && enabledStructural.length === 0;
+        const disabledPass = evalTrialPasses(
+          task,
+          pair.disabled,
+          disabledStructural,
+        );
+        const enabledPass = evalTrialPasses(
+          task,
+          pair.enabled,
+          enabledStructural,
+        );
         const delta = pairDelta(
           pair.disabled,
           pair.enabled,
@@ -872,11 +910,7 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
 
         if (disabledLine.pass) disabledPasses++;
         if (enabledLine.pass) enabledPasses++;
-        if (
-          disabledLine.structuralFailures.length > 0 ||
-          (disabledRequired && !disabledLine.pass) ||
-          !enabledLine.pass
-        ) {
+        if (!memoryPairGatePasses(task.passPolicy, disabledLine, enabledLine)) {
           taskPassed = false;
         }
         if (disabledRequired) {

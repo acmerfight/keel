@@ -21,5 +21,6 @@
       "text": "The release branch is stable/2026-q3.",
       "lifecycle": "current"
     }
-  ]
+  ],
+  "forbiddenAttempts": []
 }

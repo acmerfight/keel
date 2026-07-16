@@ -14,5 +14,6 @@
       "text": "Deployment timeout remains 5 seconds.",
       "lifecycle": "stale"
     }
-  ]
+  ],
+  "forbiddenAttempts": []
 }

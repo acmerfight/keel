@@ -41,7 +41,9 @@ export interface EvalCompareCommandArgs {
   readonly headFile: string;
 }
 
-function readEvalResultLines(filePath: string): readonly ResultLine[] {
+type ResultGroup = [ResultLine, ...ResultLine[]];
+
+function readEvalResultLines(filePath: string): ResultGroup {
   let raw: string;
   try {
     raw = readFileSync(filePath, "utf8");
@@ -51,7 +53,7 @@ function readEvalResultLines(filePath: string): readonly ResultLine[] {
     );
   }
 
-  const results: ResultLine[] = [];
+  let results: ResultGroup | null = null;
   for (const [index, line] of raw.split(/\r?\n/u).entries()) {
     if (line.trim() === "") continue;
 
@@ -70,33 +72,195 @@ function readEvalResultLines(filePath: string): readonly ResultLine[] {
         `cannot read eval result file ${filePath}: line ${index + 1} is not a schemaVersion 2 eval result.`,
       );
     }
-    results.push(parsedLine.data);
+    if (results === null) {
+      results = [parsedLine.data];
+    } else {
+      results.push(parsedLine.data);
+    }
   }
 
-  if (results.length === 0) {
+  if (results === null) {
     throw new Error(`eval result file ${filePath} has no result lines.`);
   }
 
   return results;
 }
 
-function groupByTask(
-  lines: readonly ResultLine[],
-): ReadonlyMap<string, readonly ResultLine[]> {
-  const groups = new Map<string, ResultLine[]>();
+function groupByTask(lines: ResultGroup): ReadonlyMap<string, ResultGroup> {
+  const groups = new Map<string, ResultGroup>();
   for (const line of lines) {
     const groupId =
       line.condition === "standard"
         ? line.taskId
         : `${line.taskId} [${line.condition}]`;
-    let group = groups.get(groupId);
+    const group = groups.get(groupId);
     if (group === undefined) {
-      group = [];
-      groups.set(groupId, group);
+      groups.set(groupId, [line]);
+    } else {
+      group.push(line);
     }
-    group.push(line);
   }
   return groups;
+}
+
+function knownCohortValue(
+  filePath: string,
+  label: "provider" | "model",
+  lines: ResultGroup,
+): string {
+  const values = new Set(lines.map((line) => line[label]));
+  if (values.size > 1) {
+    throw new Error(
+      `eval result file ${filePath} mixes ${label} values in one cohort.`,
+    );
+  }
+  return lines[0][label];
+}
+
+function sameStringArray(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+function validateTaskGroup(
+  filePath: string,
+  groupId: string,
+  lines: ResultGroup,
+): void {
+  const first = lines[0];
+  if (lines.some((line) => line.corpusVersion !== first.corpusVersion)) {
+    throw new Error(
+      `eval result file ${filePath} mixes corpus versions for ${groupId}.`,
+    );
+  }
+  if (lines.some((line) => line.repetitionCount !== first.repetitionCount)) {
+    throw new Error(
+      `eval result file ${filePath} mixes repetition counts for ${groupId}.`,
+    );
+  }
+  const trials = lines
+    .map((line) => line.trial)
+    .sort((left, right) => left - right);
+  if (
+    trials.length !== first.repetitionCount ||
+    trials.some((trial, index) => trial !== index + 1)
+  ) {
+    throw new Error(
+      `eval result file ${filePath} requires exactly trials 1..${first.repetitionCount} for ${groupId}.`,
+    );
+  }
+}
+
+function validateMemoryPairs(filePath: string, lines: ResultGroup): void {
+  const byTask = new Map<string, ResultLine[]>();
+  for (const line of lines) {
+    const taskLines = byTask.get(line.taskId) ?? [];
+    taskLines.push(line);
+    byTask.set(line.taskId, taskLines);
+  }
+  for (const [taskId, taskLines] of byTask) {
+    const conditions = new Set(taskLines.map((line) => line.condition));
+    if (conditions.has("standard") && conditions.size > 1) {
+      throw new Error(
+        `eval result file ${filePath} mixes standard and memory conditions for ${taskId}.`,
+      );
+    }
+    if (conditions.has("standard")) continue;
+    if (
+      !conditions.has("memory_disabled") ||
+      !conditions.has("memory_enabled")
+    ) {
+      throw new Error(
+        `eval result file ${filePath} has an incomplete memory pair for ${taskId}.`,
+      );
+    }
+    const disabledLines = taskLines.filter(
+      (line) => line.condition === "memory_disabled",
+    );
+    const enabledLines = taskLines.filter(
+      (line) => line.condition === "memory_enabled",
+    );
+    if (disabledLines.length !== enabledLines.length) {
+      throw new Error(
+        `eval result file ${filePath} has an incomplete memory pair for ${taskId}.`,
+      );
+    }
+    const enabledByTrial = new Map(
+      enabledLines.map((line) => [line.trial, line]),
+    );
+    for (const disabled of disabledLines) {
+      const enabled = enabledByTrial.get(disabled.trial);
+      if (enabled === undefined) {
+        throw new Error(
+          `eval result file ${filePath} has an incomplete memory pair for ${taskId} trial ${disabled.trial}.`,
+        );
+      }
+      if (
+        !sameStringArray(
+          disabled.memory.configuredIds,
+          enabled.memory.configuredIds,
+        ) ||
+        JSON.stringify(disabled.memory.scope) !==
+          JSON.stringify(enabled.memory.scope) ||
+        JSON.stringify(disabled.pairDelta) !== JSON.stringify(enabled.pairDelta)
+      ) {
+        throw new Error(
+          `eval result file ${filePath} has mismatched memory-pair evidence for ${taskId} trial ${disabled.trial}.`,
+        );
+      }
+    }
+  }
+}
+
+function validateResultCohort(filePath: string, lines: ResultGroup): void {
+  knownCohortValue(filePath, "provider", lines);
+  knownCohortValue(filePath, "model", lines);
+  const revisions = new Set(lines.map((line) => line.keelRevision));
+  if (revisions.size > 1) {
+    throw new Error(
+      `eval result file ${filePath} mixes Keel revisions in one cohort.`,
+    );
+  }
+  for (const [groupId, taskLines] of groupByTask(lines)) {
+    validateTaskGroup(filePath, groupId, taskLines);
+  }
+  validateMemoryPairs(filePath, lines);
+}
+
+function validateComparableCohorts(
+  baseFile: string,
+  headFile: string,
+  baseLines: ResultGroup,
+  headLines: ResultGroup,
+  baseGroups: ReadonlyMap<string, ResultGroup>,
+  headGroups: ReadonlyMap<string, ResultGroup>,
+): void {
+  for (const label of ["provider", "model"] as const) {
+    if (
+      knownCohortValue(baseFile, label, baseLines) !==
+      knownCohortValue(headFile, label, headLines)
+    ) {
+      throw new Error(
+        `cannot compare eval cohorts: ${label} differs between ${baseFile} and ${headFile}.`,
+      );
+    }
+  }
+  for (const [groupId, baseLines] of baseGroups) {
+    const headLines = headGroups.get(groupId);
+    if (headLines === undefined) continue;
+    const base = baseLines[0];
+    const head = headLines[0];
+    if (base.corpusVersion !== head.corpusVersion) {
+      throw new Error(
+        `cannot compare ${groupId}: corpus version differs between ${baseFile} and ${headFile}.`,
+      );
+    }
+  }
 }
 
 function summarizeMetric(values: readonly number[]): MetricSummary {
@@ -366,8 +530,18 @@ function renderTaskComparison(
 function renderEvalComparison(args: EvalCompareCommandArgs): string {
   const baseLines = readEvalResultLines(args.baseFile);
   const headLines = readEvalResultLines(args.headFile);
+  validateResultCohort(args.baseFile, baseLines);
+  validateResultCohort(args.headFile, headLines);
   const baseGroups = groupByTask(baseLines);
   const headGroups = groupByTask(headLines);
+  validateComparableCohorts(
+    args.baseFile,
+    args.headFile,
+    baseLines,
+    headLines,
+    baseGroups,
+    headGroups,
+  );
   const output = [
     "Eval comparison:",
     `base: ${args.baseFile}`,

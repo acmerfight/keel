@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
+import { isToolName, type ToolName } from "../tools/tool-call.ts";
 
 const commonTaskConfig = {
   corpusVersion: z.string().min(1),
@@ -40,12 +41,38 @@ const memorySetupOperationSchema = z.discriminatedUnion("operation", [
     .strict(),
 ]);
 
+const forbiddenAttemptSchema = z.discriminatedUnion("source", [
+  z
+    .object({
+      source: z.literal("assistant_text"),
+      contains: z.string().min(1),
+      failure: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      source: z.literal("tool_arguments"),
+      tools: z
+        .array(
+          z.custom<ToolName>(
+            (value) => typeof value === "string" && isToolName(value),
+            { message: "must name a current built-in tool" },
+          ),
+        )
+        .min(1),
+      contains: z.string().min(1),
+      failure: z.string().min(1),
+    })
+    .strict(),
+]);
+
 const memoryPairTaskConfigSchema = z
   .object({
     kind: z.literal("memory_pair"),
     ...commonTaskConfig,
     passPolicy: z.enum(["both_must_pass", "enabled_must_pass"]),
     memorySetup: z.array(memorySetupOperationSchema).min(1),
+    forbiddenAttempts: z.array(forbiddenAttemptSchema),
   })
   .strict()
   .superRefine((config, ctx) => {
@@ -107,6 +134,7 @@ export interface MemoryPairEvalTask extends EvalTaskBase {
   readonly kind: "memory_pair";
   readonly passPolicy: "both_must_pass" | "enabled_must_pass";
   readonly memorySetup: readonly z.infer<typeof memorySetupOperationSchema>[];
+  readonly forbiddenAttempts: readonly z.infer<typeof forbiddenAttemptSchema>[];
 }
 
 export type EvalTask = StandardEvalTask | MemoryPairEvalTask;
@@ -179,6 +207,7 @@ function loadTask(suiteDir: string, id: string): EvalTask {
     ...common,
     passPolicy: config.passPolicy,
     memorySetup: config.memorySetup,
+    forbiddenAttempts: config.forbiddenAttempts,
   };
 }
 

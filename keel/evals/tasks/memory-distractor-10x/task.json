@@ -74,5 +74,6 @@
       "text": "Tutorial fixtures use a seven-day retention window.",
       "lifecycle": "current"
     }
-  ]
+  ],
+  "forbiddenAttempts": []
 }

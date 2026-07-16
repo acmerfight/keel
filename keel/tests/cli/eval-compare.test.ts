@@ -173,8 +173,8 @@ describe("Eval Compare", () => {
       const result = runCompare(baseFile, headFile);
 
       // Then
-      expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
+      expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("task: added-or-removed");
       expect(result.stdout).toContain("status: REMOVED");
       expect(result.stdout).toContain("task: brand-new");
@@ -278,12 +278,14 @@ describe("Eval Compare", () => {
       resultLine({
         taskId: "cheaper-task",
         trial: 1,
+        repetitionCount: 2,
         pass: true,
         report: report({ costUsd: 0.002 }),
       }),
       resultLine({
         taskId: "cheaper-task",
         trial: 2,
+        repetitionCount: 2,
         pass: true,
         report: report({ costUsd: 0.002 }),
       }),
@@ -292,12 +294,14 @@ describe("Eval Compare", () => {
       resultLine({
         taskId: "cheaper-task",
         trial: 1,
+        repetitionCount: 2,
         pass: true,
         report: report({ costUsd: 0.001 }),
       }),
       resultLine({
         taskId: "cheaper-task",
         trial: 2,
+        repetitionCount: 2,
         pass: true,
         report: report({ costUsd: 0.001 }),
       }),
@@ -343,6 +347,7 @@ describe("Eval Compare", () => {
       resultLine({
         taskId: "more-reliable-head",
         trial: 1,
+        repetitionCount: 5,
         pass: false,
         outcome: "crashed",
         transcriptPath: "/tmp/head/crashed-1.jsonl",
@@ -350,6 +355,7 @@ describe("Eval Compare", () => {
       resultLine({
         taskId: "more-reliable-head",
         trial: 2,
+        repetitionCount: 5,
         pass: false,
         outcome: "timeout",
         transcriptPath: "/tmp/head/timeout-2.jsonl",
@@ -357,16 +363,19 @@ describe("Eval Compare", () => {
       resultLine({
         taskId: "more-reliable-head",
         trial: 3,
+        repetitionCount: 5,
         pass: true,
       }),
       resultLine({
         taskId: "more-reliable-head",
         trial: 4,
+        repetitionCount: 5,
         pass: true,
       }),
       resultLine({
         taskId: "more-reliable-head",
         trial: 5,
+        repetitionCount: 5,
         pass: true,
       }),
     ]);
@@ -376,8 +385,8 @@ describe("Eval Compare", () => {
       const result = runCompare(baseFile, headFile);
 
       // Then
-      expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
+      expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("task: more-reliable-head");
       expect(result.stdout).toContain("status: IMPROVEMENT");
       expect(result.stdout).toContain(
@@ -387,6 +396,181 @@ describe("Eval Compare", () => {
       expect(result.stdout).not.toContain("regression transcripts:");
       expect(result.stdout).not.toContain("/tmp/head/crashed-1.jsonl");
       expect(result.stdout).not.toContain("/tmp/head/timeout-2.jsonl");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given eval files contain mixed, incomplete, or mismatched cohort evidence,
+    When the compare command validates the experiment,
+    Then it rejects every invalid cohort instead of averaging it`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "keel-eval-compare-cohort-"));
+    const baseFile = join(root, "base.jsonl");
+    const headFile = join(root, "head.jsonl");
+    const standard = resultLine({ taskId: "case", trial: 1, pass: true });
+    const disabled = resultLine({
+      taskId: "case",
+      trial: 1,
+      pass: false,
+      condition: "memory_disabled",
+      requiredToPass: false,
+    });
+    const enabled = resultLine({
+      taskId: "case",
+      trial: 1,
+      pass: true,
+      condition: "memory_enabled",
+    });
+    const cases = [
+      {
+        base: [
+          { ...standard, repetitionCount: 2 },
+          { ...standard, repetitionCount: 2 },
+        ],
+        head: [standard],
+        expected: "requires exactly trials 1..2",
+      },
+      {
+        base: [
+          { ...standard, repetitionCount: 2 },
+          { ...standard, trial: 2, repetitionCount: 3 },
+        ],
+        head: [standard],
+        expected: "mixes repetition counts",
+      },
+      {
+        base: [
+          { ...standard, repetitionCount: 2 },
+          {
+            ...standard,
+            trial: 2,
+            repetitionCount: 2,
+            corpusVersion: "other-v1",
+          },
+        ],
+        head: [standard],
+        expected: "mixes corpus versions",
+      },
+      {
+        base: [
+          standard,
+          resultLine({
+            taskId: "other",
+            trial: 1,
+            pass: true,
+            provider: "kimi",
+            model: "kimi-k2.6",
+          }),
+        ],
+        head: [standard],
+        expected: "mixes provider values",
+      },
+      {
+        base: [
+          standard,
+          resultLine({
+            taskId: "other",
+            trial: 1,
+            pass: true,
+            keelRevision: "fedcba9876543210fedcba9876543210fedcba98",
+          }),
+        ],
+        head: [standard],
+        expected: "mixes Keel revisions",
+      },
+      {
+        base: [disabled],
+        head: [standard],
+        expected: "incomplete memory pair",
+      },
+      {
+        base: [standard, disabled, enabled],
+        head: [standard],
+        expected: "mixes standard and memory conditions",
+      },
+      {
+        base: [
+          {
+            ...disabled,
+            memory: {
+              ...disabled.memory,
+              configuredIds: ["mem_disabled"],
+            },
+          },
+          {
+            ...enabled,
+            memory: {
+              ...enabled.memory,
+              configuredIds: ["mem_enabled"],
+            },
+          },
+        ],
+        head: [standard],
+        expected: "mismatched memory-pair evidence",
+      },
+      {
+        base: [
+          disabled,
+          {
+            ...enabled,
+            memory: {
+              ...enabled.memory,
+              scope: { kind: "project" as const, id: "project_other" },
+            },
+          },
+        ],
+        head: [standard],
+        expected: "mismatched memory-pair evidence",
+      },
+      {
+        base: [
+          disabled,
+          {
+            ...enabled,
+            pairDelta: {
+              successPercentagePoints: 0,
+              toolCalls: 1,
+              agentLoopTurns: 0,
+              inputTokens: 0,
+              outputTokens: 0,
+              costUsd: 0,
+              wallMs: 0,
+              renderedBytes: 0,
+            },
+          },
+        ],
+        head: [standard],
+        expected: "mismatched memory-pair evidence",
+      },
+      {
+        base: [standard],
+        head: [
+          {
+            ...standard,
+            provider: "kimi",
+            model: "kimi-k2.6",
+          },
+        ],
+        expected: "provider differs",
+      },
+      {
+        base: [standard],
+        head: [{ ...standard, corpusVersion: "other-v1" }],
+        expected: "corpus version differs",
+      },
+    ];
+
+    try {
+      for (const cohort of cases) {
+        await writeResultFile(baseFile, cohort.base);
+        await writeResultFile(headFile, cohort.head);
+
+        const result = runCompare(baseFile, headFile);
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain(cohort.expected);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

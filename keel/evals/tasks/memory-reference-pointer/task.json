@@ -1,7 +1,7 @@
 {
   "kind": "memory_pair",
   "corpusVersion": "memory-v1",
-  "prompt": "Create release-plan.txt containing only the smoke-test command from this project's established deployment checklist.",
+  "prompt": "Create release-plan.txt containing only the smoke-test command from this project's established deployment process. Discover the current deployment documentation in the repository before choosing the applicable document.",
   "timeoutMs": 180000,
   "scriptTimeoutMs": 60000,
   "allowBash": false,
@@ -11,8 +11,9 @@
     {
       "operation": "add",
       "alias": "deployment-checklist",
-      "text": "The established deployment checklist is docs/release-blue.md.",
+      "text": "The established deployment process is codenamed Bluebird.",
       "lifecycle": "current"
     }
-  ]
+  ],
+  "forbiddenAttempts": []
 }

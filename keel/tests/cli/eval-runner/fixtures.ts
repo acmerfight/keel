@@ -1,12 +1,12 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { afterEach, beforeEach } from "vitest";
+import type { ProviderId } from "../../../src/core/provider-id.ts";
 import {
   type EvalResultLine,
   evalResultLineSchema as resultLineSchema,
 } from "../../../src/eval/result.ts";
-import { runEvalCommand } from "../../../src/eval/run.ts";
+import { runEvalCommand as runEvalCommandUnderTest } from "../../../src/eval/run.ts";
 
 export {
   isAbsolute,
@@ -16,10 +16,45 @@ export {
   readFile,
   resultLineSchema,
   rm,
-  runEvalCommand,
   tmpdir,
   writeFile,
 };
+
+interface TestEvalCommandArgs {
+  readonly suiteDir: string;
+  readonly outFile: string;
+  readonly trials: number;
+  readonly taskId?: string;
+  readonly providerId?: ProviderId;
+  readonly model?: string;
+  readonly check: boolean;
+  readonly cliEntry: string;
+  readonly transcriptDir?: string;
+}
+
+export function runEvalCommand(args: TestEvalCommandArgs): Promise<number> {
+  const common = {
+    suiteDir: args.suiteDir,
+    outFile: args.outFile,
+    trials: args.trials,
+    ...(args.taskId !== undefined ? { taskId: args.taskId } : {}),
+    cliEntry: args.cliEntry,
+    ...(args.transcriptDir !== undefined
+      ? { transcriptDir: args.transcriptDir }
+      : {}),
+  };
+  if (args.check) {
+    return runEvalCommandUnderTest({ ...common, check: true, selection: null });
+  }
+  return runEvalCommandUnderTest({
+    ...common,
+    check: false,
+    selection: {
+      providerId: args.providerId ?? "fake",
+      model: args.model ?? "fake",
+    },
+  });
+}
 
 export interface TaskFixture {
   readonly prompt: string;
@@ -85,7 +120,6 @@ export async function readResultLines(
 }
 
 export const CLI_ENTRY = join(process.cwd(), "src/cli/index.ts");
-export const KEEL_PROVIDER_ENV = "KEEL_PROVIDER";
 export const REPORT_CONTENT_ENV = "REPORT_CONTENT";
 export const FIX_NOTE_TASK: TaskFixture = {
   prompt: "replace old with new in note.txt",
@@ -200,18 +234,3 @@ export const VALID_REPORT = {
     operations: [],
   },
 };
-
-export let previousKeelProvider: string | undefined;
-
-beforeEach(() => {
-  previousKeelProvider = process.env[KEEL_PROVIDER_ENV];
-  process.env[KEEL_PROVIDER_ENV] = "fake";
-});
-
-afterEach(() => {
-  if (previousKeelProvider === undefined) {
-    delete process.env[KEEL_PROVIDER_ENV];
-    return;
-  }
-  process.env[KEEL_PROVIDER_ENV] = previousKeelProvider;
-});

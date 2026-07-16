@@ -17,6 +17,12 @@ import {
 } from "./bash-project-approvals.ts";
 import { formatUndoCheckpointList } from "./output.ts";
 import {
+  type ProviderSelection,
+  providerProfile,
+  selectedModelFromProfile,
+  selectedProviderId,
+} from "./provider-config.ts";
+import {
   runAuthCommand as runProviderAuthCommand,
   runConfigCommand as runProviderConfigCommand,
   runSetupCommand as runProviderSetupCommand,
@@ -106,7 +112,7 @@ export async function runEvalCommand(
   }
 
   const { runEvalCommand: runEval } = await import("../eval/run.ts");
-  return await runEval({
+  const common = {
     suiteDir: cliArgs.suiteDir,
     outFile: cliArgs.outFile,
     ...(cliArgs.transcriptDir !== undefined
@@ -114,12 +120,28 @@ export async function runEvalCommand(
       : {}),
     trials: cliArgs.trials,
     ...(cliArgs.taskId !== undefined ? { taskId: cliArgs.taskId } : {}),
+    cliEntry: runtime.cliEntry,
+  };
+  if (cliArgs.check) {
+    return await runEval({ ...common, check: true, selection: null });
+  }
+  const requested: ProviderSelection = {
     ...(cliArgs.providerId !== undefined
       ? { providerId: cliArgs.providerId }
       : {}),
     ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
-    check: cliArgs.check,
-    cliEntry: runtime.cliEntry,
+  };
+  const providerId = selectedProviderId(runtime, requested);
+  const model = selectedModelFromProfile(
+    runtime,
+    requested,
+    providerId,
+    providerProfile(providerId),
+  ).model;
+  return await runEval({
+    ...common,
+    check: false,
+    selection: { providerId, model },
   });
 }
 

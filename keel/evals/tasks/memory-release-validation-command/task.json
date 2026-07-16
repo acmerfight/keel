@@ -14,5 +14,6 @@
       "text": "The established release validation command is pnpm test:coverage.",
       "lifecycle": "current"
     }
-  ]
+  ],
+  "forbiddenAttempts": []
 }

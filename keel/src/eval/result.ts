@@ -22,6 +22,8 @@ export interface RecordedToolCall {
 export interface TranscriptEvidence {
   readonly readable: boolean;
   readonly systemPrompt: string | null;
+  readonly providerText: string;
+  readonly assistantTexts: readonly string[];
   readonly toolCalls: readonly RecordedToolCall[];
 }
 
@@ -40,8 +42,8 @@ export interface ConfiguredMemory {
 }
 
 export interface EvalProviderSelection {
-  readonly providerId?: ProviderId;
-  readonly model?: string;
+  readonly providerId: ProviderId;
+  readonly model: string;
 }
 
 const pairDeltaSchema = z
@@ -80,6 +82,13 @@ const recordedToolCallSchema = z
   })
   .strict();
 
+const providerEvidenceSchema = z
+  .object({
+    transcriptReadable: z.boolean(),
+    finalAssistantText: z.string().max(4_096),
+  })
+  .strict();
+
 export const evalResultLineSchema = z
   .object({
     schemaVersion: z.literal(2),
@@ -91,8 +100,8 @@ export const evalResultLineSchema = z
     trial: z.number().int().positive(),
     repetitionCount: z.number().int().positive(),
     seed: z.number().int().nullable(),
-    provider: z.string().nullable(),
-    model: z.string().nullable(),
+    provider: z.string().min(1),
+    model: z.string().min(1),
     modelRevision: z.string().nullable(),
     condition: z.enum(["standard", "memory_disabled", "memory_enabled"]),
     requiredToPass: z.boolean(),
@@ -103,6 +112,7 @@ export const evalResultLineSchema = z
     behavioralFailures: z.array(z.string()),
     memory: resultMemorySchema,
     toolCalls: z.array(recordedToolCallSchema),
+    providerEvidence: providerEvidenceSchema,
     pairDelta: pairDeltaSchema.nullable(),
     report: runReportSchema.nullable(),
     transcriptPath: z.string().nullable(),
@@ -139,9 +149,98 @@ export const evalResultLineSchema = z
         message: `${line.condition} results must be required to pass`,
       });
     }
+    const expectedPass =
+      line.outcome === "verified" &&
+      line.structuralFailures.length === 0 &&
+      line.behavioralFailures.length === 0;
+    if (line.pass !== expectedPass) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["pass"],
+        message:
+          "pass must exactly reflect a verified outcome with no structural or behavioral failures",
+      });
+    }
+    const requiredOutcomeFailure = outcomeBehavioralFailure(line.outcome);
+    if (
+      requiredOutcomeFailure !== null &&
+      !line.behavioralFailures.includes(requiredOutcomeFailure)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["behavioralFailures"],
+        message: `${line.outcome} results require their canonical behavioral failure`,
+      });
+    }
+    if (
+      line.condition === "standard" &&
+      (line.memory.configuredIds.length > 0 || line.memory.scope !== null)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["memory"],
+        message: "standard results cannot carry configured memory",
+      });
+    }
+    if (line.condition !== "standard" && line.memory.scope === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["memory", "scope"],
+        message: "memory-pair results require a configured project scope",
+      });
+    }
+    if (
+      !line.providerEvidence.transcriptReadable &&
+      (line.providerEvidence.finalAssistantText !== "" ||
+        line.toolCalls.length > 0)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providerEvidence"],
+        message: "unreadable transcripts cannot carry provider evidence",
+      });
+    }
+    if (
+      line.transcriptPath !== null &&
+      !line.providerEvidence.transcriptReadable
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["transcriptPath"],
+        message: "persisted transcript paths require readable evidence",
+      });
+    }
+    const reportedModel = line.report?.modelsUsed[0];
+    if (
+      reportedModel !== undefined &&
+      (line.provider !== reportedModel.provider ||
+        line.model !== reportedModel.model)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["provider"],
+        message: "provider and model must match the run report",
+      });
+    }
   });
 
 export type EvalResultLine = z.infer<typeof evalResultLineSchema>;
+
+const VERIFIER_FAILURE = "task verifier rejected the resulting workspace";
+
+export function memoryPairGatePasses(
+  passPolicy: MemoryPairEvalTask["passPolicy"],
+  disabled: EvalResultLine,
+  enabled: EvalResultLine,
+): boolean {
+  const allowedDisabledFailure =
+    passPolicy === "enabled_must_pass" &&
+    disabled.outcome === "verify_failed" &&
+    disabled.structuralFailures.length === 0 &&
+    disabled.behavioralFailures.length === 1 &&
+    disabled.behavioralFailures[0] === VERIFIER_FAILURE;
+  return (disabled.pass || allowedDisabledFailure) && enabled.pass;
+}
 
 function sameStrings(
   left: readonly string[],
@@ -159,6 +258,13 @@ function sameScope(
 ): boolean {
   if (left === null || right === null) return left === right;
   return left.kind === right.kind && left.id === right.id;
+}
+
+function providerContextContains(
+  transcript: TranscriptEvidence,
+  value: string,
+): boolean {
+  return transcript.providerText.includes(JSON.stringify(value).slice(1, -1));
 }
 
 export function memoryStructuralFailures(
@@ -196,17 +302,19 @@ export function memoryStructuralFailures(
     if (memory.renderedBytes !== 0) {
       failures.push("--no-memory report exposes rendered memory bytes");
     }
+    if (memory.estimatedTokens !== 0) {
+      failures.push("--no-memory report exposes estimated memory tokens");
+    }
     if (memory.operations.length > 0) {
       failures.push("--no-memory report exposes memory operations");
     }
-    const prompt = result.transcript.systemPrompt ?? "";
     if (
       [
         ...configured.ids,
         ...task.memorySetup.flatMap((operation) =>
           operation.operation === "forget" ? [] : [operation.text],
         ),
-      ].some((value) => prompt.includes(value))
+      ].some((value) => providerContextContains(result.transcript, value))
     ) {
       failures.push("--no-memory provider context contains configured memory");
     }
@@ -320,28 +428,54 @@ export function resultMemory(
   };
 }
 
-function behavioralFailures(result: TrialResult): readonly string[] {
-  switch (result.outcome) {
+function outcomeBehavioralFailure(outcome: TrialOutcome): string | null {
+  switch (outcome) {
     case "verified":
-      return [];
+      return null;
     case "verify_failed":
-      return ["task verifier rejected the resulting workspace"];
+      return VERIFIER_FAILURE;
     case "timeout":
-      return ["agent or verifier timed out"];
+      return "agent or verifier timed out";
     case "crashed":
-      return ["agent or evaluation harness crashed"];
+      return "agent or evaluation harness crashed";
   }
 }
 
-function resultProvider(
+function taskBehavioralFailures(
+  task: EvalTask,
   result: TrialResult,
-  selection: EvalProviderSelection,
-): { readonly provider: string | null; readonly model: string | null } {
-  const reported = result.report?.modelsUsed[0];
-  return {
-    provider: reported?.provider ?? selection.providerId ?? null,
-    model: reported?.model ?? selection.model ?? null,
-  };
+): readonly string[] {
+  const failures = new Set<string>();
+  const outcomeFailure = outcomeBehavioralFailure(result.outcome);
+  if (outcomeFailure !== null) failures.add(outcomeFailure);
+  if (task.kind === "standard") return [...failures];
+
+  for (const forbidden of task.forbiddenAttempts) {
+    const matched =
+      forbidden.source === "assistant_text"
+        ? result.transcript.assistantTexts.some((text) =>
+            text.includes(forbidden.contains),
+          )
+        : result.transcript.toolCalls.some(
+            (toolCall) =>
+              forbidden.tools.some((tool) => tool === toolCall.tool) &&
+              JSON.stringify(toolCall.arguments).includes(forbidden.contains),
+          );
+    if (matched) failures.add(forbidden.failure);
+  }
+  return [...failures];
+}
+
+export function evalTrialPasses(
+  task: EvalTask,
+  result: TrialResult,
+  structuralFailures: readonly string[],
+): boolean {
+  return (
+    result.outcome === "verified" &&
+    structuralFailures.length === 0 &&
+    taskBehavioralFailures(task, result).length === 0
+  );
 }
 
 export function createEvalResultLine(options: {
@@ -358,10 +492,17 @@ export function createEvalResultLine(options: {
   readonly pairDelta: PairDelta | null;
   readonly selection: EvalProviderSelection;
 }): EvalResultLine {
-  const pass =
-    options.result.outcome === "verified" &&
-    options.structuralFailures.length === 0;
-  const provider = resultProvider(options.result, options.selection);
+  const behavioralFailures = taskBehavioralFailures(
+    options.task,
+    options.result,
+  );
+  const pass = evalTrialPasses(
+    options.task,
+    options.result,
+    options.structuralFailures,
+  );
+  const finalAssistantText =
+    options.result.transcript.assistantTexts.at(-1)?.slice(-4_096) ?? "";
   return {
     schemaVersion: 2,
     timestamp: new Date().toISOString(),
@@ -372,8 +513,8 @@ export function createEvalResultLine(options: {
     trial: options.trial,
     repetitionCount: options.repetitionCount,
     seed: null,
-    provider: provider.provider,
-    model: provider.model,
+    provider: options.selection.providerId,
+    model: options.selection.model,
     modelRevision: null,
     condition: options.condition,
     requiredToPass: options.requiredToPass,
@@ -381,7 +522,7 @@ export function createEvalResultLine(options: {
     outcome: options.result.outcome,
     wallMs: options.result.wallMs,
     structuralFailures: [...options.structuralFailures],
-    behavioralFailures: [...behavioralFailures(options.result)],
+    behavioralFailures: [...behavioralFailures],
     memory: {
       mode: options.memory.mode,
       configuredIds: [...options.memory.configuredIds],
@@ -392,6 +533,10 @@ export function createEvalResultLine(options: {
       tool: toolCall.tool,
       arguments: toolCall.arguments,
     })),
+    providerEvidence: {
+      transcriptReadable: options.result.transcript.readable,
+      finalAssistantText,
+    },
     pairDelta: options.pairDelta,
     report: options.result.report,
     transcriptPath: options.result.transcriptPath,
