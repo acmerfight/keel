@@ -131,10 +131,10 @@ function toolContextForSummaryInput(
       (candidate) => candidate.id === toolCallId,
     );
     if (toolCall !== undefined) {
-      return { toolName: toolCall.tool, toolCall };
+      return { toolCall };
     }
   }
-  return { toolName: "unknown" };
+  return { toolCall: null };
 }
 
 function summaryToolOutputPreview(options: {

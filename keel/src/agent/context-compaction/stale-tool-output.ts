@@ -333,11 +333,17 @@ function toolContextForToolOutput(
     );
     /* v8 ignore next: valid tool-result ledgers preserve the matching assistant tool call; corrupted histories fall through below. */
     if (toolCall !== undefined) {
-      return { toolName: toolCall.tool, toolCall };
+      return { toolCall };
     }
   }
   /* v8 ignore next: valid tool-result ledgers preserve the matching assistant tool call; this labels corrupted current-schema histories. */
-  return { toolName: "unknown" };
+  return { toolCall: null };
+}
+
+function artifactToolNameForContext(
+  context: ToolOutputProjectionContext,
+): ToolOutputArtifactToolName {
+  return context.toolCall === null ? "unknown" : context.toolCall.tool;
 }
 
 function rejectedToolOutputCompactionAttempt(options: {
@@ -639,7 +645,7 @@ export async function compactStaleToolOutputsWithArtifacts(
           store,
           message,
           toolCallId: message.toolCallId,
-          toolName: context.toolName,
+          toolName: artifactToolNameForContext(context),
           content: message.content,
           omittedChars: projection.omittedChars,
           purpose: "stale-compaction",
@@ -830,7 +836,7 @@ export async function compactCurrentToolOutputsWithArtifacts(
           store,
           message,
           toolCallId: message.toolCallId,
-          toolName: context.toolName,
+          toolName: artifactToolNameForContext(context),
           content: message.content,
           omittedChars: projection.omittedChars,
           purpose:
