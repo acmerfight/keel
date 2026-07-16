@@ -48,7 +48,7 @@ describe("CLI Eval", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(records[0]).toMatchObject({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "transcript",
         provider: "fake",
         model: "fake",

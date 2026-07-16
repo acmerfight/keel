@@ -162,6 +162,14 @@ export function evalResultLine(options: EvalResultLineOptions): EvalResultLine {
         : outcome === "timeout"
           ? ["agent or verifier timed out"]
           : ["agent or evaluation harness crashed"];
+  const memory: EvalResultLine["memory"] =
+    condition === "standard"
+      ? { mode: "not_applicable", configuredIds: [], scope: null }
+      : {
+          mode: condition === "memory_disabled" ? "disabled" : "enabled",
+          configuredIds: [],
+          scope: { kind: "project", id: "project_test" },
+        };
   return {
     schemaVersion: 2,
     timestamp: "2026-06-22T00:00:00.000Z",
@@ -187,23 +195,13 @@ export function evalResultLine(options: EvalResultLineOptions): EvalResultLine {
     behavioralFailures: [
       ...(options.behavioralFailures ?? (options.pass ? [] : outcomeFailure)),
     ],
-    memory: {
-      mode:
-        condition === "standard"
-          ? "not_applicable"
-          : condition === "memory_disabled"
-            ? "disabled"
-            : "enabled",
-      configuredIds: [],
-      scope:
-        condition === "standard"
-          ? null
-          : { kind: "project", id: "project_test" },
-    },
+    memory,
     toolCalls: [],
     providerEvidence: {
       transcriptReadable: options.transcriptPath !== undefined,
       finalAssistantText: "",
+      matchedEvidence: [],
+      readObservations: [],
     },
     pairDelta:
       condition === "standard"
@@ -211,12 +209,12 @@ export function evalResultLine(options: EvalResultLineOptions): EvalResultLine {
         : {
             successPercentagePoints: 0,
             toolCalls: 0,
-            agentLoopTurns: 0,
-            inputTokens: 0,
-            outputTokens: 0,
-            costUsd: 0,
+            agentLoopTurns: null,
+            inputTokens: null,
+            outputTokens: null,
+            costUsd: null,
             wallMs: 0,
-            renderedBytes: 0,
+            renderedBytes: null,
           },
     report,
     transcriptPath: options.transcriptPath ?? null,

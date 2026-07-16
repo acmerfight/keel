@@ -41,6 +41,11 @@ const memorySetupOperationSchema = z.discriminatedUnion("operation", [
     .strict(),
 ]);
 
+const toolNameSchema = z.custom<ToolName>(
+  (value) => typeof value === "string" && isToolName(value),
+  { message: "must name a current built-in tool" },
+);
+
 const forbiddenAttemptSchema = z.discriminatedUnion("source", [
   z
     .object({
@@ -52,19 +57,22 @@ const forbiddenAttemptSchema = z.discriminatedUnion("source", [
   z
     .object({
       source: z.literal("tool_arguments"),
-      tools: z
-        .array(
-          z.custom<ToolName>(
-            (value) => typeof value === "string" && isToolName(value),
-            { message: "must name a current built-in tool" },
-          ),
-        )
-        .min(1),
+      tools: z.array(toolNameSchema).min(1),
       contains: z.string().min(1),
       failure: z.string().min(1),
     })
     .strict(),
 ]);
+
+const requiredToolEvidenceSchema = z
+  .object({
+    condition: z.literal("memory_enabled"),
+    tool: z.literal("read"),
+    path: z.string().min(1),
+    beforeTools: z.array(toolNameSchema).min(1),
+    failure: z.string().min(1),
+  })
+  .strict();
 
 const memoryPairTaskConfigSchema = z
   .object({
@@ -73,6 +81,7 @@ const memoryPairTaskConfigSchema = z
     passPolicy: z.enum(["both_must_pass", "enabled_must_pass"]),
     memorySetup: z.array(memorySetupOperationSchema).min(1),
     forbiddenAttempts: z.array(forbiddenAttemptSchema),
+    requiredToolEvidence: z.array(requiredToolEvidenceSchema),
   })
   .strict()
   .superRefine((config, ctx) => {
@@ -135,6 +144,9 @@ export interface MemoryPairEvalTask extends EvalTaskBase {
   readonly passPolicy: "both_must_pass" | "enabled_must_pass";
   readonly memorySetup: readonly z.infer<typeof memorySetupOperationSchema>[];
   readonly forbiddenAttempts: readonly z.infer<typeof forbiddenAttemptSchema>[];
+  readonly requiredToolEvidence: readonly z.infer<
+    typeof requiredToolEvidenceSchema
+  >[];
 }
 
 export type EvalTask = StandardEvalTask | MemoryPairEvalTask;
@@ -208,6 +220,7 @@ function loadTask(suiteDir: string, id: string): EvalTask {
     passPolicy: config.passPolicy,
     memorySetup: config.memorySetup,
     forbiddenAttempts: config.forbiddenAttempts,
+    requiredToolEvidence: config.requiredToolEvidence,
   };
 }
 

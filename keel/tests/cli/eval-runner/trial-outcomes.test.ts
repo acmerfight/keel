@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   CLI_ENTRY,
   createEvalDir,
@@ -108,6 +108,13 @@ describe("Eval Runner", () => {
     const { root, suiteDir, outFile } = await createEvalDir();
     await createTask(suiteDir, "too-slow", { ...FIX_NOTE_TASK, timeoutMs: 1 });
 
+    const realKill = process.kill.bind(process);
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (typeof pid === "number" && pid < 0) {
+        throw new Error("process group unavailable");
+      }
+      return realKill(pid, signal);
+    });
     try {
       // When
       const exitCode = await runEvalCommand({
@@ -123,7 +130,9 @@ describe("Eval Runner", () => {
       expect(await readResultLines(outFile)).toMatchObject([
         { taskId: "too-slow", pass: false, outcome: "timeout" },
       ]);
+      expect(kill).toHaveBeenCalledWith(expect.any(Number), "SIGKILL");
     } finally {
+      kill.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });

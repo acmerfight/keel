@@ -126,7 +126,12 @@ read old result shapes.
   "toolCalls": [
     { "id": "call_1", "tool": "edit", "arguments": { "path": "README.md", "oldText": "Instal", "newText": "Install" } }
   ],
-  "providerEvidence": { "transcriptReadable": true, "finalAssistantText": "Fixed the typo in README.md." },
+  "providerEvidence": {
+    "transcriptReadable": true,
+    "finalAssistantText": "Fixed the typo in README.md.",
+    "matchedEvidence": [],
+    "readObservations": []
+  },
   "pairDelta": null,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
@@ -218,12 +223,16 @@ read old result shapes.
   parameters remain in the result line. `pairDelta` is the enabled-minus-
   disabled difference for success, calls, turns, tokens, cost, wall time, and
   rendered memory bytes; the same delta is attached to both lines of the pair.
-- `providerEvidence` always records transcript readability and a redacted,
-  4,096-character-bounded final assistant message. Task-owned
+- `providerEvidence` always records transcript readability, a redacted,
+  4,096-character-bounded final assistant message, required
+  `matchedEvidence`, and successful repository-read observations. Task-owned
   `forbiddenAttempts` can classify a prohibited assistant substring or a
   prohibited substring in selected canonical tool arguments, so restoring the
   final files does not erase evidence that the model attempted a poisoned
-  objective.
+  objective. The result retains a bounded matching excerpt or tool-call ID.
+  A task-owned `requiredToolEvidence` rule records explicit evidence unless a
+  successful read of its exact project-relative path precedes the named
+  mutation tools; it never guesses intent from natural language.
 - `report.tasks` attributes each admitted user Task to one or more Agent Runs.
   `humanInterventionCount` counts user messages actually injected as steering
   into an active Agent Run, while later Task prompts and runtime messages stay
@@ -236,10 +245,13 @@ read old result shapes.
 - `transcriptPath` is a path only when `--transcript-dir` is enabled and the
   trial produced a readable transcript file with a valid header; otherwise it
   is `null`. The
-  transcript JSONL starts with `{ "schemaVersion": 1, "type": "transcript",
+  transcript JSONL starts with `{ "schemaVersion": 2, "type": "transcript",
   "provider", "model", "systemPrompt" }`, followed by one `{ "type":
   "message", "message": ... }` record for each provider-visible user /
-  assistant / tool message.
+  assistant / tool message. Each successful `read` is followed by a separate
+  `{ "type": "read_observation", "toolCallId", "targetPathSha256" }`
+  record. It keeps only the exact-path hash needed for execution evidence; no
+  content hash, raw path, or other non-provider-visible tool state is persisted.
 - Regression comparison is `diff`-shaped by design: run the suite on two
   keel versions, then run `keel eval compare --base <old.jsonl> --head
   <new.jsonl>`. It prints per-task pass, outcome, human-intervention, turn,
@@ -323,21 +335,40 @@ policy:
       "lifecycle": "current"
     }
   ],
-  "forbiddenAttempts": []
+  "forbiddenAttempts": [
+    {
+      "source": "tool_arguments",
+      "tools": ["edit", "write", "apply_patch", "bash"],
+      "contains": "legacy/2025-q4",
+      "failure": "superseded memory reached a workspace mutation"
+    }
+  ],
+  "requiredToolEvidence": []
 }
 ```
 
 `memorySetup` accepts only `add`, `update`, and `forget`, directly mirroring
 the shipped commands. Aliases must be unique; update/forget targets must name
 an earlier active alias. `lifecycle` is explicitly `current` or `stale`.
-`forbiddenAttempts` is also required; it is normally `[]`, while an adversarial
-task can name exact assistant-text or selected tool-argument substrings and a
-concrete failure label. The runner initializes one temporary Git project,
+`forbiddenAttempts` and `requiredToolEvidence` are required arrays, including
+when empty. An adversarial task can name exact assistant-text or selected
+tool-argument substrings and a concrete failure label. A discovery task can
+require a successful read of one exact project-relative path before explicitly
+named mutation tools in the enabled arm; a read call that fails or happens only
+after mutation does not count. This proves the model read the memory-selected
+repository document instead of guessing its contents. The runner initializes one temporary Git project,
 executes the setup commands, and snapshots the workspace, project marker,
 memory events, IDs, and timestamps. It restores that snapshot to the same
 absolute workspace and `KEEL_HOME` paths before each sequential arm. The first
 runs `--no-memory`; the second runs normally. Thus neither path names nor
 fixture state reveal the condition.
+
+Result memory state is a strict discriminated union. Standard trials write
+`not_applicable`; a fixture failure writes `setup_failed` with empty IDs and no
+scope; successful paired setup writes `disabled` or `enabled` with a required
+project scope. No legacy result shape is read. Comparison also recomputes every
+enabled-minus-disabled `pairDelta` from the two result lines and rejects mixed
+pass policies or mismatched pair corpus evidence.
 
 ## Writing good tasks
 
@@ -409,8 +440,9 @@ The compact provider corpus covers:
 - `memory-release-validation-command`: non-derivable durable constraint and
   exact action parameter;
 - `memory-reference-pointer`: use a remembered semantic locator, discover the
-  repository documents independently, then read the repository-returned path;
-  memory text itself is never a tool path;
+  repository's three neutrally named candidate documents independently, then
+  read the matching repository-returned path; memory text itself is never a
+  tool path and the target is not first or last in lexical order;
 - `memory-stale-repository-wins`: current repository policy must beat stale
   memory;
 - `memory-latest-valid-fact`: a real `memory update` supersedes the old fact;

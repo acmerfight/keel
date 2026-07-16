@@ -32,6 +32,7 @@ import {
   memoryPairGatePasses,
   memoryStructuralFailures,
   pairDelta,
+  type RecordedReadObservation,
   type RecordedToolCall,
   resultMemory,
   type TranscriptEvidence,
@@ -45,7 +46,7 @@ import {
 } from "./task.ts";
 
 const transcriptHeaderSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   type: z.literal("transcript"),
   provider: z.string(),
   model: z.string(),
@@ -59,6 +60,12 @@ const transcriptAssistantMessageSchema = z.object({
     content: z.string(),
     toolCalls: z.array(toolCallSchema),
   }),
+});
+
+const transcriptReadObservationSchema = z.object({
+  type: z.literal("read_observation"),
+  toolCallId: z.string(),
+  targetPathSha256: z.string(),
 });
 
 const packageJsonSchema = z.object({ version: z.string() });
@@ -222,6 +229,17 @@ function recordedToolCall(toolCall: ToolCall): RecordedToolCall {
   };
 }
 
+function recordedReadObservation(
+  record: z.infer<typeof transcriptReadObservationSchema>,
+  toolCallCountAtObservation: number,
+): RecordedReadObservation {
+  return {
+    toolCallId: record.toolCallId,
+    targetPathSha256: record.targetPathSha256,
+    toolCallCountAtObservation,
+  };
+}
+
 function readTranscriptEvidence(
   transcriptPath: string | null,
 ): TranscriptEvidence {
@@ -232,6 +250,7 @@ function readTranscriptEvidence(
       providerText: "",
       assistantTexts: [],
       toolCalls: [],
+      readObservations: [],
     };
   }
   try {
@@ -241,10 +260,24 @@ function readTranscriptEvidence(
       .split("\n")
       .map((line) => JSON.parse(line));
     const header = transcriptHeaderSchema.parse(records[0]);
-    const assistantMessages = records.flatMap((record) => {
-      const parsed = transcriptAssistantMessageSchema.safeParse(record);
-      return parsed.success ? [parsed.data.message] : [];
-    });
+    const assistantMessages: z.infer<
+      typeof transcriptAssistantMessageSchema
+    >["message"][] = [];
+    const readObservations: RecordedReadObservation[] = [];
+    let toolCallCount = 0;
+    for (const record of records) {
+      const assistant = transcriptAssistantMessageSchema.safeParse(record);
+      if (assistant.success) {
+        assistantMessages.push(assistant.data.message);
+        toolCallCount += assistant.data.message.toolCalls.length;
+      }
+      const observation = transcriptReadObservationSchema.safeParse(record);
+      if (observation.success) {
+        readObservations.push(
+          recordedReadObservation(observation.data, toolCallCount),
+        );
+      }
+    }
     return {
       readable: true,
       systemPrompt: header.systemPrompt,
@@ -253,6 +286,7 @@ function readTranscriptEvidence(
       toolCalls: assistantMessages.flatMap((message) =>
         message.toolCalls.map(recordedToolCall),
       ),
+      readObservations,
     };
   } catch {
     return {
@@ -261,6 +295,7 @@ function readTranscriptEvidence(
       providerText: "",
       assistantTexts: [],
       toolCalls: [],
+      readObservations: [],
     };
   }
 }
@@ -448,6 +483,7 @@ function failedSetupTrial(): TrialResult {
       providerText: "",
       assistantTexts: [],
       toolCalls: [],
+      readObservations: [],
     },
   };
 }
@@ -866,11 +902,13 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
           task,
           pair.disabled,
           disabledStructural,
+          "memory_disabled",
         );
         const enabledPass = evalTrialPasses(
           task,
           pair.enabled,
           enabledStructural,
+          "memory_enabled",
         );
         const delta = pairDelta(
           pair.disabled,
@@ -879,6 +917,8 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
           enabledPass,
         );
         const disabledRequired = task.passPolicy === "both_must_pass";
+        const configuredForResult =
+          pair.setupFailures.length === 0 ? pair.configured : null;
         const disabledLine = createEvalResultLine({
           version,
           revision,
@@ -889,7 +929,7 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
           requiredToPass: disabledRequired,
           result: pair.disabled,
           structuralFailures: disabledStructural,
-          memory: resultMemory("memory_disabled", pair.configured),
+          memory: resultMemory("memory_disabled", configuredForResult),
           pairDelta: delta,
           selection,
         });
@@ -903,7 +943,7 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
           requiredToPass: true,
           result: pair.enabled,
           structuralFailures: enabledStructural,
-          memory: resultMemory("memory_enabled", pair.configured),
+          memory: resultMemory("memory_enabled", configuredForResult),
           pairDelta: delta,
           selection,
         });

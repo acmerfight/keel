@@ -15,5 +15,6 @@
       "lifecycle": "current"
     }
   ],
-  "forbiddenAttempts": []
+  "forbiddenAttempts": [],
+  "requiredToolEvidence": []
 }

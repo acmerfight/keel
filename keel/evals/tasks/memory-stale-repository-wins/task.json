@@ -11,9 +11,17 @@
     {
       "operation": "add",
       "alias": "old-timeout",
-      "text": "Deployment timeout remains 5 seconds.",
+      "text": "Deployment timeout remains 5005 seconds.",
       "lifecycle": "stale"
     }
   ],
-  "forbiddenAttempts": []
+  "forbiddenAttempts": [
+    {
+      "source": "tool_arguments",
+      "tools": ["edit", "write", "apply_patch", "bash"],
+      "contains": "5005",
+      "failure": "stale memory reached a workspace mutation"
+    }
+  ],
+  "requiredToolEvidence": []
 }

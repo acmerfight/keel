@@ -3,6 +3,7 @@ import { errorMessage } from "../core/error.ts";
 import type { RunReport } from "./report-schema.ts";
 import {
   evalResultLineSchema,
+  type PairDelta,
   type EvalResultLine as ResultLine,
   type TrialOutcome,
   trialOutcomes,
@@ -143,6 +144,11 @@ function validateTaskGroup(
       `eval result file ${filePath} mixes repetition counts for ${groupId}.`,
     );
   }
+  if (lines.some((line) => line.requiredToPass !== first.requiredToPass)) {
+    throw new Error(
+      `eval result file ${filePath} mixes pass policies for ${groupId}.`,
+    );
+  }
   const trials = lines
     .map((line) => line.trial)
     .sort((left, right) => left - right);
@@ -154,6 +160,49 @@ function validateTaskGroup(
       `eval result file ${filePath} requires exactly trials 1..${first.repetitionCount} for ${groupId}.`,
     );
   }
+}
+
+function pairReportDelta(
+  disabled: ResultLine,
+  enabled: ResultLine,
+  select: (report: RunReport) => number,
+): number | null {
+  return disabled.report === null || enabled.report === null
+    ? null
+    : select(enabled.report) - select(disabled.report);
+}
+
+function expectedPairDelta(
+  disabled: ResultLine,
+  enabled: ResultLine,
+): PairDelta {
+  return {
+    successPercentagePoints:
+      (Number(enabled.pass) - Number(disabled.pass)) * 100,
+    toolCalls: enabled.toolCalls.length - disabled.toolCalls.length,
+    agentLoopTurns: pairReportDelta(
+      disabled,
+      enabled,
+      (report) => report.agentLoopTurns,
+    ),
+    inputTokens: pairReportDelta(
+      disabled,
+      enabled,
+      (report) => report.usage.inputTokens,
+    ),
+    outputTokens: pairReportDelta(
+      disabled,
+      enabled,
+      (report) => report.usage.outputTokens,
+    ),
+    costUsd: pairReportDelta(disabled, enabled, (report) => report.costUsd),
+    wallMs: enabled.wallMs - disabled.wallMs,
+    renderedBytes: pairReportDelta(
+      disabled,
+      enabled,
+      (report) => report.memory.renderedBytes,
+    ),
+  };
 }
 
 function validateMemoryPairs(filePath: string, lines: ResultGroup): void {
@@ -201,16 +250,26 @@ function validateMemoryPairs(filePath: string, lines: ResultGroup): void {
         );
       }
       if (
+        disabled.corpusVersion !== enabled.corpusVersion ||
+        disabled.repetitionCount !== enabled.repetitionCount ||
         !sameStringArray(
           disabled.memory.configuredIds,
           enabled.memory.configuredIds,
         ) ||
         JSON.stringify(disabled.memory.scope) !==
-          JSON.stringify(enabled.memory.scope) ||
-        JSON.stringify(disabled.pairDelta) !== JSON.stringify(enabled.pairDelta)
+          JSON.stringify(enabled.memory.scope)
       ) {
         throw new Error(
           `eval result file ${filePath} has mismatched memory-pair evidence for ${taskId} trial ${disabled.trial}.`,
+        );
+      }
+      const expectedDelta = expectedPairDelta(disabled, enabled);
+      if (
+        JSON.stringify(disabled.pairDelta) !== JSON.stringify(expectedDelta) ||
+        JSON.stringify(enabled.pairDelta) !== JSON.stringify(expectedDelta)
+      ) {
+        throw new Error(
+          `eval result file ${filePath} has an invalid pair delta for ${taskId} trial ${disabled.trial}.`,
         );
       }
     }
@@ -226,10 +285,10 @@ function validateResultCohort(filePath: string, lines: ResultGroup): void {
       `eval result file ${filePath} mixes Keel revisions in one cohort.`,
     );
   }
+  validateMemoryPairs(filePath, lines);
   for (const [groupId, taskLines] of groupByTask(lines)) {
     validateTaskGroup(filePath, groupId, taskLines);
   }
-  validateMemoryPairs(filePath, lines);
 }
 
 function validateComparableCohorts(
@@ -258,6 +317,11 @@ function validateComparableCohorts(
     if (base.corpusVersion !== head.corpusVersion) {
       throw new Error(
         `cannot compare ${groupId}: corpus version differs between ${baseFile} and ${headFile}.`,
+      );
+    }
+    if (base.requiredToPass !== head.requiredToPass) {
+      throw new Error(
+        `cannot compare ${groupId}: pass policy differs between ${baseFile} and ${headFile}.`,
       );
     }
   }

@@ -2,4 +2,4 @@
 
 Process codename: Greenfield
 
-Smoke test: `pnpm smoke:green`
+Smoke test: `pnpm smoke:cedar`

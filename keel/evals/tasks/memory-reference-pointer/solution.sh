@@ -1,1 +1,1 @@
-printf 'pnpm smoke:blue\n' > release-plan.txt
+printf 'pnpm smoke:quartz\n' > release-plan.txt

@@ -213,40 +213,74 @@ describe("Eval Compare", () => {
     const root = await mkdtemp(join(tmpdir(), "keel-eval-compare-memory-"));
     const baseFile = join(root, "base.jsonl");
     const headFile = join(root, "head.jsonl");
+    const basePairDelta = {
+      successPercentagePoints: 100,
+      toolCalls: 0,
+      agentLoopTurns: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 0,
+      wallMs: 0,
+      renderedBytes: 0,
+    };
+    const headPairDelta = {
+      successPercentagePoints: 0,
+      toolCalls: 0,
+      agentLoopTurns: null,
+      inputTokens: null,
+      outputTokens: null,
+      costUsd: null,
+      wallMs: 0,
+      renderedBytes: null,
+    };
     await writeResultFile(baseFile, [
-      resultLine({
-        taskId: "memory-case",
-        trial: 1,
-        pass: false,
-        condition: "memory_disabled",
-        requiredToPass: false,
-      }),
-      resultLine({
-        taskId: "memory-case",
-        trial: 1,
-        pass: true,
-        condition: "memory_enabled",
-        report: report(),
-      }),
+      {
+        ...resultLine({
+          taskId: "memory-case",
+          trial: 1,
+          pass: false,
+          condition: "memory_disabled",
+          requiredToPass: false,
+          report: report(),
+        }),
+        pairDelta: basePairDelta,
+      },
+      {
+        ...resultLine({
+          taskId: "memory-case",
+          trial: 1,
+          pass: true,
+          condition: "memory_enabled",
+          report: report(),
+        }),
+        pairDelta: basePairDelta,
+      },
     ]);
     await writeResultFile(headFile, [
-      resultLine({
-        taskId: "memory-case",
-        trial: 1,
-        pass: false,
-        condition: "memory_disabled",
-        requiredToPass: false,
-      }),
-      resultLine({
-        taskId: "memory-case",
-        trial: 1,
-        pass: false,
-        condition: "memory_enabled",
-        structuralFailures: [
-          "enabled report loaded IDs differ from configured IDs",
-        ],
-        transcriptPath: "/tmp/head/memory-case-enabled.jsonl",
-      }),
+      {
+        ...resultLine({
+          taskId: "memory-case",
+          trial: 1,
+          pass: false,
+          condition: "memory_disabled",
+          requiredToPass: false,
+          report: report(),
+        }),
+        pairDelta: headPairDelta,
+      },
+      {
+        ...resultLine({
+          taskId: "memory-case",
+          trial: 1,
+          pass: false,
+          condition: "memory_enabled",
+          structuralFailures: [
+            "enabled report loaded IDs differ from configured IDs",
+          ],
+          transcriptPath: "/tmp/head/memory-case-enabled.jsonl",
+        }),
+        pairDelta: headPairDelta,
+      },
     ]);
 
     try {
@@ -408,19 +442,41 @@ describe("Eval Compare", () => {
     const baseFile = join(root, "base.jsonl");
     const headFile = join(root, "head.jsonl");
     const standard = resultLine({ taskId: "case", trial: 1, pass: true });
-    const disabled = resultLine({
-      taskId: "case",
-      trial: 1,
-      pass: false,
-      condition: "memory_disabled",
-      requiredToPass: false,
-    });
-    const enabled = resultLine({
-      taskId: "case",
-      trial: 1,
-      pass: true,
-      condition: "memory_enabled",
-    });
+    const validPairDelta = {
+      successPercentagePoints: 100,
+      toolCalls: 0,
+      agentLoopTurns: null,
+      inputTokens: null,
+      outputTokens: null,
+      costUsd: null,
+      wallMs: 0,
+      renderedBytes: null,
+    };
+    const disabled = {
+      ...resultLine({
+        taskId: "case",
+        trial: 1,
+        pass: false,
+        condition: "memory_disabled",
+        requiredToPass: false,
+      }),
+      pairDelta: validPairDelta,
+    };
+    const enabled = {
+      ...resultLine({
+        taskId: "case",
+        trial: 1,
+        pass: true,
+        condition: "memory_enabled",
+      }),
+      pairDelta: validPairDelta,
+    };
+    if (
+      disabled.memory.mode !== "disabled" ||
+      enabled.memory.mode !== "enabled"
+    ) {
+      throw new Error("memory result fixture has the wrong mode");
+    }
     const cases = [
       {
         base: [
@@ -453,6 +509,42 @@ describe("Eval Compare", () => {
       },
       {
         base: [
+          resultLine({
+            taskId: "policy-case",
+            trial: 1,
+            repetitionCount: 2,
+            pass: true,
+            condition: "memory_disabled",
+            requiredToPass: false,
+          }),
+          resultLine({
+            taskId: "policy-case",
+            trial: 2,
+            repetitionCount: 2,
+            pass: true,
+            condition: "memory_disabled",
+            requiredToPass: true,
+          }),
+          resultLine({
+            taskId: "policy-case",
+            trial: 1,
+            repetitionCount: 2,
+            pass: true,
+            condition: "memory_enabled",
+          }),
+          resultLine({
+            taskId: "policy-case",
+            trial: 2,
+            repetitionCount: 2,
+            pass: true,
+            condition: "memory_enabled",
+          }),
+        ],
+        head: [standard],
+        expected: "mixes pass policies",
+      },
+      {
+        base: [
           standard,
           resultLine({
             taskId: "other",
@@ -480,6 +572,56 @@ describe("Eval Compare", () => {
       },
       {
         base: [disabled],
+        head: [standard],
+        expected: "incomplete memory pair",
+      },
+      {
+        base: [
+          {
+            ...resultLine({
+              taskId: "uneven-pair",
+              trial: 1,
+              pass: true,
+              condition: "memory_disabled",
+            }),
+          },
+          resultLine({
+            taskId: "uneven-pair",
+            trial: 1,
+            repetitionCount: 2,
+            pass: true,
+            condition: "memory_enabled",
+          }),
+          resultLine({
+            taskId: "uneven-pair",
+            trial: 2,
+            repetitionCount: 2,
+            pass: true,
+            condition: "memory_enabled",
+          }),
+        ],
+        head: [standard],
+        expected: "incomplete memory pair",
+      },
+      {
+        base: [
+          {
+            ...resultLine({
+              taskId: "misaligned-pair",
+              trial: 1,
+              repetitionCount: 2,
+              pass: true,
+              condition: "memory_disabled",
+            }),
+          },
+          resultLine({
+            taskId: "misaligned-pair",
+            trial: 2,
+            repetitionCount: 2,
+            pass: true,
+            condition: "memory_enabled",
+          }),
+        ],
         head: [standard],
         expected: "incomplete memory pair",
       },
@@ -529,16 +671,21 @@ describe("Eval Compare", () => {
             ...enabled,
             pairDelta: {
               successPercentagePoints: 0,
-              toolCalls: 1,
-              agentLoopTurns: 0,
-              inputTokens: 0,
-              outputTokens: 0,
-              costUsd: 0,
+              toolCalls: 0,
+              agentLoopTurns: null,
+              inputTokens: null,
+              outputTokens: null,
+              costUsd: null,
               wallMs: 0,
-              renderedBytes: 0,
+              renderedBytes: null,
             },
           },
         ],
+        head: [standard],
+        expected: "invalid pair delta",
+      },
+      {
+        base: [{ ...disabled, corpusVersion: "memory-v2" }, enabled],
         head: [standard],
         expected: "mismatched memory-pair evidence",
       },
@@ -557,6 +704,11 @@ describe("Eval Compare", () => {
         base: [standard],
         head: [{ ...standard, corpusVersion: "other-v1" }],
         expected: "corpus version differs",
+      },
+      {
+        base: [disabled, enabled],
+        head: [{ ...disabled, requiredToPass: true }, enabled],
+        expected: "pass policy differs",
       },
     ];
 

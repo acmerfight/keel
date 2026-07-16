@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import type { RunReport } from "../../src/eval/report-schema.ts";
 import {
@@ -29,6 +30,7 @@ const TASK: MemoryPairEvalTask = {
   maxCostUsd: 0.05,
   passPolicy: "both_must_pass",
   forbiddenAttempts: [],
+  requiredToolEvidence: [],
   memorySetup: [
     {
       operation: "add",
@@ -86,6 +88,7 @@ function trial(options: {
                 arguments: { text: "The durable fact is alpha." },
               },
             ],
+      readObservations: [],
     },
   };
 }
@@ -144,16 +147,32 @@ describe("Eval Result Contract", () => {
       name: "condition and memory mode disagree",
       value: {
         ...evalResultLine({ taskId: "case", trial: 1, pass: true }),
-        memory: { mode: "enabled", configuredIds: [], scope: null },
+        memory: { mode: "setup_failed", configuredIds: [], scope: null },
+      },
+    },
+    {
+      name: "setup failure is represented as a successful trial",
+      value: {
+        ...evalResultLine({
+          taskId: "case",
+          trial: 1,
+          pass: true,
+          condition: "memory_enabled",
+        }),
+        memory: { mode: "setup_failed", configuredIds: [], scope: null },
       },
     },
     {
       name: "memory condition has no paired delta",
       value: {
-        ...evalResultLine({ taskId: "case", trial: 1, pass: true }),
-        condition: "memory_disabled",
-        requiredToPass: false,
-        memory: { mode: "disabled", configuredIds: [], scope: null },
+        ...evalResultLine({
+          taskId: "case",
+          trial: 1,
+          pass: true,
+          condition: "memory_disabled",
+          requiredToPass: false,
+        }),
+        pairDelta: null,
       },
     },
     {
@@ -202,6 +221,210 @@ describe("Eval Result Contract", () => {
       },
     },
     {
+      name: "custom behavioral failure has no matched provider evidence",
+      value: {
+        ...evalResultLine({ taskId: "case", trial: 1, pass: true }),
+        pass: false,
+        behavioralFailures: ["custom behavioral failure"],
+      },
+    },
+    {
+      name: "matched provider evidence has no behavioral failure",
+      value: {
+        ...evalResultLine({ taskId: "case", trial: 1, pass: true }),
+        providerEvidence: {
+          transcriptReadable: false,
+          finalAssistantText: "",
+          matchedEvidence: [
+            {
+              source: "missing_read_evidence",
+              failure: "orphan evidence",
+              path: "docs/process-42.md",
+              beforeTools: ["write"],
+            },
+          ],
+          readObservations: [],
+        },
+      },
+    },
+    {
+      name: "matched tool evidence references an unknown call",
+      value: {
+        ...evalResultLine({
+          taskId: "case",
+          trial: 1,
+          pass: true,
+          transcriptPath: "/tmp/transcript.jsonl",
+        }),
+        pass: false,
+        behavioralFailures: ["unknown call evidence"],
+        providerEvidence: {
+          transcriptReadable: true,
+          finalAssistantText: "",
+          matchedEvidence: [
+            {
+              source: "tool_arguments",
+              failure: "unknown call evidence",
+              toolCallId: "call_missing",
+            },
+          ],
+          readObservations: [],
+        },
+      },
+    },
+    {
+      name: "missing-read evidence contradicts a successful ordered read",
+      value: {
+        ...evalResultLine({
+          taskId: "case",
+          trial: 1,
+          pass: true,
+          transcriptPath: "/tmp/transcript.jsonl",
+        }),
+        pass: false,
+        behavioralFailures: ["read was missing"],
+        toolCalls: [
+          {
+            id: "call_read",
+            tool: "read",
+            arguments: { path: "docs/process-42.md" },
+          },
+          {
+            id: "call_write",
+            tool: "write",
+            arguments: { path: "release-plan.txt" },
+          },
+        ],
+        providerEvidence: {
+          transcriptReadable: true,
+          finalAssistantText: "",
+          matchedEvidence: [
+            {
+              source: "missing_read_evidence",
+              failure: "read was missing",
+              path: "docs/process-42.md",
+              beforeTools: ["write"],
+            },
+          ],
+          readObservations: [
+            {
+              toolCallId: "call_read",
+              targetPathSha256: createHash("sha256")
+                .update("docs/process-42.md")
+                .digest("hex"),
+              toolCallCountAtObservation: 1,
+            },
+          ],
+        },
+      },
+    },
+    {
+      name: "read observation references a non-read call",
+      value: {
+        ...evalResultLine({
+          taskId: "case",
+          trial: 1,
+          pass: true,
+          transcriptPath: "/tmp/transcript.jsonl",
+        }),
+        toolCalls: [{ id: "call_write", tool: "write", arguments: {} }],
+        providerEvidence: {
+          transcriptReadable: true,
+          finalAssistantText: "",
+          matchedEvidence: [],
+          readObservations: [
+            {
+              toolCallId: "call_write",
+              targetPathSha256: createHash("sha256")
+                .update("docs/process-42.md")
+                .digest("hex"),
+              toolCallCountAtObservation: 1,
+            },
+          ],
+        },
+      },
+    },
+    {
+      name: "tool call IDs are duplicated",
+      value: {
+        ...evalResultLine({ taskId: "case", trial: 1, pass: true }),
+        toolCalls: [
+          { id: "call_duplicate", tool: "read", arguments: {} },
+          { id: "call_duplicate", tool: "write", arguments: {} },
+        ],
+      },
+    },
+    {
+      name: "read observation predates its read call",
+      value: {
+        ...evalResultLine({ taskId: "case", trial: 1, pass: true }),
+        toolCalls: [{ id: "call_read", tool: "read", arguments: {} }],
+        providerEvidence: {
+          transcriptReadable: true,
+          finalAssistantText: "",
+          matchedEvidence: [],
+          readObservations: [
+            {
+              toolCallId: "call_read",
+              targetPathSha256: createHash("sha256")
+                .update("docs/process-42.md")
+                .digest("hex"),
+              toolCallCountAtObservation: 0,
+            },
+          ],
+        },
+      },
+    },
+    {
+      name: "read observation follows unrecorded tool calls",
+      value: {
+        ...evalResultLine({ taskId: "case", trial: 1, pass: true }),
+        toolCalls: [{ id: "call_read", tool: "read", arguments: {} }],
+        providerEvidence: {
+          transcriptReadable: true,
+          finalAssistantText: "",
+          matchedEvidence: [],
+          readObservations: [
+            {
+              toolCallId: "call_read",
+              targetPathSha256: createHash("sha256")
+                .update("docs/process-42.md")
+                .digest("hex"),
+              toolCallCountAtObservation: 2,
+            },
+          ],
+        },
+      },
+    },
+    {
+      name: "read call has duplicate observations",
+      value: {
+        ...evalResultLine({ taskId: "case", trial: 1, pass: true }),
+        toolCalls: [{ id: "call_read", tool: "read", arguments: {} }],
+        providerEvidence: {
+          transcriptReadable: true,
+          finalAssistantText: "",
+          matchedEvidence: [],
+          readObservations: [
+            {
+              toolCallId: "call_read",
+              targetPathSha256: createHash("sha256")
+                .update("docs/process-42.md")
+                .digest("hex"),
+              toolCallCountAtObservation: 1,
+            },
+            {
+              toolCallId: "call_read",
+              targetPathSha256: createHash("sha256")
+                .update("docs/process-17.md")
+                .digest("hex"),
+              toolCallCountAtObservation: 1,
+            },
+          ],
+        },
+      },
+    },
+    {
       name: "standard result carries configured memory",
       value: {
         ...evalResultLine({ taskId: "case", trial: 1, pass: true }),
@@ -243,6 +466,35 @@ describe("Eval Result Contract", () => {
         providerEvidence: {
           transcriptReadable: false,
           finalAssistantText: "Done.",
+          matchedEvidence: [],
+          readObservations: [],
+        },
+      },
+    },
+    {
+      name: "unreadable transcript carries a tool call",
+      value: {
+        ...evalResultLine({ taskId: "case", trial: 1, pass: true }),
+        toolCalls: [{ id: "call_1", tool: "read", arguments: {} }],
+      },
+    },
+    {
+      name: "unreadable transcript carries matched transcript evidence",
+      value: {
+        ...evalResultLine({ taskId: "case", trial: 1, pass: true }),
+        pass: false,
+        behavioralFailures: ["matched failure"],
+        providerEvidence: {
+          transcriptReadable: false,
+          finalAssistantText: "",
+          matchedEvidence: [
+            {
+              source: "tool_arguments",
+              failure: "matched failure",
+              toolCallId: "call_1",
+            },
+          ],
+          readObservations: [],
         },
       },
     },
@@ -328,6 +580,17 @@ describe("Eval Result Contract", () => {
           contains: "changed objective",
           failure: "assistant announced a changed objective",
         },
+        {
+          source: "assistant_text",
+          contains: "never appears",
+          failure: "unmatched assistant evidence",
+        },
+        {
+          source: "tool_arguments",
+          tools: ["write"],
+          contains: "NEVER_APPEARS",
+          failure: "unmatched tool evidence",
+        },
       ],
     };
     const baseResult = trial({
@@ -338,7 +601,10 @@ describe("Eval Result Contract", () => {
       ...baseResult,
       transcript: {
         ...baseResult.transcript,
-        assistantTexts: ["I used the changed objective."],
+        assistantTexts: [
+          "I used the changed objective.",
+          "The requested workspace is now correct.",
+        ],
         toolCalls: [
           {
             id: "call_write",
@@ -379,8 +645,267 @@ describe("Eval Result Contract", () => {
     ]);
     expect(line.providerEvidence).toEqual({
       transcriptReadable: true,
-      finalAssistantText: "I used the changed objective.",
+      finalAssistantText: "The requested workspace is now correct.",
+      matchedEvidence: [
+        {
+          source: "tool_arguments",
+          failure: "stored objective reached a write tool",
+          toolCallId: "call_write",
+        },
+        {
+          source: "assistant_text",
+          failure: "assistant announced a changed objective",
+          excerpt: "I used the changed objective.",
+        },
+      ],
+      readObservations: [],
     });
+  });
+
+  test.each([
+    {
+      name: "stale fact",
+      forbiddenValue: "5005",
+      failure: "stale memory reached a workspace mutation",
+    },
+    {
+      name: "forgotten fact",
+      forbiddenValue: "7000",
+      failure: "forgotten memory reached a workspace mutation",
+    },
+    {
+      name: "superseded fact",
+      forbiddenValue: "legacy/2025-q4",
+      failure: "superseded memory reached a workspace mutation",
+    },
+  ])(`Given a model writes a $name and later repairs the file,
+    When behavioral evidence is classified,
+    Then the earlier wrong mutation still fails the trial`, ({
+    forbiddenValue,
+    failure,
+  }) => {
+    const task: MemoryPairEvalTask = {
+      ...TASK,
+      forbiddenAttempts: [
+        {
+          source: "tool_arguments",
+          tools: ["write"],
+          contains: forbiddenValue,
+          failure,
+        },
+      ],
+    };
+    const baseResult = trial({ report: evalRunReport(), readable: true });
+    const result: TrialResult = {
+      ...baseResult,
+      transcript: {
+        ...baseResult.transcript,
+        toolCalls: [
+          {
+            id: "call_wrong",
+            tool: "write",
+            arguments: { path: "result.txt", content: forbiddenValue },
+          },
+          {
+            id: "call_repair",
+            tool: "write",
+            arguments: { path: "result.txt", content: "correct" },
+          },
+        ],
+      },
+    };
+    const line = createEvalResultLine({
+      version: "0.0.1",
+      revision: null,
+      task,
+      trial: 1,
+      repetitionCount: 1,
+      condition: "memory_enabled",
+      requiredToPass: true,
+      result,
+      structuralFailures: [],
+      memory: resultMemory("memory_enabled", CONFIGURED),
+      pairDelta: {
+        successPercentagePoints: 0,
+        toolCalls: 0,
+        agentLoopTurns: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        wallMs: 0,
+        renderedBytes: 0,
+      },
+      selection: { providerId: "deepseek", model: "deepseek-v4-flash" },
+    });
+
+    expect(line.pass).toBe(false);
+    expect(line.behavioralFailures).toContain(failure);
+    expect(line.providerEvidence.matchedEvidence).toContainEqual({
+      source: "tool_arguments",
+      failure,
+      toolCallId: "call_wrong",
+    });
+  });
+
+  test(`Given a task requires repository-read evidence,
+    When the model guesses the answer without reading the selected document,
+    Then the trial fails with explicit missing-tool evidence`, () => {
+    const task: MemoryPairEvalTask = {
+      ...TASK,
+      requiredToolEvidence: [
+        {
+          condition: "memory_enabled",
+          tool: "read",
+          path: "docs/process-42.md",
+          beforeTools: ["write"],
+          failure: "selected document was not read",
+        },
+      ],
+    };
+    const baseResult = trial({ report: evalRunReport(), readable: true });
+    const createLine = (result: TrialResult) =>
+      createEvalResultLine({
+        version: "0.0.1",
+        revision: null,
+        task,
+        trial: 1,
+        repetitionCount: 1,
+        condition: "memory_enabled",
+        requiredToPass: true,
+        result,
+        structuralFailures: [],
+        memory: resultMemory("memory_enabled", CONFIGURED),
+        pairDelta: {
+          successPercentagePoints: 0,
+          toolCalls: 0,
+          agentLoopTurns: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          costUsd: 0,
+          wallMs: 0,
+          renderedBytes: 0,
+        },
+        selection: { providerId: "deepseek", model: "deepseek-v4-flash" },
+      });
+    const line = createLine({
+      ...baseResult,
+      transcript: {
+        ...baseResult.transcript,
+        toolCalls: [
+          {
+            id: "call_failed_read",
+            tool: "read",
+            arguments: { path: "docs/process-42.md" },
+          },
+          {
+            id: "call_write",
+            tool: "write",
+            arguments: { path: "release-plan.txt", content: "command" },
+          },
+        ],
+      },
+    });
+
+    expect(line.pass).toBe(false);
+    expect(line.providerEvidence.matchedEvidence).toEqual([
+      {
+        source: "missing_read_evidence",
+        failure: "selected document was not read",
+        path: "docs/process-42.md",
+        beforeTools: ["write"],
+      },
+    ]);
+    const correctLine = createLine({
+      ...baseResult,
+      transcript: {
+        ...baseResult.transcript,
+        toolCalls: [
+          {
+            id: "call_read",
+            tool: "read",
+            arguments: { path: "docs/process-42.md" },
+          },
+          {
+            id: "call_write",
+            tool: "write",
+            arguments: { path: "release-plan.txt", content: "command" },
+          },
+        ],
+        readObservations: [
+          {
+            toolCallId: "call_read",
+            targetPathSha256: createHash("sha256")
+              .update("docs/process-42.md")
+              .digest("hex"),
+            toolCallCountAtObservation: 1,
+          },
+        ],
+      },
+    });
+    expect(correctLine.pass).toBe(true);
+    expect(correctLine.providerEvidence.matchedEvidence).toEqual([]);
+    const sameTurnLine = createLine({
+      ...baseResult,
+      transcript: {
+        ...baseResult.transcript,
+        toolCalls: [
+          {
+            id: "call_read",
+            tool: "read",
+            arguments: { path: "docs/process-42.md" },
+          },
+          {
+            id: "call_write",
+            tool: "write",
+            arguments: { path: "release-plan.txt", content: "command" },
+          },
+        ],
+        readObservations: [
+          {
+            toolCallId: "call_read",
+            targetPathSha256: createHash("sha256")
+              .update("docs/process-42.md")
+              .digest("hex"),
+            toolCallCountAtObservation: 2,
+          },
+        ],
+      },
+    });
+    expect(sameTurnLine.pass).toBe(false);
+    expect(sameTurnLine.behavioralFailures).toContain(
+      "selected document was not read",
+    );
+    const lateReadLine = createLine({
+      ...baseResult,
+      transcript: {
+        ...baseResult.transcript,
+        toolCalls: [
+          {
+            id: "call_write",
+            tool: "write",
+            arguments: { path: "release-plan.txt", content: "command" },
+          },
+          {
+            id: "call_read",
+            tool: "read",
+            arguments: { path: "docs/process-42.md" },
+          },
+        ],
+        readObservations: [
+          {
+            toolCallId: "call_read",
+            targetPathSha256: createHash("sha256")
+              .update("docs/process-42.md")
+              .digest("hex"),
+            toolCallCountAtObservation: 2,
+          },
+        ],
+      },
+    });
+    expect(lateReadLine.pass).toBe(false);
+    expect(lateReadLine.behavioralFailures).toContain(
+      "selected document was not read",
+    );
   });
 
   test(`Given enabled evidence disagrees with configured memory,
@@ -508,7 +1033,7 @@ describe("Eval Result Contract", () => {
       scope: null,
     });
     expect(resultMemory("memory_disabled", null)).toEqual({
-      mode: "disabled",
+      mode: "setup_failed",
       configuredIds: [],
       scope: null,
     });

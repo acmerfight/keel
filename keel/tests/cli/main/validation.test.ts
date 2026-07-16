@@ -350,7 +350,7 @@ describe("CLI Main - Validation", () => {
         .map((line) => JSON.parse(line));
       expect(records).toMatchObject([
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           type: "transcript",
           provider: "fake",
           model: "fake",

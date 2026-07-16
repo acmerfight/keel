@@ -125,6 +125,56 @@ describe("Eval Runner", () => {
       solution: "printf '[]' > agent-args.json\n",
     });
     const cliEntry = join(root, "record-transcript-cli.js");
+    const transcript = `${[
+      {
+        schemaVersion: 2,
+        type: "transcript",
+        provider: "fake",
+        model: "fake",
+        systemPrompt: "test",
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            { id: "call_read", tool: "read", path: "docs/runbook.md" },
+          ],
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "tool",
+          toolCallId: "call_read",
+          content: "run pnpm smoke",
+        },
+      },
+      {
+        type: "read_observation",
+        toolCallId: "call_read",
+        targetPathSha256:
+          "7cb168a606ed42686a8e3e63b0f4bf995c9017efb2f5e95279acf4937f02fe4e",
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Done.",
+          toolCalls: [
+            {
+              id: "call_write",
+              tool: "write",
+              path: "result.txt",
+              content: "pnpm smoke\n",
+            },
+          ],
+        },
+      },
+    ]
+      .map((record) => JSON.stringify(record))
+      .join("\n")}\n`;
     await writeFile(
       cliEntry,
       [
@@ -135,7 +185,7 @@ describe("Eval Runner", () => {
         "const transcriptIndex = args.indexOf('--transcript');",
         "writeFileSync('agent-args.json', JSON.stringify(args), 'utf8');",
         "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
-        'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n\', \'utf8\');',
+        `writeFileSync(args[transcriptIndex + 1], ${JSON.stringify(transcript)}, 'utf8');`,
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
         "  schemaVersion: 15,",
         "  tasks: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentRuns: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentLoopTurns: 1, providerRetries: [], contextCompactions: [], stopReason: 'completed' }], outcome: 'completed' }],",
@@ -174,7 +224,25 @@ describe("Eval Runner", () => {
       expect(exitCode).toBe(0);
       const lines = await readResultLines(outFile);
       expect(lines).toMatchObject([
-        { taskId: "records-transcript", pass: true, outcome: "verified" },
+        {
+          taskId: "records-transcript",
+          pass: true,
+          outcome: "verified",
+          toolCalls: [
+            { id: "call_read", tool: "read" },
+            { id: "call_write", tool: "write" },
+          ],
+          providerEvidence: {
+            readObservations: [
+              {
+                toolCallId: "call_read",
+                targetPathSha256:
+                  "7cb168a606ed42686a8e3e63b0f4bf995c9017efb2f5e95279acf4937f02fe4e",
+                toolCallCountAtObservation: 1,
+              },
+            ],
+          },
+        },
       ]);
       expect(lines[0]?.transcriptPath).toContain("records-transcript-");
       expect(lines[0]?.transcriptPath).toContain("-trial-1");
@@ -211,7 +279,7 @@ describe("Eval Runner", () => {
         "const reportIndex = args.indexOf('--report');",
         "const transcriptIndex = args.indexOf('--transcript');",
         "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
-        'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n\', \'utf8\');',
+        'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":2,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n\', \'utf8\');',
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
         "  schemaVersion: 15,",
         "  tasks: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentRuns: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentLoopTurns: 1, providerRetries: [], contextCompactions: [], stopReason: 'completed' }], outcome: 'completed' }],",
@@ -273,7 +341,7 @@ describe("Eval Runner", () => {
     {
       name: "valid header with malformed body",
       transcriptAction:
-        'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n{not-json\\n\', \'utf8\');',
+        'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":2,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n{not-json\\n\', \'utf8\');',
     },
     {
       name: "empty file",

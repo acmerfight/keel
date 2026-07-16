@@ -2,4 +2,4 @@
 
 Process codename: Bluebird
 
-Smoke test: `pnpm smoke:blue`
+Smoke test: `pnpm smoke:quartz`

@@ -1,10 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   CLI_ENTRY,
   createEvalDir,
   createTask,
   join,
   readFile,
+  readResultLines,
   rm,
   runEvalCommand,
   VALID_REPORT,
@@ -66,6 +67,7 @@ describe("Eval Runner Memory Pairs", () => {
         maxCostUsd: 0.05,
         passPolicy: "both_must_pass",
         forbiddenAttempts: [],
+        requiredToolEvidence: [],
         memorySetup,
       }),
       "utf8",
@@ -125,6 +127,56 @@ describe("Eval Runner Memory Pairs", () => {
             failure: "invalid tool name",
           },
         ],
+        requiredToolEvidence: [],
+      }),
+      "utf8",
+    );
+
+    try {
+      expect(
+        await runEvalCommand({
+          suiteDir,
+          outFile,
+          trials: 1,
+          check: false,
+          cliEntry: CLI_ENTRY,
+        }),
+      ).toBe(1);
+      await expect(readFile(outFile, "utf8")).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a memory task omits the required tool-evidence contract,
+    When the eval runner loads the task definition,
+    Then it rejects the task instead of defaulting the field`, async () => {
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const taskId = "missing-required-tool-evidence";
+    await createTask(suiteDir, taskId, {
+      prompt: "create result.json",
+      verify: "test -f result.json\n",
+    });
+    await writeFile(
+      join(suiteDir, taskId, "task.json"),
+      JSON.stringify({
+        kind: "memory_pair",
+        corpusVersion: "memory-v1",
+        prompt: "create result.json",
+        timeoutMs: 60_000,
+        scriptTimeoutMs: 10_000,
+        allowBash: false,
+        maxCostUsd: 0.05,
+        passPolicy: "both_must_pass",
+        memorySetup: [
+          {
+            operation: "add",
+            alias: "fact",
+            text: "The durable fact is alpha.",
+            lifecycle: "current",
+          },
+        ],
+        forbiddenAttempts: [],
       }),
       "utf8",
     );
@@ -170,6 +222,7 @@ describe("Eval Runner Memory Pairs", () => {
         maxCostUsd: 0.05,
         passPolicy: "both_must_pass",
         forbiddenAttempts: [],
+        requiredToolEvidence: [],
         memorySetup: [
           {
             operation: "add",
@@ -281,6 +334,80 @@ describe("Eval Runner Memory Pairs", () => {
     }
   });
 
+  test(`Given only the enabled arm lacks required tool evidence,
+    When the paired runner reports its aggregate score,
+    Then it records and prints the negative enabled-minus-disabled delta`, async () => {
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const taskId = "missing-enabled-tool-evidence";
+    await createTask(suiteDir, taskId, {
+      prompt: "create result.json",
+      verify: "test -f result.json\n",
+      solution: "printf '{\"created\":true}\\n' > result.json\n",
+      timeoutMs: 60_000,
+    });
+    await writeFile(
+      join(suiteDir, taskId, "task.json"),
+      JSON.stringify({
+        kind: "memory_pair",
+        corpusVersion: "memory-v1",
+        prompt: "create result.json",
+        timeoutMs: 60_000,
+        scriptTimeoutMs: 10_000,
+        allowBash: false,
+        maxCostUsd: 0.05,
+        passPolicy: "both_must_pass",
+        forbiddenAttempts: [],
+        requiredToolEvidence: [
+          {
+            condition: "memory_enabled",
+            tool: "read",
+            path: "never-read.md",
+            beforeTools: ["write"],
+            failure: "required repository read was missing",
+          },
+        ],
+        memorySetup: [
+          {
+            operation: "add",
+            alias: "fact",
+            text: "The durable fact is alpha.",
+            lifecycle: "current",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    let stdout = "";
+    const writeStdout = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stdout += chunk.toString();
+        return true;
+      });
+
+    try {
+      expect(
+        await runEvalCommand({
+          suiteDir,
+          outFile,
+          trials: 1,
+          check: false,
+          cliEntry: CLI_ENTRY,
+        }),
+      ).toBe(1);
+      const lines = await readResultLines(outFile);
+      expect(lines.map((line) => line.pass)).toEqual([true, false]);
+      expect(lines[1]?.behavioralFailures).toContain(
+        "required repository read was missing",
+      );
+      expect(lines[0]?.pairDelta?.successPercentagePoints).toBe(-100);
+      expect(stdout).toContain("delta -100.0pp");
+    } finally {
+      writeStdout.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a non-required disabled baseline crashes,
     When the enabled condition still verifies,
     Then the harness failure fails the paired gate`, async () => {
@@ -304,6 +431,7 @@ describe("Eval Runner Memory Pairs", () => {
         maxCostUsd: 0.05,
         passPolicy: "enabled_must_pass",
         forbiddenAttempts: [],
+        requiredToolEvidence: [],
         memorySetup: [
           {
             operation: "add",
@@ -356,7 +484,7 @@ describe("Eval Runner Memory Pairs", () => {
         "  const transcriptIndex = args.indexOf('--transcript');",
         "  mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
         `  writeFileSync(args[reportIndex + 1], ${JSON.stringify(JSON.stringify(enabledReport))}, 'utf8');`,
-        `  writeFileSync(args[transcriptIndex + 1], ${JSON.stringify('{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"The durable fact is alpha."}\n')}, 'utf8');`,
+        `  writeFileSync(args[transcriptIndex + 1], ${JSON.stringify('{"schemaVersion":2,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"The durable fact is alpha."}\n')}, 'utf8');`,
         "}",
       ].join("\n"),
       "utf8",
@@ -424,6 +552,7 @@ describe("Eval Runner Memory Pairs", () => {
         maxCostUsd: 0.05,
         passPolicy: "both_must_pass",
         forbiddenAttempts: [],
+        requiredToolEvidence: [],
         memorySetup: [
           {
             operation: "add",
@@ -448,15 +577,13 @@ describe("Eval Runner Memory Pairs", () => {
 
       // Then
       expect(exitCode).toBe(1);
-      const lines = (await readFile(outFile, "utf8"))
-        .trimEnd()
-        .split("\n")
-        .map((line) => JSON.parse(line));
+      const lines = await readResultLines(outFile);
       expect(lines).toHaveLength(2);
       expect(
         lines.every(
           (line) =>
             line.pass === false &&
+            line.memory.mode === "setup_failed" &&
             line.structuralFailures.some((failure: string) =>
               failure.startsWith("memory fixture setup failed:"),
             ),
@@ -490,6 +617,7 @@ describe("Eval Runner Memory Pairs", () => {
         maxCostUsd: 0.05,
         passPolicy: "both_must_pass",
         forbiddenAttempts: [],
+        requiredToolEvidence: [],
         memorySetup: [
           {
             operation: "add",
@@ -613,6 +741,7 @@ describe("Eval Runner Memory Pairs", () => {
         maxCostUsd: 0.05,
         passPolicy: "both_must_pass",
         forbiddenAttempts: [],
+        requiredToolEvidence: [],
         memorySetup,
       }),
       "utf8",
@@ -630,17 +759,15 @@ describe("Eval Runner Memory Pairs", () => {
 
       // Then
       expect(exitCode).toBe(1);
-      const lines = (await readFile(outFile, "utf8"))
-        .trimEnd()
-        .split("\n")
-        .map((line) => JSON.parse(line));
+      const lines = await readResultLines(outFile);
       expect(lines).toHaveLength(2);
       expect(
         lines.every(
           (line) =>
+            line.memory.mode === "setup_failed" &&
             line.structuralFailures.length === 1 &&
-            line.structuralFailures[0].startsWith(
-              "memory fixture setup failed:",
+            line.structuralFailures.some((failure) =>
+              failure.startsWith("memory fixture setup failed:"),
             ),
         ),
       ).toBe(true);
@@ -724,6 +851,7 @@ describe("Eval Runner Memory Pairs", () => {
         maxCostUsd: 0.05,
         passPolicy: "both_must_pass",
         forbiddenAttempts: [],
+        requiredToolEvidence: [],
         memorySetup,
       }),
       "utf8",

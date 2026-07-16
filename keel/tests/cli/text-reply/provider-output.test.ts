@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { writeRunTranscript } from "../../../src/cli/transcript.ts";
 import {
   close,
   createServer,
@@ -72,7 +73,7 @@ describe("CLI Text Reply", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(records[0]).toMatchObject({
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "transcript",
         provider: "fake",
         model: "fake",
@@ -86,6 +87,67 @@ describe("CLI Text Reply", () => {
             role: "assistant",
             content: "Hello from fake provider.",
           },
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a successful repository read has a resource observation,
+    When the run transcript is persisted,
+    Then transcript v2 writes separate minimal evidence and preserves the provider-visible tool result`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-transcript-read-"),
+    );
+    const transcriptPath = join(workspace, "run.jsonl");
+
+    try {
+      // When
+      writeRunTranscript(transcriptPath, {
+        provider: "fake",
+        model: "fake",
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "tool",
+            toolCallId: "call_read",
+            content: "document contents",
+            resourceObservation: {
+              kind: "read_projection",
+              targetPathSha256: "a".repeat(64),
+              contentSha256: "b".repeat(64),
+            },
+          },
+        ],
+      });
+
+      // Then
+      const records = (await readFile(transcriptPath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(records).toEqual([
+        {
+          schemaVersion: 2,
+          type: "transcript",
+          provider: "fake",
+          model: "fake",
+          systemPrompt: "system",
+        },
+        {
+          type: "message",
+          message: {
+            role: "tool",
+            toolCallId: "call_read",
+            content: "document contents",
+          },
+        },
+        {
+          type: "read_observation",
+          toolCallId: "call_read",
+          targetPathSha256: "a".repeat(64),
         },
       ]);
     } finally {

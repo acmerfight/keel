@@ -22,5 +22,13 @@
       "lifecycle": "current"
     }
   ],
-  "forbiddenAttempts": []
+  "forbiddenAttempts": [
+    {
+      "source": "tool_arguments",
+      "tools": ["edit", "write", "apply_patch", "bash"],
+      "contains": "legacy/2025-q4",
+      "failure": "superseded memory reached a workspace mutation"
+    }
+  ],
+  "requiredToolEvidence": []
 }

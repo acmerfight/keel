@@ -15,7 +15,7 @@ interface RunTranscriptInput {
 }
 
 interface TranscriptHeader {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly type: "transcript";
   readonly provider: string;
   readonly model: string;
@@ -27,7 +27,38 @@ interface TranscriptMessage {
   readonly message: Message;
 }
 
-type TranscriptRecord = TranscriptHeader | TranscriptMessage;
+interface TranscriptReadObservation {
+  readonly type: "read_observation";
+  readonly toolCallId: string;
+  readonly targetPathSha256: string;
+}
+
+type TranscriptRecord =
+  | TranscriptHeader
+  | TranscriptMessage
+  | TranscriptReadObservation;
+
+function transcriptRecordsForMessage(
+  message: Message,
+): readonly (TranscriptMessage | TranscriptReadObservation)[] {
+  const persistedMessage: TranscriptMessage = {
+    type: "message",
+    message: redactMessageForPersistence(
+      projectSessionMessageToProvider(message),
+    ),
+  };
+  if (message.role !== "tool" || message.resourceObservation === undefined) {
+    return [persistedMessage];
+  }
+  return [
+    persistedMessage,
+    {
+      type: "read_observation",
+      toolCallId: message.toolCallId,
+      targetPathSha256: message.resourceObservation.targetPathSha256,
+    },
+  ];
+}
 
 export function writeRunTranscript(
   filePath: string,
@@ -36,18 +67,13 @@ export function writeRunTranscript(
   mkdirSync(dirname(filePath), { recursive: true });
   const records: TranscriptRecord[] = [
     {
-      schemaVersion: 1,
+      schemaVersion: 2,
       type: "transcript",
       provider: input.provider,
       model: input.model,
       systemPrompt: redactTextForPersistence(input.systemPrompt),
     },
-    ...input.messages.map((message) => ({
-      type: "message" as const,
-      message: redactMessageForPersistence(
-        projectSessionMessageToProvider(message),
-      ),
-    })),
+    ...input.messages.flatMap(transcriptRecordsForMessage),
   ];
   writeFileSync(
     filePath,

@@ -15,5 +15,14 @@
       "lifecycle": "current"
     }
   ],
-  "forbiddenAttempts": []
+  "forbiddenAttempts": [],
+  "requiredToolEvidence": [
+    {
+      "condition": "memory_enabled",
+      "tool": "read",
+      "path": "docs/runbook-lantern.md",
+      "beforeTools": ["write", "apply_patch"],
+      "failure": "agent did not read the repository document selected by memory"
+    }
+  ]
 }

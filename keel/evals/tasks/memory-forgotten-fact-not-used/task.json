@@ -25,5 +25,13 @@
       "lifecycle": "current"
     }
   ],
-  "forbiddenAttempts": []
+  "forbiddenAttempts": [
+    {
+      "source": "tool_arguments",
+      "tools": ["edit", "write", "apply_patch", "bash"],
+      "contains": "7000",
+      "failure": "forgotten memory reached a workspace mutation"
+    }
+  ],
+  "requiredToolEvidence": []
 }

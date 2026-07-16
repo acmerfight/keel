@@ -1,1 +1,1 @@
-test "$(cat release-plan.txt)" = "pnpm smoke:blue"
+test "$(cat release-plan.txt)" = "pnpm smoke:quartz"
