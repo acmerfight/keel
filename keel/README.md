@@ -89,11 +89,21 @@ keel --no-memory "Run without project memory."
 Memory writes require an explicit current-user action. In addition to the CLI
 commands, a direct request such as “Remember that release tags use a v prefix”
 lets the agent save that exact claim, and an unambiguous “Forget the memory
-about release tags” request can forget one active entry. The runtime verifies
-the exact current-user source span, rejects negated, hypothetical, quoted,
-third-party, interrogative, inferred, or broadened claims, and asks for an ID
-instead of guessing when a forget request could match multiple entries. Keel
-does not automatically extract, consolidate, or promote conversation text.
+about release tags” request can forget one active entry. The model decides
+whether the latest user message is a direct, unambiguous request; it must not
+act on negated, hypothetical, quoted, third-party, interrogative, or inferred
+text, and it must ask instead of guessing when a forget request could match
+multiple entries. This semantic intent judgment is a model-mediated behavioral
+target, not a deterministic language parser or structural invariant.
+
+For each eligible user message, mutation tools are available only on the first
+model step, before tool output enters the turn. `memory_add` accepts one required
+`text` field: an exact contiguous durable-claim span from that user message.
+The runtime rejects paraphrased or broadened text and records the complete
+authorizing user message as event provenance itself; the model cannot provide
+or forge that source evidence. `memory_forget` accepts one required active
+project-memory ID. Keel does not automatically extract, consolidate, or promote
+conversation text.
 `--ephemeral` only disables the session ledger; it
 does not disable project memory. Use `--no-memory` when a run must skip memory
 identity discovery, storage reads, prompt injection, and memory observability.

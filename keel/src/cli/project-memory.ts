@@ -707,6 +707,7 @@ export function addProjectMemory(
     removeIncompleteFinalEvent(filePath);
     appendEvent(filePath, event);
     const entry = next.entries.find((candidate) => candidate.id === event.id);
+    /* v8 ignore next 3 -- replaying the valid add event constructed above must project its unique ID; this guards an internal replay defect. */
     if (entry === undefined) {
       throw new Error("newly added project memory was not projected");
     }

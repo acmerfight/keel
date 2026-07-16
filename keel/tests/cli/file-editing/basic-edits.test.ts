@@ -158,6 +158,8 @@ describe("CLI File Editing", () => {
       ).toEqual([
         "update_plan",
         "update_goal",
+        "memory_add",
+        "memory_forget",
         "read",
         "ls",
         "glob",
@@ -242,6 +244,8 @@ describe("CLI File Editing", () => {
       expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual([
         "update_plan",
         "update_goal",
+        "memory_add",
+        "memory_forget",
         "read",
         "ls",
         "glob",

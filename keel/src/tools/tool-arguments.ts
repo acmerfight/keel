@@ -44,15 +44,7 @@ export const memoryAddToolArgumentsSchema = z
       .trim()
       .min(1)
       .describe(
-        "Exact durable claim copied from the current user's explicit remember request. Do not paraphrase, broaden, or infer it.",
-      ),
-    sourceText: z
-      .string()
-      .trim()
-      .min(1)
-      .max(8192)
-      .describe(
-        "Exact current-user sentence or standalone line that explicitly asks Keel to remember this claim.",
+        "One exact contiguous durable-claim span copied from the latest current-user message. Preserve meaningful punctuation; do not paraphrase, broaden, or infer it.",
       ),
   })
   .strict();
@@ -63,14 +55,6 @@ export const memoryForgetToolArgumentsSchema = z
       .string()
       .describe(
         "Exact active project-memory ID selected from the current project memory block.",
-      ),
-    sourceText: z
-      .string()
-      .trim()
-      .min(1)
-      .max(8192)
-      .describe(
-        "Exact current-user sentence or standalone line that explicitly asks Keel to forget this one memory.",
       ),
   })
   .strict();

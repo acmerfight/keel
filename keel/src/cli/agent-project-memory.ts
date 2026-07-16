@@ -23,7 +23,7 @@ export function createAgentProjectMemory(options: {
         listProjectMemory(options.runtime, options.workspace, {
           all: false,
         }).entries.map((entry) => ({ id: entry.id, text: entry.text })),
-      add: (text, sourceText) => {
+      add: (text, evidence) => {
         const saved = addProjectMemory(
           options.runtime,
           options.workspace,
@@ -31,7 +31,7 @@ export function createAgentProjectMemory(options: {
           {
             type: "user_explicit",
             channel: "agent",
-            evidence: sourceText,
+            evidence,
           },
           { reviewAfter: null, expiresAt: null },
         );
@@ -43,7 +43,7 @@ export function createAgentProjectMemory(options: {
         });
         return { id: saved.entry.id, scope: saved.scope };
       },
-      forget: (id, sourceText) => {
+      forget: (id, evidence) => {
         const scope = forgetProjectMemory(
           options.runtime,
           options.workspace,
@@ -51,7 +51,7 @@ export function createAgentProjectMemory(options: {
           {
             type: "user_explicit",
             channel: "agent",
-            evidence: sourceText,
+            evidence,
           },
         );
         operations.push({

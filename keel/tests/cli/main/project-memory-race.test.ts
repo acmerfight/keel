@@ -10,6 +10,7 @@ type FsModule = typeof import("node:fs");
 interface FsOverrides {
   readonly linkSync?: FsModule["linkSync"];
   readonly renameSync?: FsModule["renameSync"];
+  readonly rmSync?: FsModule["rmSync"];
   readonly writeSync?: (
     fd: number,
     buffer: Uint8Array,
@@ -296,6 +297,61 @@ describe("CLI Project Memory Race Handling", () => {
       ).toThrow("cannot atomically purge project memory");
       expect(await readFile(eventsPath, "utf8")).toBe(before);
       expect(await readdir(projectDirectory)).toEqual(["events.jsonl"]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the filesystem refuses to remove a complete memory store,
+    When Keel purges all project memory,
+    Then it reports the failure and preserves the complete store`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-memory-purge-all-failure-",
+    );
+    const keelHome = mkdtempSync(join(tmpdir(), "keel-memory-race-home-"));
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => 0,
+    };
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    let failStoreRemoval = false;
+    const projectMemory = await importProjectMemoryWithFs({
+      rmSync: (path, options) => {
+        if (failStoreRemoval && String(path).endsWith("events.jsonl")) {
+          throw errno("EIO");
+        }
+        actualFs.rmSync(path, options);
+      },
+    });
+    const saved = projectMemory.addProjectMemory(
+      runtime,
+      workspace,
+      "Purge-all survivor.",
+      {
+        type: "user_explicit",
+        channel: "cli",
+        evidence: "memory add Purge-all survivor.",
+      },
+      { reviewAfter: null, expiresAt: null },
+    );
+    const eventsPath = join(
+      keelHome,
+      "memory",
+      "projects",
+      saved.scope.id,
+      "events.jsonl",
+    );
+    const before = await readFile(eventsPath, "utf8");
+    failStoreRemoval = true;
+
+    try {
+      // When / Then
+      expect(() =>
+        projectMemory.purgeAllProjectMemory(runtime, workspace),
+      ).toThrow("cannot atomically purge all project memory");
+      expect(await readFile(eventsPath, "utf8")).toBe(before);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(keelHome, { recursive: true, force: true });
