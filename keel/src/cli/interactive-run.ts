@@ -147,7 +147,7 @@ function activeSkillPackageId(
   descriptorId: string,
 ): string {
   const packageId = packageIds.get(descriptorId);
-  /* v8 ignore next 3 -- validated session lifecycle state requires every active descriptor id to have an activation. */
+  // validated session lifecycle state requires every active descriptor id to have an activation.
   if (packageId === undefined) return "";
   return packageId;
 }
@@ -406,7 +406,7 @@ async function promptedSessionStartForBareKeel(options: {
     case "pick": {
       const selectedSession =
         catalog.sessions[startupSelection.selection.choice - 1];
-      /* v8 ignore next 3: the picker validates the choice range against this catalog length. */
+      // the picker validates the choice range against this catalog length.
       if (selectedSession === undefined) {
         throw new SessionStoreError(
           "Error: selected session is not available.",
@@ -470,7 +470,7 @@ async function pickedSessionIdForWorkspace(options: {
     return null;
   }
   const selectedSession = catalog.sessions[pickerResult.selection.choice - 1];
-  /* v8 ignore next 3: the picker validates the choice range against this catalog length. */
+  // the picker validates the choice range against this catalog length.
   if (selectedSession === undefined) {
     throw new SessionStoreError("Error: selected session is not available.");
   }
@@ -837,7 +837,7 @@ async function runSessionCli(
         };
       }
       const persistSkillLifecycleState = (state: SkillLifecycleState): void => {
-        /* v8 ignore next -- this callback is exposed only through named-session persistence below. */
+        // this callback is exposed only through named-session persistence below.
         if (ensureActiveSession === undefined) return;
         const activeSession = ensureActiveSession();
         persistSessionSkillState({
@@ -948,7 +948,7 @@ async function runSessionCli(
       if (activeSessionId !== undefined) {
         const sessionId = activeSessionId;
         const activeSessionForPersistence = ensureActiveSession;
-        /* v8 ignore next 3 -- activeSessionId installs this closure immediately above. */
+        // activeSessionId installs this closure immediately above.
         if (activeSessionForPersistence === undefined) {
           throw new Error("saved session persistence is unavailable");
         }
@@ -1547,7 +1547,7 @@ function runReportGoalOutcome(
   sessionId: string,
   goal: SessionGoal | undefined,
 ): RunReportGoalOutcome | undefined {
-  /* v8 ignore start: report finalization follows a terminal headless Goal, so it cannot be absent, active, or paused. */
+  // report finalization follows a terminal headless Goal, so it cannot be absent, active, or paused.
   if (
     goal === undefined ||
     goal.status === "active" ||
@@ -1555,12 +1555,11 @@ function runReportGoalOutcome(
   ) {
     return undefined;
   }
-  /* v8 ignore stop */
   if (goal.status === "completed") {
     return {
       sessionId,
       status: "completed",
-      /* v8 ignore next: completed Goals always persist a completion runtime outcome before report finalization. */
+      // completed Goals always persist a completion runtime outcome before report finalization.
       reason: goal.latestRuntimeOutcome?.reason ?? "Session goal completed.",
       evidenceKind: goal.completionEvidence.kind,
     };
@@ -1575,14 +1574,13 @@ function runReportGoalOutcome(
 function headlessGoalReportStopReason(
   goal: SessionGoal | undefined,
 ): "goal_blocked" | "goal_budget" | "goal_usage_limit" | undefined {
-  /* v8 ignore start: report finalization follows a terminal headless Goal, so it cannot be absent, active, or paused. */
+  // report finalization follows a terminal headless Goal, so it cannot be absent, active, or paused.
   if (
     goal === undefined ||
     goal.status === "active" ||
     goal.status === "paused"
   )
     return undefined;
-  /* v8 ignore stop */
   switch (goal.status) {
     case "blocked":
       return "goal_blocked";

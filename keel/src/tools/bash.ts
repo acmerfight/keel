@@ -262,7 +262,7 @@ function runBashProcess(
         capturedArtifactStdout = artifactStdout.capture();
         capturedArtifactStderr = artifactStderr.capture();
       } catch (error) {
-        /* v8 ignore start: temp output capture failures require filesystem faults after process completion. */
+        // temp output capture failures require filesystem faults after process completion.
         cleanup();
         const detail = error instanceof Error ? error.message : String(error);
         rejectProcess(
@@ -273,7 +273,6 @@ function runBashProcess(
           ),
         );
         return;
-        /* v8 ignore stop */
       }
       cleanup();
       resolveProcess({
@@ -335,7 +334,7 @@ function runBashProcess(
         preview.append(chunk);
         artifact.append(chunk);
       } catch (error) {
-        /* v8 ignore start: temp output write failures require filesystem faults while streaming. */
+        // temp output write failures require filesystem faults while streaming.
         stopChildProcess(child.pid);
         const detail = error instanceof Error ? error.message : String(error);
         finish({
@@ -346,7 +345,6 @@ function runBashProcess(
             "Rerun the command with narrower output or inspect specific files directly.",
           ),
         });
-        /* v8 ignore stop */
       }
     };
 

@@ -146,7 +146,7 @@ export function applyPreparedOperation(
       };
     } catch (error) {
       rollbackWorkspaceParentDirectoriesBestEffort(createdParentDirectories);
-      /* v8 ignore next 7: EEXIST requires a concurrent create after prevalidation. */
+      // EEXIST requires a concurrent create after prevalidation.
       if (isErrnoException(error) && error.code === "EEXIST") {
         throw new KeelError(
           "tool_file_exists",
@@ -156,7 +156,7 @@ export function applyPreparedOperation(
             : "Read the existing file and use an Update File hunk instead of Add File.",
         );
       }
-      /* v8 ignore next 1: unknown atomic create errors are rethrown unchanged. */
+      // unknown atomic create errors are rethrown unchanged.
       throw error;
     }
   }
@@ -239,7 +239,7 @@ export function applyPreparedOperation(
           },
         );
       } catch (error) {
-        /* v8 ignore next 7: EEXIST requires a concurrent create after prevalidation. */
+        // EEXIST requires a concurrent create after prevalidation.
         if (isErrnoException(error) && error.code === "EEXIST") {
           throw new KeelError(
             "tool_file_exists",
@@ -247,7 +247,7 @@ export function applyPreparedOperation(
             "Read the existing file and use an Update File hunk instead of moving over it.",
           );
         }
-        /* v8 ignore next 1: unknown atomic create errors are rethrown unchanged. */
+        // unknown atomic create errors are rethrown unchanged.
         throw error;
       }
 
@@ -382,7 +382,7 @@ export function applyPreparedOperation(
         beforeContent: operation.beforeContent,
         afterContent: operation.afterContent,
       },
-      /* v8 ignore next 2: update temp cleanup by identity is covered through edit/write; this is the same atomic path. */
+      // update temp cleanup by identity is covered through edit/write; this is the same atomic path.
       cleanupPathsByIdentity: (identity) =>
         findWorkspacePathsByIdentity(operation.workspacePath, identity),
     },
@@ -398,7 +398,7 @@ export function verifyAppliedOperation(
   operation: AppliedPatchOperation,
 ): AppliedPatchOperation {
   if (operation.kind === "move") {
-    /* v8 ignore next 3: rmSync removes the captured identity unless a post-delete filesystem race recreates it before verification. */
+    // rmSync removes the captured identity unless a post-delete filesystem race recreates it before verification.
     if (pathHasIdentity(operation.targetPath, operation.targetIdentity)) {
       throw changedTargetError(operation);
     }
@@ -415,7 +415,7 @@ export function verifyAppliedOperation(
   }
 
   if (operation.kind === "delete") {
-    /* v8 ignore next 3: rmSync removes the captured identity unless a post-delete filesystem race recreates it before verification. */
+    // rmSync removes the captured identity unless a post-delete filesystem race recreates it before verification.
     if (pathHasIdentity(operation.targetPath, operation.appliedIdentity)) {
       throw changedTargetError(operation);
     }

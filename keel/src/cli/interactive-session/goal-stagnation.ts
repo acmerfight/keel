@@ -30,7 +30,7 @@ function latestToolResult(
       return message;
     }
   }
-  /* v8 ignore next -- completed prompt turns append every tool_end result before the end event; fail closed if that invariant changes. */
+  // completed prompt turns append every tool_end result before the end event; fail closed if that invariant changes.
   return null;
 }
 
@@ -83,7 +83,7 @@ export function goalContinuationStagnationFingerprint(options: {
   const signature: string[] = [];
   for (const execution of options.toolExecutions) {
     const result = latestToolResult(options.messages, execution.toolCall.id);
-    /* v8 ignore next 3 -- latestToolResult is nullable only to preserve the fail-closed invariant guard above. */
+    // latestToolResult is nullable only to preserve the fail-closed invariant guard above.
     if (result === null) {
       return null;
     }

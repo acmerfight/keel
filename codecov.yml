@@ -1,15 +1,13 @@
-# keel's coverage fluctuates run-to-run because bash.ts exercises
-# timing-dependent kill/timeout paths (SIGTERM->SIGKILL fallback, abort
-# races). With the default threshold of 0, any -0.01% noise fails
-# codecov/project on PRs that change no coverable code. The 1% threshold
-# absorbs that noise; real regressions are still caught by the vitest
-# coverage thresholds (statements 95, branches 90) and codecov/patch.
+# Keel reports necessary defensive branches as honest coverage gaps instead of
+# suppressing them inline. Explicit targets match the Vitest policy so prior
+# inflated reports cannot become the automatic baseline.
 coverage:
   status:
     project:
       default:
-        target: auto
-        threshold: 1%
+        target: 95%
+        threshold: 0%
     patch:
       default:
-        target: 100%
+        target: 95%
+        threshold: 0%

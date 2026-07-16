@@ -618,7 +618,7 @@ export function resumeSessionStore(options: {
           }),
         );
         const snapshotSkillState = skillStateCheckpoints.at(-1);
-        /* v8 ignore next 3 -- the snapshot schema requires at least one lifecycle checkpoint. */
+        // the snapshot schema requires at least one lifecycle checkpoint.
         if (snapshotSkillState === undefined) {
           sessionStoreError(
             "Error: session snapshot has no skill lifecycle state.",

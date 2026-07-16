@@ -248,11 +248,10 @@ function parseGoalLaunchArgs(
   const completionCriterion = hasVerificationCommand
     ? verificationCommand
     : assertionCriterion;
-  /* v8 ignore start: the exclusive criterion checks above guarantee a value. */
+  // the exclusive criterion checks above guarantee a value.
   if (completionCriterion === undefined) {
     return parseError("Error: goal completion criterion is required.");
   }
-  /* v8 ignore stop */
   if (
     completionCriterion.length > SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH
   ) {

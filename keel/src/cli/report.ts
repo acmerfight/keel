@@ -163,7 +163,7 @@ function reportWriteCause(error: unknown): string {
 export function assertEndEventHasCost(
   end: EndEvent,
 ): asserts end is EndEventWithCost {
-  /* v8 ignore next 3: --report enables cost tracking before the run starts. */
+  // --report enables cost tracking before the run starts.
   if (end.cost === undefined) {
     throw new Error("run report requires cost tracking to be enabled");
   }

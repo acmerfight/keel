@@ -92,7 +92,7 @@ function parsePathRecord(
   pathFieldIndex: number,
 ): readonly string[] | null {
   const fields = record.split(" ");
-  /* v8 ignore next: malformed porcelain records are ignored defensively; Git owns this record shape. */
+  // malformed porcelain records are ignored defensively; Git owns this record shape.
   if (fields.length <= pathFieldIndex) return null;
   const path = fields.slice(pathFieldIndex).join(" ");
   return [...fields.slice(0, pathFieldIndex), path];
@@ -100,14 +100,14 @@ function parsePathRecord(
 
 function parseOrdinaryStatusEntry(record: string): GitStatusEntry | null {
   const fields = parsePathRecord(record, 8);
-  /* v8 ignore next: malformed porcelain records are ignored defensively; Git owns this record shape. */
+  // malformed porcelain records are ignored defensively; Git owns this record shape.
   if (fields === null) return null;
   const parsed = ordinaryStatusEntrySchema.safeParse({
     kind: "ordinary",
     xy: fields[1],
     path: fields[8],
   });
-  /* v8 ignore next: schema rejection is a defensive guard for malformed Git output. */
+  // schema rejection is a defensive guard for malformed Git output.
   return parsed.success ? parsed.data : null;
 }
 
@@ -115,10 +115,10 @@ function parseRenamedStatusEntry(
   record: string,
   oldPath: string | undefined,
 ): GitStatusEntry | null {
-  /* v8 ignore next: malformed porcelain rename records are ignored defensively; Git owns the paired old path. */
+  // malformed porcelain rename records are ignored defensively; Git owns the paired old path.
   if (oldPath === undefined) return null;
   const fields = parsePathRecord(record, 9);
-  /* v8 ignore next: malformed porcelain records are ignored defensively; Git owns this record shape. */
+  // malformed porcelain records are ignored defensively; Git owns this record shape.
   if (fields === null) return null;
   const parsed = renamedStatusEntrySchema.safeParse({
     kind: "renamed",
@@ -126,20 +126,20 @@ function parseRenamedStatusEntry(
     path: fields[9],
     oldPath,
   });
-  /* v8 ignore next: schema rejection is a defensive guard for malformed Git output. */
+  // schema rejection is a defensive guard for malformed Git output.
   return parsed.success ? parsed.data : null;
 }
 
 function parseUnmergedStatusEntry(record: string): GitStatusEntry | null {
   const fields = parsePathRecord(record, 10);
-  /* v8 ignore next: malformed porcelain records are ignored defensively; Git owns this record shape. */
+  // malformed porcelain records are ignored defensively; Git owns this record shape.
   if (fields === null) return null;
   const parsed = unmergedStatusEntrySchema.safeParse({
     kind: "unmerged",
     xy: fields[1],
     path: fields[10],
   });
-  /* v8 ignore next: schema rejection is a defensive guard for malformed Git output. */
+  // schema rejection is a defensive guard for malformed Git output.
   return parsed.success ? parsed.data : null;
 }
 
@@ -148,7 +148,7 @@ function parseUntrackedStatusEntry(record: string): GitStatusEntry | null {
     kind: "untracked",
     path: record.slice(2),
   });
-  /* v8 ignore next: schema rejection is a defensive guard for malformed Git output. */
+  // schema rejection is a defensive guard for malformed Git output.
   return parsed.success ? parsed.data : null;
 }
 
@@ -189,11 +189,11 @@ function parseBranchHeader(
   }
   if (record.startsWith("# branch.ab ")) {
     const match = /^# branch\.ab \+(\d+) -(\d+)$/u.exec(record);
-    /* v8 ignore next: malformed branch.ab headers are ignored defensively; Git owns this record shape. */
+    // malformed branch.ab headers are ignored defensively; Git owns this record shape.
     if (match === null) return branch;
     const ahead = match[1];
     const behind = match[2];
-    /* v8 ignore next: successful branch.ab regex matches always include both captures. */
+    // successful branch.ab regex matches always include both captures.
     if (ahead === undefined || behind === undefined) return branch;
     return branchWithAheadBehind(
       branch,
@@ -213,7 +213,7 @@ function parseGitStatusOutput(output: string): ParsedGitStatus {
   while (index < records.length) {
     const record = records[index];
     index += 1;
-    /* v8 ignore next: index is bounded by the loop condition. */
+    // index is bounded by the loop condition.
     if (record === undefined) break;
     if (record === "") break;
 
@@ -224,14 +224,14 @@ function parseGitStatusOutput(output: string): ParsedGitStatus {
 
     if (record.startsWith("? ")) {
       const entry = parseUntrackedStatusEntry(record);
-      /* v8 ignore next: null means malformed Git output; valid untracked records are covered. */
+      // null means malformed Git output; valid untracked records are covered.
       if (entry !== null) entries.push(entry);
       continue;
     }
 
     if (record.startsWith("1 ")) {
       const entry = parseOrdinaryStatusEntry(record);
-      /* v8 ignore next: null means malformed Git output; valid ordinary records are covered. */
+      // null means malformed Git output; valid ordinary records are covered.
       if (entry !== null) entries.push(entry);
       continue;
     }
@@ -239,14 +239,14 @@ function parseGitStatusOutput(output: string): ParsedGitStatus {
     if (record.startsWith("2 ")) {
       const entry = parseRenamedStatusEntry(record, records[index]);
       index += 1;
-      /* v8 ignore next: null means malformed Git output; valid rename records are covered. */
+      // null means malformed Git output; valid rename records are covered.
       if (entry !== null) entries.push(entry);
       continue;
     }
 
     if (record.startsWith("u ")) {
       const entry = parseUnmergedStatusEntry(record);
-      /* v8 ignore next: null means malformed Git output; valid unmerged records are covered. */
+      // null means malformed Git output; valid unmerged records are covered.
       if (entry !== null) entries.push(entry);
     }
   }
@@ -326,7 +326,7 @@ function statusBuckets(entries: readonly GitStatusEntry[]): {
 }
 
 function formatBranch(branch: GitStatusBranch): string {
-  /* v8 ignore next: git status --branch normally emits branch.head; this fallback is for malformed output. */
+  // git status --branch normally emits branch.head; this fallback is for malformed output.
   const head = branch.head ?? "unknown";
   const details: string[] = [];
   if (branch.upstream !== undefined)

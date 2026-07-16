@@ -166,7 +166,7 @@ function filterDriverFromKey(key: string): string | null {
   for (const suffix of [".clean", ".process"]) {
     if (key.endsWith(suffix)) return key.slice(0, -suffix.length);
   }
-  /* v8 ignore next: git config is queried with a clean/process suffix regexp; this guards malformed output. */
+  // git config is queried with a clean/process suffix regexp; this guards malformed output.
   return null;
 }
 
@@ -186,9 +186,9 @@ async function configuredFilterOverrides(
     ],
     gitRunOptions(undefined, signal, "metadata"),
   );
-  /* v8 ignore next: exit 1 is git's normal no-match result; other config failures are environment faults. */
+  // exit 1 is git's normal no-match result; other config failures are environment faults.
   if (result.exitCode === 1) return [];
-  /* v8 ignore next: unexpected git config failures are surfaced through the generic git failure path. */
+  // unexpected git config failures are surfaced through the generic git failure path.
   expectGitExitCode("git_diff", "config", result, new Set([0]));
 
   const drivers = new Set<string>();
@@ -210,18 +210,18 @@ function processOutput(options: {
   readonly maxBytes: number;
 }): string {
   const output: string[] = [];
-  /* v8 ignore next: callers skip known-empty tracked diffs; this remains as a defensive guard for git races/warnings. */
+  // callers skip known-empty tracked diffs; this remains as a defensive guard for git races/warnings.
   if (options.stdout.text !== "") output.push(options.stdout.text.trimEnd());
   if (options.stdout.truncated) {
     output.push(
       `[git_diff stdout truncated: showing first ${options.maxBytes} bytes]`,
     );
   }
-  /* v8 ignore next 3: stderr pass-through is for unexpected git warnings; successful fixture diffs keep stderr empty. */
+  // stderr pass-through is for unexpected git warnings; successful fixture diffs keep stderr empty.
   if (options.stderr.text !== "") {
     output.push(`git stderr:\n${options.stderr.text.trimEnd()}`);
   }
-  /* v8 ignore next 4: stderr truncation is a defensive cap for unexpected noisy git warnings/errors. */
+  // stderr truncation is a defensive cap for unexpected noisy git warnings/errors.
   if (options.stderr.truncated) {
     output.push(
       `[git_diff stderr truncated: showing first ${options.maxBytes} bytes]`,
@@ -235,7 +235,7 @@ function appendOutputSection(
   label: string,
   output: string,
 ): void {
-  /* v8 ignore next: callers skip known-empty tracked diffs; this remains as a defensive guard for git races/warnings. */
+  // callers skip known-empty tracked diffs; this remains as a defensive guard for git races/warnings.
   if (output !== "") sections.push(`${label}:\n${output}`);
 }
 
@@ -301,7 +301,7 @@ async function resolveGitCommitRef(
     ["rev-parse", "--verify", "--end-of-options", `${requestedRef}^{commit}`],
     gitRunOptions(config, signal, "metadata"),
   );
-  /* v8 ignore next 3: rev-parse timeout/null exit is an OS process-control failure, not deterministic tool behavior. */
+  // rev-parse timeout/null exit is an OS process-control failure, not deterministic tool behavior.
   if (result.exitCode === null || result.timedOut) {
     throw gitCommandFailure("git_diff", "rev-parse", result);
   }
@@ -310,7 +310,7 @@ async function resolveGitCommitRef(
   }
 
   const commit = result.artifactStdout.text.trim();
-  /* v8 ignore next 3: git rev-parse --verify <ref>^{commit} emits a commit OID on success. */
+  // git rev-parse --verify <ref>^{commit} emits a commit OID on success.
   if (!GIT_COMMIT_OID_PATTERN.test(commit)) {
     throw gitRefDoesNotResolveToCommitError(requestedRef);
   }
@@ -342,19 +342,19 @@ async function mergeBaseRef(
     ["merge-base", comparison.baseCommit, comparison.headCommit],
     gitRunOptions(config, signal, "metadata"),
   );
-  /* v8 ignore next 3: merge-base timeout/null exit is an OS process-control failure, not deterministic tool behavior. */
+  // merge-base timeout/null exit is an OS process-control failure, not deterministic tool behavior.
   if (result.exitCode === null || result.timedOut) {
     throw gitCommandFailure("git_diff", "merge-base", result);
   }
   if (result.exitCode === 1) {
     throw noCommonAncestorError(comparison);
   }
-  /* v8 ignore next 3: git merge-base returns 0 for success and 1 for no common ancestor; other exits are environment faults. */
+  // git merge-base returns 0 for success and 1 for no common ancestor; other exits are environment faults.
   if (result.exitCode !== 0) {
     throw gitCommandFailure("git_diff", "merge-base", result);
   }
   const mergeBase = result.artifactStdout.text.trim();
-  /* v8 ignore next 3: successful git merge-base emits the selected ancestor commit. */
+  // successful git merge-base emits the selected ancestor commit.
   if (mergeBase === "") {
     throw noCommonAncestorError(comparison);
   }
@@ -392,7 +392,7 @@ function parseChangedTrackedEntries(
       const oldPath = tokens[index];
       const newPath = tokens[index + 1];
       index += 2;
-      /* v8 ignore next: git --name-status -z emits old/new paths for rename/copy entries. */
+      // git --name-status -z emits old/new paths for rename/copy entries.
       if (
         oldPath === undefined ||
         oldPath === "" ||
@@ -407,7 +407,7 @@ function parseChangedTrackedEntries(
 
     const path = tokens[index];
     index += 1;
-    /* v8 ignore next: git --name-status -z emits status/path pairs for non-rename entries. */
+    // git --name-status -z emits status/path pairs for non-rename entries.
     if (path === undefined || path === "") continue;
     entries.push({ kind: "single", path });
   }

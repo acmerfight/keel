@@ -320,7 +320,7 @@ function listSkillResourceDirectory(options: {
           state: options.state,
         });
       } else {
-        /* v8 ignore else -- portable Skill fixtures can create files, directories, and symlinks; device/socket entries remain fail-closed. */
+        // portable Skill fixtures can create files, directories, and symlinks; device/socket entries remain fail-closed.
         if (entry.isFile()) {
           options.state.resourcePaths.push(resourcePath);
         } else {
@@ -335,7 +335,7 @@ function listSkillResourceDirectory(options: {
       }
     }
   } catch {
-    /* v8 ignore next 7 -- a directory read can fail only after a successful open because of a concurrent filesystem or mount fault. */
+    // a directory read can fail only after a successful open because of a concurrent filesystem or mount fault.
     options.state.findings.push({
       severity: "blocker",
       code: "resource_unreadable",
@@ -443,7 +443,7 @@ function decodeSkillBytes(skillFilePath: string, bytes: Uint8Array): string {
 }
 
 function binarySkillResourceError(relativePath: string): WorkflowSkillError {
-  /* v8 ignore next 2 -- audit blocks non-assets binaries; the fallback wording only protects a concurrent replacement after re-audit. */
+  // audit blocks non-assets binaries; the fallback wording only protects a concurrent replacement after re-audit.
   const kind = relativePath.startsWith("assets/")
     ? "binary asset"
     : "binary resource";
@@ -471,7 +471,7 @@ function readSkillResourceText(
     ) {
       throw binarySkillResourceError(relativePath);
     }
-    /* v8 ignore next 4 -- the package is re-audited immediately before this read; only concurrent growth can cross the text limit here. */
+    // the package is re-audited immediately before this read; only concurrent growth can cross the text limit here.
     if (reportedSize > MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES) {
       throw new WorkflowSkillError(
         `Error: workflow skill resource ${JSON.stringify(redactSecretLikeText(relativePath))} is too large to read as text (${reportedSize} bytes; limit ${MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES} bytes).`,
@@ -480,7 +480,7 @@ function readSkillResourceText(
     const bytes = Buffer.allocUnsafe(reportedSize);
     const bytesRead = readSync(fd, bytes, 0, bytes.length, 0);
     const content = bytes.subarray(0, bytesRead);
-    /* v8 ignore next 3 -- the package is re-audited immediately before this read; only concurrent replacement can introduce later binary bytes. */
+    // the package is re-audited immediately before this read; only concurrent replacement can introduce later binary bytes.
     if (hasBinaryControlBytes(content)) {
       throw binarySkillResourceError(relativePath);
     }
@@ -489,7 +489,7 @@ function readSkillResourceText(
         .decode(content)
         .trimEnd();
     } catch {
-      /* v8 ignore next 1 -- the package is re-audited immediately before this read; only concurrent replacement can introduce invalid UTF-8. */
+      // the package is re-audited immediately before this read; only concurrent replacement can introduce invalid UTF-8.
       throw binarySkillResourceError(relativePath);
     }
   } finally {
@@ -600,7 +600,7 @@ function readSkillFile(
         auditMessage,
       );
     }
-    /* v8 ignore else: filesystem operations throw errno exceptions; unexpected implementation faults must retain their original identity. */
+    // filesystem operations throw errno exceptions; unexpected implementation faults must retain their original identity.
     if (isErrnoException(error)) {
       const auditMessage =
         "Skill package files could not be read during deterministic validation";
@@ -609,7 +609,7 @@ function readSkillFile(
         auditMessage,
       );
     }
-    /* v8 ignore next: preserve unexpected implementation faults for the runtime boundary. */
+    // preserve unexpected implementation faults for the runtime boundary.
     throw error;
   }
 }
@@ -640,7 +640,7 @@ function lookupParts(lookup: string): {
     return { name: lookup };
   }
   const scope = qualified[1];
-  /* v8 ignore next -- QUALIFIED_SKILL_PATTERN restricts the captured scope. */
+  // QUALIFIED_SKILL_PATTERN restricts the captured scope.
   if (
     scope !== "repo" &&
     scope !== "user" &&
@@ -650,7 +650,7 @@ function lookupParts(lookup: string): {
     throw new WorkflowSkillError("Error: qualified skill scope is invalid.");
   }
   const qualifiedRemainder = qualified[2];
-  /* v8 ignore next 3 -- QUALIFIED_SKILL_PATTERN requires a non-empty remainder. */
+  // QUALIFIED_SKILL_PATTERN requires a non-empty remainder.
   if (qualifiedRemainder === undefined) {
     throw new WorkflowSkillError("Error: qualified skill name is incomplete.");
   }
@@ -661,7 +661,7 @@ function lookupParts(lookup: string): {
     );
   }
   const name = segments.at(-1);
-  /* v8 ignore next 3 -- splitting a defined string always yields one segment. */
+  // splitting a defined string always yields one segment.
   if (name === undefined) {
     throw new WorkflowSkillError("Error: qualified skill name is incomplete.");
   }
@@ -706,7 +706,7 @@ export function resolveSkillDescriptor(
     );
   }
   const descriptor = matches[0];
-  /* v8 ignore next 3 -- the zero-match case returns above. */
+  // the zero-match case returns above.
   if (descriptor === undefined) {
     throw new WorkflowSkillError("Error: resolved workflow skill disappeared.");
   }
@@ -741,7 +741,7 @@ function invalidPackageAuditMessage(error: WorkflowSkillError): string {
   if (message.includes("must be a regular SKILL.md")) {
     return "SKILL.md must be a regular file";
   }
-  /* v8 ignore next 2 -- discovery checks SKILL.md existence immediately before reading; this only catches a concurrent deletion. */
+  // discovery checks SKILL.md existence immediately before reading; this only catches a concurrent deletion.
   if (message.includes("was not found")) {
     return "SKILL.md is missing from the package";
   }
@@ -769,7 +769,7 @@ function invalidPackageAuditMessage(error: WorkflowSkillError): string {
   if (message.includes("metadata.keel.activation")) {
     return 'metadata.keel.activation must be "implicit" or "explicit"';
   }
-  /* v8 ignore next 3 -- all current package-validation sites are categorized above or use the shared skill-name validator. */
+  // all current package-validation sites are categorized above or use the shared skill-name validator.
   if (!message.includes("skill names may contain")) {
     return "does not satisfy deterministic package validation";
   }
@@ -852,7 +852,7 @@ export function discoverSkillCatalog(
         skills.push(read.descriptor);
         rootsById.set(read.descriptor.id, root);
       } catch (error) {
-        /* v8 ignore next 3: unexpected filesystem/runtime faults must propagate. */
+        // unexpected filesystem/runtime faults must propagate.
         if (!(error instanceof WorkflowSkillError)) throw error;
         recordInvalidPackage(
           root,
@@ -920,7 +920,7 @@ export function discoverSkillCatalog(
   ): WorkflowSkill => {
     const descriptor = resolveSkillDescriptor(candidates, lookup);
     const root = rootsById.get(descriptor.id);
-    /* v8 ignore next 4 -- descriptors and roots are populated atomically above. */
+    // descriptors and roots are populated atomically above.
     if (root === undefined) {
       throw new WorkflowSkillError(
         `Error: workflow skill ${JSON.stringify(lookup)} is no longer available.`,
@@ -990,7 +990,7 @@ export function discoverSkillCatalog(
       );
       if (descriptor === undefined) return undefined;
       const root = rootsById.get(descriptor.id);
-      /* v8 ignore next -- descriptors and roots are populated atomically above. */
+      // descriptors and roots are populated atomically above.
       if (root === undefined) return undefined;
       const current = readSkillFile(root, descriptor.name, true);
       assertSkillAuditPass(descriptor.qualifiedName, current.findings);
@@ -1015,7 +1015,7 @@ export function discoverSkillCatalog(
       }
       const descriptor = resolveSkillDescriptor(sortedSkills, lookup);
       const root = rootsById.get(descriptor.id);
-      /* v8 ignore next 4 -- descriptors and roots are populated atomically above. */
+      // descriptors and roots are populated atomically above.
       if (root === undefined) {
         throw new WorkflowSkillError(
           `Error: workflow skill ${JSON.stringify(lookup)} is no longer available.`,
@@ -1055,7 +1055,7 @@ export function discoverSkillCatalog(
         );
       }
       const root = rootsById.get(descriptor.id);
-      /* v8 ignore next 4 -- descriptors and roots are populated atomically above. */
+      // descriptors and roots are populated atomically above.
       if (root === undefined) {
         throw new WorkflowSkillError(
           `Error: active workflow skill package ${JSON.stringify(packageId)} is no longer available.`,

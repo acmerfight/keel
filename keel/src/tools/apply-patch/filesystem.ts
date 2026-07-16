@@ -7,7 +7,7 @@ export function readFileIfPossible(filePath: string): string | null {
   try {
     return readFileSync(filePath, "utf8");
   } catch {
-    /* v8 ignore next 1: rollback tolerates concurrent file removal. */
+    // rollback tolerates concurrent file removal.
     return null;
   }
 }
@@ -16,7 +16,7 @@ export function pathHasIdentity(path: string, identity: FileIdentity): boolean {
   try {
     return sameFileIdentity(statSync(path), identity);
   } catch {
-    /* v8 ignore next 1: rollback tolerates concurrently removed target paths. */
+    // rollback tolerates concurrently removed target paths.
     return false;
   }
 }

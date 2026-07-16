@@ -60,7 +60,7 @@ function writeAllSync(fd: number, chunk: Buffer, bytes: number): void {
   let offset = 0;
   while (offset < bytes) {
     const writtenBytes = writeSync(fd, chunk, offset, bytes - offset);
-    /* v8 ignore next: local file writes either make progress or throw on supported platforms. */
+    // local file writes either make progress or throw on supported platforms.
     if (writtenBytes <= 0) {
       throw new Error("temporary output capture write made no progress");
     }
@@ -99,11 +99,10 @@ export class TempFileByteOutputCapture {
         writeAllSync(fd, chunk, chunk.length);
       }
     } catch (error) {
-      /* v8 ignore start: temp output spill failures require filesystem faults while creating or backfilling the capture file. */
+      // temp output spill failures require filesystem faults while creating or backfilling the capture file.
       if (fd !== undefined) closeSync(fd);
       rmSync(directory, { recursive: true, force: true });
       throw error;
-      /* v8 ignore stop */
     }
 
     this.#directory = directory;
@@ -113,9 +112,9 @@ export class TempFileByteOutputCapture {
   }
 
   append(chunk: Buffer): void {
-    /* v8 ignore next: append after capture/cleanup is a stream lifecycle race guard. */
+    // append after capture/cleanup is a stream lifecycle race guard.
     if (this.#cleanedUp) return;
-    /* v8 ignore next: depends on stream chunk boundaries after the cap has already been recorded. */
+    // depends on stream chunk boundaries after the cap has already been recorded.
     if (this.#bytes >= this.#maxBytes) {
       this.#truncated = true;
       return;
@@ -138,7 +137,7 @@ export class TempFileByteOutputCapture {
     const capturedBytes = capturedChunk.length;
 
     this.#spillToFile();
-    /* v8 ignore next: #spillToFile either initializes the file descriptor or throws. */
+    // #spillToFile either initializes the file descriptor or throws.
     if (this.#fd === undefined) return;
     writeAllSync(this.#fd, capturedChunk, capturedBytes);
     this.#bytes += capturedBytes;
@@ -173,7 +172,7 @@ export class TempFileByteOutputCapture {
 
       this.#close();
       const filePath = this.#filePath;
-      /* v8 ignore next 3: a file descriptor implies a capture file path. */
+      // a file descriptor implies a capture file path.
       if (filePath === undefined) {
         throw new Error("temporary output capture file is missing");
       }
@@ -264,7 +263,7 @@ export class TailByteOutputLimit {
 
     while (this.#bytes > this.#maxBytes) {
       const first = this.#chunks[0];
-      /* v8 ignore next: positive buffered byte count implies at least one chunk. */
+      // positive buffered byte count implies at least one chunk.
       if (first === undefined) return;
 
       const excessBytes = this.#bytes - this.#maxBytes;

@@ -126,7 +126,7 @@ export function findWorkspacePathsByIdentity(
     try {
       entries = readdirSync(directory, { withFileTypes: true });
     } catch {
-      /* v8 ignore next 1: identity scans tolerate concurrently removed directories. */
+      // identity scans tolerate concurrently removed directories.
       continue;
     }
 
@@ -136,7 +136,7 @@ export function findWorkspacePathsByIdentity(
       try {
         entryStat = lstatSync(entryPath);
       } catch {
-        /* v8 ignore next 1: identity scans tolerate concurrently removed entries. */
+        // identity scans tolerate concurrently removed entries.
         continue;
       }
       if (entryStat.isSymbolicLink()) continue;
@@ -156,7 +156,7 @@ export function assertWorkspaceOpenTargetAtAccess(
   const targetStat = statSync(targetRealPath);
   const openedStat = fstatSync(input.fd);
   if (!openedStat.isFile() || !targetStat.isFile()) {
-    /* v8 ignore next 1: target resolution rejects special files; this guards post-open races. */
+    // target resolution rejects special files; this guards post-open races.
     throw unsupportedPathTypeError(input.toolName, input.requestedPath);
   }
   if (
@@ -176,7 +176,7 @@ export function assertWorkspaceFileIdentityAtAccess(
   const targetRealPath = assertWorkspaceTargetAtAccess(input);
   const targetStat = statSync(targetRealPath);
   if (!targetStat.isFile()) {
-    /* v8 ignore next 1: published file identity checks only receive file publishes. */
+    // published file identity checks only receive file publishes.
     throw unsupportedPathTypeError(input.toolName, input.requestedPath);
   }
   if (!sameFileIdentity(fileIdentityFromStats(targetStat), input.identity)) {
@@ -200,7 +200,7 @@ function workspaceParentSegments(
 ): readonly string[] {
   const parentFromWorkspace = relative(input.workspacePath, input.parentPath);
   if (parentFromWorkspace === "") return [];
-  /* v8 ignore next 3: resolveWorkspaceCreateTarget constrains parentPath before parent creation. */
+  // resolveWorkspaceCreateTarget constrains parentPath before parent creation.
   if (parentFromWorkspace.startsWith("..") || isAbsolute(parentFromWorkspace)) {
     throw outsideWorkspaceError(input.toolName, input.requestedPath);
   }
@@ -229,7 +229,7 @@ function createChildDirectory(
     if (isErrnoException(error) && error.code === "ENOTDIR") {
       throw notDirectoryError(input.toolName, input.requestedPath);
     }
-    /* v8 ignore next 1: unexpected mkdir failures are OS-level faults; preserve the original error. */
+    // unexpected mkdir failures are OS-level faults; preserve the original error.
     throw error;
   }
 }
@@ -288,7 +288,7 @@ export function rollbackWorkspaceParentDirectoriesBestEffort(
     try {
       rmdirSync(directory);
     } catch {
-      /* v8 ignore next 1: rollback is best-effort and skips non-empty or raced directories. */
+      // rollback is best-effort and skips non-empty or raced directories.
     }
   }
 }

@@ -60,12 +60,12 @@ const STDERR_TAIL_CHARS = 400;
 
 function killProcessGroup(child: ReturnType<typeof spawn>): void {
   const pid = child.pid;
-  /* v8 ignore next 3: spawn can fail before assigning a pid. */
+  // spawn can fail before assigning a pid.
   if (pid === undefined) {
     child.kill("SIGKILL");
     return;
   }
-  /* v8 ignore next 3: process groups are unavailable on Windows. */
+  // process groups are unavailable on Windows.
   if (process.platform === "win32") {
     child.kill("SIGKILL");
     return;
@@ -103,7 +103,7 @@ function runProcess(
     }, options.timeoutMs);
 
     const finish = (exitCode: number | null) => {
-      /* v8 ignore next 1: child_process can emit close/error races. */
+      // child_process can emit close/error races.
       if (finished) return;
       finished = true;
       clearTimeout(timer);
@@ -117,7 +117,7 @@ function runProcess(
       });
     };
     child.on("error", (error) => {
-      /* v8 ignore next 1: child_process can emit close/error races. */
+      // child_process can emit close/error races.
       if (finished) return;
       finished = true;
       clearTimeout(timer);
@@ -243,7 +243,7 @@ async function runTrial(
       cwd: workDir,
       timeoutMs: task.scriptTimeoutMs,
     });
-    /* v8 ignore next 3: CI and supported user environments provide bash. */
+    // CI and supported user environments provide bash.
     if (verify.spawnFailed) {
       return {
         outcome: "crashed",

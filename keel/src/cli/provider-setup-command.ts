@@ -214,12 +214,12 @@ export async function runAuthCommand(
   try {
     return await runAuthCommandUnsafe(cliArgs, runtime);
   } catch (error) {
-    /* v8 ignore else: provider setup storage throws ProviderUserConfigError for expected failures. */
+    // provider setup storage throws ProviderUserConfigError for expected failures.
     if (error instanceof ProviderUserConfigError) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
-    /* v8 ignore next: unexpected non-config errors should escape to the CLI runtime boundary. */
+    // unexpected non-config errors should escape to the CLI runtime boundary.
     throw error;
   }
 }
@@ -231,12 +231,12 @@ export async function runSetupCommand(
   try {
     return await runSetupCommandUnsafe(cliArgs, runtime);
   } catch (error) {
-    /* v8 ignore else: provider setup storage throws ProviderUserConfigError for expected failures. */
+    // provider setup storage throws ProviderUserConfigError for expected failures.
     if (error instanceof ProviderUserConfigError) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
-    /* v8 ignore next: unexpected non-config errors should escape to the CLI runtime boundary. */
+    // unexpected non-config errors should escape to the CLI runtime boundary.
     throw error;
   }
 }
@@ -248,12 +248,12 @@ export function runConfigCommand(
   try {
     return runConfigCommandUnsafe(cliArgs, runtime);
   } catch (error) {
-    /* v8 ignore else: provider setup storage throws ProviderUserConfigError for expected failures. */
+    // provider setup storage throws ProviderUserConfigError for expected failures.
     if (error instanceof ProviderUserConfigError) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }
-    /* v8 ignore next: unexpected non-config errors should escape to the CLI runtime boundary. */
+    // unexpected non-config errors should escape to the CLI runtime boundary.
     throw error;
   }
 }

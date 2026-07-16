@@ -56,7 +56,7 @@ function escapeControlChar(char: string): string {
 
 function firstCodePoint(character: string): number {
   const code = character.codePointAt(0);
-  /* v8 ignore next 3 -- replace callbacks always provide one non-empty matched character. */
+  // replace callbacks always provide one non-empty matched character.
   if (code === undefined) {
     return 0;
   }

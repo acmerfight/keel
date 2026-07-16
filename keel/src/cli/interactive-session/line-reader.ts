@@ -205,7 +205,7 @@ export function createLineReader(
         let waiter: LineWaiter;
         const onAbort = () => {
           const index = freshWaiters.indexOf(waiter);
-          /* v8 ignore next 3: while the abort listener is registered, the waiter is registered; this guard is defensive against future lifecycle changes. */
+          // while the abort listener is registered, the waiter is registered; this guard is defensive against future lifecycle changes.
           if (index >= 0) {
             freshWaiters.splice(index, 1);
           }

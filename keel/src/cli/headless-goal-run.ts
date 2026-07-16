@@ -128,7 +128,7 @@ async function prepareHeadlessGoalResume(
     runtime.writeStderr(`${resumeRejection}\n`);
     return { kind: "rejected" };
   }
-  /* v8 ignore start: the shared resume gate guarantees a durable criterion. */
+  // the shared resume gate guarantees a durable criterion.
   if (
     preparedGoal === undefined ||
     preparedGoal.criterionKind === undefined ||
@@ -136,7 +136,6 @@ async function prepareHeadlessGoalResume(
   ) {
     return { kind: "rejected" };
   }
-  /* v8 ignore stop */
   const bashPermission = await headlessGoalBashPermission(
     {
       bashMode: cliArgs.bashMode,
@@ -281,9 +280,8 @@ export async function runHeadlessGoalCli(
         : undefined,
     );
   } catch (error) {
-    /* v8 ignore start: approval loading is the only expected preflight throw; unexpected faults must reach the CLI boundary. */
+    // approval loading is the only expected preflight throw; unexpected faults must reach the CLI boundary.
     if (!(error instanceof BashProjectApprovalsError)) throw error;
-    /* v8 ignore stop */
     runtime.writeStderr(`${error.message}\n`);
     return 1;
   }
@@ -291,14 +289,14 @@ export async function runHeadlessGoalCli(
     return result.exitCode;
   }
   const sessionId = result.sessionId;
-  /* v8 ignore start: a successful headless run always reports the active saved session. */
+  // a successful headless run always reports the active saved session.
   if (sessionId === undefined) {
     runtime.writeStderr(
       "Error: headless Goal ended without an active saved session.\n",
     );
     return 1;
   }
-  /* v8 ignore start: exit 0 is produced only after the generated activation command reaches a terminal durable Goal. */
+  // exit 0 is produced only after the generated activation command reaches a terminal durable Goal.
   if (result.goal === undefined) {
     runtime.writeStderr(
       `Error: headless Goal session ${sanitizeStatusLineText(sessionId)} ended without durable Goal state.\n`,
@@ -311,6 +309,5 @@ export async function runHeadlessGoalCli(
     );
     return 1;
   }
-  /* v8 ignore stop */
   return writeHeadlessGoalOutcome(runtime, sessionId, result.goal);
 }

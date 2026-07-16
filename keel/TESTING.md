@@ -63,6 +63,10 @@ Before adding or keeping a test, answer:
 
 Coverage gaps require triage, not automatic tests. Do not manufacture impossible internal states just to satisfy coverage.
 
+Inline coverage suppression directives are forbidden. Keep necessary guards
+visible as honest coverage gaps until a supported behavior test, contract test,
+or simpler invariant removes the gap.
+
 - If a branch is reachable through a supported boundary, cover its observable behavior with BDD.
 - If it is unreachable under current invariants, remove or refactor it.
 - If it is a necessary guard, give it a named contract or invariant test.
@@ -77,7 +81,7 @@ Test support code, such as CLI harnesses and fixture factories, lives in `src/te
 
 Use an explicit Vitest path, `pnpm test:changed`, `pnpm test:unit`, or `pnpm test:cli` for iteration. Before pushing or merging, run `pnpm test:coverage`; CI's sharded equivalent is not a substitute for this local final check.
 
-After coverage, run `pnpm coverage:patch` on branches that change coverable code. It checks changed measured lines and branches against `coverage/lcov.info`; Codecov remains the authoritative merge gate.
+After coverage, run `pnpm coverage:patch` on branches that change coverable code. It checks changed measured lines at 95% and branches at 90% against `coverage/lcov.info`; Codecov remains the authoritative merge gate.
 
 ## Permitted Exceptions
 

@@ -163,7 +163,7 @@ function activeActivationForId(
   const activation = activations.findLast(
     (candidate) => candidate.descriptorId === id,
   );
-  /* v8 ignore next 5 -- lifecycle state is validated before active ids reach this internal lookup. */
+  // lifecycle state is validated before active ids reach this internal lookup.
   if (activation === undefined) {
     throw new WorkflowSkillError(
       `Error: active workflow skill id ${JSON.stringify(id)} has no activation snapshot.`,
@@ -180,7 +180,7 @@ function lookupScopeAndName(lookup: string): {
   if (segments.length === 1) return { name: lookup };
   const scope = segments[0];
   const name = segments.at(-1);
-  /* v8 ignore next 5 -- splitting a string always yields at least one segment. */
+  // splitting a string always yields at least one segment.
   if (name === undefined) {
     throw new WorkflowSkillError(
       `Error: workflow skill ${JSON.stringify(lookup)} is not active.`,

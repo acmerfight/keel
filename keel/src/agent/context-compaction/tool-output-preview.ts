@@ -142,7 +142,7 @@ function sourceLineForToolCall(
   context: ToolOutputProjectionContext,
 ): string | null {
   const { toolCall } = context;
-  /* v8 ignore next 3: active ledger context supplies a toolCall for every known tool identity. */
+  // active ledger context supplies a toolCall for every known tool identity.
   if (toolCall === undefined) {
     return null;
   }
@@ -193,7 +193,7 @@ function sourceLineForToolCall(
         : `git_diff source: ${toolCall.paths.join(" ")}`;
     }
   }
-  /* v8 ignore next: generic edit/write/apply_patch projections do not request source lines. */
+  // generic edit/write/apply_patch projections do not request source lines.
   return null;
 }
 
@@ -203,7 +203,7 @@ function appendSourceLine(
   maxChars: number,
 ): void {
   const sourceLine = sourceLineForToolCall(context);
-  /* v8 ignore next 3: generic projections do not call appendSourceLine. */
+  // generic projections do not call appendSourceLine.
   if (sourceLine === null) {
     return;
   }
@@ -218,7 +218,7 @@ function compactLineAware(
   const selected: string[] = [];
   appendSourceLine(selected, context, maxChars);
   for (const line of headLinesWithinBudget(text.split("\n"), maxChars)) {
-    /* v8 ignore next 3: compactLineAware content lines are preselected against the same budget. */
+    // compactLineAware content lines are preselected against the same budget.
     if (!appendLineWithinBudget(selected, line, maxChars)) {
       break;
     }
@@ -258,7 +258,7 @@ function projectBashOutput(
     appendLineWithinBudget(selected, "[bash output tail preview]", maxChars);
     const remaining = Math.max(0, maxChars - joinedLines(selected).length - 1);
     for (const line of tailLinesWithinBudget(parsed.otherLines, remaining)) {
-      /* v8 ignore next 3: tail lines are preselected against the exact remaining budget. */
+      // tail lines are preselected against the exact remaining budget.
       if (!appendLineWithinBudget(selected, line, maxChars)) {
         break;
       }
@@ -431,7 +431,7 @@ function projectReadOutput(
   );
   let contentLinesAdded = 0;
   for (const line of headLinesWithinBudget(contentLines, contentBudget)) {
-    /* v8 ignore next 3: read content lines are preselected against the notice-reserved budget. */
+    // read content lines are preselected against the notice-reserved budget.
     if (!appendLineWithinBudget(selected, line, maxChars)) {
       break;
     }
@@ -630,7 +630,7 @@ function gitDiffPathToken(
   input: string,
   startIndex: number,
 ): { readonly token: string; readonly nextIndex: number } | null {
-  /* v8 ignore next 3: git_diff headings passed here contain at least one path token. */
+  // git_diff headings passed here contain at least one path token.
   if (startIndex >= input.length) {
     return null;
   }
@@ -656,7 +656,7 @@ function gitDiffPathToken(
     }
     escaped = false;
   }
-  /* v8 ignore next: malformed quoted git path; fall back to the raw heading. */
+  // malformed quoted git path; fall back to the raw heading.
   return null;
 }
 
@@ -670,18 +670,18 @@ function skipSpaces(input: string, startIndex: number): number {
 
 function gitDiffDisplayPath(heading: string): string {
   const prefix = "diff --git ";
-  /* v8 ignore next 3: gitDiffBlocksWithPrelude only passes headings with this prefix. */
+  // gitDiffBlocksWithPrelude only passes headings with this prefix.
   if (!heading.startsWith(prefix)) {
     return heading;
   }
   const rest = heading.slice(prefix.length);
   const oldPath = gitDiffPathToken(rest, 0);
-  /* v8 ignore next 3: git_diff headings contain the old path token. */
+  // git_diff headings contain the old path token.
   if (oldPath === null) {
     return heading;
   }
   const newPath = gitDiffPathToken(rest, skipSpaces(rest, oldPath.nextIndex));
-  /* v8 ignore next 3: git_diff headings contain the new path token. */
+  // git_diff headings contain the new path token.
   if (newPath === null) {
     return heading;
   }
@@ -779,7 +779,7 @@ function gitDiffFiles(blocks: readonly GitDiffBlock[]): readonly GitDiffFile[] {
   const files: GitDiffFile[] = [];
   for (const block of blocks) {
     const heading = block.lines[0];
-    /* v8 ignore next 3: gitDiffBlocksWithPrelude only yields non-empty blocks that begin with a diff heading. */
+    // gitDiffBlocksWithPrelude only yields non-empty blocks that begin with a diff heading.
     if (heading === undefined) {
       continue;
     }
@@ -1137,7 +1137,7 @@ function projectGitDiffOutput(
     maxChars,
   );
   const sourceLine = sourceLineForToolCall(context);
-  /* v8 ignore next 3: valid git_diff tool-result ledgers preserve a matching tool call. */
+  // valid git_diff tool-result ledgers preserve a matching tool call.
   if (sourceLine !== null) {
     insertLineWithinBudget(previewLines, 1, sourceLine, maxChars);
   }

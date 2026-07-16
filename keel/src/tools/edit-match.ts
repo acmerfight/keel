@@ -160,7 +160,7 @@ export function originalSpan(
     normalizedEnd >= normalized.sourceIndexByNormalizedIndex.length
       ? originalLength
       : normalized.sourceIndexByNormalizedIndex[normalizedEnd];
-  /* v8 ignore next 3: locateUniqueEditSpan only returns spans from normalized text. */
+  // locateUniqueEditSpan only returns spans from normalized text.
   if (index === undefined || end === undefined) {
     throw new Error("source map invariant violated: match is invalid");
   }
@@ -320,17 +320,16 @@ function commonIndentLength(lines: readonly string[]): number {
     common =
       common === undefined ? indentLength : Math.min(common, indentLength);
   }
-  /* v8 ignore next: blank-only windows match the trailing-whitespace fallback before indentation matching. */
+  // blank-only windows match the trailing-whitespace fallback before indentation matching.
   return common ?? 0;
 }
 
 function commonIndent(lines: readonly string[]): string {
   const indentLength = commonIndentLength(lines);
   for (const line of lines) {
-    /* v8 ignore next: blank-only windows match the trailing-whitespace fallback before indentation replacement. */
+    // blank-only windows match the trailing-whitespace fallback before indentation replacement.
     if (line.trim() !== "") return line.slice(0, indentLength);
   }
-  /* v8 ignore next */
   return "";
 }
 
@@ -363,7 +362,7 @@ function candidateSpan(
   // nullable result is reserved for trailing-newline mismatches.
   const firstLine = lines[startLine];
   const lastLine = lines[startLine + lineCount - 1];
-  /* v8 ignore next 3: lineBasedMatches bounds-checks candidate windows before computing spans. */
+  // lineBasedMatches bounds-checks candidate windows before computing spans.
   if (firstLine === undefined || lastLine === undefined) {
     throw new Error("edit match invariant violated: candidate span is invalid");
   }
@@ -461,7 +460,7 @@ function typographicPunctuationSourceSpan(
   match: EditMatchSpan,
 ): EditMatchSpan | null {
   const sourceStart = normalized.sourceIndexByNormalizedIndex[match.index];
-  /* v8 ignore next 3: typographic punctuation scan only returns spans inside the normalized text. */
+  // typographic punctuation scan only returns spans inside the normalized text.
   if (sourceStart === undefined) {
     throw new Error(
       "edit match invariant violated: punctuation span is invalid",
@@ -481,7 +480,7 @@ function typographicPunctuationSourceSpan(
   } else {
     const endSourceIndex =
       normalized.sourceIndexByNormalizedIndex[normalizedEnd];
-    /* v8 ignore next 3: typographic punctuation scan only returns spans inside the normalized text. */
+    // typographic punctuation scan only returns spans inside the normalized text.
     if (endSourceIndex === undefined) {
       throw new Error(
         "edit match invariant violated: punctuation span is invalid",
@@ -544,7 +543,7 @@ export function locateExactEditSpans(
 
 function requiredSequenceItem(items: readonly string[], index: number): string {
   const item = items[index];
-  /* v8 ignore next 3: LCS callers only request indexes inside bounds checked loops. */
+  // LCS callers only request indexes inside bounds checked loops.
   if (item === undefined) {
     throw new Error("edit match invariant violated: sequence index is invalid");
   }
@@ -566,7 +565,7 @@ function alignedOldIndexes(
   const scores = new Uint32Array((oldItems.length + 1) * columnCount);
   const score = (oldIndex: number, newIndex: number): number => {
     const value = scores[scoreIndex(oldIndex, newIndex)];
-    /* v8 ignore next 3: alignment only asks for initialized score cells. */
+    // alignment only asks for initialized score cells.
     if (value === undefined) {
       throw new Error("edit match invariant violated: score index is invalid");
     }
@@ -641,7 +640,7 @@ function alignedOldIndexesWithSubstitutions(
   const scores = new Uint32Array((oldItems.length + 1) * columnCount);
   const score = (oldIndex: number, newIndex: number): number => {
     const value = scores[scoreIndex(oldIndex, newIndex)];
-    /* v8 ignore next 3: alignment only asks for initialized score cells. */
+    // alignment only asks for initialized score cells.
     if (value === undefined) {
       throw new Error("edit match invariant violated: score index is invalid");
     }
@@ -765,7 +764,7 @@ function sourceIndexAtNormalizedBoundary(
     return normalized.sourceLength;
   }
   const sourceIndex = normalized.sourceIndexByNormalizedIndex[boundary];
-  /* v8 ignore next: callers only ask for ranges inside normalized text. */
+  // callers only ask for ranges inside normalized text.
   if (sourceIndex === undefined) return null;
   if (
     boundary > 0 &&
@@ -805,7 +804,7 @@ function replacementTextFromNormalizedRange(
   end: number,
 ): string {
   const slice = textSliceFromNormalizedRange(normalized, text, start, end);
-  /* v8 ignore next 3: if neither source nor replacement can be sliced at typographic boundaries, the local normalized fallback is the only safe non-corrupting segment. */
+  // if neither source nor replacement can be sliced at typographic boundaries, the local normalized fallback is the only safe non-corrupting segment.
   if (slice === null) {
     return normalized.text.slice(start, end);
   }

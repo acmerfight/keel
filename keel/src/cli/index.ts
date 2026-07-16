@@ -130,7 +130,7 @@ export async function runCliMain(runtime: CliRuntime): Promise<number> {
   );
 }
 
-/* v8 ignore start: real process adapter is exercised by CLI subprocess tests. */
+// real process adapter is exercised by CLI subprocess tests.
 function defaultRuntime(): CliRuntime {
   return {
     args: process.argv.slice(2),
@@ -177,4 +177,3 @@ if (
   installProcessRuntimeErrorHandlers();
   await main();
 }
-/* v8 ignore stop */

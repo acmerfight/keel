@@ -212,7 +212,7 @@ function ownerlessSessionLockIsStale(lockPath: string): boolean {
     const stats = statSync(lockPath);
     return Date.now() - stats.mtimeMs >= OWNERLESS_LOCK_RECLAIM_AFTER_MS;
   } catch (error) {
-    /* v8 ignore next 3: requires a filesystem race or permission change between lock existence detection and stale-owner inspection. */
+    // requires a filesystem race or permission change between lock existence detection and stale-owner inspection.
     sessionStoreError(
       `Error: cannot inspect session lock ${lockPath}: ${errorMessage(error)}`,
     );
@@ -328,9 +328,9 @@ export function acquireSessionLock(options: {
         { encoding: "utf8", flag: "wx", mode: 0o600 },
       );
     } catch (error) {
-      /* v8 ignore next 3: requires a filesystem race after the lock directory is created; mkdir and release failures are covered with real filesystem cases. */
+      // requires a filesystem race after the lock directory is created; mkdir and release failures are covered with real filesystem cases.
       rmSync(lockPath, { recursive: true, force: true });
-      /* v8 ignore next 3: same post-mkdir owner-write race as above. */
+      // same post-mkdir owner-write race as above.
       sessionStoreError(
         `Error: cannot write session lock ${lockPath}: ${errorMessage(error)}`,
       );

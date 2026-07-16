@@ -112,7 +112,7 @@ function sessionLedgerSize(filePath: string): number {
 }
 
 function sessionLedgerReadError(filePath: string, error: unknown): never {
-  /* v8 ignore next 3: stat succeeds before reads; ENOENT here requires a filesystem race. */
+  // stat succeeds before reads; ENOENT here requires a filesystem race.
   if (hasNodeErrorCode(error, "ENOENT")) {
     sessionStoreError(`Error: session ledger not found at ${filePath}.`);
   }
@@ -275,7 +275,7 @@ function readSessionRecords(filePath: string): SessionRecords {
 }
 
 function formatResumeSessionLoadError(error: unknown): string {
-  /* v8 ignore next 3: readSessionRecords converts disk and parser failures to SessionStoreError. */
+  // readSessionRecords converts disk and parser failures to SessionStoreError.
   if (!(error instanceof SessionStoreError)) {
     throw error;
   }

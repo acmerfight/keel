@@ -101,7 +101,7 @@ function sortLsEntries(entries: readonly LsEntry[]): LsEntry[] {
     }
     if (left.name < right.name) return -1;
     if (left.name > right.name) return 1;
-    /* v8 ignore next: a single directory cannot contain duplicate entry names. */
+    // a single directory cannot contain duplicate entry names.
     return 0;
   });
 }

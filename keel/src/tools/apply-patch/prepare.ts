@@ -222,7 +222,7 @@ function prepareUpdateOperation(
 }
 
 function openedFileIdentity(identity: FileIdentity | null): FileIdentity {
-  /* v8 ignore next 3: readEditableTextFileWithMetadata validates the opened fd before returning. */
+  // readEditableTextFileWithMetadata validates the opened fd before returning.
   if (identity === null) {
     throw new Error("apply_patch opened file identity invariant violated");
   }

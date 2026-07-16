@@ -206,7 +206,7 @@ function sleepWithAbort(
   signal: AbortSignal,
   providerName: string,
 ): Promise<void> {
-  /* v8 ignore next 5: protects the small window before the abort listener is registered. */
+  // protects the small window before the abort listener is registered.
   if (signal.aborted) {
     throw new KeelError(
       "provider_aborted",
@@ -238,7 +238,7 @@ function sleepWithAbort(
 async function discardResponseBody(response: Response): Promise<void> {
   try {
     await response.body?.cancel();
-    /* v8 ignore next 3: cancellation cleanup is best effort before retrying. */
+    // cancellation cleanup is best effort before retrying.
   } catch {
     // Best effort only; the retry decision must not depend on error body IO.
   }
@@ -434,7 +434,7 @@ export async function* requestChatCompletions(
       if (keelError.code === "provider_aborted") {
         attempt?.finish({ outcome: "aborted" });
       }
-      /* v8 ignore next 5 -- fetch throws aborts or network failures; transportError only preserves a third KeelError class for non-fetch callers. */
+      // fetch throws aborts or network failures; transportError only preserves a third KeelError class for non-fetch callers.
       if (keelError.code !== "provider_network_error") {
         if (keelError.code !== "provider_aborted") {
           attempt?.finish({ outcome: "terminal_error" });
@@ -483,7 +483,7 @@ export async function* requestChatCompletions(
         `${providerName} response body failed before streaming`,
       );
       attempt?.finish({
-        /* v8 ignore next -- abort can race before or during response-body reading; provider conformance covers the same aborted physical-attempt result. */
+        // abort can race before or during response-body reading; provider conformance covers the same aborted physical-attempt result.
         outcome:
           keelError.code === "provider_aborted" ? "aborted" : "terminal_error",
       });

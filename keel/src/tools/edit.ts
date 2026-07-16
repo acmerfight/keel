@@ -190,7 +190,7 @@ function diagnosticLineIndexAtOffset(
     const line = lines[index];
     if (line !== undefined && offset < line.end) return index;
   }
-  /* v8 ignore next: edit match offsets are produced from existing file content. */
+  // edit match offsets are produced from existing file content.
   return Math.max(lines.length - 1, 0);
 }
 
@@ -224,7 +224,7 @@ function matchingLocationsDiagnostic(
   occurrenceCount: number,
 ): string {
   const lines = splitDiagnosticLines(content);
-  /* v8 ignore next 3: non-unique matches require non-empty file content. */
+  // non-unique matches require non-empty file content.
   if (lines.length === 0) {
     return `Current matching locations in ${filePath}:\n<empty file>`;
   }

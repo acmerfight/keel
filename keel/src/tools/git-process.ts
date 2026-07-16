@@ -51,7 +51,7 @@ interface GitProcessOutputCapture {
 }
 
 export function gitNullDevicePath(): string {
-  /* v8 ignore next: Windows null-device path is covered by platform behavior, not macOS CI. */
+  // Windows null-device path is covered by platform behavior, not macOS CI.
   return process.platform === "win32" ? "NUL" : "/dev/null";
 }
 
@@ -99,7 +99,7 @@ function gitConfigArgs(config: readonly string[] | undefined): string[] {
   return configs.flatMap((entry) => ["-c", entry]);
 }
 
-/* v8 ignore start: abort/timeout cleanup races are OS process-control fallbacks, not deterministic unit behavior. */
+// abort/timeout cleanup races are OS process-control fallbacks, not deterministic unit behavior.
 function killChildProcess(childPid: number): void {
   const signalTarget = process.platform === "win32" ? childPid : -childPid;
 
@@ -123,7 +123,6 @@ function killChildProcess(childPid: number): void {
 function stopChildProcess(childPid: number | undefined): void {
   if (childPid !== undefined) killChildProcess(childPid);
 }
-/* v8 ignore stop */
 
 function gitProcessOutputCapture(
   mode: GitProcessCaptureMode,
@@ -205,10 +204,10 @@ export function runGitProcess(
           }
         | { readonly type: "reject"; readonly error: KeelError },
     ) => {
-      /* v8 ignore next: protects close/error races from double-settling the same child process. */
+      // protects close/error races from double-settling the same child process.
       if (settled) return;
       settled = true;
-      /* v8 ignore next 4: child spawn failures and mid-process aborts are environment/process faults. */
+      // child spawn failures and mid-process aborts are environment/process faults.
       if (outcome.type === "reject") {
         cleanup();
         rejectProcess(outcome.error);
@@ -224,7 +223,7 @@ export function runGitProcess(
         capturedArtifactStdout = artifactStdout.capture();
         capturedArtifactStderr = artifactStderr.capture();
       } catch (error) {
-        /* v8 ignore start: temp output capture failures require filesystem faults after process completion. */
+        // temp output capture failures require filesystem faults after process completion.
         cleanup();
         const detail = error instanceof Error ? error.message : String(error);
         rejectProcess(
@@ -235,7 +234,6 @@ export function runGitProcess(
           ),
         );
         return;
-        /* v8 ignore stop */
       }
       cleanup();
       resolveProcess({
@@ -250,7 +248,7 @@ export function runGitProcess(
       });
     };
 
-    /* v8 ignore start: mid-process abort cleanup is covered by pre-start abort and OS process-control guards. */
+    // mid-process abort cleanup is covered by pre-start abort and OS process-control guards.
     const abort = () => {
       stopChildProcess(child.pid);
       finish({
@@ -262,9 +260,8 @@ export function runGitProcess(
         ),
       });
     };
-    /* v8 ignore stop */
 
-    /* v8 ignore next 4: timeout cleanup is a process-control fallback; normal git invocations complete promptly. */
+    // timeout cleanup is a process-control fallback; normal git invocations complete promptly.
     const timeout = setTimeout(() => {
       timedOut = true;
       stopChildProcess(child.pid);
@@ -280,7 +277,7 @@ export function runGitProcess(
         preview.append(chunk);
         artifact.append(chunk);
       } catch (error) {
-        /* v8 ignore start: temp output write failures require filesystem faults while streaming. */
+        // temp output write failures require filesystem faults while streaming.
         stopChildProcess(child.pid);
         const detail = error instanceof Error ? error.message : String(error);
         finish({
@@ -291,7 +288,6 @@ export function runGitProcess(
             "Use paths to narrow output or inspect files directly with read/grep.",
           ),
         });
-        /* v8 ignore stop */
       }
     };
 
@@ -301,7 +297,7 @@ export function runGitProcess(
     child.stderr.on("data", (chunk: Buffer) => {
       recordOutputChunk(stderr, artifactStderr, "stderr", chunk);
     });
-    /* v8 ignore start: spawn errors require a missing/broken git executable or inaccessible cwd. */
+    // spawn errors require a missing/broken git executable or inaccessible cwd.
     child.once("error", (error) => {
       finish({
         type: "reject",
@@ -312,7 +308,6 @@ export function runGitProcess(
         ),
       });
     });
-    /* v8 ignore stop */
     child.once("close", (exitCode, childSignal) => {
       finish({ type: "resolve", exitCode, signal: childSignal });
     });
@@ -321,7 +316,7 @@ export function runGitProcess(
   });
 }
 
-/* v8 ignore start: unexpected git command failures are surfaced, but are not deterministic product paths. */
+// unexpected git command failures are surfaced, but are not deterministic product paths.
 export function gitCommandFailure(
   toolName: string,
   command: string,
@@ -345,7 +340,6 @@ export function gitCommandFailure(
     "Use paths to narrow output or inspect files directly with read/grep.",
   );
 }
-/* v8 ignore stop */
 
 export function expectGitExitCode(
   toolName: string,
@@ -353,11 +347,11 @@ export function expectGitExitCode(
   result: GitProcessResult,
   acceptedExitCodes: ReadonlySet<number>,
 ): GitProcessResult {
-  /* v8 ignore next 3: null exit codes require external signal races; normal git exits report numeric codes. */
+  // null exit codes require external signal races; normal git exits report numeric codes.
   if (result.exitCode === null) {
     throw gitCommandFailure(toolName, command, result);
   }
-  /* v8 ignore next 3: non-accepted git exits are covered by gitCommandFailure formatting guards. */
+  // non-accepted git exits are covered by gitCommandFailure formatting guards.
   if (!acceptedExitCodes.has(result.exitCode)) {
     throw gitCommandFailure(toolName, command, result);
   }
@@ -402,7 +396,7 @@ function normalizeGitPathFilter(
   const canonicalPath = posix.normalize(normalizedPath);
 
   const absolutePath = resolve(workspacePath, canonicalPath);
-  /* v8 ignore next 3: lexical validation above constrains normalized relative paths inside the workspace. */
+  // lexical validation above constrains normalized relative paths inside the workspace.
   if (!isInsideWorkspace(workspacePath, absolutePath)) {
     throw pathFilterError(toolName, requestedPath);
   }
@@ -460,7 +454,7 @@ export function gitPathVisibleToProvider(
   path: string,
 ): boolean {
   const absolutePath = resolve(gitPathBasePath, path);
-  /* v8 ignore next: git emits paths relative to the queried work tree; this guards unexpected git output. */
+  // git emits paths relative to the queried work tree; this guards unexpected git output.
   if (!isInsideWorkspace(workspacePath, absolutePath)) return false;
   return !projectIgnorePolicy.isIgnored(absolutePath, false);
 }

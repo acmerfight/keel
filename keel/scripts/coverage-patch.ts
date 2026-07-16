@@ -8,13 +8,15 @@ import { errorMessage } from "../src/core/error.ts";
 interface CliOptions {
   readonly compareBranch: string;
   readonly coveragePath: string;
-  readonly failUnder: number;
+  readonly minimumLineCoverage: number;
+  readonly minimumBranchCoverage: number;
 }
 
 function parseArgs(args: readonly string[]): CliOptions {
   let compareBranch = "origin/main";
   let coveragePath = "coverage/lcov.info";
-  let failUnder = 100;
+  let minimumLineCoverage = 95;
+  let minimumBranchCoverage = 90;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -28,12 +30,19 @@ function parseArgs(args: readonly string[]): CliOptions {
       index += 1;
       continue;
     }
-    if (arg === "--fail-under") {
-      const rawFailUnder = requiredValue(args, index, arg);
-      failUnder = Number.parseFloat(rawFailUnder);
-      if (!Number.isFinite(failUnder)) {
-        throw new Error(`Invalid --fail-under value: ${rawFailUnder}`);
-      }
+    if (arg === "--fail-under-lines") {
+      minimumLineCoverage = coverageThreshold(
+        requiredValue(args, index, arg),
+        arg,
+      );
+      index += 1;
+      continue;
+    }
+    if (arg === "--fail-under-branches") {
+      minimumBranchCoverage = coverageThreshold(
+        requiredValue(args, index, arg),
+        arg,
+      );
       index += 1;
       continue;
     }
@@ -44,7 +53,20 @@ function parseArgs(args: readonly string[]): CliOptions {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { compareBranch, coveragePath, failUnder };
+  return {
+    compareBranch,
+    coveragePath,
+    minimumLineCoverage,
+    minimumBranchCoverage,
+  };
+}
+
+function coverageThreshold(raw: string, flag: string): number {
+  const value = Number.parseFloat(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 100) {
+    throw new Error(`Invalid ${flag} value: ${raw}`);
+  }
+  return value;
 }
 
 function requiredValue(
@@ -60,9 +82,9 @@ function requiredValue(
 }
 
 function helpText(): string {
-  return `Usage: coverage-patch [--compare-branch <branch>] [--coverage <path>] [--fail-under <percent>]
+  return `Usage: coverage-patch [--compare-branch <branch>] [--coverage <path>] [--fail-under-lines <percent>] [--fail-under-branches <percent>]
 
-Checks changed measured LCOV lines and branch records against a git compare branch.
+Checks changed measured LCOV lines and branches independently against a git compare branch.
 `;
 }
 
@@ -72,7 +94,8 @@ try {
     cwd: process.cwd(),
     compareBranch: options.compareBranch,
     coveragePath: options.coveragePath,
-    failUnder: options.failUnder,
+    minimumLineCoverage: options.minimumLineCoverage,
+    minimumBranchCoverage: options.minimumBranchCoverage,
   });
   process.stdout.write(formatPatchCoverageReport(report));
   process.exitCode = report.passed ? 0 : 1;

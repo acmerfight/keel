@@ -179,6 +179,44 @@ end_of_record
     }
   });
 
+  test(`Given every changed line runs but one changed branch does not,
+    When separate line and branch thresholds accept the measured coverage,
+    Then patch coverage keeps the line covered and reports the branch ratio`, async () => {
+    // Given
+    const workspace = await createPatchCoverageWorkspace(`TN:
+SF:src/feature.ts
+DA:1,1
+DA:3,1
+DA:4,1
+DA:5,1
+BRDA:2,0,0,1
+BRDA:2,0,1,-
+end_of_record
+`);
+
+    try {
+      // When
+      const result = await runCoveragePatch(workspace, [
+        "--fail-under-lines",
+        "100",
+        "--fail-under-branches",
+        "50",
+      ]);
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(
+        "4/4 changed coverable lines covered (100.00%)",
+      );
+      expect(result.stdout).toContain("1/2 changed branches covered (50.00%)");
+      expect(result.stdout).toContain(
+        "src/feature.ts:2 partial branch (1/2 branches covered)",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given every changed coverable line and branch is covered,
     When patch coverage is checked,
     Then the command succeeds`, async () => {

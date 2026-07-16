@@ -87,7 +87,7 @@ function requiredPathFromHeader(line: string, marker: string): string {
 
 function parserLine(lines: readonly string[], index: number): string {
   const line = lines[index];
-  /* v8 ignore next 3: parser callers check bounds before reading a line. */
+  // parser callers check bounds before reading a line.
   if (line === undefined) {
     throw new Error("apply_patch parser line invariant violated");
   }

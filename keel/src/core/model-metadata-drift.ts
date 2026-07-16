@@ -482,7 +482,7 @@ function comparableRegistryMetadata(
     contextWindowTokens: metadata.contextWindowTokens,
     maxOutputTokens: metadata.maxOutputTokens,
     capabilities: metadata.capabilities,
-    /* v8 ignore next 3: current known registry entries all carry cost metadata. */
+    // current known registry entries all carry cost metadata.
     costModel:
       metadata.costModel === null
         ? null
@@ -560,7 +560,7 @@ function costModelBaseRates(model: ComparableCostModel): ComparableCostRates {
     return model;
   }
   const firstTier = model.tiers[0];
-  /* v8 ignore next 8: comparable tiered models are constructed with at least a base tier. */
+  // comparable tiered models are constructed with at least a base tier.
   if (firstTier === undefined) {
     return {
       uncachedInputPerMillionTokens: null,
@@ -646,7 +646,7 @@ function pushTieredCostModelDifferences(
   for (let index = 0; index < comparedTierCount; index += 1) {
     const registryTier = registry.tiers[index];
     const modelsDevTier = modelsDev.tiers[index];
-    /* v8 ignore next 3: comparedTierCount is bounded by both arrays. */
+    // comparedTierCount is bounded by both arrays.
     if (registryTier === undefined || modelsDevTier === undefined) {
       continue;
     }
@@ -697,7 +697,7 @@ function pushCostModelDifferences(
     return;
   }
 
-  /* v8 ignore next 4: fixed and mismatched cost models return above. */
+  // fixed and mismatched cost models return above.
   if (
     registry.type === "input-token-tiers" &&
     modelsDev.type === "input-token-tiers"

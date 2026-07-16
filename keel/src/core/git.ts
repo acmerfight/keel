@@ -683,7 +683,7 @@ export function recordLastBatchCheckpoint(
 
     return { written: true };
   } catch (error) {
-    /* v8 ignore next 1: checkpoint writes can fail from filesystem races or permissions. */
+    // checkpoint writes can fail from filesystem races or permissions.
     return skippedBatchCheckpointRecord(
       options,
       String(error),
@@ -817,7 +817,7 @@ function sameUndoCheckpointFileState(
 ): boolean {
   if (first.status !== second.status) return false;
   if (first.status === "missing") return true;
-  /* v8 ignore next 1: status equality above makes this unreachable. */
+  // status equality above makes this unreachable.
   if (second.status === "missing") return false;
   if (first.content !== second.content) return false;
   // Undefined means this checkpoint did not own the file mode; it is a
@@ -858,7 +858,7 @@ function mergeUndoCheckpointOperations(
   }
 
   if (existing.operation === "expect-missing") {
-    /* v8 ignore next 3: continuity rejects non-create operations before this branch. */
+    // continuity rejects non-create operations before this branch.
     if (next.operation !== "create") {
       invalidCheckpointError();
     }
@@ -890,7 +890,7 @@ function mergeUndoCheckpointOperations(
   }
 
   if (existing.operation === "delete") {
-    /* v8 ignore next 3: continuity rejects non-create operations after a delete. */
+    // continuity rejects non-create operations after a delete.
     if (next.operation !== "create") {
       invalidCheckpointError();
     }
@@ -946,7 +946,7 @@ function mergeUndoCheckpointOperations(
     };
   }
 
-  /* v8 ignore next 3: continuity rejects create-after-edit before this merge path. */
+  // continuity rejects create-after-edit before this merge path.
   if (next.operation !== "edit") {
     invalidCheckpointError();
   }
@@ -1173,7 +1173,7 @@ function validateBatchRestoreOperation(
       return blockedRestore(operation);
     }
     const restorePath = realpathIfPossible(filePath);
-    /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
+    // symlinks are blocked above; this guards post-validation path races.
     if (restorePath === null || !isInside(gitRoot, restorePath)) {
       return blockedRestore(operation);
     }
@@ -1200,7 +1200,7 @@ function validateBatchRestoreOperation(
     return blockedRestore(operation);
   }
   const restorePath = realpathIfPossible(filePath);
-  /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
+  // symlinks are blocked above; this guards post-validation path races.
   if (restorePath === null || !isInside(gitRoot, restorePath)) {
     return blockedRestore(operation);
   }
@@ -1280,7 +1280,7 @@ function rollbackBatchRestore(
     try {
       if (operation.operation === "edit") {
         writeFileSync(operation.restorePath, operation.afterContent, "utf8");
-        /* v8 ignore next 3: only chmod-changing restore failures need mode rollback. */
+        // only chmod-changing restore failures need mode rollback.
         if (operation.mode !== undefined) {
           chmodSync(operation.restorePath, operation.mode);
         }
@@ -1365,7 +1365,7 @@ function restoreBatchCheckpoint(
           ...modeState(operation.afterMode),
         });
       } catch {
-        /* v8 ignore next 12: filesystem races or permissions can still block after validation. */
+        // filesystem races or permissions can still block after validation.
         return blockedBatchRestore(
           [
             ...applied,
@@ -1438,7 +1438,7 @@ function validateCoalescedCreateRestoreOperation(
     return blockedRestore(operation);
   }
   const restorePath = realpathIfPossible(filePath);
-  /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
+  // symlinks are blocked above; this guards post-validation path races.
   if (restorePath === null || !isInside(gitRoot, restorePath)) {
     return blockedRestore(operation);
   }
@@ -1491,7 +1491,7 @@ function validateDeleteCreateRestoreOperation(
   }
 
   const restorePath = realpathIfPossible(filePath);
-  /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
+  // symlinks are blocked above; this guards post-validation path races.
   if (restorePath === null || !isInside(gitRoot, restorePath)) {
     return blockedRestore(operation);
   }
@@ -1523,7 +1523,7 @@ function restoreResolvedCoalescedOperations(
   for (const operation of operations.toReversed()) {
     if (operation.operation === "delete-create") {
       if (!operation.exists) {
-        /* v8 ignore next 8: filesystem races or permissions can still block after validation. */
+        // filesystem races or permissions can still block after validation.
         if (
           !restoreDeletedFile(
             operation.filePath,
@@ -1548,7 +1548,7 @@ function restoreResolvedCoalescedOperations(
         chmodSync(operation.restorePath, operation.mode);
         applied.push(rollbackOperation);
       } catch {
-        /* v8 ignore next 5: filesystem races or permissions can still block after validation. */
+        // filesystem races or permissions can still block after validation.
         return blockedBatchRestore(
           [...applied, rollbackOperation],
           operation,
@@ -1569,7 +1569,7 @@ function restoreResolvedCoalescedOperations(
             mode: operation.mode,
           });
         } catch {
-          /* v8 ignore next 5: filesystem races or permissions can still block after validation. */
+          // filesystem races or permissions can still block after validation.
           return blockedBatchRestore(
             applied,
             operation,
@@ -1578,7 +1578,7 @@ function restoreResolvedCoalescedOperations(
         }
       }
     } else if (operation.operation === "delete") {
-      /* v8 ignore next 8: filesystem races or permissions can still block after validation. */
+      // filesystem races or permissions can still block after validation.
       if (
         !restoreDeletedFile(
           operation.filePath,
@@ -1602,7 +1602,7 @@ function restoreResolvedCoalescedOperations(
           ...modeState(operation.afterMode),
         });
       } catch {
-        /* v8 ignore next 12: filesystem races or permissions can still block after validation. */
+        // filesystem races or permissions can still block after validation.
         return blockedBatchRestore(
           [
             ...applied,
@@ -1694,7 +1694,7 @@ function restoreCheckpoint(
     return blockedRestore(checkpoint);
   }
   const restorePath = realpathIfPossible(filePath);
-  /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
+  // symlinks are blocked above; this guards post-validation path races.
   if (restorePath === null || !isInside(gitWorkspace.root, restorePath)) {
     return blockedRestore(checkpoint);
   }
@@ -1771,7 +1771,7 @@ function restoreCoalescedUndoCheckpointOperations(
   }
 
   const blocked = restoreResolvedCoalescedOperations(restoreOperations);
-  /* v8 ignore next 1: post-validation filesystem races are covered by rollback helpers. */
+  // post-validation filesystem races are covered by rollback helpers.
   if (blocked !== null) return blocked;
   return {
     status: "restored",
@@ -1837,7 +1837,7 @@ export function restoreUndoCheckpointsThrough(
   const selectedCheckpoints = checkpoints.slice(-checkpointIndex);
   if (checkpointIndex === 1) {
     const checkpoint = selectedCheckpoints[0];
-    /* v8 ignore next 3: length and range checks above guarantee one selected checkpoint. */
+    // length and range checks above guarantee one selected checkpoint.
     if (checkpoint === undefined) {
       return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
     }

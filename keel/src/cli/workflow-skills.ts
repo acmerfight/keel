@@ -158,7 +158,7 @@ export function filterWorkflowSkillCatalog(
         rawDescriptor = resolveSkillDescriptor(allCandidates, lookup);
       } catch {
         rawLoad(lookup);
-        /* v8 ignore next -- the raw loader either returns the descriptor represented by the raw candidate set or throws its richer audit/ambiguity error. */
+        // the raw loader either returns the descriptor represented by the raw candidate set or throws its richer audit/ambiguity error.
         throw enabledError;
       }
       throw new WorkflowSkillError(

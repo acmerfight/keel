@@ -44,7 +44,7 @@ function writeCliRuntimeError(
   return 1;
 }
 
-/* v8 ignore start: real process adapter is exercised by CLI subprocess tests. */
+// real process adapter is exercised by CLI subprocess tests.
 export function exitWithCliRuntimeError(error: unknown): never {
   if (isAbortThrow(error)) {
     process.exit(130);
@@ -55,4 +55,3 @@ export function exitWithCliRuntimeError(error: unknown): never {
     process.exit(1);
   }
 }
-/* v8 ignore stop */

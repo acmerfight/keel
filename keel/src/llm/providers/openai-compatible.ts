@@ -135,7 +135,7 @@ export function createOpenAICompatibleProvider<
           }
           return;
         } catch (error) {
-          /* v8 ignore next 3: supported stream helpers normalize expected failures to KeelError; preserve unexpected bugs. */
+          // supported stream helpers normalize expected failures to KeelError; preserve unexpected bugs.
           if (!(error instanceof KeelError)) {
             finishAttempt({ outcome: "terminal_error" });
             throw error;

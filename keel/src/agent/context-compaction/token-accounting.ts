@@ -125,7 +125,7 @@ function stableJson(value: unknown): string {
   ) {
     return `${JSON.stringify(value)}`;
   }
-  /* v8 ignore next 3: tool fingerprints are built from JSON-compatible canonical arguments. */
+  // tool fingerprints are built from JSON-compatible canonical arguments.
   if (typeof value !== "object") {
     return "null";
   }
@@ -149,7 +149,7 @@ function stableClone(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(stableClone);
   }
-  /* v8 ignore next 3: tool fingerprints are built from JSON-compatible canonical arguments. */
+  // tool fingerprints are built from JSON-compatible canonical arguments.
   if (typeof value !== "object") {
     return null;
   }

@@ -24,7 +24,7 @@ export function checkpointOperationsFor(
   }
 
   if (operation.kind === "delete") {
-    /* v8 ignore next 3: verifyAppliedOperation rejects this first except for a race between verification and checkpointing. */
+    // verifyAppliedOperation rejects this first except for a race between verification and checkpointing.
     if (pathHasIdentity(operation.targetPath, operation.appliedIdentity)) {
       throw changedTargetError(operation);
     }

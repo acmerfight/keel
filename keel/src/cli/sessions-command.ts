@@ -46,7 +46,7 @@ export function runSessionsCommand(
       );
       return 0;
     } catch (error) {
-      /* v8 ignore next 3: sessions show converts supported failures to SessionStoreError. */
+      // sessions show converts supported failures to SessionStoreError.
       if (!(error instanceof SessionStoreError)) {
         throw error;
       }
@@ -92,7 +92,7 @@ export function runSessionsCommand(
       runtime.writeStdout(formatSessionForkCreated(cliArgs));
       return 0;
     } catch (error) {
-      /* v8 ignore next 3: session fork command converts supported failures to SessionStoreError. */
+      // session fork command converts supported failures to SessionStoreError.
       if (!(error instanceof SessionStoreError)) {
         throw error;
       }
@@ -113,7 +113,7 @@ export function runSessionsCommand(
     runtime.writeStderr(formatSessionCatalogWarnings(catalog.warnings));
     return 0;
   } catch (error) {
-    /* v8 ignore next 3: listSessionCatalog converts supported catalog failures to SessionStoreError. */
+    // listSessionCatalog converts supported catalog failures to SessionStoreError.
     if (!(error instanceof SessionStoreError)) {
       throw error;
     }

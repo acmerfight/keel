@@ -193,7 +193,7 @@ function applySessionCatalogMutation(
       };
     case "snapshot": {
       const snapshotSkillState = record.skillStateCheckpoints.at(-1);
-      /* v8 ignore next 3 -- the snapshot schema requires at least one lifecycle checkpoint. */
+      // the snapshot schema requires at least one lifecycle checkpoint.
       if (snapshotSkillState === undefined) {
         sessionStoreError(
           "Error: session snapshot has no skill lifecycle state.",
@@ -328,7 +328,7 @@ function sessionCatalogEntry(records: SessionRecords): SessionCatalogEntry {
       const activation = state.skillActivations.findLast(
         (candidate) => candidate.descriptorId === id,
       );
-      /* v8 ignore next 5 -- mutation parsing validates every active id has a persisted activation snapshot. */
+      // mutation parsing validates every active id has a persisted activation snapshot.
       if (activation === undefined) {
         sessionStoreError(
           `Error: session "${records.header.id}" has an active workflow skill without an activation snapshot.`,
@@ -437,7 +437,7 @@ export function listSessionCatalog(options: {
         ),
       );
     } catch (error) {
-      /* v8 ignore next 3: catalog readers convert supported per-session failures to SessionStoreError. */
+      // catalog readers convert supported per-session failures to SessionStoreError.
       if (!(error instanceof SessionStoreError)) {
         throw error;
       }
@@ -468,7 +468,7 @@ export function readSessionCatalogEntry(options: {
       runtime: options.runtime,
     });
   } catch (error) {
-    /* v8 ignore next 3: catalog detail readers convert supported load failures to SessionStoreError. */
+    // catalog detail readers convert supported load failures to SessionStoreError.
     if (!(error instanceof SessionStoreError)) {
       throw error;
     }

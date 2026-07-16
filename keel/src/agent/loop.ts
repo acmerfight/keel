@@ -942,7 +942,7 @@ export async function* runAgentTurn(
               modelOperations: options.modelOperations ?? null,
             });
           } catch (error) {
-            /* v8 ignore else -- non-budget evaluator failures follow the tool layer's existing recoverable-error path. */
+            // non-budget evaluator failures follow the tool layer's existing recoverable-error path.
             if (error instanceof CostBudgetAdmissionError) {
               toolCostBudgetAdmission = error;
             }
@@ -1089,17 +1089,17 @@ export async function* runAgentTurn(
           }
           const { toolCall, result: execution } = result;
           yield toolEndEvent(toolCall, execution);
-          /* v8 ignore next 3: skill declares global access and cannot execute in a parallel scheduler batch. */
+          // skill declares global access and cannot execute in a parallel scheduler batch.
           if (execution.skillActivation !== undefined) {
             yield { type: "skill_activated", ...execution.skillActivation };
           }
           const taskProgressEvent = taskProgressEventFromExecution(execution);
-          /* v8 ignore next 3: update_plan uses global tool access and is never scheduled in a parallel batch. */
+          // update_plan uses global tool access and is never scheduled in a parallel batch.
           if (taskProgressEvent !== null) {
             yield taskProgressEvent;
           }
           const sessionGoalEvent = sessionGoalEventFromExecution(execution);
-          /* v8 ignore next 3: update_goal uses global tool access and is never scheduled in a parallel batch. */
+          // update_goal uses global tool access and is never scheduled in a parallel batch.
           if (sessionGoalEvent !== null) {
             yield sessionGoalEvent;
           }
@@ -1133,7 +1133,7 @@ export async function* runAgentTurn(
               ok: false,
             },
           });
-          /* v8 ignore next 3 -- the fixed short budget message cannot cross the artifact threshold. */
+          // the fixed short budget message cannot cross the artifact threshold.
           for (const notice of await settlePendingToolExecutions()) {
             yield { type: "tool_output_artifact", ...notice };
           }
@@ -1280,7 +1280,7 @@ export async function* runAgent(
     const checkpointEvent = recordCheckpoint();
     checkpointRecorded = true;
     if (checkpointEvent !== null) yield checkpointEvent;
-    /* v8 ignore next -- a normally completed runAgentTurn always emits one terminal end event. */
+    // a normally completed runAgentTurn always emits one terminal end event.
     if (finalEnd !== undefined) yield finalEnd;
   } finally {
     if (!checkpointRecorded) recordCheckpoint();

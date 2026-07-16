@@ -187,7 +187,7 @@ export async function restorePostCompactionReads(options: {
       output =
         options.projectInstructionVisibility.formatRestoreOutput(snapshot);
     } catch (error) {
-      /* v8 ignore next 3: recoverable AGENTS.md reload failures are covered; unexpected restore failures must still abort the turn. */
+      // recoverable AGENTS.md reload failures are covered; unexpected restore failures must still abort the turn.
       if (!shouldSkipProjectInstructionRestore(error)) {
         throw error;
       }

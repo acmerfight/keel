@@ -33,7 +33,7 @@ function restoreDeletedTextFileBestEffort(
     { readonly kind: "delete" | "move" }
   >,
 ): void {
-  /* v8 ignore next 1: move rollback needs a deterministic post-move failure; delete rollback covers restoration. */
+  // move rollback needs a deterministic post-move failure; delete rollback covers restoration.
   const mode =
     operation.kind === "move" ? operation.rollbackMode : operation.mode;
   try {
@@ -44,7 +44,7 @@ function restoreDeletedTextFileBestEffort(
     });
     chmodSync(operation.targetPath, mode);
   } catch {
-    /* v8 ignore next 1: rollback is best-effort and must not overwrite user-created files. */
+    // rollback is best-effort and must not overwrite user-created files.
   }
 }
 
@@ -74,7 +74,7 @@ function rollbackTargetPaths(
       isErrnoException(error) &&
       (error.code === "ENOENT" || error.code === "ENOTDIR")
     ) {
-      /* v8 ignore next 1: rollback may run after a concurrent remove. */
+      // rollback may run after a concurrent remove.
       return findWorkspacePathsByIdentity(operation.workspacePath, identity);
     }
     if (
@@ -85,13 +85,13 @@ function rollbackTargetPaths(
         operation.workspacePath,
         identity,
       );
-      /* v8 ignore next 3: covered outside rollback paths either restore by workspace scan or skip non-Keel files. */
+      // covered outside rollback paths either restore by workspace scan or skip non-Keel files.
       if (pathHasIdentity(operation.targetPath, identity)) {
         return uniquePaths([...workspacePaths, operation.targetPath]);
       }
       return workspacePaths;
     }
-    /* v8 ignore next 1: assertWorkspaceTargetAtAccess only throws handled path errors here. */
+    // assertWorkspaceTargetAtAccess only throws handled path errors here.
     throw error;
   }
 }
@@ -126,7 +126,7 @@ export function rollbackAppliedOperations(
     const targetPaths = rollbackTargetPaths(operation);
     if (operation.kind === "add" || operation.kind === "copy") {
       for (const targetPath of targetPaths) {
-        /* v8 ignore next 1: rollback skips files changed concurrently after the failed operation. */
+        // rollback skips files changed concurrently after the failed operation.
         if (readFileIfPossible(targetPath) === operation.afterContent) {
           rmSync(targetPath, { force: true });
         }
@@ -140,7 +140,7 @@ export function rollbackAppliedOperations(
     if (targetPaths.length === 0) continue;
 
     for (const targetPath of targetPaths) {
-      /* v8 ignore next 1: rollback skips paths that lose the applied identity after path discovery. */
+      // rollback skips paths that lose the applied identity after path discovery.
       if (pathHasIdentity(targetPath, operation.appliedIdentity)) {
         restoreTextFileByIdentityBestEffort(
           targetPath,

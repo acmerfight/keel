@@ -6,7 +6,8 @@ export interface PatchCoverageOptions {
   readonly cwd: string;
   readonly compareBranch: string;
   readonly coveragePath: string;
-  readonly failUnder: number;
+  readonly minimumLineCoverage: number;
+  readonly minimumBranchCoverage: number;
 }
 
 interface PatchCoverageFailure {
@@ -19,8 +20,11 @@ export interface PatchCoverageReport {
   readonly passed: boolean;
   readonly coveredLines: number;
   readonly measuredLines: number;
+  readonly coveredBranches: number;
+  readonly measuredBranches: number;
   readonly unmeasuredLines: number;
-  readonly percentCovered: number;
+  readonly linePercentCovered: number;
+  readonly branchPercentCovered: number;
   readonly failures: readonly PatchCoverageFailure[];
 }
 
@@ -47,17 +51,24 @@ export function runPatchCoverageCheck(
     readFileSync(resolve(options.cwd, options.coveragePath), "utf8"),
     options.cwd,
   );
-  return analyzePatchCoverage(changedLines, coverage, options.failUnder);
+  return analyzePatchCoverage(
+    changedLines,
+    coverage,
+    options.minimumLineCoverage,
+    options.minimumBranchCoverage,
+  );
 }
 
 export function formatPatchCoverageReport(report: PatchCoverageReport): string {
   const lines: string[] = [];
   const status = report.passed ? "passed" : "failed";
-  if (report.measuredLines === 0) {
-    lines.push(`Patch coverage ${status}: no changed coverable lines`);
+  if (report.measuredLines === 0 && report.measuredBranches === 0) {
+    lines.push(
+      `Patch coverage ${status}: no changed coverable lines or branches`,
+    );
   } else {
     lines.push(
-      `Patch coverage ${status}: ${report.coveredLines}/${report.measuredLines} changed coverable lines covered (${report.percentCovered.toFixed(2)}%)`,
+      `Patch coverage ${status}: ${report.coveredLines}/${report.measuredLines} changed coverable lines covered (${report.linePercentCovered.toFixed(2)}%); ${report.coveredBranches}/${report.measuredBranches} changed branches covered (${report.branchPercentCovered.toFixed(2)}%)`,
     );
   }
 
@@ -109,7 +120,7 @@ function parseChangedLines(diff: string): ChangedLinesByPath {
     if (!line.startsWith("@@ ") || currentPath === null) continue;
 
     const hunk = parseHunkHeader(line);
-    /* v8 ignore next: changedLinesAgainstBranch passes git-generated hunk headers. */
+    // changedLinesAgainstBranch passes git-generated hunk headers.
     if (hunk === null) continue;
     const lines = changedLines.get(currentPath) ?? new Set<number>();
     for (let offset = 0; offset < hunk.count; offset += 1) {
@@ -168,11 +179,14 @@ function parseLcov(content: string, cwd: string): CoverageByPath {
 function analyzePatchCoverage(
   changedLines: ChangedLinesByPath,
   coverage: CoverageByPath,
-  failUnder: number,
+  minimumLineCoverage: number,
+  minimumBranchCoverage: number,
 ): PatchCoverageReport {
   const failures: PatchCoverageFailure[] = [];
   let measuredLines = 0;
   let coveredLines = 0;
+  let measuredBranches = 0;
+  let coveredBranches = 0;
   let unmeasuredLines = 0;
 
   for (const [path, lines] of changedLines) {
@@ -184,39 +198,47 @@ function analyzePatchCoverage(
         continue;
       }
 
-      measuredLines += 1;
-      if (lineCoverage.hits === 0) {
-        failures.push({ path, line, message: "uncovered line" });
-        continue;
-      }
-
-      const coveredBranches = lineCoverage.branches.filter(
+      const lineCoveredBranches = lineCoverage.branches.filter(
         (branch) => branch.taken > 0,
       ).length;
+      const lineHits = lineCoverage.hits ?? (lineCoveredBranches > 0 ? 1 : 0);
+      measuredLines += 1;
+      if (lineHits === 0) {
+        failures.push({ path, line, message: "uncovered line" });
+      } else {
+        coveredLines += 1;
+      }
+
+      measuredBranches += lineCoverage.branches.length;
+      coveredBranches += lineCoveredBranches;
       if (
         lineCoverage.branches.length > 0 &&
-        coveredBranches < lineCoverage.branches.length
+        lineCoveredBranches < lineCoverage.branches.length
       ) {
         failures.push({
           path,
           line,
-          message: `partial branch (${coveredBranches}/${lineCoverage.branches.length} branches covered)`,
+          message: `partial branch (${lineCoveredBranches}/${lineCoverage.branches.length} branches covered)`,
         });
-        continue;
       }
-
-      coveredLines += 1;
     }
   }
 
-  const percentCovered =
+  const linePercentCovered =
     measuredLines === 0 ? 100 : (coveredLines / measuredLines) * 100;
+  const branchPercentCovered =
+    measuredBranches === 0 ? 100 : (coveredBranches / measuredBranches) * 100;
   return {
-    passed: percentCovered >= failUnder,
+    passed:
+      linePercentCovered >= minimumLineCoverage &&
+      branchPercentCovered >= minimumBranchCoverage,
     coveredLines,
     measuredLines,
+    coveredBranches,
+    measuredBranches,
     unmeasuredLines,
-    percentCovered,
+    linePercentCovered,
+    branchPercentCovered,
     failures,
   };
 }
@@ -230,15 +252,15 @@ function parseHunkHeader(
   line: string,
 ): { readonly start: number; readonly count: number } | null {
   const match = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
-  /* v8 ignore next: parseChangedLines only calls this for git hunk header lines. */
+  // parseChangedLines only calls this for git hunk header lines.
   if (match === null) return null;
   const startRaw = match[1];
-  /* v8 ignore next: the hunk header regex always captures the new-file start. */
+  // The hunk header regex always captures the new-file start.
   if (startRaw === undefined) return null;
   const countRaw = match[2];
   const start = parseInteger(startRaw);
   const count = countRaw === undefined ? 1 : parseInteger(countRaw);
-  /* v8 ignore next: git hunk headers only contain numeric ranges. */
+  // Git hunk headers only contain numeric ranges.
   if (start === null || count === null) return null;
   return {
     start,

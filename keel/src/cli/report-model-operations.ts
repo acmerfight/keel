@@ -124,7 +124,7 @@ interface MutableProviderRequestAttempt {
 function finishedProviderRequestAttemptResult(
   result: MutableProviderRequestAttemptResult,
 ): FinishedProviderRequestAttemptResult {
-  /* v8 ignore next 3 -- model operations reject unfinished attempts before report materialization. */
+  // model operations reject unfinished attempts before report materialization.
   if (result.state === "pending") {
     throw new Error("internal: provider request attempt never finished");
   }
@@ -168,10 +168,10 @@ function resolveOperationOwner(
   owner: ModelOperationOwner,
   currentAgentRun: CurrentAgentRunReportOwner | null,
 ): RunReportModelOperationOwner {
-  /* v8 ignore next -- current behavior covers Agent Run and session ownership; invocation is the remaining explicit non-Agent owner variant. */
+  // current behavior covers Agent Run and session ownership; invocation is the remaining explicit non-Agent owner variant.
   switch (owner.type) {
     case "current_agent_run":
-      /* v8 ignore next 5 -- CLI report lifecycle starts an Agent Run before current-agent operations; keep the fail-fast guard at the recorder boundary. */
+      // CLI report lifecycle starts an Agent Run before current-agent operations; keep the fail-fast guard at the recorder boundary.
       if (currentAgentRun === null) {
         throw new Error(
           "internal: report model operation requires an active Agent Run owner",
@@ -181,7 +181,7 @@ function resolveOperationOwner(
     case "session":
       return { type: "session" };
     case "invocation":
-      /* v8 ignore next -- current provider work outside Agent Runs is session-owned; retain the explicit invocation owner contract. */
+      // current provider work outside Agent Runs is session-owned; retain the explicit invocation owner contract.
       return { type: "invocation" };
   }
 }
@@ -191,7 +191,7 @@ function finishProviderRequestAttempt(
   result: ProviderRequestAttemptFinish,
   costModel: CostModel,
 ): void {
-  /* v8 ignore next 3 -- supported-provider conformance requires each physical attempt handle to finish exactly once. */
+  // supported-provider conformance requires each physical attempt handle to finish exactly once.
   if (attempt.result.state !== "pending") {
     throw new Error("internal: provider request attempt finished twice");
   }
@@ -278,7 +278,7 @@ function operationCostUsd(operation: MutableModelOperation): number | null {
 function modelOperationReport(
   operation: MutableModelOperation,
 ): RunReportModelOperation {
-  /* v8 ignore next 3 -- report lifecycle finishes every operation before requesting its immutable report projection. */
+  // report lifecycle finishes every operation before requesting its immutable report projection.
   if (operation.result.state === "pending") {
     throw new Error("internal: model operation never finished");
   }
@@ -294,7 +294,7 @@ function modelOperationReport(
   };
   const usage = operationUsage(operation);
   const costUsd = operationCostUsd(operation);
-  /* v8 ignore next 8 -- a completed operation can only follow a conforming provider's completed attempt with usage. */
+  // a completed operation can only follow a conforming provider's completed attempt with usage.
   if (
     operation.result.outcome === "completed" &&
     (usage === null || costUsd === null)
@@ -322,13 +322,13 @@ function linkRecoveryOperation(
   const attempt = operation?.providerRequestAttempts.find(
     (candidate) => candidate.token === recoveryFor.attemptToken,
   );
-  /* v8 ignore next 5 -- recovery targets are opaque handles created only from a recorded context-overflow attempt. */
+  // recovery targets are opaque handles created only from a recorded context-overflow attempt.
   if (attempt?.result.state !== "context_overflow") {
     throw new Error(
       "internal: report model operation recovery target is not a context overflow attempt",
     );
   }
-  /* v8 ignore next 5 -- one overflow attempt starts at most one recovery compaction operation. */
+  // one overflow attempt starts at most one recovery compaction operation.
   if (attempt.result.recoveryOperationOrdinal !== null) {
     throw new Error(
       "internal: provider request attempt already has a recovery operation",
@@ -363,11 +363,11 @@ function beginModelOperation(
   operations.push(operation);
 
   const finishOperation = (outcome: ModelOperationOutcome): void => {
-    /* v8 ignore next 3 -- each operation-owning control path has one terminal finish site. */
+    // each operation-owning control path has one terminal finish site.
     if (operation.result.state !== "pending") {
       throw new Error("internal: model operation finished twice");
     }
-    /* v8 ignore next 9 -- supported-provider conformance finishes the physical attempt before its logical operation. */
+    // supported-provider conformance finishes the physical attempt before its logical operation.
     if (
       operation.providerRequestAttempts.some(
         (attempt) => attempt.result.state === "pending",
@@ -377,7 +377,7 @@ function beginModelOperation(
         "internal: model operation finished with an unfinished provider request attempt",
       );
     }
-    /* v8 ignore next 8 -- admission rejection occurs before the provider attempt hook; post-attempt rejections are normalized below. */
+    // admission rejection occurs before the provider attempt hook; post-attempt rejections are normalized below.
     if (
       outcome === "admission_rejected" &&
       operation.providerRequestAttempts.length > 0
@@ -405,7 +405,7 @@ function beginModelOperation(
   return {
     providerRequestAttempts: {
       begin: (): ProviderRequestAttemptHandle => {
-        /* v8 ignore next 5 -- provider conformance cannot begin a physical attempt after its owning operation finishes. */
+        // provider conformance cannot begin a physical attempt after its owning operation finishes.
         if (operation.result.state !== "pending") {
           throw new Error(
             "internal: provider request attempt started after model operation finished",
@@ -431,7 +431,7 @@ function beginModelOperation(
     finishFromError: (error) => finishOperation(failureOutcome(error)),
     latestContextOverflowRecoveryTarget: () => {
       const attempt = operation.latestContextOverflowAttempt;
-      /* v8 ignore next 3 -- recovery lookup is called only after a conforming provider records context overflow. */
+      // recovery lookup is called only after a conforming provider records context overflow.
       if (attempt === null) {
         return null;
       }

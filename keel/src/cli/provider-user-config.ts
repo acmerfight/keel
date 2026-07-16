@@ -105,7 +105,7 @@ function invalidFileMessage(
   result: z.ZodError,
 ): string {
   const [issue] = result.issues;
-  /* v8 ignore next: Zod schema failures include at least one issue. */
+  // Zod schema failures include at least one issue.
   const message = issue?.message ?? "invalid schema";
   return `Error: cannot read ${label} ${filePath}: ${message}.`;
 }
@@ -228,7 +228,7 @@ function credentialForProvider(
       return providers.kimi ?? null;
     case "qwen":
       return providers.qwen ?? null;
-    /* v8 ignore next: fake is reported as not-required before credential lookup. */
+    // fake is reported as not-required before credential lookup.
     case "fake":
       return null;
   }

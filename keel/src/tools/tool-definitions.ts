@@ -166,7 +166,7 @@ function defineTool<
     for (const name of argumentNames) {
       const value = objectFieldValue(parsedArgs.data, name);
       if (!value.exists || value.value === undefined || value.value === null) {
-        /* v8 ignore next 3: required fields cannot be absent after this tool's Zod schema has parsed successfully. */
+        // required fields cannot be absent after this tool's Zod schema has parsed successfully.
         if (requiredArgumentNames.has(name)) {
           throw invalidBuiltinToolCallError(tool.name);
         }

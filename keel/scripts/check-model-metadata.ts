@@ -30,11 +30,11 @@ async function fetchModelsDevCatalog(apiUrl: string): Promise<unknown> {
 }
 
 function configuredModelsDevApiUrl(apiUrl: string | undefined): string {
-  /* v8 ignore else: the live default URL path is covered by pnpm check:model-metadata, outside Vitest coverage. */
+  // the live default URL path is covered by pnpm check:model-metadata, outside Vitest coverage.
   if (apiUrl !== undefined) {
     return apiUrl;
   }
-  /* v8 ignore next 1: the live default URL path is covered by pnpm check:model-metadata, outside Vitest coverage. */
+  // the live default URL path is covered by pnpm check:model-metadata, outside Vitest coverage.
   return MODELS_DEV_API_URL;
 }
 
@@ -79,7 +79,7 @@ function isMainModule(): boolean {
   );
 }
 
-/* v8 ignore next 4: direct script execution is covered by CLI smoke tests outside the in-process coverage runtime. */
+// direct script execution is covered by CLI smoke tests outside the in-process coverage runtime.
 if (isMainModule()) {
   runCheckModelMetadata().then((exitCode) => {
     process.exitCode = exitCode;

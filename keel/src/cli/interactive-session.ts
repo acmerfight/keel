@@ -452,7 +452,7 @@ export async function runInteractiveSession(
         }))
       : [...(options.initialSkillActivationRecords ?? [])];
   const syncActiveWorkflowSkills = (): void => {
-    /* v8 ignore next -- every call site first establishes lifecycle state or an activation command. */
+    // every call site first establishes lifecycle state or an activation command.
     if (options.skillActivation === undefined) return;
     activeWorkflowSkills.splice(
       0,
@@ -755,7 +755,7 @@ export async function runInteractiveSession(
       : cost;
   };
   const currentSessionCostBudgetLimitedReport = (): CostReport => {
-    /* v8 ignore next 3 -- admission can call this only when --max-cost created the budget wrapper. */
+    // admission can call this only when --max-cost created the budget wrapper.
     if (options.cliArgs.maxCostUsd === undefined) {
       return currentSessionCostReport();
     }
@@ -1079,7 +1079,7 @@ export async function runInteractiveSession(
           });
         },
         (next) => {
-          /* v8 ignore next -- session_goal_updated requires an existing active goal; keep the closure fail-safe if that event contract changes. */
+          // session_goal_updated requires an existing active goal; keep the closure fail-safe if that event contract changes.
           const goalStateChanged =
             sessionGoal === undefined ||
             !sessionGoalStatesEqual(next, sessionGoal);
@@ -1501,7 +1501,7 @@ export async function runInteractiveSession(
           if (skill === undefined) {
             throw new Error("explicit skill activation is unavailable");
           }
-          /* v8 ignore next 3 -- the CLI installs activation lookup and lifecycle ownership together. */
+          // the CLI installs activation lookup and lifecycle ownership together.
           if (options.skillActivation === undefined) {
             throw new WorkflowSkillError(
               options.skillUnavailableReason ??
@@ -2271,7 +2271,7 @@ export async function runInteractiveSession(
       }
       if (interactiveCommand?.kind === "skill") {
         if (interactiveCommand.action === "active") {
-          /* v8 ignore next -- the CLI always installs lifecycle ownership before exposing Skill commands. */
+          // the CLI always installs lifecycle ownership before exposing Skill commands.
           const statuses = options.skillActivation?.activeStatuses() ?? [];
           options.writeStdout(formatActiveWorkflowSkills(statuses));
           consumeQueuedInputLines([rawInput]);
@@ -2304,7 +2304,7 @@ export async function runInteractiveSession(
             const skill = options.activateExplicitSkill?.(
               interactiveCommand.lookup,
             );
-            /* v8 ignore next 3 -- the CLI installs activation lookup and lifecycle ownership together. */
+            // the CLI installs activation lookup and lifecycle ownership together.
             if (skill === undefined) {
               throw new Error("explicit skill activation is unavailable");
             }

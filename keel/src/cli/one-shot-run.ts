@@ -377,7 +377,7 @@ export async function runOneShotCli(
       }
       throw error;
     }
-    /* v8 ignore next -- a normally completed runAgent() always emits one terminal end event. */
+    // a normally completed runAgent() always emits one terminal end event.
     if (finalEnd !== undefined) {
       reportRecorder.completeAgentRun(finalEnd.turns, finalEnd.stopReason);
       reportRecorder.endTask();

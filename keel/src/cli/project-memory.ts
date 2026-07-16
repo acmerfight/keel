@@ -603,7 +603,7 @@ function acquireWriteLock(directory: string): () => void {
   try {
     mkdirSync(lockPath, { mode: 0o700 });
   } catch (error) {
-    /* v8 ignore else -- non-EEXIST requires an OS fault at the validated private memory directory boundary. */
+    // non-EEXIST requires an OS fault at the validated private memory directory boundary.
     if (hasNodeErrorCode(error, "EEXIST")) {
       fail(
         `Error: project memory is locked by another Keel process. If no memory command is running, remove ${lockPath} and retry.`,
@@ -707,7 +707,7 @@ export function addProjectMemory(
     removeIncompleteFinalEvent(filePath);
     appendEvent(filePath, event);
     const entry = next.entries.find((candidate) => candidate.id === event.id);
-    /* v8 ignore next 3 -- replaying the valid add event constructed above must project its unique ID; this guards an internal replay defect. */
+    // replaying the valid add event constructed above must project its unique ID; this guards an internal replay defect.
     if (entry === undefined) {
       throw new Error("newly added project memory was not projected");
     }

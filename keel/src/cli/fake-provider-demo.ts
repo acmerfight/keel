@@ -40,7 +40,7 @@ function createObservedFakeProvider(
           }
           yield event;
         }
-        /* v8 ignore start -- demo scripts complete normally; production fake/provider conformance owns error and consumer-cancellation attempt finalization. */
+        // demo scripts complete normally; production fake/provider conformance owns error and consumer-cancellation attempt finalization.
       } catch (error) {
         if (!finished) {
           finished = true;
@@ -57,7 +57,6 @@ function createObservedFakeProvider(
           });
         }
       }
-      /* v8 ignore stop */
     },
   };
 }

@@ -113,11 +113,11 @@ function userProviderConfig(runtime: ProviderConfigRuntime) {
   try {
     return readOptionalUserProviderConfig(runtime);
   } catch (error) {
-    /* v8 ignore else: user config readers throw ProviderUserConfigError for expected failures. */
+    // user config readers throw ProviderUserConfigError for expected failures.
     if (error instanceof ProviderUserConfigError) {
       providerConfigError(error.message);
     }
-    /* v8 ignore next: unexpected non-config errors should escape to the caller. */
+    // unexpected non-config errors should escape to the caller.
     throw error;
   }
 }
@@ -129,11 +129,11 @@ function providerAuthApiKey(
   try {
     return readProviderAuthApiKey(runtime, providerId);
   } catch (error) {
-    /* v8 ignore else: user auth readers throw ProviderUserConfigError for expected failures. */
+    // user auth readers throw ProviderUserConfigError for expected failures.
     if (error instanceof ProviderUserConfigError) {
       providerConfigError(error.message);
     }
-    /* v8 ignore next: unexpected non-config errors should escape to the caller. */
+    // unexpected non-config errors should escape to the caller.
     throw error;
   }
 }

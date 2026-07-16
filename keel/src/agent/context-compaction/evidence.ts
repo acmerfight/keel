@@ -323,7 +323,7 @@ function renderBoundedCompactionEvidenceSection(
 
   let selectedLines: readonly string[] = [];
   for (let index = evidenceLines.length - 1; index >= 0; index--) {
-    /* v8 ignore next: index is bounded by evidenceLines.length in this loop. */
+    // index is bounded by evidenceLines.length in this loop.
     const nextLines = [evidenceLines[index] ?? "", ...selectedLines];
     const candidate = renderEvidenceLinesWithOmission({
       evidenceLines: nextLines,
@@ -343,7 +343,7 @@ function renderBoundedCompactionEvidenceSection(
   }
 
   const newestLine = evidenceLines.at(-1);
-  /* v8 ignore next: callers render bounded sections only for non-empty evidence. */
+  // callers render bounded sections only for non-empty evidence.
   if (newestLine !== undefined) {
     const newestOnly = joinedEvidenceLines([EVIDENCE_HEADING, newestLine]);
     if (newestOnly.length <= maxChars) {

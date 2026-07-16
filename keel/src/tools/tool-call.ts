@@ -106,7 +106,7 @@ function isRecoverableAgentStateToolName(
     case "memory_add":
     case "memory_forget":
       return true;
-    /* v8 ignore next 2: current agent-state tools are exactly the recoverable tools above; registry tests pin the set. */
+    // current agent-state tools are exactly the recoverable tools above; registry tests pin the set.
     default:
       return false;
   }
@@ -118,11 +118,11 @@ function builtinToolForName<Name extends ToolName>(
   const tool = builtinTools.find((candidate) =>
     isBuiltinToolForName(candidate, name),
   );
-  /* v8 ignore next 3: ToolName is derived from builtinTools. */
+  // ToolName is derived from builtinTools.
   if (tool !== undefined) {
     return tool;
   }
-  /* v8 ignore next: ToolName is derived from builtinTools. */
+  // ToolName is derived from builtinTools.
   throw new Error(`Missing builtin tool registration for ${name}`);
 }
 
@@ -216,7 +216,7 @@ function parseToolCallFromParsedArguments(
   const result = tool.args.schema.safeParse(parsedArguments);
   if (!result.success) {
     if (tool.risk.kind === "agent-state") {
-      /* v8 ignore next 3: current agent-state tools are exactly the recoverable tools above; keep the guard for future registry changes. */
+      // current agent-state tools are exactly the recoverable tools above; keep the guard for future registry changes.
       if (!isRecoverableAgentStateToolName(name)) {
         return { success: false, error: result.error };
       }
@@ -237,11 +237,11 @@ function parseToolCallFromParsedArguments(
     id,
     tool: name,
   });
-  /* v8 ignore next 3: the call is built from the matching parsed args schema plus contract-owned id/tool fields. */
+  // the call is built from the matching parsed args schema plus contract-owned id/tool fields.
   if (!toolCall.success) {
     return { success: false, error: toolCall.error };
   }
-  /* v8 ignore next 4: toolCall is built from this tool's strict schema after successful parse; the guard narrows the definition-derived union without `as`. */
+  // toolCall is built from this tool's strict schema after successful parse; the guard narrows the definition-derived union without `as`.
   if (!tool.isCall(toolCall.data)) {
     return { success: false };
   }

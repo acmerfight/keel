@@ -91,7 +91,7 @@ export async function executeManualCompaction(
           provider: resolved.provider,
           model: manualCostModel,
           maxCostUsd: remainingCostUsd,
-          /* v8 ignore next 3 -- metadata normalization is covered at the model-metadata boundary. */
+          // metadata normalization is covered at the model-metadata boundary.
           ...(modelMaxOutputTokens !== undefined
             ? { modelMaxOutputTokens }
             : {}),
@@ -181,7 +181,7 @@ export async function executeManualCompaction(
         result.failure.error instanceof CostBudgetAdmissionError
       ) {
         const cost = costBudgetLimitedReport();
-        /* v8 ignore else -- CostBudgetAdmissionError is created only by --max-cost's budget wrapper. */
+        // CostBudgetAdmissionError is created only by --max-cost's budget wrapper.
         if (options.cliArgs.maxCostUsd !== undefined) {
           options.writeStderr(
             options.formatCostReport(cost, options.cliArgs.maxCostUsd),
@@ -215,7 +215,7 @@ export async function executeManualCompaction(
     }
     if (error instanceof CostBudgetAdmissionError) {
       const cost = costBudgetLimitedReport();
-      /* v8 ignore next 3 -- the wrapper exists only when --max-cost supplied the remaining budget. */
+      // the wrapper exists only when --max-cost supplied the remaining budget.
       if (options.cliArgs.maxCostUsd !== undefined) {
         options.writeStderr(
           options.formatCostReport(cost, options.cliArgs.maxCostUsd),

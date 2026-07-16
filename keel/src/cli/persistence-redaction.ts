@@ -48,7 +48,7 @@ function redactToolCallForPersistence(toolCall: ToolCall): ToolCall {
     toolCall.tool,
     redactUnknownForPersistence(toolCallCanonicalArguments(toolCall)),
   );
-  /* v8 ignore next 3: redaction only replaces strings with strings, preserving each tool schema shape. */
+  // redaction only replaces strings with strings, preserving each tool schema shape.
   if (redacted === null) {
     throw new Error("redacted tool call failed validation");
   }

@@ -56,7 +56,7 @@ function objectValue(input: object, key: string): ObjectValue {
       return { exists: true, value };
     }
   }
-  /* v8 ignore next: same-tool canonical args share field names; this guards future schema drift. */
+  // same-tool canonical args share field names; this guards future schema drift.
   return { exists: false };
 }
 
@@ -71,7 +71,7 @@ function stableValuesEqual(left: unknown, right: unknown): boolean {
   }
 
   if (Array.isArray(left) || Array.isArray(right)) {
-    /* v8 ignore next 3: same-tool canonical args keep stable field types; this guards future schema drift. */
+    // same-tool canonical args keep stable field types; this guards future schema drift.
     if (!Array.isArray(left) || !Array.isArray(right)) {
       return false;
     }
@@ -412,7 +412,7 @@ function rebaseReplaySkillStateAfterReplace(
   replacement?: SkillLifecycleState,
 ): void {
   const current = replacement ?? state.skillStateCheckpoints.at(-1);
-  /* v8 ignore next 3 -- every session replay starts with the ordinal-zero lifecycle checkpoint. */
+  // every session replay starts with the ordinal-zero lifecycle checkpoint.
   if (current === undefined) {
     throw new Error("session skill lifecycle checkpoint is unavailable");
   }

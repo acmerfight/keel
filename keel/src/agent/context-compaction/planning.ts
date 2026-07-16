@@ -185,7 +185,7 @@ export function planCompaction(
     recentMessages,
     options.toolOutputMaxChars,
   ).messages;
-  /* v8 ignore next 5: compactStaleToolOutputs is a content-only rewrite. */
+  // compactStaleToolOutputs is a content-only rewrite.
   if (compactedRecent.length !== recentMessages.length) {
     throw new Error(
       "Stale tool output compaction must preserve message count and order",

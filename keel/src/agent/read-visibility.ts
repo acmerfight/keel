@@ -25,7 +25,7 @@ export function createReadVisibilityState(): ReadVisibilityState {
   const evictOldestVisibleReads = (): void => {
     while (visibleReads.size > VISIBLE_READS_MAX_ENTRIES) {
       const [oldestTargetPath] = visibleReads.keys();
-      /* v8 ignore next 3: size is above the cap, so the map has an oldest key. */
+      // size is above the cap, so the map has an oldest key.
       if (oldestTargetPath === undefined) {
         return;
       }

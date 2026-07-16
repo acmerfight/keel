@@ -21,7 +21,7 @@ export function hasForbiddenSkillTextCharacter(
 ): boolean {
   for (const character of text) {
     const code = character.codePointAt(0);
-    /* v8 ignore next -- iteration over a non-empty Unicode string always yields a code point. */
+    // iteration over a non-empty Unicode string always yields a code point.
     if (code === undefined) continue;
     if (
       (code < 0x20 &&
