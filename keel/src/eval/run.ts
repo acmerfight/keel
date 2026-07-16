@@ -2,7 +2,9 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  chmodSync,
   closeSync,
+  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -12,13 +14,18 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import { type RunReport, runReportSchema } from "./report-schema.ts";
-import { type EvalTask, loadEvalTasks } from "./task.ts";
+import {
+  type EvalTask,
+  loadEvalTasks,
+  type MemoryPairEvalTask,
+  type StandardEvalTask,
+} from "./task.ts";
 
 const transcriptHeaderSchema = z.object({
   schemaVersion: z.literal(1),
@@ -29,6 +36,7 @@ const transcriptHeaderSchema = z.object({
 });
 
 const packageJsonSchema = z.object({ version: z.string() });
+const KEEL_HOME_ENV = "KEEL_HOME";
 
 function keelVersion(): string {
   const raw = readFileSync(
@@ -41,6 +49,7 @@ function keelVersion(): string {
 // Trial outcomes separate harness failures (timeout, crashed) from graded
 // failures (verify_failed) so a broken environment never reads as a bad agent.
 type TrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
+type TrialCondition = "standard" | "memory_disabled" | "memory_enabled";
 
 interface TrialResult {
   readonly outcome: TrialOutcome;
@@ -81,13 +90,17 @@ function killProcessGroup(child: ReturnType<typeof spawn>): void {
 function runProcess(
   command: string,
   args: readonly string[],
-  options: { readonly cwd: string; readonly timeoutMs: number },
+  options: {
+    readonly cwd: string;
+    readonly timeoutMs: number;
+    readonly env: Readonly<NodeJS.ProcessEnv>;
+  },
 ): Promise<ProcessResult> {
   return new Promise((resolve) => {
     const child = spawn(command, [...args], {
       cwd: options.cwd,
       detached: process.platform !== "win32",
-      env: process.env,
+      env: options.env,
       stdio: ["ignore", "ignore", "pipe"],
     });
     const stderrChunks: Buffer[] = [];
@@ -188,85 +201,205 @@ function isReadableTranscript(transcriptPath: string): boolean {
   }
 }
 
-async function runTrial(
+async function runTrialInWorkspace(
   task: EvalTask,
   cliEntry: string,
   selection: EvalProviderSelection,
+  condition: TrialCondition,
+  workDir: string,
+  metaDir: string,
+  env: Readonly<NodeJS.ProcessEnv>,
   transcriptPath: string | undefined,
 ): Promise<TrialResult> {
-  return withTrialWorkspace(task, async (workDir, metaDir) => {
-    const reportPath = join(metaDir, "report.json");
-    const cliArgs = [
-      ...process.execArgv,
-      cliEntry,
-      ...(selection.providerId !== undefined
-        ? ["--provider", selection.providerId]
-        : []),
-      ...(selection.model !== undefined ? ["--model", selection.model] : []),
-      ...(task.allowBash ? ["--allow-bash"] : []),
-      ...(task.maxCostUsd !== undefined
-        ? ["--max-cost", String(task.maxCostUsd)]
-        : []),
-      "--report",
-      reportPath,
-      ...(transcriptPath !== undefined ? ["--transcript", transcriptPath] : []),
-      task.prompt,
-    ];
+  const reportPath = join(metaDir, `${condition}-report.json`);
+  const cliArgs = [
+    ...process.execArgv,
+    cliEntry,
+    ...(selection.providerId !== undefined
+      ? ["--provider", selection.providerId]
+      : []),
+    ...(selection.model !== undefined ? ["--model", selection.model] : []),
+    ...(task.allowBash ? ["--allow-bash"] : []),
+    ...(task.maxCostUsd !== undefined
+      ? ["--max-cost", String(task.maxCostUsd)]
+      : []),
+    ...(condition === "memory_enabled" ? [] : ["--no-memory"]),
+    "--report",
+    reportPath,
+    ...(transcriptPath !== undefined ? ["--transcript", transcriptPath] : []),
+    task.prompt,
+  ];
 
-    const startedAt = Date.now();
-    const run = await runProcess(process.execPath, cliArgs, {
-      cwd: workDir,
-      timeoutMs: task.timeoutMs,
-    });
-    const wallMs = Date.now() - startedAt;
+  const startedAt = Date.now();
+  const run = await runProcess(process.execPath, cliArgs, {
+    cwd: workDir,
+    timeoutMs: task.timeoutMs,
+    env,
+  });
+  const wallMs = Date.now() - startedAt;
 
-    if (run.timedOut) {
-      return {
-        outcome: "timeout",
-        wallMs,
-        ...readableTranscriptResult(transcriptPath),
-      };
-    }
-    const report = readRunReport(reportPath);
-    if (run.exitCode !== 0 || report === null) {
-      if (run.stderrTail !== "") {
-        process.stderr.write(`[${task.id}] agent stderr: ${run.stderrTail}\n`);
-      }
-      return {
-        outcome: "crashed",
-        wallMs,
-        ...readableTranscriptResult(transcriptPath),
-      };
-    }
-
-    const verify = await runProcess("bash", [task.verifyScript], {
-      cwd: workDir,
-      timeoutMs: task.scriptTimeoutMs,
-    });
-    /* v8 ignore next 3: CI and supported user environments provide bash. */
-    if (verify.spawnFailed) {
-      return {
-        outcome: "crashed",
-        wallMs,
-        report,
-        ...readableTranscriptResult(transcriptPath),
-      };
-    }
-    if (verify.timedOut) {
-      return {
-        outcome: "timeout",
-        wallMs,
-        report,
-        ...readableTranscriptResult(transcriptPath),
-      };
+  if (run.timedOut) {
+    return {
+      outcome: "timeout",
+      wallMs,
+      ...readableTranscriptResult(transcriptPath),
+    };
+  }
+  const report = readRunReport(reportPath);
+  if (run.exitCode !== 0 || report === null) {
+    if (run.stderrTail !== "") {
+      process.stderr.write(`[${task.id}] agent stderr: ${run.stderrTail}\n`);
     }
     return {
-      outcome: verify.exitCode === 0 ? "verified" : "verify_failed",
+      outcome: "crashed",
+      wallMs,
+      ...readableTranscriptResult(transcriptPath),
+    };
+  }
+
+  const verify = await runProcess("bash", [task.verifyScript], {
+    cwd: workDir,
+    timeoutMs: task.scriptTimeoutMs,
+    env,
+  });
+  /* v8 ignore next 3: CI and supported user environments provide bash. */
+  if (verify.spawnFailed) {
+    return {
+      outcome: "crashed",
       wallMs,
       report,
       ...readableTranscriptResult(transcriptPath),
     };
-  });
+  }
+  if (verify.timedOut) {
+    return {
+      outcome: "timeout",
+      wallMs,
+      report,
+      ...readableTranscriptResult(transcriptPath),
+    };
+  }
+  if (verify.exitCode === null) {
+    return {
+      outcome: "crashed",
+      wallMs,
+      report,
+      ...readableTranscriptResult(transcriptPath),
+    };
+  }
+  return {
+    outcome: verify.exitCode === 0 ? "verified" : "verify_failed",
+    wallMs,
+    report,
+    ...readableTranscriptResult(transcriptPath),
+  };
+}
+
+function runStandardTrial(
+  task: StandardEvalTask,
+  cliEntry: string,
+  selection: EvalProviderSelection,
+  transcriptPath: string | undefined,
+): Promise<TrialResult> {
+  return withTrialWorkspace(task, (workDir, metaDir) =>
+    runTrialInWorkspace(
+      task,
+      cliEntry,
+      selection,
+      "standard",
+      workDir,
+      metaDir,
+      process.env,
+      transcriptPath,
+    ),
+  );
+}
+
+interface MemoryPairTrial {
+  readonly disabled: TrialResult;
+  readonly enabled: TrialResult;
+}
+
+function copyProviderConfiguration(targetKeelHome: string): void {
+  const sourceKeelHome = process.env[KEEL_HOME_ENV] ?? join(homedir(), ".keel");
+  for (const name of ["config.json", "auth.json"]) {
+    const source = join(sourceKeelHome, name);
+    if (existsSync(source)) {
+      const target = join(targetKeelHome, name);
+      copyFileSync(source, target);
+      chmodSync(target, 0o600);
+    }
+  }
+}
+
+async function runMemoryPairTrial(
+  task: MemoryPairEvalTask,
+  cliEntry: string,
+  selection: EvalProviderSelection,
+  transcriptPaths: {
+    readonly disabled: string | undefined;
+    readonly enabled: string | undefined;
+  },
+): Promise<MemoryPairTrial> {
+  const pairRoot = mkdtempSync(join(tmpdir(), `keel-eval-${task.id}-pair-`));
+  const workDir = join(pairRoot, "workspace");
+  const snapshotDir = join(pairRoot, "snapshot");
+  const metaDir = join(pairRoot, "meta");
+  const keelHome = join(pairRoot, "home");
+  const env = { ...process.env, KEEL_HOME: keelHome };
+
+  try {
+    cpSync(task.workspaceDir, workDir, { recursive: true });
+    mkdirSync(metaDir, { recursive: true });
+    mkdirSync(keelHome, { recursive: true });
+    copyProviderConfiguration(keelHome);
+
+    const initialized = await runProcess("git", ["init", "--quiet"], {
+      cwd: workDir,
+      timeoutMs: task.scriptTimeoutMs,
+      env,
+    });
+    if (initialized.exitCode !== 0) {
+      throw new Error(`git init failed: ${initialized.stderrTail}`);
+    }
+
+    const seeded = await runProcess(
+      process.execPath,
+      [...process.execArgv, cliEntry, "memory", "add", task.memory],
+      { cwd: workDir, timeoutMs: task.scriptTimeoutMs, env },
+    );
+    if (seeded.exitCode !== 0) {
+      throw new Error(`memory add failed: ${seeded.stderrTail}`);
+    }
+
+    cpSync(workDir, snapshotDir, { recursive: true });
+    const disabled = await runTrialInWorkspace(
+      task,
+      cliEntry,
+      selection,
+      "memory_disabled",
+      workDir,
+      metaDir,
+      env,
+      transcriptPaths.disabled,
+    );
+
+    rmSync(workDir, { recursive: true, force: true });
+    cpSync(snapshotDir, workDir, { recursive: true });
+    const enabled = await runTrialInWorkspace(
+      task,
+      cliEntry,
+      selection,
+      "memory_enabled",
+      workDir,
+      metaDir,
+      env,
+      transcriptPaths.enabled,
+    );
+    return { disabled, enabled };
+  } finally {
+    rmSync(pairRoot, { recursive: true, force: true });
+  }
 }
 
 async function checkTask(task: EvalTask): Promise<boolean> {
@@ -274,23 +407,27 @@ async function checkTask(task: EvalTask): Promise<boolean> {
     const solution = await runProcess("bash", [task.solutionScript], {
       cwd: workDir,
       timeoutMs: task.scriptTimeoutMs,
+      env: process.env,
     });
     if (solution.exitCode !== 0) return false;
 
     const verify = await runProcess("bash", [task.verifyScript], {
       cwd: workDir,
       timeoutMs: task.scriptTimeoutMs,
+      env: process.env,
     });
     return verify.exitCode === 0;
   });
 }
 
 interface ResultLine {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly timestamp: string;
   readonly keelVersion: string;
   readonly taskId: string;
   readonly trial: number;
+  readonly condition: TrialCondition;
+  readonly requiredToPass: boolean;
   readonly pass: boolean;
   readonly outcome: TrialOutcome;
   readonly wallMs: number;
@@ -329,10 +466,17 @@ function ensureResultOutputFile(outFile: string): boolean {
   }
 }
 
-function appendResultLine(outFile: string, line: ResultLine): boolean {
+function appendResultLines(
+  outFile: string,
+  lines: readonly ResultLine[],
+): boolean {
   if (!ensureResultOutputDirectory(outFile)) return false;
   try {
-    appendFileSync(outFile, `${JSON.stringify(line)}\n`, "utf8");
+    appendFileSync(
+      outFile,
+      lines.map((line) => `${JSON.stringify(line)}\n`).join(""),
+      "utf8",
+    );
     return true;
   } catch (error) {
     process.stderr.write(
@@ -340,6 +484,31 @@ function appendResultLine(outFile: string, line: ResultLine): boolean {
     );
     return false;
   }
+}
+
+function trialResultLine(
+  version: string,
+  task: EvalTask,
+  trial: number,
+  condition: TrialCondition,
+  result: TrialResult,
+): ResultLine {
+  return {
+    schemaVersion: 2,
+    timestamp: new Date().toISOString(),
+    keelVersion: version,
+    taskId: task.id,
+    trial,
+    condition,
+    requiredToPass: condition !== "memory_disabled",
+    pass: result.outcome === "verified",
+    outcome: result.outcome,
+    wallMs: result.wallMs,
+    ...(result.report !== undefined ? { report: result.report } : {}),
+    ...(result.transcriptPath !== undefined
+      ? { transcriptPath: result.transcriptPath }
+      : {}),
+  };
 }
 
 function ensureTranscriptRunDirectory(transcriptRunDir: string): boolean {
@@ -419,9 +588,86 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
 
   if (!ensureResultOutputFile(args.outFile)) return 1;
 
+  const selection: EvalProviderSelection = {
+    ...(args.providerId !== undefined ? { providerId: args.providerId } : {}),
+    ...(args.model !== undefined ? { model: args.model } : {}),
+  };
   let passingTasks = 0;
   let passingTrials = 0;
   for (const task of tasks) {
+    if (task.kind === "memory_pair") {
+      let disabledPasses = 0;
+      let enabledPasses = 0;
+      let pairPasses = 0;
+      for (let trial = 1; trial <= args.trials; trial++) {
+        const transcriptPrefix =
+          transcriptRunDir === undefined
+            ? undefined
+            : join(transcriptRunDir, `${artifactName(task.id)}-trial-${trial}`);
+        let pair: MemoryPairTrial;
+        try {
+          pair = await runMemoryPairTrial(task, args.cliEntry, selection, {
+            disabled:
+              transcriptPrefix === undefined
+                ? undefined
+                : `${transcriptPrefix}-memory-disabled.jsonl`,
+            enabled:
+              transcriptPrefix === undefined
+                ? undefined
+                : `${transcriptPrefix}-memory-enabled.jsonl`,
+          });
+        } catch (error) {
+          process.stderr.write(
+            `Error: memory eval setup for ${task.id} failed: ${errorMessage(error)}\n`,
+          );
+          return 1;
+        }
+
+        if (
+          !appendResultLines(args.outFile, [
+            trialResultLine(
+              version,
+              task,
+              trial,
+              "memory_disabled",
+              pair.disabled,
+            ),
+            trialResultLine(
+              version,
+              task,
+              trial,
+              "memory_enabled",
+              pair.enabled,
+            ),
+          ])
+        ) {
+          return 1;
+        }
+        process.stderr.write(
+          `[${task.id}] trial ${trial} disabled: ${pair.disabled.outcome} (${pair.disabled.wallMs}ms)\n`,
+        );
+        process.stderr.write(
+          `[${task.id}] trial ${trial} enabled: ${pair.enabled.outcome} (${pair.enabled.wallMs}ms)\n`,
+        );
+
+        if (pair.disabled.outcome === "verified") disabledPasses++;
+        if (pair.enabled.outcome === "verified") enabledPasses++;
+        if (
+          pair.enabled.outcome === "verified" &&
+          pair.disabled.outcome !== "timeout" &&
+          pair.disabled.outcome !== "crashed"
+        ) {
+          pairPasses++;
+        }
+      }
+      if (pairPasses === args.trials) passingTasks++;
+      passingTrials += pairPasses;
+      process.stdout.write(
+        `${task.id}: disabled ${disabledPasses}/${args.trials}, enabled ${enabledPasses}/${args.trials}\n`,
+      );
+      continue;
+    }
+
     let passes = 0;
     for (let trial = 1; trial <= args.trials; trial++) {
       const transcriptPath =
@@ -431,33 +677,17 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
               transcriptRunDir,
               `${artifactName(task.id)}-trial-${trial}.jsonl`,
             );
-      const result = await runTrial(
+      const result = await runStandardTrial(
         task,
         args.cliEntry,
-        {
-          ...(args.providerId !== undefined
-            ? { providerId: args.providerId }
-            : {}),
-          ...(args.model !== undefined ? { model: args.model } : {}),
-        },
+        selection,
         transcriptPath,
       );
       const pass = result.outcome === "verified";
       if (pass) passes++;
-      const appended = appendResultLine(args.outFile, {
-        schemaVersion: 1,
-        timestamp: new Date().toISOString(),
-        keelVersion: version,
-        taskId: task.id,
-        trial,
-        pass,
-        outcome: result.outcome,
-        wallMs: result.wallMs,
-        ...(result.report !== undefined ? { report: result.report } : {}),
-        ...(result.transcriptPath !== undefined
-          ? { transcriptPath: result.transcriptPath }
-          : {}),
-      });
+      const appended = appendResultLines(args.outFile, [
+        trialResultLine(version, task, trial, "standard", result),
+      ]);
       if (!appended) return 1;
       process.stderr.write(
         `[${task.id}] trial ${trial}: ${result.outcome} (${result.wallMs}ms)\n`,
@@ -473,5 +703,5 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
     `suite: ${passingTasks}/${tasks.length} tasks pass (${passingTrials}/${totalTrials} trials)\n`,
   );
   process.stdout.write(`results: ${args.outFile}\n`);
-  return passingTrials === totalTrials ? 0 : 1;
+  return passingTasks === tasks.length ? 0 : 1;
 }

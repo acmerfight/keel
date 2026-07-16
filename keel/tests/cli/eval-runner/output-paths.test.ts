@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   CLI_ENTRY,
   createEvalDir,
+  createMemoryPairTask,
   createTask,
   FIX_NOTE_TASK,
   join,
@@ -14,6 +15,68 @@ import {
 } from "./fixtures.ts";
 
 describe("Eval Runner", () => {
+  test(`Given a memory pair loses its output directory after both arms run,
+    When the eval runner records the pair,
+    Then it returns a clean output error without a partial pair`, async () => {
+    // Given
+    const { root, suiteDir } = await createEvalDir();
+    const outParent = join(root, "paired-results");
+    const outFile = join(outParent, "results.jsonl");
+    await createMemoryPairTask(suiteDir, "paired-output-race", {
+      prompt: "use memory",
+      verify: "exit 0\n",
+      solution: "exit 0\n",
+      timeoutMs: 10_000,
+      scriptTimeoutMs: 10_000,
+      allowBash: false,
+      maxCostUsd: 0.01,
+      memory: "A project fact.",
+    });
+    const cliEntry = join(root, "break-paired-output.mjs");
+    const validReportJson = JSON.stringify(VALID_REPORT);
+    await writeFile(
+      cliEntry,
+      [
+        "import { rmSync, writeFileSync } from 'node:fs';",
+        "const args = process.argv.slice(2);",
+        "if (args[0] === 'memory' && args[1] === 'add') process.exit(0);",
+        "const reportIndex = args.indexOf('--report');",
+        `writeFileSync(args[reportIndex + 1], ${JSON.stringify(validReportJson)}, 'utf8');`,
+        "if (!args.includes('--no-memory')) {",
+        `  rmSync(${JSON.stringify(outParent)}, { recursive: true, force: true });`,
+        `  writeFileSync(${JSON.stringify(outParent)}, 'not a directory\\n', 'utf8');`,
+        "}",
+      ].join("\n"),
+      "utf8",
+    );
+    let stderr = "";
+    const writeStderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stderr += chunk.toString();
+        return true;
+      });
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("Error: cannot write eval results");
+      expect(stderr).not.toContain("\n    at ");
+    } finally {
+      writeStderr.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the eval results output parent is a file,
     When the eval runner prepares the output file,
     Then it returns a clean output-path error without throwing a stack trace`, async () => {

@@ -41,6 +41,44 @@ function runCompare(baseFile: string, headFile: string): CommandResult {
 }
 
 describe("Eval Compare", () => {
+  test(`Given paired memory results share one task ID,
+    When the compare command summarizes them,
+    Then disabled and enabled conditions remain separate`, async () => {
+    // Given
+    const root = await mkdtemp(join(tmpdir(), "keel-eval-compare-memory-"));
+    const baseFile = join(root, "base.jsonl");
+    const headFile = join(root, "head.jsonl");
+    const pairedResults = [
+      resultLine({
+        taskId: "memory-task",
+        trial: 1,
+        condition: "memory_disabled",
+        pass: false,
+      }),
+      resultLine({
+        taskId: "memory-task",
+        trial: 1,
+        condition: "memory_enabled",
+        pass: true,
+      }),
+    ];
+    await writeResultFile(baseFile, pairedResults);
+    await writeResultFile(headFile, pairedResults);
+
+    try {
+      // When
+      const result = runCompare(baseFile, headFile);
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("task: memory-task [memory_disabled]");
+      expect(result.stdout).toContain("task: memory-task [memory_enabled]");
+      expect(result.stdout).toContain("suite pass: 1/2 (50.0%) -> 1/2 (50.0%)");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given two eval result files with score and efficiency changes,
     When the compare command runs,
     Then it reports task statuses, metric deltas, and regression transcripts`, async () => {
@@ -375,7 +413,7 @@ describe("Eval Compare", () => {
       // Then
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toBe("");
-      expect(result.stderr).toContain("line 1 is not a schemaVersion 1");
+      expect(result.stderr).toContain("line 1 is not a schemaVersion 2");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
