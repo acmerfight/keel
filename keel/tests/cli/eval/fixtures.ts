@@ -1,8 +1,10 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { z } from "zod";
-import { runReportSchema } from "../../../src/eval/report-schema.ts";
+import {
+  type EvalResultLine,
+  evalResultLineSchema as resultLineSchema,
+} from "../../../src/eval/result.ts";
 import { runCli } from "../../../src/testing/cli-harness.ts";
 import {
   evalResultLine as resultLine,
@@ -16,26 +18,14 @@ export {
   mkdtemp,
   readFile,
   resultLine,
+  resultLineSchema,
   rm,
   runCli,
   runReport,
   tmpdir,
   writeFile,
   writeResultFile,
-  z,
 };
-export const resultLineSchema = z.object({
-  schemaVersion: z.literal(1),
-  timestamp: z.string(),
-  keelVersion: z.string(),
-  taskId: z.string(),
-  trial: z.number().int().positive(),
-  pass: z.boolean(),
-  outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
-  wallMs: z.number().nonnegative(),
-  report: runReportSchema.optional(),
-  transcriptPath: z.string().optional(),
-});
 
 export interface TaskFixture {
   readonly prompt: string;
@@ -56,13 +46,13 @@ export async function createTask(
   await writeFile(
     join(taskDir, "task.json"),
     JSON.stringify({
+      kind: "standard",
+      corpusVersion: "test-v1",
       prompt: fixture.prompt,
-      ...(fixture.timeoutMs !== undefined
-        ? { timeoutMs: fixture.timeoutMs }
-        : {}),
-      ...(fixture.scriptTimeoutMs !== undefined
-        ? { scriptTimeoutMs: fixture.scriptTimeoutMs }
-        : {}),
+      timeoutMs: fixture.timeoutMs ?? 300_000,
+      scriptTimeoutMs: fixture.scriptTimeoutMs ?? 60_000,
+      allowBash: false,
+      maxCostUsd: 0.05,
     }),
     "utf8",
   );
@@ -90,7 +80,7 @@ export async function createEvalDir(): Promise<{
 
 export async function readResultLines(
   outFile: string,
-): Promise<readonly z.infer<typeof resultLineSchema>[]> {
+): Promise<readonly EvalResultLine[]> {
   const raw = await readFile(outFile, "utf8");
   return raw
     .split("\n")

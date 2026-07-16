@@ -338,9 +338,7 @@ describe("Eval Runner", () => {
 
       // Then
       expect(exitCode).toBe(0);
-      expect(
-        (await readResultLines(outFile))[0]?.transcriptPath,
-      ).toBeUndefined();
+      expect((await readResultLines(outFile))[0]?.transcriptPath).toBeNull();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

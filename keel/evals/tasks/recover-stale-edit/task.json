@@ -1,5 +1,9 @@
 {
+  "kind": "standard",
+  "corpusVersion": "core-v1",
   "prompt": "A stale bug report says status.js contains `const statusText = \"Pending\";`, but the file has changed since then. Update the current implementation so `statusLabel()` returns \"Ready\". Do not rewrite unrelated exports.",
   "timeoutMs": 240000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
   "maxCostUsd": 0.05
 }

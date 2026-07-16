@@ -1,5 +1,9 @@
 {
+  "kind": "standard",
+  "corpusVersion": "core-v1",
   "prompt": "In config.ini, change only the server timeout from 10 to 30. Leave the client timeout at 10.",
   "timeoutMs": 240000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
   "maxCostUsd": 0.05
 }

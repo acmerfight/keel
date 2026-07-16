@@ -1,5 +1,9 @@
 {
+  "kind": "standard",
+  "corpusVersion": "core-v1",
   "prompt": "This project retries failed requests too few times. Find where MAX_RETRIES is defined and change it from 3 to 5.",
   "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
   "maxCostUsd": 0.05
 }

@@ -1,5 +1,9 @@
 {
+  "kind": "standard",
+  "corpusVersion": "core-v1",
   "prompt": "Fix the spelling mistake in README.md: \"Instal\" should be \"Install\". Do not change anything else.",
   "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
   "maxCostUsd": 0.05
 }

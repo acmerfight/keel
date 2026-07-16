@@ -146,8 +146,11 @@ What a user can do today:
   schema-versioned JSONL.
 - `keel eval [--check] [--trials <n>]` — run a repeatable harness eval suite
   from `evals/tasks`, with per-trial JSONL results and reference-solution
-  verifier checks. `--transcript-dir <dir>` keeps one readable transcript
-  artifact per trial and links it from the result JSONL when produced.
+  verifier checks. Memory-pair tasks run the same configured snapshot under
+  `--no-memory` and enabled memory, recording exact tool arguments, loaded IDs,
+  structural/behavioral failures, and paired cost/success deltas.
+  `--transcript-dir <dir>` keeps one readable transcript artifact per run and
+  links it from the result JSONL when produced.
   `keel eval compare --base <old.jsonl> --head <new.jsonl>` compares two
   result files by task, including pass, outcome, turn, token, cost, wall-time,
   harness-failure, and regression transcript-path deltas.
@@ -270,7 +273,10 @@ Known limits that shape the priorities below:
    editing, stale edit recovery, repeated-string disambiguation,
    test-preserving bug fixes, and pattern-following feature additions. Result
    comparison now reports per-task score, human-intervention, and efficiency
-   deltas with transcript paths for regressions. This baseline is enough to keep
+   deltas with transcript paths for regressions. Versioned memory-pair tasks
+   additionally isolate exact governed-memory snapshots across disabled and
+   enabled conditions, separate structural failures from model behavior, and
+   preserve tool/cost/latency evidence for provider comparison. This baseline is enough to keep
    the quality goal falsifiable while replacement work continues. Add or update
    eval tasks when a real daily-use failure is being fixed or preserved, but do
    not pick standalone corpus growth, external agent runners, or cross-agent

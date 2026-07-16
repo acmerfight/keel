@@ -1,0 +1,18 @@
+{
+  "kind": "memory_pair",
+  "corpusVersion": "memory-v1",
+  "prompt": "Update release.json so validationCommand uses this project's established release validation command. Preserve every other field.",
+  "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.05,
+  "passPolicy": "enabled_must_pass",
+  "memorySetup": [
+    {
+      "operation": "add",
+      "alias": "validation-command",
+      "text": "The established release validation command is pnpm test:coverage.",
+      "lifecycle": "current"
+    }
+  ]
+}

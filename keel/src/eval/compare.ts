@@ -1,25 +1,12 @@
 import { readFileSync } from "node:fs";
-import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
-import { type RunReport, runReportSchema } from "./report-schema.ts";
-
-const outcomes = ["verified", "verify_failed", "timeout", "crashed"] as const;
-
-const evalResultLineSchema = z.object({
-  schemaVersion: z.literal(1),
-  timestamp: z.string(),
-  keelVersion: z.string(),
-  taskId: z.string(),
-  trial: z.number().int().positive(),
-  pass: z.boolean(),
-  outcome: z.enum(outcomes),
-  wallMs: z.number().nonnegative(),
-  report: runReportSchema.optional(),
-  transcriptPath: z.string().optional(),
-});
-
-type ResultLine = z.infer<typeof evalResultLineSchema>;
-type TrialOutcome = z.infer<typeof evalResultLineSchema>["outcome"];
+import type { RunReport } from "./report-schema.ts";
+import {
+  evalResultLineSchema,
+  type EvalResultLine as ResultLine,
+  type TrialOutcome,
+  trialOutcomes,
+} from "./result.ts";
 
 interface MetricSummary {
   readonly count: number;
@@ -39,6 +26,7 @@ interface TaskSummary {
   readonly outcomes: readonly OutcomeCount[];
   readonly harnessFailures: number;
   readonly harnessFailureRate: number;
+  readonly structuralFailures: readonly string[];
   readonly failedTranscripts: readonly string[];
   readonly humanInterventions: MetricSummary;
   readonly turns: MetricSummary;
@@ -79,7 +67,7 @@ function readEvalResultLines(filePath: string): readonly ResultLine[] {
     const parsedLine = evalResultLineSchema.safeParse(parsedJson);
     if (!parsedLine.success) {
       throw new Error(
-        `cannot read eval result file ${filePath}: line ${index + 1} is not a schemaVersion 1 eval result.`,
+        `cannot read eval result file ${filePath}: line ${index + 1} is not a schemaVersion 2 eval result.`,
       );
     }
     results.push(parsedLine.data);
@@ -97,10 +85,14 @@ function groupByTask(
 ): ReadonlyMap<string, readonly ResultLine[]> {
   const groups = new Map<string, ResultLine[]>();
   for (const line of lines) {
-    let group = groups.get(line.taskId);
+    const groupId =
+      line.condition === "standard"
+        ? line.taskId
+        : `${line.taskId} [${line.condition}]`;
+    let group = groups.get(groupId);
     if (group === undefined) {
       group = [];
-      groups.set(line.taskId, group);
+      groups.set(groupId, group);
     }
     group.push(line);
   }
@@ -119,7 +111,7 @@ function reportMetric(
 ): MetricSummary {
   const values: number[] = [];
   for (const line of lines) {
-    if (line.report !== undefined) values.push(read(line.report));
+    if (line.report !== null) values.push(read(line.report));
   }
   return summarizeMetric(values);
 }
@@ -129,7 +121,7 @@ function summarizeTask(
   lines: readonly ResultLine[],
 ): TaskSummary {
   const passes = lines.filter((line) => line.pass).length;
-  const outcomesForTask = outcomes.map((outcome) => ({
+  const outcomesForTask = trialOutcomes.map((outcome) => ({
     outcome,
     count: lines.filter((line) => line.outcome === outcome).length,
   }));
@@ -137,7 +129,7 @@ function summarizeTask(
     (line) => line.outcome === "timeout" || line.outcome === "crashed",
   ).length;
   const failedTranscripts = lines.flatMap((line) =>
-    line.pass === false && line.transcriptPath !== undefined
+    line.pass === false && line.transcriptPath !== null
       ? [line.transcriptPath]
       : [],
   );
@@ -150,6 +142,7 @@ function summarizeTask(
     outcomes: outcomesForTask,
     harnessFailures,
     harnessFailureRate: harnessFailures / lines.length,
+    structuralFailures: lines.flatMap((line) => line.structuralFailures),
     failedTranscripts,
     humanInterventions: reportMetric(
       lines,
@@ -277,6 +270,7 @@ function statusFor(
 ): string {
   if (base === undefined) return "ADDED";
   if (head === undefined) return "REMOVED";
+  if (head.structuralFailures.length > 0) return "STRUCTURAL FAILURE";
   if (head.harnessFailureRate > base.harnessFailureRate) {
     return "HARNESS FAILURE";
   }
@@ -346,10 +340,19 @@ function renderTaskComparison(
     lines.push(`  head harness failures: ${head.harnessFailures}`);
   }
 
+  if (head !== undefined && head.structuralFailures.length > 0) {
+    lines.push("  structural failures:");
+    for (const failure of head.structuralFailures) {
+      lines.push(`    ${failure}`);
+    }
+  }
+
   if (
     head !== undefined &&
     head.failedTranscripts.length > 0 &&
-    (status === "REGRESSION" || status === "HARNESS FAILURE")
+    (status === "REGRESSION" ||
+      status === "HARNESS FAILURE" ||
+      status === "STRUCTURAL FAILURE")
   ) {
     lines.push("  regression transcripts:");
     for (const transcriptPath of head.failedTranscripts) {

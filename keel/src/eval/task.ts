@@ -3,32 +3,113 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 
-const DEFAULT_TASK_TIMEOUT_MS = 300_000;
-const DEFAULT_SCRIPT_TIMEOUT_MS = 60_000;
-
-const taskConfigSchema = z.object({
+const commonTaskConfig = {
+  corpusVersion: z.string().min(1),
   prompt: z.string().min(1),
-  timeoutMs: z.number().int().positive().default(DEFAULT_TASK_TIMEOUT_MS),
-  scriptTimeoutMs: z
-    .number()
-    .int()
-    .positive()
-    .default(DEFAULT_SCRIPT_TIMEOUT_MS),
-  allowBash: z.boolean().default(false),
-  maxCostUsd: z.number().positive().optional(),
-});
+  timeoutMs: z.number().int().positive(),
+  scriptTimeoutMs: z.number().int().positive(),
+  allowBash: z.boolean(),
+  maxCostUsd: z.number().positive(),
+};
 
-export interface EvalTask {
+const standardTaskConfigSchema = z
+  .object({
+    kind: z.literal("standard"),
+    ...commonTaskConfig,
+  })
+  .strict();
+
+const memoryAliasSchema = z.string().regex(/^[a-z][a-z0-9_-]*$/u);
+const scheduledMemoryFields = {
+  alias: memoryAliasSchema,
+  text: z.string().min(1),
+  lifecycle: z.enum(["current", "stale"]),
+};
+
+const memorySetupOperationSchema = z.discriminatedUnion("operation", [
+  z.object({ operation: z.literal("add"), ...scheduledMemoryFields }).strict(),
+  z
+    .object({
+      operation: z.literal("update"),
+      target: memoryAliasSchema,
+      ...scheduledMemoryFields,
+    })
+    .strict(),
+  z
+    .object({ operation: z.literal("forget"), target: memoryAliasSchema })
+    .strict(),
+]);
+
+const memoryPairTaskConfigSchema = z
+  .object({
+    kind: z.literal("memory_pair"),
+    ...commonTaskConfig,
+    passPolicy: z.enum(["both_must_pass", "enabled_must_pass"]),
+    memorySetup: z.array(memorySetupOperationSchema).min(1),
+  })
+  .strict()
+  .superRefine((config, ctx) => {
+    const activeAliases = new Set<string>();
+    const allAliases = new Set<string>();
+    for (const [index, operation] of config.memorySetup.entries()) {
+      if (operation.operation === "add" || operation.operation === "update") {
+        if (allAliases.has(operation.alias)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["memorySetup", index, "alias"],
+            message: `memory alias "${operation.alias}" is duplicated`,
+          });
+        }
+        allAliases.add(operation.alias);
+      }
+      if (operation.operation === "add") {
+        activeAliases.add(operation.alias);
+        continue;
+      }
+      if (!activeAliases.has(operation.target)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["memorySetup", index, "target"],
+          message: `memory target "${operation.target}" is not active`,
+        });
+        continue;
+      }
+      activeAliases.delete(operation.target);
+      if (operation.operation === "update") {
+        activeAliases.add(operation.alias);
+      }
+    }
+  });
+
+const taskConfigSchema = z.discriminatedUnion("kind", [
+  standardTaskConfigSchema,
+  memoryPairTaskConfigSchema,
+]);
+
+interface EvalTaskBase {
   readonly id: string;
   readonly workspaceDir: string;
   readonly verifyScript: string;
   readonly solutionScript: string;
+  readonly corpusVersion: string;
   readonly prompt: string;
   readonly timeoutMs: number;
   readonly scriptTimeoutMs: number;
   readonly allowBash: boolean;
-  readonly maxCostUsd?: number;
+  readonly maxCostUsd: number;
 }
+
+export interface StandardEvalTask extends EvalTaskBase {
+  readonly kind: "standard";
+}
+
+export interface MemoryPairEvalTask extends EvalTaskBase {
+  readonly kind: "memory_pair";
+  readonly passPolicy: "both_must_pass" | "enabled_must_pass";
+  readonly memorySetup: readonly z.infer<typeof memorySetupOperationSchema>[];
+}
+
+export type EvalTask = StandardEvalTask | MemoryPairEvalTask;
 
 function parseTaskConfig(
   id: string,
@@ -78,18 +159,26 @@ function loadTask(suiteDir: string, id: string): EvalTask {
     throw new Error(`eval task "${id}" is missing solution.sh`);
   }
 
-  return {
+  const common = {
     id,
     workspaceDir,
     verifyScript,
     solutionScript,
+    corpusVersion: config.corpusVersion,
     prompt: config.prompt,
     timeoutMs: config.timeoutMs,
     scriptTimeoutMs: config.scriptTimeoutMs,
     allowBash: config.allowBash,
-    ...(config.maxCostUsd !== undefined
-      ? { maxCostUsd: config.maxCostUsd }
-      : {}),
+    maxCostUsd: config.maxCostUsd,
+  };
+  if (config.kind === "standard") {
+    return { kind: "standard", ...common };
+  }
+  return {
+    kind: "memory_pair",
+    ...common,
+    passPolicy: config.passPolicy,
+    memorySetup: config.memorySetup,
   };
 }
 

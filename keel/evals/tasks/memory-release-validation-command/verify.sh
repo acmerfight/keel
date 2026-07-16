@@ -1,0 +1,1 @@
+node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync("release.json","utf8")); if (value.validationCommand!=="pnpm test:coverage" || value.owner!=="release-engineering" || value.publish!==false || Object.keys(value).length!==3) process.exit(1)'

@@ -155,10 +155,7 @@ function formatMemoryStatus(memory: RunReportMemory | undefined): string {
   if (memory.error !== undefined)
     return `error - ${formatStatusText(memory.error)}`;
   const scope = memory.scope?.id ?? "unknown";
-  const estimatedTokens =
-    memory.estimatedTokens === undefined
-      ? "token estimate unavailable"
-      : `~${memory.estimatedTokens} tokens`;
+  const estimatedTokens = `~${memory.estimatedTokens} tokens`;
   const loadedIds =
     memory.loadedIds.length === 0
       ? "none"

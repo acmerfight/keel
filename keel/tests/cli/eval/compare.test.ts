@@ -202,9 +202,9 @@ describe("CLI Eval", () => {
     }
   });
 
-  test(`Given an eval result contains an obsolete v1 run report,
+  test(`Given an eval result uses the pre-v2 result protocol,
     When user compares it with a current result file,
-    Then the CLI rejects the old report schema`, async () => {
+    Then the CLI rejects the old result protocol`, async () => {
     // Given
     const root = await mkdtemp(join(tmpdir(), "keel-eval-compare-old-report-"));
     const baseFile = join(root, "base.jsonl");
@@ -259,7 +259,7 @@ describe("CLI Eval", () => {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(baseFile);
       expect(result.stderr).toContain(
-        "line 1 is not a schemaVersion 1 eval result",
+        "line 1 is not a schemaVersion 2 eval result",
       );
     } finally {
       await rm(root, { recursive: true, force: true });

@@ -2,8 +2,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach } from "vitest";
-import { z } from "zod";
-import { runReportSchema } from "../../../src/eval/report-schema.ts";
+import {
+  type EvalResultLine,
+  evalResultLineSchema as resultLineSchema,
+} from "../../../src/eval/result.ts";
 import { runEvalCommand } from "../../../src/eval/run.ts";
 
 export {
@@ -12,21 +14,12 @@ export {
   mkdir,
   mkdtemp,
   readFile,
+  resultLineSchema,
   rm,
   runEvalCommand,
   tmpdir,
   writeFile,
-  z,
 };
-export const resultLineSchema = z.object({
-  schemaVersion: z.literal(1),
-  taskId: z.string(),
-  trial: z.number().int().positive(),
-  pass: z.boolean(),
-  outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
-  report: runReportSchema.optional(),
-  transcriptPath: z.string().optional(),
-});
 
 export interface TaskFixture {
   readonly prompt: string;
@@ -60,19 +53,13 @@ export async function createTask(
   await writeFile(
     join(taskDir, "task.json"),
     JSON.stringify({
+      kind: "standard",
+      corpusVersion: "test-v1",
       prompt: fixture.prompt,
-      ...(fixture.timeoutMs !== undefined
-        ? { timeoutMs: fixture.timeoutMs }
-        : {}),
-      ...(fixture.scriptTimeoutMs !== undefined
-        ? { scriptTimeoutMs: fixture.scriptTimeoutMs }
-        : {}),
-      ...(fixture.allowBash !== undefined
-        ? { allowBash: fixture.allowBash }
-        : {}),
-      ...(fixture.maxCostUsd !== undefined
-        ? { maxCostUsd: fixture.maxCostUsd }
-        : {}),
+      timeoutMs: fixture.timeoutMs ?? 300_000,
+      scriptTimeoutMs: fixture.scriptTimeoutMs ?? 60_000,
+      allowBash: fixture.allowBash ?? false,
+      maxCostUsd: fixture.maxCostUsd ?? 0.05,
     }),
     "utf8",
   );
@@ -89,7 +76,7 @@ export async function createTask(
 
 export async function readResultLines(
   outFile: string,
-): Promise<readonly z.infer<typeof resultLineSchema>[]> {
+): Promise<readonly EvalResultLine[]> {
   const raw = await readFile(outFile, "utf8");
   return raw
     .split("\n")

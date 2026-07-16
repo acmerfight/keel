@@ -1,0 +1,28 @@
+{
+  "kind": "memory_pair",
+  "corpusVersion": "memory-v1",
+  "prompt": "Create port.txt containing only the current service port from defaults.json.",
+  "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.05,
+  "passPolicy": "both_must_pass",
+  "memorySetup": [
+    {
+      "operation": "add",
+      "alias": "retired-port",
+      "text": "The service port is 7000.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "forget",
+      "target": "retired-port"
+    },
+    {
+      "operation": "add",
+      "alias": "package-manager",
+      "text": "This project uses pnpm for package management.",
+      "lifecycle": "current"
+    }
+  ]
+}

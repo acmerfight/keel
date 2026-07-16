@@ -1,6 +1,9 @@
 {
+  "kind": "standard",
+  "corpusVersion": "core-v1",
   "prompt": "The test in this project fails: node test.js exits with an error. Find the bug in the implementation (not in the test), fix it, and make sure node test.js passes.",
   "timeoutMs": 240000,
+  "scriptTimeoutMs": 60000,
   "allowBash": true,
   "maxCostUsd": 0.05
 }

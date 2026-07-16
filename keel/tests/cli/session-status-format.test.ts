@@ -189,6 +189,7 @@ describe("CLI Session Status Format", () => {
         loadedIds: [],
         loadedEntries: [],
         renderedBytes: 0,
+        estimatedTokens: 0,
         operations: [],
         error: "Error: invalid memory\nignored detail",
       },
@@ -201,6 +202,7 @@ describe("CLI Session Status Format", () => {
         loadedIds: [],
         loadedEntries: [],
         renderedBytes: 0,
+        estimatedTokens: 0,
         operations: [],
       },
     });
@@ -211,7 +213,7 @@ describe("CLI Session Status Format", () => {
       "  memory: error - Error: invalid memory ignored detail\n",
     );
     expect(unavailable).toContain(
-      "  memory: 0 loaded for project unknown; IDs: none; lifecycle: none (0 bytes, token estimate unavailable)\n",
+      "  memory: 0 loaded for project unknown; IDs: none; lifecycle: none (0 bytes, ~0 tokens)\n",
     );
   });
 

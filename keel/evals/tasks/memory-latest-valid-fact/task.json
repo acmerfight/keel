@@ -1,0 +1,25 @@
+{
+  "kind": "memory_pair",
+  "corpusVersion": "memory-v1",
+  "prompt": "Create branch.txt containing only the current release branch name for this project.",
+  "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.05,
+  "passPolicy": "enabled_must_pass",
+  "memorySetup": [
+    {
+      "operation": "add",
+      "alias": "old-branch",
+      "text": "The release branch is legacy/2025-q4.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "update",
+      "target": "old-branch",
+      "alias": "current-branch",
+      "text": "The release branch is stable/2026-q3.",
+      "lifecycle": "current"
+    }
+  ]
+}

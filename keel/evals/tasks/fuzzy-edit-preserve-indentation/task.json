@@ -1,5 +1,9 @@
 {
+  "kind": "standard",
+  "corpusVersion": "core-v1",
   "prompt": "In report.js, update renderReport so each row uses status \"ready\" instead of \"pending\".\n\nApply this block edit. Use the old block exactly as written below as the edit target; do not add leading spaces to the block. Keep the existing indentation and blank lines in the file.\n\nOld block:\n```\nconst rows = items.map((item) => ({\n  id: item.id,\n  label: item.label,\n  status: \"pending\",\n}));\n```\n\nNew block:\n```\nconst rows = items.map((item) => ({\n  id: item.id,\n  label: item.label,\n  status: \"ready\",\n}));\n```",
   "timeoutMs": 240000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
   "maxCostUsd": 0.05
 }

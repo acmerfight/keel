@@ -1,0 +1,78 @@
+{
+  "kind": "memory_pair",
+  "corpusVersion": "memory-v1",
+  "prompt": "Create owner.txt containing only the current incident-response owner for this project.",
+  "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.05,
+  "passPolicy": "enabled_must_pass",
+  "memorySetup": [
+    {
+      "operation": "add",
+      "alias": "incident-owner",
+      "text": "The current incident-response owner is Team Otter.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "add",
+      "alias": "distractor-1",
+      "text": "Documentation examples use the color indigo.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "add",
+      "alias": "distractor-2",
+      "text": "The sample database is named orchard_demo.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "add",
+      "alias": "distractor-3",
+      "text": "Weekly dependency updates are reviewed on Tuesday.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "add",
+      "alias": "distractor-4",
+      "text": "Local screenshots belong in tmp/screenshots.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "add",
+      "alias": "distractor-5",
+      "text": "Demo accounts use the display name River.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "add",
+      "alias": "distractor-6",
+      "text": "Architecture diagrams use rounded rectangles.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "add",
+      "alias": "distractor-7",
+      "text": "The changelog groups dependency bumps under Maintenance.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "add",
+      "alias": "distractor-8",
+      "text": "Example timestamps are written in UTC.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "add",
+      "alias": "distractor-9",
+      "text": "The internal demo region is north-lab.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "add",
+      "alias": "distractor-10",
+      "text": "Tutorial fixtures use a seven-day retention window.",
+      "lifecycle": "current"
+    }
+  ]
+}

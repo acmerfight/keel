@@ -1,0 +1,1 @@
+node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync("release.json","utf8")); value.validationCommand="pnpm test:coverage"; fs.writeFileSync("release.json", JSON.stringify(value,null,2)+"\n")'

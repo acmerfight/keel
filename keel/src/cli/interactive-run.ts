@@ -1318,6 +1318,7 @@ async function runSessionCli(
             loadedIds: [],
             loadedEntries: [],
             renderedBytes: 0,
+            estimatedTokens: 0,
             operations: agentMemory.operations(),
             error: errorMessage(error),
           };

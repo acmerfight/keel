@@ -1,5 +1,9 @@
 {
+  "kind": "standard",
+  "corpusVersion": "core-v1",
   "prompt": "In settings.ini, change timeout_seconds from 10 to 30. The setting is somewhere in the middle of the file. Do not change any other line.",
   "timeoutMs": 240000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
   "maxCostUsd": 0.05
 }

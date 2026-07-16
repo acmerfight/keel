@@ -31,6 +31,13 @@ DASHSCOPE_API_KEY=... keel eval --provider qwen --model qwen3.7-max --trials 3 -
 # Iterate on one task.
 keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl
 
+# Run a paired memory case. Each trial runs both --no-memory and enabled.
+keel eval --task memory-release-validation-command --trials 3 --out /tmp/memory.jsonl
+
+# Measure 1x versus 10x distractors with the same provider/model and trials.
+keel eval --task memory-distractor-1x --trials 3 --out /tmp/memory-scale.jsonl
+keel eval --task memory-distractor-10x --trials 3 --out /tmp/memory-scale.jsonl
+
 # Keep provider-visible messages for every trial.
 keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl --transcript-dir /tmp/keel-transcripts
 
@@ -43,7 +50,12 @@ Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
 run creates a unique subdirectory under `<dir>` and writes one
 schema-versioned JSONL transcript per trial.
 
-Exit code is non-zero when any trial fails to verify, times out, or crashes.
+Standard tasks require every trial to verify. Memory-pair tasks always require
+the enabled condition; `passPolicy: "both_must_pass"` also requires the
+disabled condition, while `"enabled_must_pass"` records a memory-dependent
+baseline failure without failing the gate. A structural failure always makes
+the command non-zero, including in a non-required baseline. Timeout and crash
+outcomes are never accepted.
 `keel eval compare` is report-only: it exits non-zero for unreadable or
 invalid inputs, but regressions are printed rather than used as a failure
 gate.
@@ -84,18 +96,36 @@ when tasks run near their per-task time limits:
 
 ## Reading results
 
-Each trial appends one JSON line:
+Standard trials append one JSON line. A memory-pair trial appends two lines in
+fixed order: `memory_disabled`, then `memory_enabled`. Result schema v2 does not
+read old result shapes.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "timestamp": "2026-06-13T02:11:09.123Z",
   "keelVersion": "0.0.1",
+  "keelRevision": "0123456789abcdef0123456789abcdef01234567",
+  "corpusVersion": "core-v1",
   "taskId": "fix-typo",
   "trial": 1,
+  "repetitionCount": 3,
+  "seed": null,
+  "provider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "modelRevision": null,
+  "condition": "standard",
+  "requiredToPass": true,
   "pass": true,
   "outcome": "verified",
   "wallMs": 9182,
+  "structuralFailures": [],
+  "behavioralFailures": [],
+  "memory": { "mode": "not_applicable", "configuredIds": [], "scope": null },
+  "toolCalls": [
+    { "id": "call_1", "tool": "edit", "arguments": { "path": "README.md", "oldText": "Instal", "newText": "Install" } }
+  ],
+  "pairDelta": null,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
     "schemaVersion": 15,
@@ -172,6 +202,20 @@ Each trial appends one JSON line:
   `verify_failed` are the agent's score; `timeout` / `crashed` mean the
   environment or harness broke and the trial must not be read as agent
   quality.
+- `structuralFailures` and `behavioralFailures` are deliberately separate.
+  Scope/clean-mode/provenance/budget contract violations are structural and
+  zero-tolerance. A verifier rejection, timeout, or crash is behavioral or
+  harness evidence and never disguises a structural failure.
+- `provider`, `model`, `keelRevision`, `corpusVersion`, `repetitionCount`, and
+  `seed` are required fields. `seed` and `modelRevision` are `null` when the
+  provider exposes no such control or snapshot. Missing run artifacts are also
+  explicit `null`, not omitted fields.
+- `toolCalls` is the captured provider-visible tool trajectory with canonical
+  arguments. Memory pairs capture a temporary transcript even when the user
+  does not request persistent transcripts, so exact tool selection and
+  parameters remain in the result line. `pairDelta` is the enabled-minus-
+  disabled difference for success, calls, turns, tokens, cost, wall time, and
+  rendered memory bytes; the same delta is attached to both lines of the pair.
 - `report.tasks` attributes each admitted user Task to one or more Agent Runs.
   `humanInterventionCount` counts user messages actually injected as steering
   into an active Agent Run, while later Task prompts and runtime messages stay
@@ -181,8 +225,9 @@ Each trial appends one JSON line:
 - `wallMs` is measured around the spawned agent CLI run. It excludes the
   later verifier step, so read it as agent wall time rather than full
   trial wall time.
-- `transcriptPath` is present only when `--transcript-dir` is enabled and
-  the trial produced a readable transcript file with a valid header. The
+- `transcriptPath` is a path only when `--transcript-dir` is enabled and the
+  trial produced a readable transcript file with a valid header; otherwise it
+  is `null`. The
   transcript JSONL starts with `{ "schemaVersion": 1, "type": "transcript",
   "provider", "model", "systemPrompt" }`, followed by one `{ "type":
   "message", "message": ... }` record for each provider-visible user /
@@ -192,7 +237,9 @@ Each trial appends one JSON line:
   <new.jsonl>`. It prints per-task pass, outcome, human-intervention, turn,
   token, cost, and wall-time deltas, separates `timeout` / `crashed` harness
   failures from verifier failures, and includes failed head-side
-  `transcriptPath` values for regression rows.
+  `transcriptPath` values for regression rows. Memory conditions are grouped
+  separately, and any head-side structural violation is printed as
+  `STRUCTURAL FAILURE` with its concrete messages.
 - One trial says little: agent behavior varies between runs. Use
   `--trials 3` or more before claiming a change helped. Per-task pass
   fractions give you pass^k-style reliability reading; a task passing
@@ -204,7 +251,7 @@ A task is a directory under `evals/tasks/`:
 
 ```
 evals/tasks/<task-id>/
-  task.json       # { "prompt", "timeoutMs"?, "scriptTimeoutMs"?, "allowBash"?, "maxCostUsd"? }
+  task.json       # strict, versioned standard or memory_pair definition
   workspace/      # fixture files copied into a fresh temp dir per trial
   verify.sh       # runs in the workspace after the agent; exit 0 = pass
   solution.sh     # reference solution applied without an LLM; required
@@ -213,7 +260,8 @@ evals/tasks/<task-id>/
 Execution model (mirrors Terminal-Bench/Harbor):
 
 - Every trial starts from a pristine copy of `workspace/` in a throwaway
-  temp directory. Nothing leaks between trials.
+  temp directory with a fresh isolated `KEEL_HOME`. Nothing from the
+  developer's own memory/session store or another trial can leak into it.
 - The runner spawns the real `keel` CLI as a subprocess — the same
   surface a user runs. `src/eval/` is forbidden (by
   `tests/invariants/boundaries.test.ts`) from importing harness internals.
@@ -223,15 +271,70 @@ Execution model (mirrors Terminal-Bench/Harbor):
 - `verify.sh` grades only the final workspace state, never the agent's
   path to it. Any approach that produces the right outcome passes.
 
+All standard-task fields are required. `maxCostUsd` is always a positive hard
+input to the runner; real-provider evaluation never runs without a cost cap:
+
+```json
+{
+  "kind": "standard",
+  "corpusVersion": "core-v1",
+  "prompt": "Fix the typo in README.md.",
+  "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.05
+}
+```
+
+A memory pair adds a strict public-CLI setup sequence and an explicit pass
+policy:
+
+```json
+{
+  "kind": "memory_pair",
+  "corpusVersion": "memory-v1",
+  "prompt": "Create branch.txt with the current release branch.",
+  "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.05,
+  "passPolicy": "enabled_must_pass",
+  "memorySetup": [
+    {
+      "operation": "add",
+      "alias": "old-branch",
+      "text": "The release branch is legacy/2025-q4.",
+      "lifecycle": "current"
+    },
+    {
+      "operation": "update",
+      "target": "old-branch",
+      "alias": "current-branch",
+      "text": "The release branch is stable/2026-q3.",
+      "lifecycle": "current"
+    }
+  ]
+}
+```
+
+`memorySetup` accepts only `add`, `update`, and `forget`, directly mirroring
+the shipped commands. Aliases must be unique; update/forget targets must name
+an earlier active alias. `lifecycle` is explicitly `current` or `stale`. The
+runner initializes one temporary Git project, executes the setup commands,
+then copies the exact workspace, project marker, memory events, IDs, and
+timestamps into two isolated environments. The first runs `--no-memory`; the
+second runs normally. Thus the condition is the only intended difference.
+
 ## Writing good tasks
 
 Drawn from the Terminal-Bench and Anthropic eval guidance; `--check`
 enforces the mechanical parts:
 
-1. **The prompt must be sufficient.** Everything `verify.sh` checks must
-   be derivable from the prompt alone — exact paths, exact expected
-   output. An agent that follows instructions correctly must be able to
-   pass.
+1. **The governed inputs must be sufficient.** For a standard task, everything
+   `verify.sh` checks must be derivable from prompt plus workspace. For an
+   intentionally memory-dependent task, prompt plus workspace plus the enabled
+   memory fixture must be sufficient, while the disabled condition may lack the
+   non-derivable fact by design.
 2. **Always ship `solution.sh`.** It proves the task is solvable and the
    verifier is configured correctly. `keel eval --check` replays it on
    every PR; a 0% task usually means a broken verifier, not a bad agent.
@@ -262,6 +365,60 @@ distill the failure mechanism into a task directory. Once a task is accepted
 into the baseline, freeze its prompt and verifier before reporting trial
 results; if a later run exposes a task bug, fix the task and treat prior scores
 for that task version as invalid.
+
+## Memory evaluation gates
+
+Memory quality is not one recall score. Keel uses three layers, and a release
+decision must not average a structural failure away:
+
+1. Deterministic tests prove state and authority boundaries with exact local
+   outcomes.
+2. The `memory-v1` corpus checks whether a real model uses governed memory
+   correctly in coding behavior.
+3. Every behavioral trial pairs the exact same configured snapshot under
+   `--no-memory` and enabled memory, holding prompt, fixture, provider, model,
+   bash permission, cost cap, and timeouts constant.
+
+The existing deterministic suite owns the broad safety matrix: project/path
+identity and cross-project isolation; secret rejection; byte and entry bounds;
+expiry, stale state, update, forget, purge, crash/race safety; subdirectory,
+rename, linked-worktree, and Unicode continuity; `--no-memory`; resume/fork;
+and the rule that memory is never copied into session-ledger or compaction
+state. The paired runner adds runtime checks that its disabled report and
+provider prompt contain no configured memory, enabled loaded IDs/scope/status
+exactly match the fixture, rendered memory stays within 4,096 bytes, and the
+task causes no unauthorized memory mutation.
+
+The compact provider corpus covers:
+
+- `memory-release-validation-command`: non-derivable durable constraint and
+  exact action parameter;
+- `memory-reference-pointer`: follow the remembered pointer, then read current
+  repository evidence at that path;
+- `memory-stale-repository-wins`: current repository policy must beat stale
+  memory;
+- `memory-latest-valid-fact`: a real `memory update` supersedes the old fact;
+- `memory-forgotten-fact-not-used`: a real `memory forget` removes the retired
+  fact from the active prompt;
+- `memory-stored-injection-nonregression`: an irrelevant malicious entry must
+  not change the objective or filesystem effect;
+- `memory-distractor-1x` and `memory-distractor-10x`: the same relevant fact
+  and verifier at two distractor scales.
+
+Run behavioral cases with 3–5 trials per provider/model before drawing a model
+conclusion. Report each numerator/denominator and failed case ID. For the scale
+pair, compare enabled-condition success between 1× and 10×; a drop over five
+percentage points requires investigation. On ordinary tasks, investigate any
+repeatable regression. On intentionally memory-dependent tasks, the initial
+directional target is a 10–15 percentage-point enabled improvement over the
+disabled baseline. These are versioned model/corpus targets, not structural
+guarantees.
+
+Rendered bytes are the deterministic hard bound. Reported token counts remain
+provider/model measurements or estimates; when reliable context-window data
+exists, the target is the smaller of 1,000 tokens and 5% of context. Do not
+invent a tokenizer registry or p95 statistic from a sample too small to support
+it.
 
 ## What this is not (yet)
 

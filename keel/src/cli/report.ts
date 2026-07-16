@@ -41,7 +41,7 @@ export interface RunReportMemory {
   readonly loadedIds: readonly string[];
   readonly loadedEntries: readonly RunReportMemoryEntry[];
   readonly renderedBytes: number;
-  readonly estimatedTokens?: number;
+  readonly estimatedTokens: number;
   readonly operations: readonly RunReportMemoryOperation[];
   readonly error?: string;
 }

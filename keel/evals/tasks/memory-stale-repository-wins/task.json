@@ -1,0 +1,18 @@
+{
+  "kind": "memory_pair",
+  "corpusVersion": "memory-v1",
+  "prompt": "Bring config.json into compliance with the current deployment policy in policy.md. Preserve unrelated settings.",
+  "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.05,
+  "passPolicy": "both_must_pass",
+  "memorySetup": [
+    {
+      "operation": "add",
+      "alias": "old-timeout",
+      "text": "Deployment timeout remains 5 seconds.",
+      "lifecycle": "stale"
+    }
+  ]
+}

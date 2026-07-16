@@ -206,6 +206,67 @@ describe("Eval Compare", () => {
     }
   });
 
+  test(`Given paired memory conditions and a structural failure,
+    When the compare command summarizes the results,
+    Then it keeps conditions separate and surfaces the concrete invariant failure`, async () => {
+    // Given
+    const root = await mkdtemp(join(tmpdir(), "keel-eval-compare-memory-"));
+    const baseFile = join(root, "base.jsonl");
+    const headFile = join(root, "head.jsonl");
+    await writeResultFile(baseFile, [
+      resultLine({
+        taskId: "memory-case",
+        trial: 1,
+        pass: false,
+        condition: "memory_disabled",
+        requiredToPass: false,
+      }),
+      resultLine({
+        taskId: "memory-case",
+        trial: 1,
+        pass: true,
+        condition: "memory_enabled",
+        report: report(),
+      }),
+    ]);
+    await writeResultFile(headFile, [
+      resultLine({
+        taskId: "memory-case",
+        trial: 1,
+        pass: false,
+        condition: "memory_disabled",
+        requiredToPass: false,
+      }),
+      resultLine({
+        taskId: "memory-case",
+        trial: 1,
+        pass: false,
+        condition: "memory_enabled",
+        structuralFailures: [
+          "enabled report loaded IDs differ from configured IDs",
+        ],
+        transcriptPath: "/tmp/head/memory-case-enabled.jsonl",
+      }),
+    ]);
+
+    try {
+      // When
+      const result = runCompare(baseFile, headFile);
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("task: memory-case [memory_disabled]");
+      expect(result.stdout).toContain("task: memory-case [memory_enabled]");
+      expect(result.stdout).toContain("status: STRUCTURAL FAILURE");
+      expect(result.stdout).toContain(
+        "enabled report loaded IDs differ from configured IDs",
+      );
+      expect(result.stdout).toContain("/tmp/head/memory-case-enabled.jsonl");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a task has repeated trials with lower head cost,
     When the compare command summarizes the task,
     Then it averages repeated trials and reports the negative cost delta`, async () => {
@@ -375,7 +436,7 @@ describe("Eval Compare", () => {
       // Then
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toBe("");
-      expect(result.stderr).toContain("line 1 is not a schemaVersion 1");
+      expect(result.stderr).toContain("line 1 is not a schemaVersion 2");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -83,21 +83,25 @@ jobs:
           const { z } = require("zod");
 
           const resultLineSchema = z.object({
-            schemaVersion: z.literal(1),
+            schemaVersion: z.literal(2),
             timestamp: z.string(),
             keelVersion: z.string(),
+            keelRevision: z.string().nullable(),
+            corpusVersion: z.string(),
             taskId: z.string(),
             trial: z.number().int().positive(),
+            repetitionCount: z.number().int().positive(),
+            condition: z.enum(["standard", "memory_disabled", "memory_enabled"]),
+            requiredToPass: z.boolean(),
             pass: z.boolean(),
             outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
             wallMs: z.number().nonnegative(),
+            structuralFailures: z.array(z.string()),
+            behavioralFailures: z.array(z.string()),
             report: z
               .object({
-                schemaVersion: z.literal(1),
-                provider: z.string(),
-                model: z.string(),
-                turns: z.number().int().positive(),
-                stopReason: z.string(),
+                schemaVersion: z.literal(15),
+                agentLoopTurns: z.number().int().nonnegative(),
                 usage: z.object({
                   inputTokens: z.number(),
                   cachedInputTokens: z.number(),
@@ -107,7 +111,7 @@ jobs:
                 durationMs: z.number().nonnegative(),
                 costUsd: z.number(),
               })
-              .optional(),
+              .nullable(),
           });
 
           const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -135,12 +139,18 @@ jobs:
           const harnessFailures = rows.filter(
             (row) => row.outcome === "crashed" || row.outcome === "timeout",
           ).length;
+          const structuralFailures = rows.reduce(
+            (sum, row) => sum + row.structuralFailures.length,
+            0,
+          );
+          const requiredRows = rows.filter((row) => row.requiredToPass);
+          const requiredPassed = requiredRows.filter((row) => row.pass).length;
           const totalCost = rows.reduce(
             (sum, row) => sum + (row.report?.costUsd ?? 0),
             0,
           );
           const totalTurns = rows.reduce(
-            (sum, row) => sum + (row.report?.turns ?? 0),
+            (sum, row) => sum + (row.report?.agentLoopTurns ?? 0),
             0,
           );
           const totalTokens = rows.reduce(
@@ -153,8 +163,10 @@ jobs:
 
           lines.push(`Result file: \`${resultPath}\``);
           lines.push("");
-          lines.push(`- Pass: ${passed}/${rows.length}`);
+          lines.push(`- Recorded pass: ${passed}/${rows.length}`);
+          lines.push(`- Required pass: ${requiredPassed}/${requiredRows.length}`);
           lines.push(`- Harness failures: ${harnessFailures}`);
+          lines.push(`- Structural failures: ${structuralFailures}`);
           if (harnessFailures > 0) {
             lines.push(`- **Harness failures require investigation**; see \`${resultPath}\`.`);
           }
@@ -162,8 +174,8 @@ jobs:
           lines.push(`- Reported tokens: ${totalTokens}`);
           lines.push(`- Reported cost: $${totalCost.toFixed(6)}`);
           lines.push("");
-          lines.push("| Task | Trial | Outcome | Turns | Tokens | Cost |");
-          lines.push("|---|---:|---|---:|---:|---:|");
+          lines.push("| Task | Condition | Trial | Outcome | Structural | Turns | Tokens | Cost |");
+          lines.push("|---|---|---:|---|---:|---:|---:|---:|");
 
           for (const row of rows) {
             const tokens =
@@ -171,7 +183,7 @@ jobs:
               (row.report?.usage?.outputTokens ?? 0);
             const cost = row.report?.costUsd ?? 0;
             lines.push(
-              `| ${row.taskId} | ${row.trial} | ${row.outcome} | ${row.report?.turns ?? ""} | ${tokens || ""} | ${cost ? `$${cost.toFixed(6)}` : ""} |`,
+              `| ${row.taskId} | ${row.condition} | ${row.trial} | ${row.outcome} | ${row.structuralFailures.length} | ${row.report?.agentLoopTurns ?? ""} | ${tokens || ""} | ${cost ? `$${cost.toFixed(6)}` : ""} |`,
             );
           }
 

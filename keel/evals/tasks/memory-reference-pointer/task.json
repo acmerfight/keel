@@ -1,0 +1,18 @@
+{
+  "kind": "memory_pair",
+  "corpusVersion": "memory-v1",
+  "prompt": "Create release-plan.txt containing only the smoke-test command from this project's established deployment checklist.",
+  "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.05,
+  "passPolicy": "enabled_must_pass",
+  "memorySetup": [
+    {
+      "operation": "add",
+      "alias": "deployment-checklist",
+      "text": "The established deployment checklist is docs/release-blue.md.",
+      "lifecycle": "current"
+    }
+  ]
+}

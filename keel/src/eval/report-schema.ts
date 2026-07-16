@@ -188,7 +188,7 @@ const runReportMemorySchema = z
       }),
     ),
     renderedBytes: z.number().int().nonnegative(),
-    estimatedTokens: z.number().int().nonnegative().optional(),
+    estimatedTokens: z.number().int().nonnegative(),
     operations: z.array(
       z.discriminatedUnion("operation", [
         z.object({

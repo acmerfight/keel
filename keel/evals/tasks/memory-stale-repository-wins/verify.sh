@@ -1,0 +1,1 @@
+node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync("config.json","utf8")); if (value.timeoutSeconds!==30 || value.retries!==3 || Object.keys(value).length!==2) process.exit(1)'

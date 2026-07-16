@@ -13,6 +13,16 @@ import {
   writeFile,
 } from "./fixtures.ts";
 
+const VALID_TASK_CONFIG = JSON.stringify({
+  kind: "standard",
+  corpusVersion: "test-v1",
+  prompt: "do the task",
+  timeoutMs: 60_000,
+  scriptTimeoutMs: 10_000,
+  allowBash: false,
+  maxCostUsd: 0.05,
+});
+
 describe("Eval Runner", () => {
   test(`Given each task has a reference solution,
     When the eval runner checks the suite,
@@ -171,7 +181,19 @@ describe("Eval Runner", () => {
     const { root, suiteDir, outFile } = await createEvalDir();
     const taskDir = join(suiteDir, "bad-task");
     await mkdir(taskDir, { recursive: true });
-    await writeFile(join(taskDir, "task.json"), '{"prompt":""}', "utf8");
+    await writeFile(
+      join(taskDir, "task.json"),
+      JSON.stringify({
+        kind: "standard",
+        corpusVersion: "test-v1",
+        prompt: "",
+        timeoutMs: 60_000,
+        scriptTimeoutMs: 10_000,
+        allowBash: false,
+        maxCostUsd: 0.05,
+      }),
+      "utf8",
+    );
 
     try {
       // When
@@ -281,7 +303,7 @@ describe("Eval Runner", () => {
     {
       id: "missing-workspace",
       files: {
-        "task.json": JSON.stringify({ prompt: "do the task" }),
+        "task.json": VALID_TASK_CONFIG,
         "verify.sh": "exit 0\n",
         "solution.sh": "exit 0\n",
       },
@@ -289,14 +311,14 @@ describe("Eval Runner", () => {
     {
       id: "missing-verify",
       files: {
-        "task.json": JSON.stringify({ prompt: "do the task" }),
+        "task.json": VALID_TASK_CONFIG,
         "solution.sh": "exit 0\n",
       },
     },
     {
       id: "missing-solution",
       files: {
-        "task.json": JSON.stringify({ prompt: "do the task" }),
+        "task.json": VALID_TASK_CONFIG,
         "verify.sh": "exit 0\n",
       },
     },

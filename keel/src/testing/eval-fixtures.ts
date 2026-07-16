@@ -1,22 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import type { RunReport } from "../eval/report-schema.ts";
-
-type EvalTrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
+import type { EvalResultLine, TrialOutcome } from "../eval/result.ts";
 
 export type EvalRunReport = RunReport;
-
-export interface EvalResultLine {
-  readonly schemaVersion: 1;
-  readonly timestamp: string;
-  readonly keelVersion: string;
-  readonly taskId: string;
-  readonly trial: number;
-  readonly pass: boolean;
-  readonly outcome: EvalTrialOutcome;
-  readonly wallMs: number;
-  readonly report?: EvalRunReport;
-  readonly transcriptPath?: string;
-}
 
 export interface EvalRunReportOptions {
   readonly humanInterventions?: number;
@@ -31,10 +17,13 @@ export interface EvalResultLineOptions {
   readonly taskId: string;
   readonly trial: number;
   readonly pass: boolean;
-  readonly outcome?: EvalTrialOutcome;
+  readonly outcome?: TrialOutcome;
   readonly wallMs?: number;
   readonly report?: EvalRunReport;
   readonly transcriptPath?: string;
+  readonly condition?: "standard" | "memory_disabled" | "memory_enabled";
+  readonly requiredToPass?: boolean;
+  readonly structuralFailures?: readonly string[];
 }
 
 export function evalRunReport(
@@ -155,20 +144,57 @@ export function evalRunReport(
 }
 
 export function evalResultLine(options: EvalResultLineOptions): EvalResultLine {
+  const report = options.report ?? null;
+  const condition = options.condition ?? "standard";
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     timestamp: "2026-06-22T00:00:00.000Z",
     keelVersion: "0.0.1",
+    keelRevision: "0123456789abcdef0123456789abcdef01234567",
+    corpusVersion: "test-v1",
     taskId: options.taskId,
     trial: options.trial,
+    repetitionCount: 1,
+    seed: null,
+    provider: report?.modelsUsed[0]?.provider ?? null,
+    model: report?.modelsUsed[0]?.model ?? null,
+    modelRevision: null,
+    condition,
+    requiredToPass: options.requiredToPass ?? true,
     pass: options.pass,
     outcome:
       options.outcome ?? (options.pass === true ? "verified" : "verify_failed"),
     wallMs: options.wallMs ?? 1000,
-    ...(options.report !== undefined ? { report: options.report } : {}),
-    ...(options.transcriptPath !== undefined
-      ? { transcriptPath: options.transcriptPath }
-      : {}),
+    structuralFailures: [...(options.structuralFailures ?? [])],
+    behavioralFailures: options.pass
+      ? []
+      : ["task verifier rejected the resulting workspace"],
+    memory: {
+      mode:
+        condition === "standard"
+          ? "not_applicable"
+          : condition === "memory_disabled"
+            ? "disabled"
+            : "enabled",
+      configuredIds: [],
+      scope: null,
+    },
+    toolCalls: [],
+    pairDelta:
+      condition === "standard"
+        ? null
+        : {
+            successPercentagePoints: 0,
+            toolCalls: 0,
+            agentLoopTurns: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            costUsd: 0,
+            wallMs: 0,
+            renderedBytes: 0,
+          },
+    report,
+    transcriptPath: options.transcriptPath ?? null,
   };
 }
 

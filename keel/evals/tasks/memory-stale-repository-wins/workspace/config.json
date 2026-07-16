@@ -1,0 +1,4 @@
+{
+  "timeoutSeconds": 10,
+  "retries": 3
+}

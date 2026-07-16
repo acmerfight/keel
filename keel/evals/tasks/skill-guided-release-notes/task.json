@@ -1,5 +1,9 @@
 {
+  "kind": "standard",
+  "corpusVersion": "core-v1",
   "prompt": "Create RELEASE_NOTES.md from changes.json. Include only entries whose userFacing field is true. Use headings in this order when the group is non-empty: ## Breaking changes, ## Features, ## Fixes. Put one blank line after each heading and one blank line between groups. Under each heading, write bullets as - <title> (#<id>) in ascending numeric id order. The final bullet must be followed by exactly one newline character, with no blank line after it. Do not modify other files.",
   "timeoutMs": 120000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
   "maxCostUsd": 0.03
 }
