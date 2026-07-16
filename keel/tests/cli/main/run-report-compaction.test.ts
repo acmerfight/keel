@@ -1407,12 +1407,12 @@ describe("CLI Main - Run Report Compaction", () => {
       });
     });
     await listen(server);
-    const run = createRuntime(["--report", reportPath], {
+    const run = createRuntime(["--no-memory", "--report", reportPath], {
       cwd: workspace,
       env: {
         DEEPSEEK_API_KEY: "test-key",
         DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-        KEEL_CONTEXT_WINDOW_TOKENS: "52675",
+        KEEL_CONTEXT_WINDOW_TOKENS: "46384",
         KEEL_FORCE_INTERACTIVE: "1",
         KEEL_HOME: home,
       },
