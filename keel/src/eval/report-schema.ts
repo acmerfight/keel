@@ -162,7 +162,7 @@ const modelOperationBase = {
 const modelOperationSchema = z.object(modelOperationBase);
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(13),
+  schemaVersion: z.literal(14),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),
@@ -255,6 +255,22 @@ export const runReportSchema = z.object({
     loadedIds: z.array(z.string()),
     renderedBytes: z.number().int().nonnegative(),
     estimatedTokens: z.number().int().nonnegative().optional(),
+    operations: z.array(
+      z.discriminatedUnion("operation", [
+        z.object({
+          operation: z.literal("add"),
+          id: z.string(),
+          scope: z.object({ kind: z.literal("project"), id: z.string() }),
+          outcome: z.literal("saved"),
+        }),
+        z.object({
+          operation: z.literal("forget"),
+          id: z.string(),
+          scope: z.object({ kind: z.literal("project"), id: z.string() }),
+          outcome: z.literal("forgotten"),
+        }),
+      ]),
+    ),
     error: z.string().optional(),
   }),
   goalOutcome: z

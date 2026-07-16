@@ -27,6 +27,7 @@ import {
 } from "../skills/lifecycle.ts";
 import { explicitSkillActivationRecord } from "../skills/model.ts";
 import { repositoryWorkflowSkillRootPaths } from "../skills/project.ts";
+import { createAgentProjectMemory } from "./agent-project-memory.ts";
 import type { CliArgs } from "./args.ts";
 import {
   BashProjectApprovalsError,
@@ -254,6 +255,7 @@ export async function runOneShotCli(
     let transcriptMemoryPrompt = "";
     let memoryPrompt: (() => string) | undefined;
     let memoryReport: () => RunReportMemory;
+    const agentMemory = createAgentProjectMemory({ runtime, workspace });
     if (cliArgs.memoryEnabled) {
       let loadedMemory = loadRenderedProjectMemory(runtime, workspace);
       memoryPrompt = () => {
@@ -278,6 +280,7 @@ export async function runOneShotCli(
         loadedIds: [...exposedMemoryIds],
         renderedBytes: exposedMemoryBytes,
         estimatedTokens: exposedMemoryTokens,
+        operations: agentMemory.operations(),
       });
     } else {
       memoryReport = () => ({
@@ -286,6 +289,7 @@ export async function runOneShotCli(
         loadedIds: [],
         renderedBytes: 0,
         estimatedTokens: 0,
+        operations: [],
       });
     }
     const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
@@ -305,6 +309,9 @@ export async function runOneShotCli(
       userMessage,
       systemPrompt,
       ...(memoryPrompt !== undefined ? { memoryPrompt } : {}),
+      ...(cliArgs.memoryEnabled
+        ? { memoryMutation: agentMemory.capability }
+        : {}),
       signal: abortController.signal,
       allowBash: bashModeExposesTool(cliArgs.bashMode),
       ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),

@@ -30,7 +30,7 @@ export const USAGE = [
   "       keel --help | -h",
   "",
   "--allow-bash enables trusted shell commands. Shell commands run with the current OS user's permissions and may read or modify gitignored files.",
-  "Project memory is explicit and project-scoped. Save only durable rules, preferences, decisions, and observable facts; use --no-memory for a run with no memory discovery or injection.",
+  "Project memory is explicit and project-scoped. Save durable facts with memory commands or direct unambiguous current-user remember/forget requests; use --no-memory for a run with no memory discovery, injection, or mutation tools.",
   "Project memory requires a reliable local filesystem. Cloud-synced stores and concurrent multi-host writers are unsupported.",
   "--bash-policy controls shell command approval: ask requires a real TTY approval prompt, deny disables bash, trusted runs commands without per-command approval. Approved or trusted command output may be sent to the provider unredacted. Do not combine it with --allow-bash; use --bash-policy trusted instead.",
   "--max-cost sets a best-effort session cost budget. Keel conservatively rejects requests that cannot fit, bounds provider output when possible, and reports any remaining post-response overshoot; it is not a guaranteed provider billing ceiling.",

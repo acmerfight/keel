@@ -17,6 +17,7 @@ export function createChatCompletionsBody(
   const tools = openAICompatibleTools(
     options.allowBash === true,
     options.allowSkill === true,
+    options.allowMemory === true,
   );
 
   return JSON.stringify({

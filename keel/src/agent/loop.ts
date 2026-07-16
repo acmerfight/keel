@@ -23,6 +23,11 @@ import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import { workflowSkillFromActivation } from "../skills/lifecycle.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
+import type {
+  AgentMemoryMutationCapability,
+  AgentMemoryToolContext,
+} from "../tools/memory.ts";
+import { hasExplicitAgentMemoryIntent } from "../tools/memory.ts";
 import {
   createProjectInstructionVisibilityState,
   type ProjectInstructionVisibilityState,
@@ -103,6 +108,7 @@ export interface RunAgentOptions {
   readonly userMessage: string;
   readonly systemPrompt: string;
   readonly memoryPrompt?: () => string;
+  readonly memoryMutation?: AgentMemoryMutationCapability;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
   readonly hiddenWorkspacePaths?: readonly string[];
@@ -127,6 +133,7 @@ export interface RunAgentTurnOptions {
   readonly messages: Message[];
   readonly systemPrompt: string;
   readonly memoryPrompt?: () => string;
+  readonly memoryMutation?: AgentMemoryMutationCapability;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
   readonly hiddenWorkspacePaths?: readonly string[];
@@ -181,6 +188,9 @@ function toolEndEvent(
     ok: execution.ok,
     ...(execution.bashCommandEvidence !== undefined
       ? { bashExitCode: execution.bashCommandEvidence.exitCode }
+      : {}),
+    ...(execution.memoryOperation !== undefined
+      ? { memoryOperation: execution.memoryOperation }
       : {}),
   };
 }
@@ -546,6 +556,33 @@ export async function* runAgentTurn(
   } = options;
   const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const allowSkill = options.skillActivation !== undefined;
+  const claimedMemorySourceMessages = new WeakSet<InjectedUserMessage>();
+  const currentMemoryUserMessage = (): InjectedUserMessage | null => {
+    const current = messages.findLast(
+      (message): message is InjectedUserMessage => message.role === "user",
+    );
+    if (current === undefined) return null;
+    switch (current.origin?.type) {
+      case "user_prompt":
+      case "steer":
+      case "queued_followup":
+        return current;
+      default:
+        return null;
+    }
+  };
+  const memoryToolContext: AgentMemoryToolContext | undefined =
+    options.memoryMutation === undefined
+      ? undefined
+      : {
+          capability: options.memoryMutation,
+          currentUserMessage: currentMemoryUserMessage,
+          claimSourceMutation: (message) => {
+            if (claimedMemorySourceMessages.has(message)) return false;
+            claimedMemorySourceMessages.add(message);
+            return true;
+          },
+        };
   let sessionLedger = sessionLedgerFromMessages(messages);
   const applySessionLedger = (next: SessionLedger) => {
     sessionLedger = next;
@@ -646,6 +683,11 @@ export async function* runAgentTurn(
   };
 
   for (let completedTurns = 1; ; completedTurns++) {
+    const currentMemorySource = currentMemoryUserMessage();
+    const allowMemory =
+      options.memoryMutation !== undefined &&
+      currentMemorySource !== null &&
+      hasExplicitAgentMemoryIntent(currentMemorySource.content);
     const baseTurnSystemPrompt = appendWorkflowSkillsToSystemPrompt(
       systemPrompt,
       options.skillActivation === undefined
@@ -677,6 +719,7 @@ export async function* runAgentTurn(
         signal,
         allowBash,
         allowSkill,
+        allowMemory,
         modelOperationPurpose: "agent_turn",
       });
     } catch (error) {
@@ -755,6 +798,7 @@ export async function* runAgentTurn(
             signal,
             allowBash,
             allowSkill,
+            allowMemory,
           },
           turnText: turnResult.text,
           turnReasoningContent: turnResult.reasoningContent,
@@ -922,6 +966,9 @@ export async function* runAgentTurn(
         ...(bashPermission !== undefined ? { bashPermission } : {}),
         ...(options.skillActivation !== undefined
           ? { skillActivation: options.skillActivation }
+          : {}),
+        ...(memoryToolContext !== undefined
+          ? { memory: memoryToolContext }
           : {}),
       });
     };
@@ -1147,7 +1194,13 @@ export async function* runAgentTurn(
 export async function* runAgent(
   options: RunAgentOptions,
 ): AsyncGenerator<AgentEvent> {
-  const messages: Message[] = [{ role: "user", content: options.userMessage }];
+  const messages: Message[] = [
+    {
+      role: "user",
+      content: options.userMessage,
+      origin: { type: "user_prompt" },
+    },
+  ];
   const readVisibility = createReadVisibilityState();
   const projectInstructionVisibility = createProjectInstructionVisibilityState(
     options.workspace,
@@ -1176,6 +1229,9 @@ export async function* runAgent(
         systemPrompt: options.systemPrompt,
         ...(options.memoryPrompt !== undefined
           ? { memoryPrompt: options.memoryPrompt }
+          : {}),
+        ...(options.memoryMutation !== undefined
+          ? { memoryMutation: options.memoryMutation }
           : {}),
         signal: options.signal,
         allowBash: options.allowBash,

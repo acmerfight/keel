@@ -18,7 +18,8 @@ const MEMORY_HELP = `Usage:
   keel memory forget <id>
   keel memory clear [--yes]
 
-Memory is saved only by these commands; saying “remember this” in chat does not save it.
+Memory is saved only by these commands or a direct, unambiguous current-user “remember” request handled by the agent memory tool.
+Direct “forget” requests must identify one active entry unambiguously; use an ID when needed.
 Save small, durable project facts that are not cheaply derivable from the repository.
 Memory is quoted low-authority context, not instructions or authorization, and current evidence wins conflicts.
 Forget and clear provide logical removal, not physical deletion; audit events remain on disk.
@@ -52,7 +53,11 @@ export async function runMemoryCommand(
       return 0;
     }
     if (cliArgs.mode === "add") {
-      const saved = addProjectMemory(runtime, runtime.cwd(), cliArgs.text);
+      const saved = addProjectMemory(runtime, runtime.cwd(), cliArgs.text, {
+        type: "user_explicit",
+        channel: "cli",
+        evidence: `memory add ${cliArgs.text}`,
+      });
       runtime.writeStdout(
         `Saved project memory ${saved.entry.id} for ${saved.scope.id}.\n`,
       );
@@ -71,7 +76,7 @@ export async function runMemoryCommand(
           `Active project memory for ${listed.scope.id}:`,
           ...listed.entries.map(
             (entry) =>
-              `${entry.id}\t${entry.createdAt}\t${entry.source}\t${escapeTerminalText(entry.text)}`,
+              `${entry.id}\t${entry.createdAt}\t${entry.source.type}:${entry.source.channel}\t${escapeTerminalText(entry.text)}`,
           ),
           "",
         ].join("\n"),
@@ -79,7 +84,11 @@ export async function runMemoryCommand(
       return 0;
     }
     if (cliArgs.mode === "forget") {
-      const scope = forgetProjectMemory(runtime, runtime.cwd(), cliArgs.id);
+      const scope = forgetProjectMemory(runtime, runtime.cwd(), cliArgs.id, {
+        type: "user_explicit",
+        channel: "cli",
+        evidence: `memory forget ${cliArgs.id}`,
+      });
       runtime.writeStdout(
         `Forgot project memory ${cliArgs.id} for ${scope.id}. This removes it from the active view; its audit event remains on disk.\n`,
       );

@@ -383,6 +383,7 @@ function estimateRequestTokensFromAccounting(
     accounting.requestMetadata.toolChoice !== currentMetadata.toolChoice ||
     accounting.requestMetadata.allowBash !== currentMetadata.allowBash ||
     accounting.requestMetadata.allowSkill !== currentMetadata.allowSkill ||
+    accounting.requestMetadata.allowMemory !== currentMetadata.allowMemory ||
     accounting.messageFingerprintCache.length > messages.length
   ) {
     return null;

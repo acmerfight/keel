@@ -991,6 +991,9 @@ export async function runInteractiveSession(
           ...(options.memoryPrompt !== undefined
             ? { memoryPrompt: options.memoryPrompt }
             : {}),
+          ...(options.memoryMutation !== undefined
+            ? { memoryMutation: options.memoryMutation }
+            : {}),
           signal: turnAbortController.signal,
           allowBash: bashModeExposesTool(options.cliArgs.bashMode),
           hiddenWorkspacePaths,

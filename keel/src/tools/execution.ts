@@ -40,6 +40,12 @@ import { executeGitStatus } from "./git-status.ts";
 import { executeGlob } from "./glob.ts";
 import { executeGrep } from "./grep.ts";
 import { executeLs } from "./ls.ts";
+import {
+  type AgentMemoryOperation,
+  type AgentMemoryToolContext,
+  validateAgentMemoryAdd,
+  validateAgentMemoryForget,
+} from "./memory.ts";
 import { executeRead } from "./read.ts";
 import { observeReadResource } from "./read-resource-observation.ts";
 import type { ProjectInstructionVisibilityState } from "./scoped-project-instructions.ts";
@@ -70,6 +76,14 @@ type SkillResourceToolCall = Extract<
   { readonly tool: "skill_resource" }
 >;
 type LsToolCall = Extract<ValidToolCall, { readonly tool: "ls" }>;
+type MemoryAddToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "memory_add" }
+>;
+type MemoryForgetToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "memory_forget" }
+>;
 type GlobToolCall = Extract<ValidToolCall, { readonly tool: "glob" }>;
 type GrepToolCall = Extract<ValidToolCall, { readonly tool: "grep" }>;
 type GitStatusToolCall = Extract<
@@ -102,6 +116,7 @@ interface BuiltinToolExecutionContext {
     SkillActivationCapability,
     "activate" | "search" | "readResource"
   >;
+  readonly memory?: AgentMemoryToolContext;
   readonly recordCheckpoints?: boolean;
   readonly bashPermission?: BashPermissionPolicy;
   readonly readBeforeEdit?: {
@@ -149,6 +164,7 @@ export interface ToolExecution {
   readonly sessionGoalUpdate?: SessionGoal;
   readonly bashCommandEvidence?: BashCommandEvidence;
   readonly skillActivation?: SkillActivationRecord;
+  readonly memoryOperation?: AgentMemoryOperation;
 }
 
 export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
@@ -211,6 +227,98 @@ function executeSkillTool(
       ok: false,
     };
   }
+}
+
+function memoryToolFailure(
+  tool: "memory_add" | "memory_forget",
+  reason: string,
+): ToolExecution {
+  return {
+    content: `Tool failed: ${tool} failed: ${reason}.\nRecovery: Ask the user for one direct, unambiguous current-message memory request; never invent or broaden source evidence.`,
+    ok: false,
+  };
+}
+
+function executeMemoryAddTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: MemoryAddToolCall,
+): ToolExecution {
+  const memory = context.memory;
+  if (memory === undefined) {
+    return memoryToolFailure("memory_add", "memory is disabled for this run");
+  }
+  const currentUserMessage = memory.currentUserMessage();
+  const validation = validateAgentMemoryAdd({
+    currentUserMessage,
+    sourceText: toolCall.sourceText,
+    text: toolCall.text,
+  });
+  if (!validation.ok) return memoryToolFailure("memory_add", validation.reason);
+  if (
+    currentUserMessage === null ||
+    !memory.claimSourceMutation(currentUserMessage)
+  ) {
+    return memoryToolFailure(
+      "memory_add",
+      "this current-user source already authorized one memory mutation",
+    );
+  }
+  const saved = memory.capability.add(toolCall.text, toolCall.sourceText);
+  return {
+    content: `Saved project memory ${saved.id} for ${saved.scope.id}.`,
+    ok: true,
+    memoryOperation: {
+      operation: "add",
+      id: saved.id,
+      scope: saved.scope,
+      outcome: "saved",
+    },
+  };
+}
+
+function executeMemoryForgetTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: MemoryForgetToolCall,
+): ToolExecution {
+  const memory = context.memory;
+  if (memory === undefined) {
+    return memoryToolFailure(
+      "memory_forget",
+      "memory is disabled for this run",
+    );
+  }
+  const currentUserMessage = memory.currentUserMessage();
+  const validation = validateAgentMemoryForget({
+    currentUserMessage,
+    sourceText: toolCall.sourceText,
+    id: toolCall.memoryId,
+    entries: memory.capability.list(),
+  });
+  if (!validation.ok)
+    return memoryToolFailure("memory_forget", validation.reason);
+  if (
+    currentUserMessage === null ||
+    !memory.claimSourceMutation(currentUserMessage)
+  ) {
+    return memoryToolFailure(
+      "memory_forget",
+      "this current-user source already authorized one memory mutation",
+    );
+  }
+  const forgotten = memory.capability.forget(
+    toolCall.memoryId,
+    toolCall.sourceText,
+  );
+  return {
+    content: `Forgot project memory ${forgotten.id} for ${forgotten.scope.id}.`,
+    ok: true,
+    memoryOperation: {
+      operation: "forget",
+      id: forgotten.id,
+      scope: forgotten.scope,
+      outcome: "forgotten",
+    },
+  };
 }
 
 function executeSkillSearchTool(
@@ -834,6 +942,10 @@ function executeBuiltinToolCall(
       return executeUpdatePlanTool(parsed.data);
     case "update_goal":
       return executeUpdateGoalTool(context, parsed.data);
+    case "memory_add":
+      return executeMemoryAddTool(context, parsed.data);
+    case "memory_forget":
+      return executeMemoryForgetTool(context, parsed.data);
     case "skill_resource":
       return executeSkillResourceTool(context, parsed.data);
     case "skill_search":

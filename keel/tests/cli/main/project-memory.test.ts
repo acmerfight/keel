@@ -18,19 +18,28 @@ import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
-import { addProjectMemory } from "../../../src/cli/project-memory.ts";
+import {
+  addProjectMemory,
+  forgetProjectMemory,
+  loadRenderedProjectMemory,
+} from "../../../src/cli/project-memory.ts";
 import {
   createGitWorkspace,
   runCli as runCliProcess,
   runGit,
 } from "../../../src/testing/cli-harness.ts";
-import { requestWithMessagesSchema } from "../../../src/testing/cli-main-schemas.ts";
+import {
+  requestWithMessagesSchema,
+  requestWithToolsSchema,
+} from "../../../src/testing/cli-main-schemas.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   close,
   getPort,
   listen,
   sseTextReplyWithUsage,
+  sseToolCall,
+  sseToolFinish,
 } from "../../../src/testing/provider-sse-fixtures.ts";
 
 async function waitForRequestCount(
@@ -99,15 +108,64 @@ describe("CLI project memory", () => {
 
     try {
       // When / Then
-      expect(() => addProjectMemory(runtime, workspace, " \n\t ")).toThrow(
-        "project memory requires a non-empty durable fact",
-      );
+      expect(() =>
+        addProjectMemory(runtime, workspace, " \n\t ", {
+          type: "user_explicit",
+          channel: "cli",
+          evidence: "memory add",
+        }),
+      ).toThrow("project memory requires a non-empty durable fact");
       await expect(
         access(join(workspace, ".git", "keel")),
       ).rejects.toMatchObject({ code: "ENOENT" });
       await expect(access(join(keelHome, "memory"))).rejects.toMatchObject({
         code: "ENOENT",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given memory source evidence resembles a secret,
+    When the storage owner validates add and forget events,
+    Then it rejects the event before appending sensitive evidence`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-memory-secret-source-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-memory-secret-source-home-"),
+    );
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => 0,
+    };
+    const secret = `ghp_${"S".repeat(36)}`;
+
+    try {
+      // When / Then
+      expect(() =>
+        addProjectMemory(runtime, workspace, "Use pnpm.", {
+          type: "user_explicit",
+          channel: "agent",
+          evidence: `Remember ${secret}.`,
+        }),
+      ).toThrow("project memory was not saved because it resembles");
+
+      const saved = addProjectMemory(runtime, workspace, "Use pnpm.", {
+        type: "user_explicit",
+        channel: "cli",
+        evidence: "memory add",
+      });
+      expect(loadRenderedProjectMemory(runtime, workspace).prompt).toContain(
+        `[${saved.entry.id}] "Use pnpm." (source: user_explicit:cli; saved:`,
+      );
+      expect(() =>
+        forgetProjectMemory(runtime, workspace, saved.entry.id, {
+          type: "user_explicit",
+          channel: "agent",
+          evidence: `Forget ${secret}.`,
+        }),
+      ).toThrow("project memory was not changed because the source evidence");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(keelHome, { recursive: true, force: true });
@@ -204,8 +262,600 @@ describe("CLI project memory", () => {
         loadedIds: [memoryId],
         renderedBytes: expect.any(Number),
         estimatedTokens: expect.any(Number),
+        operations: [],
       });
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the current user explicitly asks Keel to remember one durable fact,
+    When the agent uses the governed memory tool,
+    Then the project store, provider-visible result, transcript, and report expose one saved memory`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-agent-memory-add-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-agent-memory-add-home-"),
+    );
+    const transcriptPath = join(workspace, "transcript.jsonl");
+    const reportPath = join(workspace, "report.json");
+    const userMessage =
+      "Remember that invoice IDs must remain stable because the audit system references them.";
+    const durableFact =
+      "invoice IDs must remain stable because the audit system references them";
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_memory_add", "memory_add", {
+              text: durableFact,
+              sourceText: userMessage,
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Saved for this project."));
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(
+        ["--transcript", transcriptPath, "--report", reportPath, userMessage],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_HOME: keelHome,
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+
+      // Then
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.stdout).toBe("Saved for this project.\n");
+      expect(result.stderr).toContain("Tool: memory_add");
+      expect(capturedBodies).toHaveLength(2);
+      const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
+      expect(firstRequest.tools?.map((tool) => tool.function?.name)).toEqual(
+        expect.arrayContaining(["memory_add", "memory_forget"]),
+      );
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      const toolResult = secondRequest.messages?.find(
+        (message) => message.tool_call_id === "call_memory_add",
+      )?.content;
+      const saved =
+        /^Saved project memory (mem_[a-f0-9-]+) for ([a-f0-9-]+)\.$/u.exec(
+          String(toolResult),
+        );
+      expect(saved).not.toBeNull();
+      const memoryId = saved?.[1];
+      const projectId = saved?.[2];
+      expect(result.stderr).toContain(
+        `Saved project memory ${String(memoryId)} for ${String(projectId)}.`,
+      );
+
+      const listed = await runCli(["memory", "list"], {
+        cwd: workspace,
+        env: { KEEL_HOME: keelHome },
+      });
+      expect(listed.exitCode).toBe(0);
+      expect(listed.stdout).toContain(String(memoryId));
+      expect(listed.stdout).toContain("user_explicit:agent");
+      expect(listed.stdout).toContain(durableFact);
+
+      const [header] = (await readFile(transcriptPath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(header.systemPrompt).toContain(`[${memoryId}]`);
+      expect(header.systemPrompt).toContain(durableFact);
+
+      const report = JSON.parse(await readFile(reportPath, "utf8"));
+      expect(report.memory.loadedIds).toContain(memoryId);
+      expect(report.memory.operations).toEqual([
+        {
+          operation: "add",
+          id: memoryId,
+          scope: { kind: "project", id: projectId },
+          outcome: "saved",
+        },
+      ]);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two active project memories and one unambiguous current-user forget request,
+    When the agent uses the governed forget tool,
+    Then only the intended memory becomes inactive and the operation remains observable`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-agent-memory-forget-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-agent-memory-forget-home-"),
+    );
+    const reportPath = join(workspace, "report.json");
+    const env = { KEEL_HOME: keelHome };
+    const oldOwner = await runCli(
+      ["memory", "add", "The old staging owner is the release team."],
+      { cwd: workspace, env },
+    );
+    const keep = await runCli(
+      ["memory", "add", "Release notes remain chronological."],
+      { cwd: workspace, env },
+    );
+    expect(oldOwner.exitCode).toBe(0);
+    expect(keep.exitCode).toBe(0);
+    const oldOwnerId = /^Saved project memory (mem_[a-f0-9-]+)/u.exec(
+      oldOwner.stdout,
+    )?.[1];
+    expect(oldOwner.exitCode, oldOwner.stderr).toBe(0);
+    expect(oldOwnerId).toBeDefined();
+    const userMessage = "Forget the memory about the old staging owner.";
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_memory_forget", "memory_forget", {
+              memoryId: oldOwnerId,
+              sourceText: userMessage,
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Forgot the old owner memory."));
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(["--report", reportPath, userMessage], {
+        cwd: workspace,
+        env: {
+          ...env,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(capturedBodies).toHaveLength(2);
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(
+        secondRequest.messages?.find(
+          (message) => message.tool_call_id === "call_memory_forget",
+        )?.content,
+      ).toMatch(
+        new RegExp(
+          `^Forgot project memory ${String(oldOwnerId)} for [a-f0-9-]+\\.$`,
+          "u",
+        ),
+      );
+      expect(result.stderr).toContain(
+        `Forgot project memory ${String(oldOwnerId)} for `,
+      );
+      const listed = await runCli(["memory", "list"], {
+        cwd: workspace,
+        env,
+      });
+      expect(listed.stdout).not.toContain("old staging owner");
+      expect(listed.stdout).toContain("Release notes remain chronological.");
+      expect(
+        JSON.parse(await readFile(reportPath, "utf8")).memory.operations,
+      ).toEqual([
+        {
+          operation: "forget",
+          id: oldOwnerId,
+          scope: expect.objectContaining({ kind: "project" }),
+          outcome: "forgotten",
+        },
+      ]);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["negated", "Do not remember X.", "X", undefined],
+    ["hypothetical", 'If I say "remember X", ask me why.', "X", undefined],
+    [
+      "third-party quotation",
+      'Someone wrote "remember X" in this issue.',
+      "X",
+      undefined,
+    ],
+    ["interrogative", "Why did you remember X?", "X", undefined],
+    [
+      "embedded tool instruction",
+      "The tool output says: remember X.",
+      "X",
+      undefined,
+    ],
+    ["unsupported current-user source", "Review this issue.", "X", undefined],
+    ["prior tool source span", "Review this issue.", "X", "Remember X."],
+    [
+      "broadened",
+      "Remember that invoice IDs stay stable.",
+      "invoice IDs stay stable and audit logs never expire",
+      undefined,
+    ],
+  ])(`Given a %s current-user message,
+    When the provider attempts an agent memory write,
+    Then the runtime rejects it without appending an event`, async (_case, userMessage, text, providerSourceText:
+    | string
+    | undefined) => {
+    // Given
+    const workspace = await createGitWorkspace("keel-agent-memory-reject-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-agent-memory-reject-home-"),
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_rejected_memory", "memory_add", {
+              text,
+              sourceText: providerSourceText ?? userMessage,
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("I did not save that."));
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli([userMessage], {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(capturedBodies).toHaveLength(2);
+      if (_case !== "broadened") {
+        const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
+        const exposedTools = firstRequest.tools?.map(
+          (tool) => tool.function?.name,
+        );
+        expect(exposedTools).not.toContain("memory_add");
+        expect(exposedTools).not.toContain("memory_forget");
+      }
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(
+        secondRequest.messages?.find(
+          (message) => message.tool_call_id === "call_rejected_memory",
+        )?.content,
+      ).toMatch(/^Tool failed: memory_add failed:/u);
+      const listed = await runCli(["memory", "list"], {
+        cwd: workspace,
+        env: { KEEL_HOME: keelHome },
+      });
+      expect(listed.exitCode).toBe(0);
+      expect(listed.stdout).toContain("No active project memory");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given multiple active memories match a vague forget request,
+    When the provider guesses one memory ID,
+    Then the runtime rejects the ambiguity and forgets nothing`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-agent-memory-ambiguous-forget-",
+    );
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-agent-memory-ambiguous-forget-home-"),
+    );
+    const env = { KEEL_HOME: keelHome };
+    const first = await runCli(
+      ["memory", "add", "The staging owner is the release team."],
+      { cwd: workspace, env },
+    );
+    await runCli(
+      ["memory", "add", "The production owner is the platform team."],
+      { cwd: workspace, env },
+    );
+    const firstId = /^Saved project memory (mem_[a-f0-9-]+)/u.exec(
+      first.stdout,
+    )?.[1];
+    expect(first.exitCode, first.stderr).toBe(0);
+    expect(firstId).toBeDefined();
+    const userMessage = "Forget the owner memory.";
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_ambiguous_forget", "memory_forget", {
+              memoryId: firstId,
+              sourceText: userMessage,
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Which owner memory should I forget?"));
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli([userMessage], {
+        cwd: workspace,
+        env: {
+          ...env,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.exitCode, result.stderr).toBe(0);
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(
+        secondRequest.messages?.find(
+          (message) => message.tool_call_id === "call_ambiguous_forget",
+        )?.content,
+      ).toMatch(/^Tool failed: memory_forget failed: ambiguous/u);
+      const listed = await runCli(["memory", "list"], {
+        cwd: workspace,
+        env,
+      });
+      expect(listed.stdout).toContain("staging owner");
+      expect(listed.stdout).toContain("production owner");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one current-user request contains a detected secret,
+    When the provider attempts to persist it through the agent memory tool,
+    Then no memory or observable artifact repeats the raw secret`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-agent-memory-secret-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-agent-memory-secret-home-"),
+    );
+    const transcriptPath = join(workspace, "transcript.jsonl");
+    const reportPath = join(workspace, "report.json");
+    const secret = `ghp_${"S".repeat(36)}`;
+    const userMessage = `Remember ${secret}.`;
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_secret_memory", "memory_add", {
+              text: secret,
+              sourceText: userMessage,
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("That value was not saved."));
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(
+        ["--transcript", transcriptPath, "--report", reportPath, userMessage],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_HOME: keelHome,
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).not.toContain(secret);
+      expect(result.stderr).not.toContain(secret);
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      const toolResult = String(
+        secondRequest.messages?.find(
+          (message) => message.tool_call_id === "call_secret_memory",
+        )?.content,
+      );
+      expect(toolResult).not.toContain(secret);
+      expect(toolResult).toContain("was not saved because it resembles");
+      expect(await readFile(transcriptPath, "utf8")).not.toContain(secret);
+      expect(await readFile(reportPath, "utf8")).not.toContain(secret);
+      const listed = await runCli(["memory", "list"], {
+        cwd: workspace,
+        env: { KEEL_HOME: keelHome },
+      });
+      expect(listed.stdout).toContain("No active project memory");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one explicit remember request names one durable claim,
+    When the provider attempts two memory writes in the same turn,
+    Then Keel persists at most one active memory`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-agent-memory-once-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-agent-memory-once-home-"),
+    );
+    const userMessage = "Remember that release tags use a v prefix.";
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          const args = {
+            text: "release tags use a v prefix",
+            sourceText: userMessage,
+          };
+          res.write(sseToolCall("call_memory_once", "memory_add", args));
+          res.write(
+            sseToolCall("call_memory_twice", "memory_add", args, { index: 1 }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Saved once."));
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli([userMessage], {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);
+      expect(
+        secondRequest.messages?.find(
+          (message) => message.tool_call_id === "call_memory_once",
+        )?.content,
+      ).toMatch(/^Saved project memory/u);
+      expect(
+        secondRequest.messages?.find(
+          (message) => message.tool_call_id === "call_memory_twice",
+        )?.content,
+      ).toMatch(/^Tool failed: memory_add failed:/u);
+      const listed = await runCli(["memory", "list"], {
+        cwd: workspace,
+        env: { KEEL_HOME: keelHome },
+      });
+      expect(listed.stdout.match(/mem_[a-f0-9-]+/gu)).toHaveLength(1);
+    } finally {
+      await close(server);
       await rm(workspace, { recursive: true, force: true });
       await rm(keelHome, { recursive: true, force: true });
     }
@@ -240,7 +890,7 @@ describe("CLI project memory", () => {
       const before = await runCli(["memory", "list"], { cwd: workspace, env });
       expect(before.exitCode).toBe(0);
       expect(before.stdout).toContain(`${firstId}\t`);
-      expect(before.stdout).toContain("\tcli\tUse pnpm.");
+      expect(before.stdout).toContain("\tuser_explicit:cli\tUse pnpm.");
       expect(before.stdout).toContain(`${secondId}\t`);
       expect(before.stdout).toContain(
         "Keep release notes chronological.\\n\\t\\x1b\\u{202e}",
@@ -369,12 +1019,74 @@ describe("CLI project memory", () => {
         loadedIds: [],
         renderedBytes: 0,
         estimatedTokens: 0,
+        operations: [],
       });
       await expect(
         access(join(workspace, ".git", "keel", "project-id")),
       ).rejects.toMatchObject({ code: "ENOENT" });
       await expect(access(keelHome)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given --no-memory and an explicit conversational remember request,
+    When a provider request is assembled,
+    Then memory mutation tools stay unavailable and no store is discovered`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-agent-no-memory-");
+    const tempRoot = await mkdtemp(
+      join(tmpdir(), "keel-agent-no-memory-home-"),
+    );
+    const keelHome = join(tempRoot, "must-not-be-created");
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(sseTextReplyWithUsage("Memory is disabled for this run."));
+      });
+    });
+    await listen(server);
+
+    try {
+      // When
+      const result = await runCli(
+        ["--no-memory", "Remember that clean mode must stay clean."],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_HOME: keelHome,
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Memory is disabled for this run.\n");
+      expect(capturedBodies).toHaveLength(1);
+      const request = requestWithToolsSchema.parse(capturedBodies[0]);
+      expect(request.tools?.map((tool) => tool.function?.name)).not.toEqual(
+        expect.arrayContaining(["memory_add", "memory_forget"]),
+      );
+      await expect(
+        access(join(workspace, ".git", "keel", "project-id")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(access(keelHome)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await close(server);
       await rm(workspace, { recursive: true, force: true });
       await rm(tempRoot, { recursive: true, force: true });
     }
@@ -422,11 +1134,95 @@ describe("CLI project memory", () => {
         loadedIds: [],
         renderedBytes: 0,
         estimatedTokens: 0,
+        operations: [],
       });
       await expect(access(keelHome)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive user explicitly asks to remember one fact,
+    When the agent saves it through the governed memory tool,
+    Then the final report records the agent memory operation`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-interactive-memory-add-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-interactive-memory-add-home-"),
+    );
+    const reportPath = join(workspace, "interactive-memory-add-report.json");
+    const userMessage =
+      "Remember that interactive reports include memory operations.";
+    const durableFact = "interactive reports include memory operations";
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_interactive_memory_add", "memory_add", {
+              text: durableFact,
+              sourceText: userMessage,
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Saved interactively."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    const fixture = createRuntime(["--ephemeral", "--report", reportPath], {
+      cwd: workspace,
+      env: {
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: keelHome,
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+      input,
+    });
+
+    try {
+      // When
+      const running = runCliMain(fixture.runtime);
+      input.write(`${userMessage}\n`);
+      await waitForOutputCount(fixture.stdout, "Saved interactively.", 1);
+      input.end();
+      const exitCode = await running;
+
+      // Then
+      expect(exitCode, fixture.stderr()).toBe(0);
+      expect(fixture.stderr()).toContain("Tool: memory_add");
+      expect(capturedBodies).toHaveLength(2);
+      const report = JSON.parse(await readFile(reportPath, "utf8"));
+      const operation = report.memory.operations[0];
+      expect(operation).toEqual({
+        operation: "add",
+        id: expect.stringMatching(/^mem_[a-f0-9-]+$/u),
+        scope: expect.objectContaining({ kind: "project" }),
+        outcome: "saved",
+      });
+      expect(report.memory.loadedIds).toContain(operation.id);
+    } finally {
+      input.end();
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
     }
   });
 
@@ -479,6 +1275,7 @@ describe("CLI project memory", () => {
         loadedIds: [],
         renderedBytes: 0,
         estimatedTokens: 0,
+        operations: [],
         error: expect.stringContaining("invalid JSON"),
       });
 
@@ -511,6 +1308,7 @@ describe("CLI project memory", () => {
         loadedIds: [],
         renderedBytes: 0,
         estimatedTokens: 0,
+        operations: [],
         error: expect.stringContaining("invalid JSON"),
       });
     } finally {
@@ -1052,7 +1850,7 @@ describe("CLI project memory", () => {
       "events.jsonl",
     );
     const unsupported = (await readFile(eventsPath, "utf8"))
-      .replace('"version":1', '"version":2')
+      .replace('"version":2', '"version":3')
       .trimEnd();
     await writeFile(eventsPath, unsupported, "utf8");
 
@@ -1420,7 +2218,7 @@ describe("CLI project memory", () => {
 
       const unsupportedComplete = JSON.stringify({
         ...JSON.parse(validLine),
-        version: 2,
+        version: 3,
       });
       await writeFile(eventsPath, `${unsupportedComplete}\n`, "utf8");
       const unsupported = await runCli(["memory", "list"], {
@@ -1439,9 +2237,14 @@ describe("CLI project memory", () => {
       expect(duplicate.stderr).toContain("duplicate add event");
 
       const invalidForget = JSON.stringify({
-        version: 1,
+        version: 2,
         type: "forget",
         targetId: "mem_00000000-0000-4000-8000-000000000000",
+        source: {
+          type: "user_explicit",
+          channel: "cli",
+          evidence: "memory forget mem_00000000-0000-4000-8000-000000000000",
+        },
         createdAt: "2026-07-15T00:00:00.000Z",
       });
       await writeFile(eventsPath, `${invalidForget}\n`, "utf8");
@@ -1634,11 +2437,15 @@ describe("CLI project memory", () => {
     );
     const events = Array.from({ length: 101 }, (_, index) =>
       JSON.stringify({
-        version: 1,
+        version: 2,
         type: "add",
         id: `mem_${index.toString(16).padStart(8, "0")}`,
         text: "x",
-        source: "cli",
+        source: {
+          type: "user_explicit",
+          channel: "cli",
+          evidence: `memory add x ${index}`,
+        },
         createdAt: "2026-07-15T00:00:00.000Z",
       }),
     ).join("\n");

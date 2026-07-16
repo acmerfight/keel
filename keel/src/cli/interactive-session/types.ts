@@ -21,6 +21,7 @@ import type {
   SkillLifecycleState,
   WorkflowSkill,
 } from "../../skills/model.ts";
+import type { AgentMemoryMutationCapability } from "../../tools/memory.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
 import type { ModelSource, ProviderSelection } from "../provider-config.ts";
 import type { RunReportMemory } from "../report.ts";
@@ -111,6 +112,7 @@ export interface InteractiveSessionOptions {
   readonly goalAutomaticContinuationTurnLimit?: number;
   readonly reportRecorder?: AgentEventReportRecorder;
   readonly memoryPrompt?: () => string;
+  readonly memoryMutation?: AgentMemoryMutationCapability;
   readonly memoryStatus?: () => RunReportMemory;
   readonly exitOnTurnAbort?: boolean;
   readonly now?: () => number;

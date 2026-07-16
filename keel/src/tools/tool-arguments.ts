@@ -37,6 +37,44 @@ export const skillResourceToolArgumentsSchema = z
   })
   .strict();
 
+export const memoryAddToolArgumentsSchema = z
+  .object({
+    text: z
+      .string()
+      .trim()
+      .min(1)
+      .describe(
+        "Exact durable claim copied from the current user's explicit remember request. Do not paraphrase, broaden, or infer it.",
+      ),
+    sourceText: z
+      .string()
+      .trim()
+      .min(1)
+      .max(8192)
+      .describe(
+        "Exact current-user sentence or standalone line that explicitly asks Keel to remember this claim.",
+      ),
+  })
+  .strict();
+
+export const memoryForgetToolArgumentsSchema = z
+  .object({
+    memoryId: z
+      .string()
+      .describe(
+        "Exact active project-memory ID selected from the current project memory block.",
+      ),
+    sourceText: z
+      .string()
+      .trim()
+      .min(1)
+      .max(8192)
+      .describe(
+        "Exact current-user sentence or standalone line that explicitly asks Keel to forget this one memory.",
+      ),
+  })
+  .strict();
+
 export const readToolArgumentsSchema = z
   .object({
     path: z.string().describe("Workspace-relative file path to read."),

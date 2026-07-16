@@ -25,12 +25,14 @@ export interface ContextCompactionRequestMetadata {
   readonly toolChoice?: "none";
   readonly allowBash?: boolean;
   readonly allowSkill?: boolean;
+  readonly allowMemory?: boolean;
 }
 
 export interface ResolvedContextCompactionRequestMetadata {
   readonly toolChoice: "auto" | "none";
   readonly allowBash: boolean;
   readonly allowSkill: boolean;
+  readonly allowMemory: boolean;
 }
 
 export function resolveContextCompactionOptions(
@@ -77,5 +79,6 @@ export function resolvedRequestMetadata(
     toolChoice,
     allowBash: toolChoice === "none" ? false : metadata?.allowBash === true,
     allowSkill: toolChoice === "none" ? false : metadata?.allowSkill === true,
+    allowMemory: toolChoice === "none" ? false : metadata?.allowMemory === true,
   };
 }

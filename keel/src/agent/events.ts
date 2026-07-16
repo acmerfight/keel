@@ -3,6 +3,7 @@ import type { SessionTaskProgress } from "../core/task-progress.ts";
 import type { RecordUndoCheckpointResult } from "../core/undo-protection.ts";
 import type { ToolCall, Usage } from "../llm/types.ts";
 import type { SkillActivationRecord } from "../skills/model.ts";
+import type { AgentMemoryOperation } from "../tools/memory.ts";
 import type { ContextCompactionStats } from "./context-compaction.ts";
 import type {
   ToolOutputArtifactCompactionArtifact,
@@ -44,6 +45,7 @@ export type AgentEvent =
       readonly toolCall: ToolCall;
       readonly ok: boolean;
       readonly bashExitCode?: number | null;
+      readonly memoryOperation?: AgentMemoryOperation;
     }
   | ({ readonly type: "undo_checkpoint" } & RecordUndoCheckpointResult)
   | ({ readonly type: "skill_activated" } & SkillActivationRecord)

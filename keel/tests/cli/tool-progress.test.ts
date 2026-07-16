@@ -282,6 +282,83 @@ describe("CLI Tool Progress", () => {
     expect(statusLines).toEqual(["Task progress: 1/1 completed"]);
   });
 
+  test(`Given an agent saves project memory through a tool,
+    When classic CLI output prints agent events,
+    Then stderr includes the stable memory ID and project scope`, async () => {
+    // Given
+    async function* events(): AsyncIterable<AgentEvent> {
+      yield {
+        type: "tool_end",
+        toolCall: {
+          id: "memory_add_1",
+          tool: "memory_add",
+          text: "release tags use a v prefix",
+          sourceText: "Remember that release tags use a v prefix.",
+        },
+        ok: true,
+        memoryOperation: {
+          operation: "add",
+          id: "mem_release",
+          scope: { kind: "project", id: "project_release" },
+          outcome: "saved",
+        },
+      };
+    }
+    let stderr = "";
+
+    // When
+    await printAgentEvents(events(), {
+      writeStdout() {},
+      writeStderr(text) {
+        stderr += text;
+      },
+    });
+
+    // Then
+    expect(stderr).toBe(
+      "Saved project memory mem_release for project_release.\n",
+    );
+  });
+
+  test(`Given an agent forgets project memory through a tool,
+    When stable interactive output prints agent events,
+    Then the status line includes the stable memory ID and project scope`, async () => {
+    // Given
+    async function* events(): AsyncIterable<AgentEvent> {
+      yield {
+        type: "tool_end",
+        toolCall: {
+          id: "memory_forget_1",
+          tool: "memory_forget",
+          memoryId: "mem_release",
+          sourceText: "Forget mem_release.",
+        },
+        ok: true,
+        memoryOperation: {
+          operation: "forget",
+          id: "mem_release",
+          scope: { kind: "project", id: "project_release" },
+          outcome: "forgotten",
+        },
+      };
+    }
+    const statusLines: string[] = [];
+
+    // When
+    await printStableInteractiveAgentEvents(events(), {
+      writeStdout() {},
+      writeAssistantHeader() {},
+      writeStatusLine(text) {
+        statusLines.push(text);
+      },
+    });
+
+    // Then
+    expect(statusLines).toEqual([
+      "Forgot project memory mem_release for project_release.",
+    ]);
+  });
+
   test(`Given an agent updates the visible session goal,
     When classic CLI output prints agent events,
     Then stderr shows the deterministic goal summary`, async () => {

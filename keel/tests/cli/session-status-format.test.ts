@@ -177,6 +177,7 @@ describe("CLI Session Status Format", () => {
         loadedIds: [],
         renderedBytes: 0,
         estimatedTokens: 0,
+        operations: [],
       },
     });
     const failed = formatSessionStatusSnapshot({
@@ -186,6 +187,7 @@ describe("CLI Session Status Format", () => {
         scope: null,
         loadedIds: [],
         renderedBytes: 0,
+        operations: [],
         error: "Error: invalid memory\nignored detail",
       },
     });
@@ -196,6 +198,7 @@ describe("CLI Session Status Format", () => {
         scope: null,
         loadedIds: [],
         renderedBytes: 0,
+        operations: [],
       },
     });
 
