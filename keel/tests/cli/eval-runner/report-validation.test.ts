@@ -43,6 +43,75 @@ describe("Eval Runner", () => {
         costUsd: -0.01,
       }),
     },
+    {
+      name: "inactive loaded memory",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        memory: {
+          ...VALID_REPORT.memory,
+          loadedIds: ["mem_inactive"],
+          loadedEntries: [
+            {
+              id: "mem_inactive",
+              status: "forgotten",
+              source: { type: "user_explicit", channel: "cli" },
+              createdAt: "2026-07-16T00:00:00.000Z",
+              lastVerifiedAt: "2026-07-16T00:00:00.000Z",
+              supersedes: [],
+              supersededBy: null,
+              reviewAfter: null,
+              expiresAt: null,
+            },
+          ],
+        },
+      }),
+    },
+    {
+      name: "divergent loaded memory IDs",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        memory: {
+          ...VALID_REPORT.memory,
+          loadedIds: ["mem_expected"],
+          loadedEntries: [
+            {
+              id: "mem_other",
+              status: "current",
+              source: { type: "user_explicit", channel: "cli" },
+              createdAt: "2026-07-16T00:00:00.000Z",
+              lastVerifiedAt: "2026-07-16T00:00:00.000Z",
+              supersedes: [],
+              supersededBy: null,
+              reviewAfter: null,
+              expiresAt: null,
+            },
+          ],
+        },
+      }),
+    },
+    {
+      name: "duplicate loaded memory IDs",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        memory: {
+          ...VALID_REPORT.memory,
+          loadedIds: ["mem_duplicate", "mem_duplicate"],
+          loadedEntries: [
+            ...[1, 2].map(() => ({
+              id: "mem_duplicate",
+              status: "current",
+              source: { type: "user_explicit", channel: "cli" },
+              createdAt: "2026-07-16T00:00:00.000Z",
+              lastVerifiedAt: "2026-07-16T00:00:00.000Z",
+              supersedes: [],
+              supersededBy: null,
+              reviewAfter: null,
+              expiresAt: null,
+            })),
+          ],
+        },
+      }),
+    },
   ])(`Given the agent writes a $name report,
     When the eval runner reads the report,
     Then it records a crashed result`, async ({ reportContent }) => {

@@ -117,17 +117,22 @@ export interface ProjectMemoryEntry {
   readonly status: ProjectMemoryStatus;
 }
 
+export type ActiveProjectMemoryEntry = ProjectMemoryEntry & {
+  readonly status: "current" | "stale";
+  readonly supersededBy: null;
+};
+
 export interface RenderedProjectMemory {
   readonly enabled: true;
   readonly scope: ProjectMemoryScope;
-  readonly entries: readonly ProjectMemoryEntry[];
+  readonly entries: readonly ActiveProjectMemoryEntry[];
   readonly prompt: string;
   readonly renderedBytes: number;
   readonly estimatedTokens: number;
 }
 
 interface MemoryState {
-  readonly active: readonly ProjectMemoryEntry[];
+  readonly active: readonly ActiveProjectMemoryEntry[];
   readonly entries: readonly ProjectMemoryEntry[];
   readonly events: readonly MemoryEvent[];
 }
@@ -462,6 +467,15 @@ function immutableMemoryEntry(
   };
 }
 
+function isActiveMemoryEntry(
+  entry: ProjectMemoryEntry,
+): entry is ActiveProjectMemoryEntry {
+  return (
+    (entry.status === "current" || entry.status === "stale") &&
+    entry.supersededBy === null
+  );
+}
+
 function replayMemoryEvents(
   events: readonly MemoryEvent[],
   filePath: string,
@@ -530,9 +544,7 @@ function replayMemoryEvents(
     immutableMemoryEntry(entry, now),
   );
   return {
-    active: projected.filter(
-      (entry) => entry.status === "current" || entry.status === "stale",
-    ),
+    active: projected.filter(isActiveMemoryEntry),
     entries: projected,
     events,
   };
@@ -947,10 +959,7 @@ export function updateProjectMemory(
     validateActiveBudget(next.active);
     removeIncompleteFinalEvent(filePath);
     appendEvent(filePath, event);
-    const entry = next.entries.find((candidate) => candidate.id === event.id);
-    if (entry === undefined)
-      throw new Error("updated project memory was not projected");
-    return { scope, entry };
+    return { scope, entry: requireMemoryEntry(next, event.id) };
   });
 }
 

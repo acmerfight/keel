@@ -207,6 +207,7 @@ export const VALID_REPORT = {
     enabled: false,
     scope: null,
     loadedIds: [],
+    loadedEntries: [],
     renderedBytes: 0,
     estimatedTokens: 0,
     operations: [],

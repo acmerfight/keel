@@ -1221,7 +1221,6 @@ async function runSessionCli(
       const reportRecorder = createAgentEventReportRecorder();
       let loadedMemory: RenderedProjectMemory | undefined;
       let memoryLoadError: string | undefined;
-      const exposedMemoryIds = new Set<string>();
       const exposedMemoryEntries = new Map<string, RunReportMemoryEntry>();
       let exposedMemoryBytes = 0;
       let exposedMemoryTokens = 0;
@@ -1260,7 +1259,6 @@ async function runSessionCli(
       const loadMemoryPrompt = (): string => {
         const memory = readMemory();
         for (const entry of memory.entries) {
-          exposedMemoryIds.add(entry.id);
           exposedMemoryEntries.set(entry.id, projectMemoryReportEntry(entry));
         }
         exposedMemoryBytes = Math.max(exposedMemoryBytes, memory.renderedBytes);
@@ -1276,7 +1274,7 @@ async function runSessionCli(
           return {
             enabled: true,
             scope: lastLoadedMemoryScope(),
-            loadedIds: [...exposedMemoryIds],
+            loadedIds: [...exposedMemoryEntries.keys()],
             loadedEntries: [...exposedMemoryEntries.values()],
             renderedBytes: exposedMemoryBytes,
             estimatedTokens: exposedMemoryTokens,
@@ -1291,7 +1289,7 @@ async function runSessionCli(
           return {
             enabled: true,
             scope: lastLoadedMemoryScope(),
-            loadedIds: [...exposedMemoryIds],
+            loadedIds: [...exposedMemoryEntries.keys()],
             loadedEntries: [...exposedMemoryEntries.values()],
             renderedBytes: exposedMemoryBytes,
             estimatedTokens: exposedMemoryTokens,
@@ -1302,7 +1300,7 @@ async function runSessionCli(
         return {
           enabled: true,
           scope: currentMemory.scope,
-          loadedIds: [...exposedMemoryIds],
+          loadedIds: [...exposedMemoryEntries.keys()],
           loadedEntries: [...exposedMemoryEntries.values()],
           renderedBytes: exposedMemoryBytes,
           estimatedTokens: exposedMemoryTokens,

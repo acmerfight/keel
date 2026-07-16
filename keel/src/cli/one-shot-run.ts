@@ -251,7 +251,6 @@ export async function runOneShotCli(
         ? { skillCatalog: catalogExposure.skills }
         : {}),
     });
-    const exposedMemoryIds = new Set<string>();
     const exposedMemoryEntries = new Map<string, RunReportMemoryEntry>();
     let exposedMemoryBytes = 0;
     let exposedMemoryTokens = 0;
@@ -264,7 +263,6 @@ export async function runOneShotCli(
       memoryPrompt = () => {
         loadedMemory = loadRenderedProjectMemory(runtime, workspace);
         for (const entry of loadedMemory.entries) {
-          exposedMemoryIds.add(entry.id);
           exposedMemoryEntries.set(entry.id, projectMemoryReportEntry(entry));
         }
         exposedMemoryBytes = Math.max(
@@ -282,7 +280,7 @@ export async function runOneShotCli(
       memoryReport = () => ({
         enabled: true,
         scope: loadedMemory.scope,
-        loadedIds: [...exposedMemoryIds],
+        loadedIds: [...exposedMemoryEntries.keys()],
         loadedEntries: [...exposedMemoryEntries.values()],
         renderedBytes: exposedMemoryBytes,
         estimatedTokens: exposedMemoryTokens,

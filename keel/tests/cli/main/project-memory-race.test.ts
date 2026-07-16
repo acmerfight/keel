@@ -232,4 +232,73 @@ describe("CLI Project Memory Race Handling", () => {
       await rm(keelHome, { recursive: true, force: true });
     }
   });
+
+  test(`Given atomic purge fails while its private generation is still open,
+    When Keel cleans up the failed replacement,
+    Then it closes the descriptor and preserves only the old complete generation`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-memory-purge-write-failure-",
+    );
+    const keelHome = mkdtempSync(join(tmpdir(), "keel-memory-race-home-"));
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => 0,
+    };
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    let failAtomicWrite = false;
+    const projectMemory = await importProjectMemoryWithFs({
+      writeSync: (fd, buffer, offset, length) => {
+        if (failAtomicWrite) throw errno("EIO");
+        return actualFs.writeSync(fd, buffer, offset, length);
+      },
+    });
+    const saved = projectMemory.addProjectMemory(
+      runtime,
+      workspace,
+      "Atomic purge write target.",
+      {
+        type: "user_explicit",
+        channel: "cli",
+        evidence: "memory add Atomic purge write target.",
+      },
+      { reviewAfter: null, expiresAt: null },
+    );
+    projectMemory.addProjectMemory(
+      runtime,
+      workspace,
+      "Atomic purge write survivor.",
+      {
+        type: "user_explicit",
+        channel: "cli",
+        evidence: "memory add Atomic purge write survivor.",
+      },
+      { reviewAfter: null, expiresAt: null },
+    );
+    const projectDirectory = join(
+      keelHome,
+      "memory",
+      "projects",
+      saved.scope.id,
+    );
+    const eventsPath = join(projectDirectory, "events.jsonl");
+    const before = await readFile(eventsPath, "utf8");
+    failAtomicWrite = true;
+
+    try {
+      // When / Then
+      expect(() =>
+        projectMemory.purgeProjectMemory(runtime, workspace, saved.entry.id, {
+          type: "user_explicit",
+          channel: "cli",
+          evidence: `memory purge ${saved.entry.id}`,
+        }),
+      ).toThrow("cannot atomically purge project memory");
+      expect(await readFile(eventsPath, "utf8")).toBe(before);
+      expect(await readdir(projectDirectory)).toEqual(["events.jsonl"]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
 });

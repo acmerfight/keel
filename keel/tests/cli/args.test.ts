@@ -1150,12 +1150,40 @@ describe("CLI Args", () => {
       ["memory", "add", "Use pnpm.", "--review-after"],
       "Error: memory add --review-after requires <timestamp>.",
     ],
+    [
+      [
+        "memory",
+        "add",
+        "Use pnpm.",
+        "--review-after",
+        "2027-01-01T00:00:00Z",
+        "--review-after",
+        "2028-01-01T00:00:00Z",
+      ],
+      'Error: memory add option "--review-after" was provided more than once.',
+    ],
+    [
+      [
+        "memory",
+        "add",
+        "Use pnpm.",
+        "--expires-at",
+        "2027-01-01T00:00:00Z",
+        "--expires-at",
+        "2028-01-01T00:00:00Z",
+      ],
+      'Error: memory add option "--expires-at" was provided more than once.',
+    ],
     [["memory", "list", "extra"], 'Error: unknown memory list option "extra"'],
     [["memory", "show"], "Error: memory show requires <id>."],
     [["memory", "update"], "Error: memory update requires <id> <replacement>."],
     [
       ["memory", "update", "mem_1234"],
       "Error: memory update requires <id> <replacement>.",
+    ],
+    [
+      ["memory", "update", "mem_1234", "Use npm.", "--expires-at"],
+      "Error: memory update --expires-at requires <timestamp>.",
     ],
     [
       ["memory", "review", "--all"],

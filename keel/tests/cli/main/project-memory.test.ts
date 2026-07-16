@@ -1188,6 +1188,186 @@ describe("CLI project memory", () => {
     }
   });
 
+  test(`Given empty, conflicting, and inactive lifecycle states,
+    When the user exercises review, update, verify, and purge management paths,
+    Then Keel reports precise outcomes and rejects every invalid transition`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-memory-management-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-memory-management-home-"),
+    );
+    const env = { KEEL_HOME: keelHome };
+
+    try {
+      const emptyHistory = await runCli(["memory", "list", "--all"], {
+        cwd: workspace,
+        env,
+      });
+      expect(emptyHistory.stdout).toContain("No project memory history");
+      const emptyReview = await runCli(["memory", "review"], {
+        cwd: workspace,
+        env,
+      });
+      expect(emptyReview.stdout).toContain("No reviewable project memory");
+      const emptyDue = await runCli(["memory", "review", "--due"], {
+        cwd: workspace,
+        env,
+      });
+      expect(emptyDue.stdout).toContain("No project memory is due for review");
+      const unconfirmedPurge = await runCli(["memory", "clear", "--purge"], {
+        cwd: workspace,
+        env,
+      });
+      expect(unconfirmedPurge.exitCode).toBe(1);
+      expect(unconfirmedPurge.stderr).toContain(
+        "memory clear --purge requires an interactive confirmation",
+      );
+      const emptyPurge = await runCli(["memory", "clear", "--purge", "--yes"], {
+        cwd: workspace,
+        env,
+      });
+      expect(emptyPurge.exitCode, emptyPurge.stderr).toBe(0);
+      expect(emptyPurge.stdout).toContain("0 payload entries");
+
+      const first = await runCli(["memory", "add", "Owner is alpha."], {
+        cwd: workspace,
+        env,
+      });
+      const firstId = /^Saved project memory (mem_[a-f0-9-]+)/u.exec(
+        first.stdout,
+      )?.[1];
+      const duplicateAdd = await runCli(["memory", "add", "Owner is alpha."], {
+        cwd: workspace,
+        env,
+      });
+      expect(duplicateAdd.exitCode).toBe(1);
+      expect(duplicateAdd.stderr).toContain("project memory duplicates");
+
+      const second = await runCli(["memory", "add", "Owner is beta."], {
+        cwd: workspace,
+        env,
+      });
+      const secondId = /^Saved project memory (mem_[a-f0-9-]+)/u.exec(
+        second.stdout,
+      )?.[1];
+      const reviewable = await runCli(["memory", "review"], {
+        cwd: workspace,
+        env,
+      });
+      expect(reviewable.stdout).toContain("Reviewable project memory");
+      expect(reviewable.stdout).toContain(String(firstId));
+      expect(reviewable.stdout).toContain(String(secondId));
+
+      const currentVerification = await runCli(
+        ["memory", "verify", String(firstId)],
+        { cwd: workspace, env },
+      );
+      expect(currentVerification.exitCode, currentVerification.stderr).toBe(0);
+      const unchanged = await runCli(
+        ["memory", "update", String(firstId), "Owner is alpha."],
+        { cwd: workspace, env },
+      );
+      expect(unchanged.exitCode).toBe(1);
+      expect(unchanged.stderr).toContain("must change the remembered claim");
+      const duplicateReplacement = await runCli(
+        ["memory", "update", String(firstId), "Owner is beta."],
+        { cwd: workspace, env },
+      );
+      expect(duplicateReplacement.exitCode).toBe(1);
+      expect(duplicateReplacement.stderr).toContain("replacement duplicates");
+
+      const replacement = await runCli(
+        ["memory", "update", String(firstId), "Owner is gamma."],
+        { cwd: workspace, env },
+      );
+      const replacementId = /with (mem_[a-f0-9-]+) for/u.exec(
+        replacement.stdout,
+      )?.[1];
+      const shownReplacement = await runCli(
+        ["memory", "show", String(replacementId)],
+        { cwd: workspace, env },
+      );
+      expect(shownReplacement.stdout).toContain(`supersedes: ${firstId}`);
+      const updateSuperseded = await runCli(
+        ["memory", "update", String(firstId), "Owner is delta."],
+        { cwd: workspace, env },
+      );
+      expect(updateSuperseded.exitCode).toBe(1);
+      expect(updateSuperseded.stderr).toContain("is superseded");
+      const verifySuperseded = await runCli(
+        ["memory", "verify", String(firstId)],
+        { cwd: workspace, env },
+      );
+      expect(verifySuperseded.exitCode).toBe(1);
+      expect(verifySuperseded.stderr).toContain("is superseded");
+
+      const forgotten = await runCli(["memory", "forget", String(secondId)], {
+        cwd: workspace,
+        env,
+      });
+      expect(forgotten.exitCode, forgotten.stderr).toBe(0);
+      const updateForgotten = await runCli(
+        ["memory", "update", String(secondId), "Owner is epsilon."],
+        { cwd: workspace, env },
+      );
+      expect(updateForgotten.exitCode).toBe(1);
+      expect(updateForgotten.stderr).toContain("is forgotten");
+      const verifyForgotten = await runCli(
+        ["memory", "verify", String(secondId)],
+        { cwd: workspace, env },
+      );
+      expect(verifyForgotten.exitCode).toBe(1);
+      expect(verifyForgotten.stderr).toContain("is forgotten");
+
+      const expired = await runCli(
+        [
+          "memory",
+          "add",
+          "Temporary owner expired.",
+          "--expires-at",
+          "1960-01-01T00:00:00Z",
+        ],
+        { cwd: workspace, env },
+      );
+      const expiredId = /^Saved project memory (mem_[a-f0-9-]+)/u.exec(
+        expired.stdout,
+      )?.[1];
+      const verifyExpired = await runCli(
+        ["memory", "verify", String(expiredId)],
+        { cwd: workspace, env },
+      );
+      expect(verifyExpired.exitCode).toBe(1);
+      expect(verifyExpired.stderr).toContain("is expired");
+
+      const purgeTarget = await runCli(
+        ["memory", "add", "Verify then purge this payload."],
+        { cwd: workspace, env },
+      );
+      const purgeTargetId = /^Saved project memory (mem_[a-f0-9-]+)/u.exec(
+        purgeTarget.stdout,
+      )?.[1];
+      await runCli(["memory", "verify", String(purgeTargetId)], {
+        cwd: workspace,
+        env,
+      });
+      const purged = await runCli(["memory", "purge", String(purgeTargetId)], {
+        cwd: workspace,
+        env,
+      });
+      expect(purged.exitCode, purged.stderr).toBe(0);
+
+      const purgedAll = await runCli(["memory", "clear", "--purge", "--yes"], {
+        cwd: workspace,
+        env,
+      });
+      expect(purgedAll.exitCode, purgedAll.stderr).toBe(0);
+      expect(purgedAll.stdout).toContain("payload entries");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
   test(`Given lifecycle timestamps are malformed or internally contradictory,
     When add or update validates the schedule,
     Then Keel rejects the write before changing project memory`, async () => {
@@ -1511,6 +1691,78 @@ describe("CLI project memory", () => {
       expect(active.stdout).toContain("No active project memory");
       expect(history.stdout).toContain(`${firstId}\tforgotten\t`);
       expect(await readdir(projectDirectory)).toEqual(["events.jsonl"]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one replacement explicitly supersedes two current claims,
+    When one predecessor is purged,
+    Then the surviving predecessor relation remains complete without the purged ID`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-memory-purge-branch-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-memory-purge-branch-home-"),
+    );
+    const env = { KEEL_HOME: keelHome };
+
+    try {
+      const first = await runCli(["memory", "add", "First old claim."], {
+        cwd: workspace,
+        env,
+      });
+      const firstId = /^Saved project memory (mem_[a-f0-9-]+)/u.exec(
+        first.stdout,
+      )?.[1];
+      const projectId = /for ([a-f0-9-]+)\./u.exec(first.stdout)?.[1];
+      const second = await runCli(["memory", "add", "Second old claim."], {
+        cwd: workspace,
+        env,
+      });
+      const secondId = /^Saved project memory (mem_[a-f0-9-]+)/u.exec(
+        second.stdout,
+      )?.[1];
+      const eventsPath = join(
+        keelHome,
+        "memory",
+        "projects",
+        String(projectId),
+        "events.jsonl",
+      );
+      const firstEvent = JSON.parse(
+        (await readFile(eventsPath, "utf8")).trimEnd().split("\n")[0] ?? "",
+      );
+      const replacementId = "mem_55555555";
+      await appendFile(
+        eventsPath,
+        `${JSON.stringify({
+          ...firstEvent,
+          id: replacementId,
+          text: "One consolidated current claim.",
+          supersedes: [firstId, secondId],
+        })}\n`,
+        "utf8",
+      );
+
+      // When
+      const purged = await runCli(["memory", "purge", String(firstId)], {
+        cwd: workspace,
+        env,
+      });
+
+      // Then
+      expect(purged.exitCode, purged.stderr).toBe(0);
+      const events = await readFile(eventsPath, "utf8");
+      expect(events).not.toContain(String(firstId));
+      expect(events).toContain(String(secondId));
+      const history = await runCli(["memory", "list", "--all"], {
+        cwd: workspace,
+        env,
+      });
+      expect(history.stdout).toContain(`${secondId}\tsuperseded\t`);
+      expect(history.stdout).toContain(`${replacementId}\tcurrent\t`);
+      expect(history.stdout).toContain(`supersedes=${secondId}`);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(keelHome, { recursive: true, force: true });
@@ -2569,6 +2821,46 @@ describe("CLI project memory", () => {
         env: { KEEL_HOME: keelHome },
       });
       expect(listed.stdout).toContain("No active project memory");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a real terminal requests physical project-memory purge,
+    When the user confirms interactively,
+    Then Keel presents the purge boundary and removes the local payload generation`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-memory-confirm-purge-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-memory-confirm-purge-home-"),
+    );
+    await runCli(["memory", "add", "Confirm before purging."], {
+      cwd: workspace,
+      env: { KEEL_HOME: keelHome },
+    });
+    const input = new PassThrough();
+    input.end("yes\n");
+    const fixture = createRuntime(["memory", "clear", "--purge"], {
+      cwd: workspace,
+      env: { KEEL_HOME: keelHome },
+      input,
+      inputIsTTY: true,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stderr()).toContain("Purge all project-memory payloads");
+      expect(fixture.stdout()).toContain("Purged all project memory");
+      const listed = await runCli(["memory", "list", "--all"], {
+        cwd: workspace,
+        env: { KEEL_HOME: keelHome },
+      });
+      expect(listed.stdout).toContain("No project memory history");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(keelHome, { recursive: true, force: true });

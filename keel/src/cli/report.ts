@@ -7,7 +7,7 @@ import type {
   SkillActivationRecord,
 } from "../skills/model.ts";
 import type { EndEvent } from "./output.ts";
-import type { ProjectMemoryEntry } from "./project-memory.ts";
+import type { ActiveProjectMemoryEntry } from "./project-memory.ts";
 import {
   accountModelOperations,
   type RunReportContextCompaction,
@@ -48,7 +48,7 @@ export interface RunReportMemory {
 
 export interface RunReportMemoryEntry {
   readonly id: string;
-  readonly status: ProjectMemoryEntry["status"];
+  readonly status: ActiveProjectMemoryEntry["status"];
   readonly source: {
     readonly type: "user_explicit";
     readonly channel: "agent" | "cli";
@@ -56,13 +56,13 @@ export interface RunReportMemoryEntry {
   readonly createdAt: string;
   readonly lastVerifiedAt: string;
   readonly supersedes: readonly string[];
-  readonly supersededBy: string | null;
+  readonly supersededBy: null;
   readonly reviewAfter: string | null;
   readonly expiresAt: string | null;
 }
 
 export function projectMemoryReportEntry(
-  entry: ProjectMemoryEntry,
+  entry: ActiveProjectMemoryEntry,
 ): RunReportMemoryEntry {
   return {
     id: entry.id,
