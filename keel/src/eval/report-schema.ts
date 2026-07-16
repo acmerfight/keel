@@ -175,10 +175,18 @@ const runReportMemorySchema = z
       z.object({
         id: z.string(),
         status: z.enum(["current", "stale"]),
-        source: z.object({
-          type: z.literal("user_explicit"),
-          channel: z.enum(["agent", "cli"]),
-        }),
+        source: z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("user_explicit"),
+            channel: z.enum(["agent", "cli"]),
+            candidateId: z.null(),
+          }),
+          z.object({
+            type: z.literal("user_approved"),
+            channel: z.literal("cli"),
+            candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
+          }),
+        ]),
         createdAt: z.string(),
         lastVerifiedAt: z.string(),
         supersedes: z.array(z.string()),
@@ -229,7 +237,7 @@ const runReportMemorySchema = z
   });
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(15),
+  schemaVersion: z.literal(16),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),
