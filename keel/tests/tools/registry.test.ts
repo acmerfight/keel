@@ -862,12 +862,12 @@ describe("tool registry", () => {
       update_plan: { fields: ["plan"], required: ["plan"] },
       update_goal: { fields: ["status", "reason"], required: ["status"] },
       memory_add: {
-        fields: ["text", "sourceText"],
-        required: ["text", "sourceText"],
+        fields: ["text"],
+        required: ["text"],
       },
       memory_forget: {
-        fields: ["memoryId", "sourceText"],
-        required: ["memoryId", "sourceText"],
+        fields: ["memoryId"],
+        required: ["memoryId"],
       },
       skill_resource: {
         fields: ["skill", "path"],

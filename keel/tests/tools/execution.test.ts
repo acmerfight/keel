@@ -70,7 +70,6 @@ describe("Tool Execution", () => {
           id: "memory_add_1",
           tool: "memory_add",
           text: "release tags use a v prefix",
-          sourceText: "Remember that release tags use a v prefix.",
         },
         signal: new AbortController().signal,
         allowBash: false,
@@ -81,7 +80,6 @@ describe("Tool Execution", () => {
           id: "memory_forget_1",
           tool: "memory_forget",
           memoryId: "mem_release",
-          sourceText: "Forget mem_release.",
         },
         signal: new AbortController().signal,
         allowBash: false,
@@ -90,11 +88,11 @@ describe("Tool Execution", () => {
       // Then
       expect(addResult.ok).toBe(false);
       expect(addResult.content).toContain(
-        "memory_add failed: memory is disabled for this run",
+        "memory_add failed: memory mutation is unavailable for this model step",
       );
       expect(forgetResult.ok).toBe(false);
       expect(forgetResult.content).toContain(
-        "memory_forget failed: memory is disabled for this run",
+        "memory_forget failed: memory mutation is unavailable for this model step",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -132,7 +130,6 @@ describe("Tool Execution", () => {
           id: "memory_add_1",
           tool: "memory_add",
           text: "release tags use a v prefix",
-          sourceText: "Remember that release tags use a v prefix.",
         },
         signal: new AbortController().signal,
         allowBash: false,
@@ -155,10 +152,10 @@ describe("Tool Execution", () => {
     Then the first call succeeds and the second call is rejected`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-tool-memory-"));
-    const sourceText = "Remember that release tags use a v prefix.";
+    const userMessage = "Remember that release tags use a v prefix.";
     const currentUserMessage = {
       role: "user" as const,
-      content: sourceText,
+      content: userMessage,
       origin: { type: "user_prompt" as const },
     };
     const claimedMessages = new WeakSet<
@@ -172,7 +169,7 @@ describe("Tool Execution", () => {
         add: (text, source) => {
           addCalls++;
           expect(text).toBe("release tags use a v prefix");
-          expect(source).toBe(sourceText);
+          expect(source).toBe(userMessage);
           return {
             id: "mem_release",
             scope: { kind: "project", id: "project_release" },
@@ -199,7 +196,6 @@ describe("Tool Execution", () => {
           id: "memory_add_1",
           tool: "memory_add",
           text: "release tags use a v prefix",
-          sourceText,
         },
         signal: new AbortController().signal,
         allowBash: false,
@@ -211,7 +207,6 @@ describe("Tool Execution", () => {
           id: "memory_add_2",
           tool: "memory_add",
           text: "release tags use a v prefix",
-          sourceText,
         },
         signal: new AbortController().signal,
         allowBash: false,
@@ -244,10 +239,10 @@ describe("Tool Execution", () => {
     Then the execution layer invokes the forget capability and returns an operation`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-tool-memory-"));
-    const sourceText = "Forget the release tag prefix.";
+    const userMessage = "Forget the release tag prefix.";
     const currentUserMessage = {
       role: "user" as const,
-      content: sourceText,
+      content: userMessage,
       origin: { type: "user_prompt" as const },
     };
     let forgetCalls = 0;
@@ -263,7 +258,7 @@ describe("Tool Execution", () => {
         forget: (id, source) => {
           forgetCalls++;
           expect(id).toBe("mem_release");
-          expect(source).toBe(sourceText);
+          expect(source).toBe(userMessage);
           return { id, scope: { kind: "project", id: "project_release" } };
         },
       },
@@ -279,7 +274,6 @@ describe("Tool Execution", () => {
           id: "memory_forget_1",
           tool: "memory_forget",
           memoryId: "mem_release",
-          sourceText,
         },
         signal: new AbortController().signal,
         allowBash: false,
@@ -336,7 +330,6 @@ describe("Tool Execution", () => {
           id: "memory_forget_1",
           tool: "memory_forget",
           memoryId: "mem_release",
-          sourceText: "Forget the release tag prefix.",
         },
         signal: new AbortController().signal,
         allowBash: false,
@@ -359,10 +352,10 @@ describe("Tool Execution", () => {
     Then the execution layer rejects the second mutation`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-tool-memory-"));
-    const sourceText = "Forget the release tag prefix.";
+    const userMessage = "Forget the release tag prefix.";
     const currentUserMessage = {
       role: "user" as const,
-      content: sourceText,
+      content: userMessage,
       origin: { type: "user_prompt" as const },
     };
     let forgetCalls = 0;
@@ -394,7 +387,6 @@ describe("Tool Execution", () => {
           id: "memory_forget_1",
           tool: "memory_forget",
           memoryId: "mem_release",
-          sourceText,
         },
         signal: new AbortController().signal,
         allowBash: false,

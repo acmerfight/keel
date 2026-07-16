@@ -7,6 +7,7 @@ import type {
   SkillActivationRecord,
 } from "../skills/model.ts";
 import type { EndEvent } from "./output.ts";
+import type { ActiveProjectMemoryEntry } from "./project-memory.ts";
 import {
   accountModelOperations,
   type RunReportContextCompaction,
@@ -38,10 +39,45 @@ export interface RunReportMemory {
   readonly enabled: boolean;
   readonly scope: { readonly kind: "project"; readonly id: string } | null;
   readonly loadedIds: readonly string[];
+  readonly loadedEntries: readonly RunReportMemoryEntry[];
   readonly renderedBytes: number;
   readonly estimatedTokens?: number;
   readonly operations: readonly RunReportMemoryOperation[];
   readonly error?: string;
+}
+
+export interface RunReportMemoryEntry {
+  readonly id: string;
+  readonly status: ActiveProjectMemoryEntry["status"];
+  readonly source: {
+    readonly type: "user_explicit";
+    readonly channel: "agent" | "cli";
+  };
+  readonly createdAt: string;
+  readonly lastVerifiedAt: string;
+  readonly supersedes: readonly string[];
+  readonly supersededBy: null;
+  readonly reviewAfter: string | null;
+  readonly expiresAt: string | null;
+}
+
+export function projectMemoryReportEntry(
+  entry: ActiveProjectMemoryEntry,
+): RunReportMemoryEntry {
+  return {
+    id: entry.id,
+    status: entry.status,
+    source: {
+      type: entry.source.type,
+      channel: entry.source.channel,
+    },
+    createdAt: entry.createdAt,
+    lastVerifiedAt: entry.lastVerifiedAt,
+    supersedes: entry.supersedes,
+    supersededBy: entry.supersededBy,
+    reviewAfter: entry.reviewAfter,
+    expiresAt: entry.expiresAt,
+  };
 }
 
 export type RunReportMemoryOperation =
@@ -81,7 +117,7 @@ export interface RunReportGoalOutcome {
 }
 
 interface RunReport {
-  readonly schemaVersion: 14;
+  readonly schemaVersion: 15;
   readonly tasks: readonly RunReportTask[];
   readonly humanInterventionCount: number;
   readonly modelOperations: readonly RunReportModelOperation[];
@@ -137,7 +173,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
   const accounting = accountModelOperations(input.modelOperations);
   const costBudgetUsd = input.end.cost.maxUsd;
   const report: RunReport = {
-    schemaVersion: 14,
+    schemaVersion: 15,
     tasks: input.tasks,
     humanInterventionCount: input.tasks.reduce(
       (total, task) => total + task.humanInterventionCount,

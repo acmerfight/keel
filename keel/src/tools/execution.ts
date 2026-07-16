@@ -233,8 +233,12 @@ function memoryToolFailure(
   tool: "memory_add" | "memory_forget",
   reason: string,
 ): ToolExecution {
+  const recovery =
+    tool === "memory_add"
+      ? "Use one exact contiguous durable-claim span from the latest current-user message only when that user directly asked Keel to remember it; never paraphrase, broaden, or infer."
+      : "Use one exact active project-memory ID only when the latest current-user message directly and unambiguously asked Keel to forget it; ask when the target is ambiguous.";
   return {
-    content: `Tool failed: ${tool} failed: ${reason}.\nRecovery: Ask the user for one direct, unambiguous current-message memory request; never invent or broaden source evidence.`,
+    content: `Tool failed: ${tool} failed: ${reason}.\nRecovery: ${recovery}`,
     ok: false,
   };
 }
@@ -245,12 +249,14 @@ function executeMemoryAddTool(
 ): ToolExecution {
   const memory = context.memory;
   if (memory === undefined) {
-    return memoryToolFailure("memory_add", "memory is disabled for this run");
+    return memoryToolFailure(
+      "memory_add",
+      "memory mutation is unavailable for this model step",
+    );
   }
   const currentUserMessage = memory.currentUserMessage();
   const validation = validateAgentMemoryAdd({
     currentUserMessage,
-    sourceText: toolCall.sourceText,
     text: toolCall.text,
   });
   if (!validation.ok) return memoryToolFailure("memory_add", validation.reason);
@@ -263,7 +269,10 @@ function executeMemoryAddTool(
       "this current-user source already authorized one memory mutation",
     );
   }
-  const saved = memory.capability.add(toolCall.text, toolCall.sourceText);
+  const saved = memory.capability.add(
+    toolCall.text,
+    currentUserMessage.content,
+  );
   return {
     content: `Saved project memory ${saved.id} for ${saved.scope.id}.`,
     ok: true,
@@ -284,13 +293,12 @@ function executeMemoryForgetTool(
   if (memory === undefined) {
     return memoryToolFailure(
       "memory_forget",
-      "memory is disabled for this run",
+      "memory mutation is unavailable for this model step",
     );
   }
   const currentUserMessage = memory.currentUserMessage();
   const validation = validateAgentMemoryForget({
     currentUserMessage,
-    sourceText: toolCall.sourceText,
     id: toolCall.memoryId,
     entries: memory.capability.list(),
   });
@@ -307,7 +315,7 @@ function executeMemoryForgetTool(
   }
   const forgotten = memory.capability.forget(
     toolCall.memoryId,
-    toolCall.sourceText,
+    currentUserMessage.content,
   );
   return {
     content: `Forgot project memory ${forgotten.id} for ${forgotten.scope.id}.`,

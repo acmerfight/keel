@@ -69,9 +69,9 @@ const INVALID_UPDATE_PLAN_RECOVERY =
 const INVALID_UPDATE_GOAL_RECOVERY =
   "Set status to completed only when the active session goal is actually achieved and no required work remains; Runtime will evaluate the assertion evidence or run the configured command verifier. Set status to blocked only with a concise reason after the required blocker audit.";
 const INVALID_MEMORY_ADD_RECOVERY =
-  "Provide one exact claim and the exact current-user sentence or standalone line that directly asks Keel to remember it.";
+  "Provide one exact contiguous durable-claim span copied from the latest current-user message.";
 const INVALID_MEMORY_FORGET_RECOVERY =
-  "Provide one exact active project-memory ID and the exact current-user sentence or standalone line that unambiguously asks Keel to forget it.";
+  "Provide one exact active project-memory ID selected from the current project memory block.";
 
 const agentStateRecovery: Readonly<
   Record<RecoverableAgentStateToolName, string>

@@ -293,7 +293,6 @@ describe("CLI Tool Progress", () => {
           id: "memory_add_1",
           tool: "memory_add",
           text: "release tags use a v prefix",
-          sourceText: "Remember that release tags use a v prefix.",
         },
         ok: true,
         memoryOperation: {
@@ -331,7 +330,6 @@ describe("CLI Tool Progress", () => {
           id: "memory_forget_1",
           tool: "memory_forget",
           memoryId: "mem_release",
-          sourceText: "Forget mem_release.",
         },
         ok: true,
         memoryOperation: {

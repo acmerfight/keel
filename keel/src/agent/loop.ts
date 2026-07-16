@@ -27,7 +27,6 @@ import type {
   AgentMemoryMutationCapability,
   AgentMemoryToolContext,
 } from "../tools/memory.ts";
-import { hasExplicitAgentMemoryIntent } from "../tools/memory.ts";
 import {
   createProjectInstructionVisibilityState,
   type ProjectInstructionVisibilityState,
@@ -557,6 +556,7 @@ export async function* runAgentTurn(
   const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const allowSkill = options.skillActivation !== undefined;
   const claimedMemorySourceMessages = new WeakSet<InjectedUserMessage>();
+  const memoryToolsExposedForMessages = new WeakSet<InjectedUserMessage>();
   const currentMemoryUserMessage = (): InjectedUserMessage | null => {
     const current = messages.findLast(
       (message): message is InjectedUserMessage => message.role === "user",
@@ -687,7 +687,10 @@ export async function* runAgentTurn(
     const allowMemory =
       options.memoryMutation !== undefined &&
       currentMemorySource !== null &&
-      hasExplicitAgentMemoryIntent(currentMemorySource.content);
+      !memoryToolsExposedForMessages.has(currentMemorySource);
+    if (allowMemory) {
+      memoryToolsExposedForMessages.add(currentMemorySource);
+    }
     const baseTurnSystemPrompt = appendWorkflowSkillsToSystemPrompt(
       systemPrompt,
       options.skillActivation === undefined
@@ -798,7 +801,7 @@ export async function* runAgentTurn(
             signal,
             allowBash,
             allowSkill,
-            allowMemory,
+            allowMemory: false,
           },
           turnText: turnResult.text,
           turnReasoningContent: turnResult.reasoningContent,
@@ -967,7 +970,7 @@ export async function* runAgentTurn(
         ...(options.skillActivation !== undefined
           ? { skillActivation: options.skillActivation }
           : {}),
-        ...(memoryToolContext !== undefined
+        ...(memoryToolContext !== undefined && allowMemory
           ? { memory: memoryToolContext }
           : {}),
       });

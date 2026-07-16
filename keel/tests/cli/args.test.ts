@@ -1030,16 +1030,83 @@ describe("CLI Args", () => {
   test.each([
     [
       ["memory", "add", "Use pnpm."],
-      { command: "memory", mode: "add", text: "Use pnpm." },
+      {
+        command: "memory",
+        mode: "add",
+        text: "Use pnpm.",
+        reviewAfter: null,
+        expiresAt: null,
+      },
     ],
-    [["memory", "list"], { command: "memory", mode: "list" }],
+    [
+      [
+        "memory",
+        "add",
+        "Review the release owner.",
+        "--review-after",
+        "2026-08-01T00:00:00Z",
+        "--expires-at",
+        "2026-09-01T00:00:00Z",
+      ],
+      {
+        command: "memory",
+        mode: "add",
+        text: "Review the release owner.",
+        reviewAfter: "2026-08-01T00:00:00Z",
+        expiresAt: "2026-09-01T00:00:00Z",
+      },
+    ],
+    [["memory", "list"], { command: "memory", mode: "list", all: false }],
+    [
+      ["memory", "list", "--all"],
+      { command: "memory", mode: "list", all: true },
+    ],
+    [
+      ["memory", "show", "mem_1234"],
+      { command: "memory", mode: "show", id: "mem_1234" },
+    ],
+    [
+      [
+        "memory",
+        "update",
+        "mem_1234",
+        "The platform team owns staging.",
+        "--review-after",
+        "2026-08-01T00:00:00Z",
+      ],
+      {
+        command: "memory",
+        mode: "update",
+        id: "mem_1234",
+        text: "The platform team owns staging.",
+        reviewAfter: "2026-08-01T00:00:00Z",
+        expiresAt: null,
+      },
+    ],
+    [["memory", "review"], { command: "memory", mode: "review", due: false }],
+    [
+      ["memory", "review", "--due"],
+      { command: "memory", mode: "review", due: true },
+    ],
+    [
+      ["memory", "verify", "mem_1234"],
+      { command: "memory", mode: "verify", id: "mem_1234" },
+    ],
     [
       ["memory", "forget", "mem_1234"],
       { command: "memory", mode: "forget", id: "mem_1234" },
     ],
     [
+      ["memory", "purge", "mem_1234"],
+      { command: "memory", mode: "purge", id: "mem_1234" },
+    ],
+    [
       ["memory", "clear", "--yes"],
-      { command: "memory", mode: "clear", confirmed: true },
+      { command: "memory", mode: "clear", confirmed: true, purge: false },
+    ],
+    [
+      ["memory", "clear", "--purge", "--yes"],
+      { command: "memory", mode: "clear", confirmed: true, purge: true },
     ],
     [["memory", "--help"], { command: "memory", mode: "help" }],
   ])(`Given explicit project-memory arguments %j,
@@ -1072,19 +1139,63 @@ describe("CLI Args", () => {
   test.each([
     [
       ["memory"],
-      "Error: memory requires a subcommand: add, list, forget, or clear.",
+      "Error: memory requires a subcommand: add, list, show, update, review, verify, forget, purge, or clear.",
     ],
     [["memory", "add"], "Error: memory add requires <durable-fact>."],
     [
       ["memory", "add", "Use pnpm.", "extra"],
       'Error: unknown memory add option "extra"',
     ],
-    [["memory", "list", "--all"], 'Error: unknown memory list option "--all"'],
+    [
+      ["memory", "add", "Use pnpm.", "--review-after"],
+      "Error: memory add --review-after requires <timestamp>.",
+    ],
+    [
+      [
+        "memory",
+        "add",
+        "Use pnpm.",
+        "--review-after",
+        "2027-01-01T00:00:00Z",
+        "--review-after",
+        "2028-01-01T00:00:00Z",
+      ],
+      'Error: memory add option "--review-after" was provided more than once.',
+    ],
+    [
+      [
+        "memory",
+        "add",
+        "Use pnpm.",
+        "--expires-at",
+        "2027-01-01T00:00:00Z",
+        "--expires-at",
+        "2028-01-01T00:00:00Z",
+      ],
+      'Error: memory add option "--expires-at" was provided more than once.',
+    ],
+    [["memory", "list", "extra"], 'Error: unknown memory list option "extra"'],
+    [["memory", "show"], "Error: memory show requires <id>."],
+    [["memory", "update"], "Error: memory update requires <id> <replacement>."],
+    [
+      ["memory", "update", "mem_1234"],
+      "Error: memory update requires <id> <replacement>.",
+    ],
+    [
+      ["memory", "update", "mem_1234", "Use npm.", "--expires-at"],
+      "Error: memory update --expires-at requires <timestamp>.",
+    ],
+    [
+      ["memory", "review", "--all"],
+      'Error: unknown memory review option "--all"',
+    ],
+    [["memory", "verify"], "Error: memory verify requires <id>."],
     [["memory", "forget"], "Error: memory forget requires <id>."],
     [
       ["memory", "forget", "mem_1234", "extra"],
       'Error: unknown memory forget option "extra"',
     ],
+    [["memory", "purge"], "Error: memory purge requires <id>."],
     [
       ["memory", "clear", "--force"],
       'Error: unknown memory clear option "--force"',

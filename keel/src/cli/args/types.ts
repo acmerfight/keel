@@ -136,10 +136,36 @@ export type MemoryCliArgs =
       readonly command: "memory";
       readonly mode: "add";
       readonly text: string;
+      readonly reviewAfter: string | null;
+      readonly expiresAt: string | null;
     }
   | {
       readonly command: "memory";
       readonly mode: "list";
+      readonly all: boolean;
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "show";
+      readonly id: string;
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "update";
+      readonly id: string;
+      readonly text: string;
+      readonly reviewAfter: string | null;
+      readonly expiresAt: string | null;
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "review";
+      readonly due: boolean;
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "verify";
+      readonly id: string;
     }
   | {
       readonly command: "memory";
@@ -148,8 +174,14 @@ export type MemoryCliArgs =
     }
   | {
       readonly command: "memory";
+      readonly mode: "purge";
+      readonly id: string;
+    }
+  | {
+      readonly command: "memory";
       readonly mode: "clear";
       readonly confirmed: boolean;
+      readonly purge: boolean;
     };
 
 export interface RunCliArgs {
