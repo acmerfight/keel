@@ -271,6 +271,11 @@ describe("Eval Runner", () => {
         'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":1,"type":"message"}\\n\', \'utf8\');',
     },
     {
+      name: "valid header with malformed body",
+      transcriptAction:
+        'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n{not-json\\n\', \'utf8\');',
+    },
+    {
       name: "empty file",
       transcriptAction: "writeFileSync(args[transcriptIndex + 1], '', 'utf8');",
     },

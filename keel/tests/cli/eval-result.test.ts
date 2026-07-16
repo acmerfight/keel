@@ -4,6 +4,7 @@ import {
   type ConfiguredMemory,
   evalResultLineSchema,
   memoryStructuralFailures,
+  resultMemory,
   type TrialResult,
 } from "../../src/eval/result.ts";
 import type { MemoryPairEvalTask } from "../../src/eval/task.ts";
@@ -99,6 +100,22 @@ describe("Eval Result Contract", () => {
         condition: "memory_disabled",
         requiredToPass: false,
         memory: { mode: "disabled", configuredIds: [], scope: null },
+      },
+    },
+    {
+      name: "standard condition has a paired delta",
+      value: {
+        ...evalResultLine({ taskId: "case", trial: 1, pass: true }),
+        pairDelta: {
+          successPercentagePoints: 0,
+          toolCalls: 0,
+          agentLoopTurns: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          costUsd: 0,
+          wallMs: 0,
+          renderedBytes: 0,
+        },
       },
     },
     {
@@ -224,6 +241,37 @@ describe("Eval Result Contract", () => {
       trial({ report: evalRunReport(), readable: false }),
       [],
     );
+    const crashedWithoutReport = memoryStructuralFailures(
+      TASK,
+      "memory_enabled",
+      CONFIGURED,
+      trial({ report: null, readable: false, outcome: "crashed" }),
+      [],
+    );
+    const crashedWithReport = memoryStructuralFailures(
+      TASK,
+      "memory_enabled",
+      CONFIGURED,
+      trial({
+        report: evalRunReport(),
+        readable: false,
+        outcome: "crashed",
+      }),
+      [],
+    );
+    const missingEnabledScope = memoryStructuralFailures(
+      TASK,
+      "memory_enabled",
+      CONFIGURED,
+      trial({
+        report: {
+          ...evalRunReport(),
+          memory: { ...evalRunReport().memory, enabled: true, scope: null },
+        },
+        readable: true,
+      }),
+      [],
+    );
     const setupFailure = memoryStructuralFailures(
       TASK,
       "memory_disabled",
@@ -239,6 +287,33 @@ describe("Eval Result Contract", () => {
     expect(unreadableTranscript).toContain(
       "provider-visible transcript is unavailable",
     );
+    expect(crashedWithoutReport).toEqual([]);
+    expect(crashedWithReport).toContain(
+      "provider-visible transcript is unavailable",
+    );
+    expect(missingEnabledScope).toContain(
+      "enabled report scope differs from configured scope",
+    );
     expect(setupFailure).toEqual(["fixture failed"]);
+  });
+
+  test(`Given result memory is standard, configured, or unavailable,
+    When the result envelope is created,
+    Then every mode has a deterministic explicit shape`, () => {
+    expect(resultMemory("standard", null)).toEqual({
+      mode: "not_applicable",
+      configuredIds: [],
+      scope: null,
+    });
+    expect(resultMemory("memory_disabled", null)).toEqual({
+      mode: "disabled",
+      configuredIds: [],
+      scope: null,
+    });
+    expect(resultMemory("memory_enabled", CONFIGURED)).toEqual({
+      mode: "enabled",
+      configuredIds: ["mem_alpha"],
+      scope: CONFIGURED.scope,
+    });
   });
 });

@@ -77,6 +77,7 @@ function keelRevision(): string | null {
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
   } catch {
+    /* v8 ignore next: published packages may run outside a Git checkout. */
     return null;
   }
 }
@@ -399,6 +400,21 @@ const UPDATED_MEMORY_PATTERN =
 const FORGOT_MEMORY_PATTERN =
   /^Forgot project memory (mem_[a-f0-9-]+) for ([a-f0-9-]+)\./u;
 
+const activeMemoryFixtureSchema = z.object({
+  id: z.string(),
+  status: z.enum(["current", "stale"]),
+});
+type ActiveMemoryFixture = z.infer<typeof activeMemoryFixtureSchema>;
+
+function memoryCommandFailure(
+  operation: "add" | "update" | "forget",
+  result: ProcessResult,
+): Error {
+  return new Error(
+    `memory ${operation} failed (exit ${String(result.exitCode)}): stdout=${JSON.stringify(result.stdout)} stderr=${JSON.stringify(result.stderrTail)}`,
+  );
+}
+
 function failedSetupTrial(): TrialResult {
   return {
     outcome: "crashed",
@@ -425,23 +441,19 @@ async function seedMemoryFixture(
     throw new Error(`git init failed: ${initialized.stderrTail}`);
   }
 
-  const active = new Map<
-    string,
-    { readonly id: string; readonly status: "current" | "stale" }
-  >();
-  let projectId: string | null = null;
+  const active = new Map<string, ActiveMemoryFixture>();
+  let projectId = "";
   const acceptProjectId = (savedProjectId: string): void => {
-    if (projectId !== null && projectId !== savedProjectId) {
+    if (projectId !== "" && projectId !== savedProjectId) {
       throw new Error("memory fixture changed project scope while seeding");
     }
     projectId = savedProjectId;
   };
   for (const operation of task.memorySetup) {
     if (operation.operation === "forget") {
-      const target = active.get(operation.target);
-      if (target === undefined) {
-        throw new Error(`memory target "${operation.target}" is not active`);
-      }
+      const target = activeMemoryFixtureSchema.parse(
+        active.get(operation.target),
+      );
       const forgotten = await runProcess(
         process.execPath,
         [...process.execArgv, cliEntry, "memory", "forget", target.id],
@@ -451,14 +463,11 @@ async function seedMemoryFixture(
       if (
         forgotten.exitCode !== 0 ||
         match === null ||
-        match[1] !== target.id ||
-        match[2] === undefined
+        match[1] !== target.id
       ) {
-        throw new Error(
-          `memory forget failed: ${forgotten.stderrTail || forgotten.stdout || `exit ${String(forgotten.exitCode)}`}`,
-        );
+        throw memoryCommandFailure("forget", forgotten);
       }
-      acceptProjectId(match[2]);
+      acceptProjectId(z.string().parse(match[2]));
       active.delete(operation.target);
       continue;
     }
@@ -468,10 +477,9 @@ async function seedMemoryFixture(
         ? ["--review-after", "2000-01-01T00:00:00.000Z"]
         : [];
     if (operation.operation === "update") {
-      const target = active.get(operation.target);
-      if (target === undefined) {
-        throw new Error(`memory target "${operation.target}" is not active`);
-      }
+      const target = activeMemoryFixtureSchema.parse(
+        active.get(operation.target),
+      );
       const updated = await runProcess(
         process.execPath,
         [
@@ -486,21 +494,13 @@ async function seedMemoryFixture(
         { cwd: workDir, timeoutMs: task.scriptTimeoutMs, env },
       );
       const match = UPDATED_MEMORY_PATTERN.exec(updated.stdout);
-      if (
-        updated.exitCode !== 0 ||
-        match === null ||
-        match[1] !== target.id ||
-        match[2] === undefined ||
-        match[3] === undefined
-      ) {
-        throw new Error(
-          `memory update failed: ${updated.stderrTail || updated.stdout || `exit ${String(updated.exitCode)}`}`,
-        );
+      if (updated.exitCode !== 0 || match === null || match[1] !== target.id) {
+        throw memoryCommandFailure("update", updated);
       }
-      acceptProjectId(match[3]);
+      acceptProjectId(z.string().parse(match[3]));
       active.delete(operation.target);
       active.set(operation.alias, {
-        id: match[2],
+        id: z.string().parse(match[2]),
         status: operation.lifecycle,
       });
       continue;
@@ -520,15 +520,10 @@ async function seedMemoryFixture(
     );
     const saved = SAVED_MEMORY_PATTERN.exec(added.stdout);
     if (added.exitCode !== 0 || saved === null) {
-      throw new Error(
-        `memory add failed: ${added.stderrTail || added.stdout || `exit ${String(added.exitCode)}`}`,
-      );
+      throw memoryCommandFailure("add", added);
     }
-    const savedId = saved[1];
-    const savedProjectId = saved[2];
-    if (savedId === undefined || savedProjectId === undefined) {
-      throw new Error("memory add returned an incomplete identifier");
-    }
+    const savedId = z.string().parse(saved[1]);
+    const savedProjectId = z.string().parse(saved[2]);
     acceptProjectId(savedProjectId);
     active.set(operation.alias, {
       id: savedId,
@@ -538,7 +533,7 @@ async function seedMemoryFixture(
   return {
     ids: [...active.values()].map((entry) => entry.id),
     statuses: [...active.values()].map((entry) => entry.status),
-    scope: projectId === null ? null : { kind: "project", id: projectId },
+    scope: { kind: "project", id: projectId },
   };
 }
 
@@ -891,7 +886,9 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
         requiredRuns++;
         if (enabledLine.pass) passingRequiredRuns++;
         resultRuns += 2;
+        /* v8 ignore next: shared append failure is covered by output-path race tests. */
         if (!appendResultLine(args.outFile, disabledLine)) return 1;
+        /* v8 ignore next: shared append failure is covered by output-path race tests. */
         if (!appendResultLine(args.outFile, enabledLine)) return 1;
         process.stderr.write(
           `[${task.id}] trial ${trial} disabled: ${pair.disabled.outcome} (${pair.disabled.wallMs}ms)\n`,

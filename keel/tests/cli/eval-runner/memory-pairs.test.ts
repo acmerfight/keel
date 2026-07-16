@@ -92,6 +92,7 @@ describe("Eval Runner Memory Pairs", () => {
     Then it records isolated disabled and enabled runs with the same configured memory`, async () => {
     // Given
     const { root, suiteDir, outFile } = await createEvalDir();
+    const transcriptDir = join(root, "transcripts");
     const taskId = "release-validation-memory";
     await createTask(suiteDir, taskId, {
       prompt: "create result.json",
@@ -128,6 +129,7 @@ describe("Eval Runner Memory Pairs", () => {
         suiteDir,
         outFile,
         trials: 1,
+        transcriptDir,
         check: false,
         cliEntry: CLI_ENTRY,
       });
@@ -200,6 +202,8 @@ describe("Eval Runner Memory Pairs", () => {
         lines[1].memory.configuredIds,
       );
       expect(lines[0].memory.scope).toEqual(lines[1].memory.scope);
+      expect(lines[0].transcriptPath).toContain("-memory-disabled.jsonl");
+      expect(lines[1].transcriptPath).toContain("-memory-enabled.jsonl");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -273,6 +277,71 @@ describe("Eval Runner Memory Pairs", () => {
           outcome: "verified",
           structuralFailures: [],
           pairDelta: { successPercentagePoints: 100 },
+        },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given memory makes an otherwise passing task fail,
+    When both sides of the pair are required,
+    Then the gate fails and records the negative paired delta`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const taskId = "memory-regression";
+    await createTask(suiteDir, taskId, {
+      prompt: "answer without changing files",
+      verify:
+        'case "$PWD" in */disabled-workspace) exit 0 ;; *) exit 1 ;; esac\n',
+      solution: "exit 0\n",
+      timeoutMs: 60_000,
+    });
+    await writeFile(
+      join(suiteDir, taskId, "task.json"),
+      JSON.stringify({
+        kind: "memory_pair",
+        corpusVersion: "memory-v1",
+        prompt: "answer without changing files",
+        timeoutMs: 60_000,
+        scriptTimeoutMs: 10_000,
+        allowBash: false,
+        maxCostUsd: 0.05,
+        passPolicy: "both_must_pass",
+        memorySetup: [
+          {
+            operation: "add",
+            alias: "irrelevant",
+            text: "The unrelated durable fact is alpha.",
+            lifecycle: "current",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry: CLI_ENTRY,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      const lines = (await readFile(outFile, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(lines).toMatchObject([
+        { condition: "memory_disabled", pass: true },
+        {
+          condition: "memory_enabled",
+          pass: false,
+          pairDelta: { successPercentagePoints: -100 },
         },
       ]);
     } finally {
@@ -379,7 +448,7 @@ describe("Eval Runner Memory Pairs", () => {
             target: "old-branch",
             alias: "current-branch",
             text: "The release branch is current/release.",
-            lifecycle: "current",
+            lifecycle: "stale",
           },
           {
             operation: "add",
@@ -420,7 +489,7 @@ describe("Eval Runner Memory Pairs", () => {
             loadedEntries: [
               {
                 id: lines[0].memory.configuredIds[0],
-                status: "current",
+                status: "stale",
               },
             ],
           },
@@ -518,6 +587,115 @@ describe("Eval Runner Memory Pairs", () => {
             line.structuralFailures[0].startsWith(
               "memory fixture setup failed:",
             ),
+        ),
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      name: "changes project scope between public command results",
+      script: [
+        "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+        "const state = new URL('./call-count', import.meta.url);",
+        "const count = existsSync(state) ? Number(readFileSync(state, 'utf8')) + 1 : 1;",
+        "writeFileSync(state, String(count), 'utf8');",
+        "const id = count === 1 ? 'aaaa' : 'bbbb';",
+        "process.stdout.write('Saved project memory mem_' + id + ' for ' + id + '.\\n');",
+      ],
+      memorySetup: [
+        {
+          operation: "add",
+          alias: "first",
+          text: "First durable fact.",
+          lifecycle: "current",
+        },
+        {
+          operation: "add",
+          alias: "second",
+          text: "Second durable fact.",
+          lifecycle: "current",
+        },
+      ],
+      expected: "memory fixture changed project scope while seeding",
+    },
+    {
+      name: "cannot forget the configured target",
+      script: [
+        "const operation = process.argv[3];",
+        "if (operation === 'add') {",
+        "  process.stdout.write('Saved project memory mem_aaaa for aaaa.\\n');",
+        "} else {",
+        "  process.stderr.write('forget unavailable');",
+        "  process.exitCode = 1;",
+        "}",
+      ],
+      memorySetup: [
+        {
+          operation: "add",
+          alias: "fact",
+          text: "Durable fact.",
+          lifecycle: "current",
+        },
+        { operation: "forget", target: "fact" },
+      ],
+      expected: "memory forget failed (exit 1)",
+    },
+  ])(`Given the memory CLI $name,
+    When fixture setup validates the command evidence,
+    Then the pair fails closed with a concrete setup error`, async ({
+    script,
+    memorySetup,
+    expected,
+  }) => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const taskId = "invalid-memory-cli-evidence";
+    await createTask(suiteDir, taskId, {
+      prompt: "create result.json",
+      verify: "test -f result.json\n",
+    });
+    await writeFile(
+      join(suiteDir, taskId, "task.json"),
+      JSON.stringify({
+        kind: "memory_pair",
+        corpusVersion: "memory-v1",
+        prompt: "create result.json",
+        timeoutMs: 60_000,
+        scriptTimeoutMs: 10_000,
+        allowBash: false,
+        maxCostUsd: 0.05,
+        passPolicy: "both_must_pass",
+        memorySetup,
+      }),
+      "utf8",
+    );
+    const cliEntry = join(root, "memory-proxy.js");
+    await writeFile(cliEntry, script.join("\n"), "utf8");
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      const lines = (await readFile(outFile, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(
+        lines.every((line) =>
+          line.structuralFailures.some((failure: string) =>
+            failure.includes(expected),
+          ),
         ),
       ).toBe(true);
     } finally {
