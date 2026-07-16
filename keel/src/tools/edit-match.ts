@@ -45,6 +45,11 @@ interface SearchBlock {
   readonly endsWithNewline: boolean;
 }
 
+interface CommonIndent {
+  readonly length: number;
+  readonly text: string;
+}
+
 interface NormalizedTypographicPunctuation {
   readonly text: string;
   readonly sourceIndexByNormalizedIndex: readonly number[];
@@ -312,26 +317,23 @@ function leadingWhitespaceLength(line: string): number {
   return length;
 }
 
-function commonIndentLength(lines: readonly string[]): number {
-  let common: number | undefined;
+function commonIndent(lines: readonly string[]): CommonIndent {
+  let length = 0;
+  let text = "";
+  let foundContent = false;
   for (const line of lines) {
     if (line.trim() === "") continue;
     const indentLength = leadingWhitespaceLength(line);
-    common =
-      common === undefined ? indentLength : Math.min(common, indentLength);
+    if (!foundContent) {
+      length = indentLength;
+      text = line.slice(0, indentLength);
+      foundContent = true;
+      continue;
+    }
+    length = Math.min(length, indentLength);
+    text = text.slice(0, length);
   }
-  /* v8 ignore next: blank-only windows match the trailing-whitespace fallback before indentation matching. */
-  return common ?? 0;
-}
-
-function commonIndent(lines: readonly string[]): string {
-  const indentLength = commonIndentLength(lines);
-  for (const line of lines) {
-    /* v8 ignore next: blank-only windows match the trailing-whitespace fallback before indentation replacement. */
-    if (line.trim() !== "") return line.slice(0, indentLength);
-  }
-  /* v8 ignore next */
-  return "";
+  return { length, text };
 }
 
 function sourceLineIndent(line: string, indentLength: number): string {
@@ -339,8 +341,8 @@ function sourceLineIndent(line: string, indentLength: number): string {
 }
 
 function stripCommonIndent(lines: readonly string[]): readonly string[] {
-  const indentLength = commonIndentLength(lines);
-  return lines.map((line) => line.slice(indentLength));
+  const indent = commonIndent(lines);
+  return lines.map((line) => line.slice(indent.length));
 }
 
 function sameLengthArraysEqual(
@@ -954,8 +956,7 @@ function indentationFlexibleReplacement(
   newText: string,
 ): SourcePreservingReplacementResult {
   const sourceBlock = parseSearchBlock(source);
-  const sourceIndentLength = commonIndentLength(sourceBlock.lines);
-  const indent = commonIndent(sourceBlock.lines);
+  const sourceIndent = commonIndent(sourceBlock.lines);
   const oldBlock = parseSearchBlock(oldText);
   const newBlock = parseSearchBlock(newText);
   const strippedOldLines = stripCommonIndent(oldBlock.lines);
@@ -984,7 +985,7 @@ function indentationFlexibleReplacement(
             ? sourceLine
             : line;
         }
-        return `${sourceLine === undefined ? indent : sourceLineIndent(sourceLine, sourceIndentLength)}${line}`;
+        return `${sourceLine === undefined ? sourceIndent.text : sourceLineIndent(sourceLine, sourceIndent.length)}${line}`;
       }),
       endsWithNewline: newBlock.endsWithNewline,
     }),
