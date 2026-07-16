@@ -58,8 +58,10 @@ import {
   resolveInteractiveProvider,
 } from "./provider-config.ts";
 import {
+  projectMemoryReportEntry,
   type RunReportGoalOutcome,
   type RunReportMemory,
+  type RunReportMemoryEntry,
   reportActiveSkills,
   writeRunReport,
 } from "./report.ts";
@@ -1220,6 +1222,7 @@ async function runSessionCli(
       let loadedMemory: RenderedProjectMemory | undefined;
       let memoryLoadError: string | undefined;
       const exposedMemoryIds = new Set<string>();
+      const exposedMemoryEntries = new Map<string, RunReportMemoryEntry>();
       let exposedMemoryBytes = 0;
       let exposedMemoryTokens = 0;
       const agentMemory = createAgentProjectMemory({ runtime, workspace });
@@ -1227,6 +1230,7 @@ async function runSessionCli(
         enabled: false,
         scope: null,
         loadedIds: [],
+        loadedEntries: [],
         renderedBytes: 0,
         estimatedTokens: 0,
         operations: [],
@@ -1237,6 +1241,7 @@ async function runSessionCli(
         enabled: true,
         scope: memory.scope,
         loadedIds: memory.entries.map((entry) => entry.id),
+        loadedEntries: memory.entries.map(projectMemoryReportEntry),
         renderedBytes: memory.renderedBytes,
         estimatedTokens: memory.estimatedTokens,
         operations: agentMemory.operations(),
@@ -1254,7 +1259,10 @@ async function runSessionCli(
       };
       const loadMemoryPrompt = (): string => {
         const memory = readMemory();
-        for (const entry of memory.entries) exposedMemoryIds.add(entry.id);
+        for (const entry of memory.entries) {
+          exposedMemoryIds.add(entry.id);
+          exposedMemoryEntries.set(entry.id, projectMemoryReportEntry(entry));
+        }
         exposedMemoryBytes = Math.max(exposedMemoryBytes, memory.renderedBytes);
         exposedMemoryTokens = Math.max(
           exposedMemoryTokens,
@@ -1269,6 +1277,7 @@ async function runSessionCli(
             enabled: true,
             scope: lastLoadedMemoryScope(),
             loadedIds: [...exposedMemoryIds],
+            loadedEntries: [...exposedMemoryEntries.values()],
             renderedBytes: exposedMemoryBytes,
             estimatedTokens: exposedMemoryTokens,
             operations: agentMemory.operations(),
@@ -1283,6 +1292,7 @@ async function runSessionCli(
             enabled: true,
             scope: lastLoadedMemoryScope(),
             loadedIds: [...exposedMemoryIds],
+            loadedEntries: [...exposedMemoryEntries.values()],
             renderedBytes: exposedMemoryBytes,
             estimatedTokens: exposedMemoryTokens,
             operations: agentMemory.operations(),
@@ -1293,6 +1303,7 @@ async function runSessionCli(
           enabled: true,
           scope: currentMemory.scope,
           loadedIds: [...exposedMemoryIds],
+          loadedEntries: [...exposedMemoryEntries.values()],
           renderedBytes: exposedMemoryBytes,
           estimatedTokens: exposedMemoryTokens,
           operations: agentMemory.operations(),
@@ -1307,6 +1318,7 @@ async function runSessionCli(
             enabled: true,
             scope: lastLoadedMemoryScope(),
             loadedIds: [],
+            loadedEntries: [],
             renderedBytes: 0,
             operations: agentMemory.operations(),
             error: errorMessage(error),

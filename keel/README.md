@@ -72,11 +72,17 @@ not conversation history, a task handoff, or a place for credentials and
 sensitive personal data.
 
 ```bash
-keel memory add "Release tags use the v-prefixed version."
-keel memory list
-keel memory forget <id>
-keel memory clear          # asks for confirmation in a TTY
-keel memory clear --yes    # explicit non-interactive confirmation
+keel memory add "Release tags use the v-prefixed version." --review-after 2026-10-01T00:00:00Z
+keel memory list                 # current and stale active entries
+keel memory list --all           # includes superseded, expired, and forgotten history
+keel memory show <id>
+keel memory update <id> "Release tags use the release/v-prefixed version."
+keel memory review --due
+keel memory verify <id>
+keel memory forget <id>          # logical removal; history remains
+keel memory purge <id>           # application-level removal from local Keel storage
+keel memory clear --yes
+keel memory clear --purge --yes
 keel --no-memory "Run without project memory."
 ```
 
@@ -105,13 +111,24 @@ private directory and file permissions. Storage assumes one machine and a
 reliable local filesystem; cloud-synced directories and concurrent multi-host
 writes are unsupported.
 
-The store is an append-only event log in physical file order. Timestamps are
-display metadata, not conflict-ordering authority. `forget` and `clear` append
-tombstones and remove entries from the active view; they do not physically
-erase prior payload bytes. The writer fsyncs complete newline-terminated events.
-After a crash, reads use the last complete event and a later locked write drops
-only an incomplete final tail. Malformed or unknown schema versions fail closed
-and remain untouched.
+Normal writes use an append-only event log in validated physical file order.
+Each entry is `current`, `stale`, `superseded`, `expired`, or `forgotten`.
+`update` appends a replacement with an explicit `supersedes` relation; wall-clock
+timestamps never choose a winner. `reviewAfter` makes an entry stale but still
+visible as needing verification, while `expiresAt` makes it inactive. `verify`
+records explicit user review. Repository state, tests, Git, configuration, live
+APIs, project instructions, and the current user request always outrank memory;
+Keel does not silently rewrite memory from observed tool evidence.
+
+`forget` and ordinary `clear` append tombstones and remove entries from every
+fresh active view, but do not erase historical payload bytes. `purge` is the
+deliberate exception to append-only history: under the same project write lock,
+it validates a replacement event generation and atomically replaces or deletes
+the local store. A successful purge removes the selected payload and dangling
+lifecycle references from addressable Keel-owned memory files. It cannot erase
+provider retention, exported transcripts or reports, user copies, filesystem
+snapshots or backups, or storage-media remnants. The writer fsyncs complete
+newline-terminated events; malformed or unknown schema versions fail closed.
 
 Keel injects the complete active view as quoted, low-authority reference data.
 It is reloaded for every normal provider request attempt, never serialized as transcript
@@ -124,7 +141,8 @@ view. Successful agent add/forget operations also expose their stable memory
 ID, project scope, and outcome in tool results, transcripts, and run reports.
 The rendered block is all-or-nothing: at most 4,096 UTF-8 bytes and 100 active
 entries. Reports and `/status` also expose whether memory is enabled, its
-project scope, rendered bytes, and an approximate token count.
+project scope, lifecycle/provenance metadata, rendered bytes, and an approximate
+token count. Reports intentionally omit remembered text and raw source evidence.
 
 Known secret formats are rejected before persistence without echoing the input,
 but detection is best-effort and is not a privacy guarantee. Do not store API
@@ -180,7 +198,7 @@ Session
   when no Run, retry, continuation, accepted input, queued Task, or runtime hook
   can produce more work.
 
-`keel --report <file>` writes report schema 14. `tasks[].ordinal` and nested
+`keel --report <file>` writes report schema 15. `tasks[].ordinal` and nested
 `agentRuns[].ordinal` are report-local identities. Each Agent Run owns its
 `humanInterventionCount`, `agentLoopTurns`, existing provider retry notices,
 context-compaction records, and stop reason. A human intervention is one user

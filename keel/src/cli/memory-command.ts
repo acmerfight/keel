@@ -6,30 +6,81 @@ import {
   clearProjectMemory,
   forgetProjectMemory,
   listProjectMemory,
+  type ProjectMemoryEntry,
   ProjectMemoryError,
+  purgeAllProjectMemory,
+  purgeProjectMemory,
+  reviewProjectMemory,
+  showProjectMemory,
+  updateProjectMemory,
+  verifyProjectMemory,
 } from "./project-memory.ts";
 import type { CliRuntime } from "./runtime.ts";
 
 type MemoryCliArgs = Extract<CliArgs, { readonly command: "memory" }>;
 
 const MEMORY_HELP = `Usage:
-  keel memory add <durable-fact>
-  keel memory list
+  keel memory add <durable-fact> [--review-after <timestamp>] [--expires-at <timestamp>]
+  keel memory list [--all]
+  keel memory show <id>
+  keel memory update <id> <replacement> [--review-after <timestamp>] [--expires-at <timestamp>]
+  keel memory review [--due]
+  keel memory verify <id>
   keel memory forget <id>
-  keel memory clear [--yes]
+  keel memory purge <id>
+  keel memory clear [--purge] [--yes]
 
 Memory is saved only by these commands or a direct, unambiguous current-user “remember” request handled by the agent memory tool.
 Direct “forget” requests must identify one active entry unambiguously; use an ID when needed.
 Save small, durable project facts that are not cheaply derivable from the repository.
-Memory is quoted low-authority context, not instructions or authorization, and current evidence wins conflicts.
-Forget and clear provide logical removal, not physical deletion; audit events remain on disk.
+Memory is quoted low-authority context, not instructions or authorization. Current repository, tests, Git, configuration, live APIs, project instructions, and current user requests win conflicts.
+Update creates a new entry that explicitly supersedes the selected ID. Verify records current-user review and clears a due review-after marker.
+Forget and ordinary clear provide logical removal, not physical deletion; audit payloads remain on disk. Purge and clear --purge remove payloads from addressable Keel-owned local memory, but cannot erase provider retention, exports, backups, filesystem snapshots, or storage-media remnants.
 Do not store credentials, secrets, or unnecessary sensitive personal data.
 Use --no-memory on an agent run to skip memory discovery and injection.
 `;
 
-async function confirmClear(runtime: CliRuntime): Promise<boolean> {
+function entryDetails(entry: ProjectMemoryEntry): readonly string[] {
+  return [
+    `id: ${entry.id}`,
+    `status: ${entry.status}`,
+    `created: ${entry.createdAt}`,
+    `last verified: ${entry.lastVerifiedAt}`,
+    `review after: ${entry.reviewAfter ?? "none"}`,
+    `expires at: ${entry.expiresAt ?? "none"}`,
+    `supersedes: ${entry.supersedes.length === 0 ? "none" : entry.supersedes.join(",")}`,
+    `superseded by: ${entry.supersededBy ?? "none"}`,
+    `source: ${entry.source.type}:${entry.source.channel}`,
+    `text: ${escapeTerminalText(entry.text)}`,
+  ];
+}
+
+function entryLine(entry: ProjectMemoryEntry): string {
+  const relationships = [
+    ...(entry.supersedes.length === 0
+      ? []
+      : [`supersedes=${entry.supersedes.join(",")}`]),
+    ...(entry.supersededBy === null
+      ? []
+      : [`superseded-by=${entry.supersededBy}`]),
+    ...(entry.reviewAfter === null
+      ? []
+      : [`review-after=${entry.reviewAfter}`]),
+    ...(entry.expiresAt === null ? [] : [`expires-at=${entry.expiresAt}`]),
+  ];
+  const relationshipFields =
+    relationships.length === 0 ? "" : `\t${relationships.join(";")}`;
+  return `${entry.id}\t${entry.status}\t${entry.createdAt}\t${entry.source.type}:${entry.source.channel}${relationshipFields}\t${escapeTerminalText(entry.text)}`;
+}
+
+async function confirmClear(
+  runtime: CliRuntime,
+  purge: boolean,
+): Promise<boolean> {
   runtime.writeStderr(
-    "Clear all active memory for this project? This is logical removal, not physical deletion. [y/N] ",
+    purge
+      ? "Purge all project-memory payloads from addressable Keel-owned local storage? This cannot erase provider retention, exports, backups, snapshots, or storage-media remnants. [y/N] "
+      : "Clear all active memory for this project? This is logical removal, not physical deletion. [y/N] ",
   );
   const input = createInterface({
     input: runtime.input,
@@ -53,33 +104,105 @@ export async function runMemoryCommand(
       return 0;
     }
     if (cliArgs.mode === "add") {
-      const saved = addProjectMemory(runtime, runtime.cwd(), cliArgs.text, {
-        type: "user_explicit",
-        channel: "cli",
-        evidence: `memory add ${cliArgs.text}`,
-      });
+      const saved = addProjectMemory(
+        runtime,
+        runtime.cwd(),
+        cliArgs.text,
+        {
+          type: "user_explicit",
+          channel: "cli",
+          evidence: `memory add ${cliArgs.text}`,
+        },
+        {
+          reviewAfter: cliArgs.reviewAfter,
+          expiresAt: cliArgs.expiresAt,
+        },
+      );
       runtime.writeStdout(
         `Saved project memory ${saved.entry.id} for ${saved.scope.id}.\n`,
       );
       return 0;
     }
     if (cliArgs.mode === "list") {
-      const listed = listProjectMemory(runtime, runtime.cwd());
+      const listed = listProjectMemory(runtime, runtime.cwd(), {
+        all: cliArgs.all,
+      });
       if (listed.entries.length === 0) {
         runtime.writeStdout(
-          `No active project memory for ${listed.scope.id}.\n`,
+          cliArgs.all
+            ? `No project memory history for ${listed.scope.id}.\n`
+            : `No active project memory for ${listed.scope.id}.\n`,
         );
         return 0;
       }
       runtime.writeStdout(
         [
-          `Active project memory for ${listed.scope.id}:`,
-          ...listed.entries.map(
-            (entry) =>
-              `${entry.id}\t${entry.createdAt}\t${entry.source.type}:${entry.source.channel}\t${escapeTerminalText(entry.text)}`,
-          ),
+          `${cliArgs.all ? "All" : "Active"} project memory for ${listed.scope.id}:`,
+          ...listed.entries.map(entryLine),
           "",
         ].join("\n"),
+      );
+      return 0;
+    }
+    if (cliArgs.mode === "show") {
+      const shown = showProjectMemory(runtime, runtime.cwd(), cliArgs.id);
+      runtime.writeStdout(
+        [
+          `Project memory ${shown.entry.id} for ${shown.scope.id}:`,
+          ...entryDetails(shown.entry),
+          "",
+        ].join("\n"),
+      );
+      return 0;
+    }
+    if (cliArgs.mode === "update") {
+      const updated = updateProjectMemory(
+        runtime,
+        runtime.cwd(),
+        cliArgs.id,
+        cliArgs.text,
+        {
+          type: "user_explicit",
+          channel: "cli",
+          evidence: "memory update",
+        },
+        {
+          reviewAfter: cliArgs.reviewAfter,
+          expiresAt: cliArgs.expiresAt,
+        },
+      );
+      runtime.writeStdout(
+        `Updated project memory ${cliArgs.id} with ${updated.entry.id} for ${updated.scope.id}; the prior entry is superseded and remains auditable.\n`,
+      );
+      return 0;
+    }
+    if (cliArgs.mode === "review") {
+      const review = reviewProjectMemory(runtime, runtime.cwd(), {
+        due: cliArgs.due,
+      });
+      if (review.entries.length === 0) {
+        runtime.writeStdout(
+          `${cliArgs.due ? "No project memory is due for review" : "No reviewable project memory"} for ${review.scope.id}.\n`,
+        );
+        return 0;
+      }
+      runtime.writeStdout(
+        [
+          `${cliArgs.due ? "Project memory due for review" : "Reviewable project memory"} for ${review.scope.id}:`,
+          ...review.entries.map(entryLine),
+          "",
+        ].join("\n"),
+      );
+      return 0;
+    }
+    if (cliArgs.mode === "verify") {
+      const verified = verifyProjectMemory(runtime, runtime.cwd(), cliArgs.id, {
+        type: "user_explicit",
+        channel: "cli",
+        evidence: `memory verify ${cliArgs.id}`,
+      });
+      runtime.writeStdout(
+        `Verified project memory ${cliArgs.id} for ${verified.scope.id} at ${verified.verifiedAt}.\n`,
       );
       return 0;
     }
@@ -94,18 +217,38 @@ export async function runMemoryCommand(
       );
       return 0;
     }
+    if (cliArgs.mode === "purge") {
+      const scope = purgeProjectMemory(runtime, runtime.cwd(), cliArgs.id, {
+        type: "user_explicit",
+        channel: "cli",
+        evidence: "memory purge",
+      });
+      runtime.writeStdout(
+        `Purged project memory ${cliArgs.id} for ${scope.id}: its payload was removed from addressable Keel-owned local memory. This does not erase provider retention, exports, backups, snapshots, or storage-media remnants.\n`,
+      );
+      return 0;
+    }
 
     if (!cliArgs.confirmed) {
       if (runtime.input.isTTY !== true) {
         runtime.writeStderr(
-          "Error: memory clear requires an interactive confirmation or --yes in non-interactive use. Clear is logical removal, not physical deletion.\n",
+          cliArgs.purge
+            ? "Error: memory clear --purge requires an interactive confirmation or --yes in non-interactive use. Purge is limited to addressable Keel-owned local memory.\n"
+            : "Error: memory clear requires an interactive confirmation or --yes in non-interactive use. Clear is logical removal, not physical deletion.\n",
         );
         return 1;
       }
-      if (!(await confirmClear(runtime))) {
+      if (!(await confirmClear(runtime, cliArgs.purge))) {
         runtime.writeStdout("Project memory unchanged.\n");
         return 0;
       }
+    }
+    if (cliArgs.purge) {
+      const result = purgeAllProjectMemory(runtime, runtime.cwd());
+      runtime.writeStdout(
+        `Purged all project memory for ${result.scope.id} (${result.purged} payload ${result.purged === 1 ? "entry" : "entries"}) from addressable Keel-owned local memory. This does not erase provider retention, exports, backups, snapshots, or storage-media remnants.\n`,
+      );
+      return 0;
     }
     const result = clearProjectMemory(runtime, runtime.cwd());
     runtime.writeStdout(

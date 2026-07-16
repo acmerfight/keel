@@ -57,7 +57,9 @@ import {
 } from "./provider-config.ts";
 import {
   assertEndEventHasCost,
+  projectMemoryReportEntry,
   type RunReportMemory,
+  type RunReportMemoryEntry,
   reportActiveSkills,
   writeRunReport,
 } from "./report.ts";
@@ -250,6 +252,7 @@ export async function runOneShotCli(
         : {}),
     });
     const exposedMemoryIds = new Set<string>();
+    const exposedMemoryEntries = new Map<string, RunReportMemoryEntry>();
     let exposedMemoryBytes = 0;
     let exposedMemoryTokens = 0;
     let transcriptMemoryPrompt = "";
@@ -260,8 +263,10 @@ export async function runOneShotCli(
       let loadedMemory = loadRenderedProjectMemory(runtime, workspace);
       memoryPrompt = () => {
         loadedMemory = loadRenderedProjectMemory(runtime, workspace);
-        for (const entry of loadedMemory.entries)
+        for (const entry of loadedMemory.entries) {
           exposedMemoryIds.add(entry.id);
+          exposedMemoryEntries.set(entry.id, projectMemoryReportEntry(entry));
+        }
         exposedMemoryBytes = Math.max(
           exposedMemoryBytes,
           loadedMemory.renderedBytes,
@@ -278,6 +283,7 @@ export async function runOneShotCli(
         enabled: true,
         scope: loadedMemory.scope,
         loadedIds: [...exposedMemoryIds],
+        loadedEntries: [...exposedMemoryEntries.values()],
         renderedBytes: exposedMemoryBytes,
         estimatedTokens: exposedMemoryTokens,
         operations: agentMemory.operations(),
@@ -287,6 +293,7 @@ export async function runOneShotCli(
         enabled: false,
         scope: null,
         loadedIds: [],
+        loadedEntries: [],
         renderedBytes: 0,
         estimatedTokens: 0,
         operations: [],

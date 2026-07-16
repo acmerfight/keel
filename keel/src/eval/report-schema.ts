@@ -162,7 +162,7 @@ const modelOperationBase = {
 const modelOperationSchema = z.object(modelOperationBase);
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(14),
+  schemaVersion: z.literal(15),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),
@@ -253,6 +253,28 @@ export const runReportSchema = z.object({
       })
       .nullable(),
     loadedIds: z.array(z.string()),
+    loadedEntries: z.array(
+      z.object({
+        id: z.string(),
+        status: z.enum([
+          "current",
+          "stale",
+          "superseded",
+          "expired",
+          "forgotten",
+        ]),
+        source: z.object({
+          type: z.literal("user_explicit"),
+          channel: z.enum(["agent", "cli"]),
+        }),
+        createdAt: z.string(),
+        lastVerifiedAt: z.string(),
+        supersedes: z.array(z.string()),
+        supersededBy: z.string().nullable(),
+        reviewAfter: z.string().nullable(),
+        expiresAt: z.string().nullable(),
+      }),
+    ),
     renderedBytes: z.number().int().nonnegative(),
     estimatedTokens: z.number().int().nonnegative().optional(),
     operations: z.array(

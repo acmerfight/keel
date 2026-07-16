@@ -20,9 +20,9 @@ export function createAgentProjectMemory(options: {
   return {
     capability: {
       list: () =>
-        listProjectMemory(options.runtime, options.workspace).entries.map(
-          (entry) => ({ id: entry.id, text: entry.text }),
-        ),
+        listProjectMemory(options.runtime, options.workspace, {
+          all: false,
+        }).entries.map((entry) => ({ id: entry.id, text: entry.text })),
       add: (text, sourceText) => {
         const saved = addProjectMemory(
           options.runtime,
@@ -33,6 +33,7 @@ export function createAgentProjectMemory(options: {
             channel: "agent",
             evidence: sourceText,
           },
+          { reviewAfter: null, expiresAt: null },
         );
         operations.push({
           operation: "add",
