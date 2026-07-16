@@ -51,7 +51,7 @@ interface GitProcessOutputCapture {
 }
 
 export function gitNullDevicePath(): string {
-  /* v8 ignore next: Windows null-device path is covered by platform behavior, not macOS CI. */
+  /* v8 ignore next: Windows uses a platform-specific null-device path; non-Windows CI exercises /dev/null. */
   return process.platform === "win32" ? "NUL" : "/dev/null";
 }
 
@@ -99,7 +99,7 @@ function gitConfigArgs(config: readonly string[] | undefined): string[] {
   return configs.flatMap((entry) => ["-c", entry]);
 }
 
-/* v8 ignore start: abort/timeout cleanup races are OS process-control fallbacks, not deterministic unit behavior. */
+/* v8 ignore start: platform signal selection and post-exit kill races are OS fallbacks; abort/timeout results are covered at the process boundary. */
 function killChildProcess(childPid: number): void {
   const signalTarget = process.platform === "win32" ? childPid : -childPid;
 
@@ -205,10 +205,8 @@ export function runGitProcess(
           }
         | { readonly type: "reject"; readonly error: KeelError },
     ) => {
-      /* v8 ignore next: protects close/error races from double-settling the same child process. */
       if (settled) return;
       settled = true;
-      /* v8 ignore next 4: child spawn failures and mid-process aborts are environment/process faults. */
       if (outcome.type === "reject") {
         cleanup();
         rejectProcess(outcome.error);
@@ -250,7 +248,6 @@ export function runGitProcess(
       });
     };
 
-    /* v8 ignore start: mid-process abort cleanup is covered by pre-start abort and OS process-control guards. */
     const abort = () => {
       stopChildProcess(child.pid);
       finish({
@@ -262,9 +259,7 @@ export function runGitProcess(
         ),
       });
     };
-    /* v8 ignore stop */
 
-    /* v8 ignore next 4: timeout cleanup is a process-control fallback; normal git invocations complete promptly. */
     const timeout = setTimeout(() => {
       timedOut = true;
       stopChildProcess(child.pid);
@@ -301,7 +296,6 @@ export function runGitProcess(
     child.stderr.on("data", (chunk: Buffer) => {
       recordOutputChunk(stderr, artifactStderr, "stderr", chunk);
     });
-    /* v8 ignore start: spawn errors require a missing/broken git executable or inaccessible cwd. */
     child.once("error", (error) => {
       finish({
         type: "reject",
@@ -312,7 +306,6 @@ export function runGitProcess(
         ),
       });
     });
-    /* v8 ignore stop */
     child.once("close", (exitCode, childSignal) => {
       finish({ type: "resolve", exitCode, signal: childSignal });
     });
@@ -321,7 +314,6 @@ export function runGitProcess(
   });
 }
 
-/* v8 ignore start: unexpected git command failures are surfaced, but are not deterministic product paths. */
 export function gitCommandFailure(
   toolName: string,
   command: string,
@@ -345,7 +337,6 @@ export function gitCommandFailure(
     "Use paths to narrow output or inspect files directly with read/grep.",
   );
 }
-/* v8 ignore stop */
 
 export function expectGitExitCode(
   toolName: string,
@@ -353,11 +344,9 @@ export function expectGitExitCode(
   result: GitProcessResult,
   acceptedExitCodes: ReadonlySet<number>,
 ): GitProcessResult {
-  /* v8 ignore next 3: null exit codes require external signal races; normal git exits report numeric codes. */
   if (result.exitCode === null) {
     throw gitCommandFailure(toolName, command, result);
   }
-  /* v8 ignore next 3: non-accepted git exits are covered by gitCommandFailure formatting guards. */
   if (!acceptedExitCodes.has(result.exitCode)) {
     throw gitCommandFailure(toolName, command, result);
   }
