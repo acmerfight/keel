@@ -446,7 +446,7 @@ async function settleToolExecutionContents(options: {
       const projection = projectCompactedToolOutput({
         text: execution.artifactContent,
         maxChars: maxInlineChars,
-        context: { toolName: toolCall.tool, toolCall },
+        context: { toolCall },
       });
       const settled = await settleProjectedToolOutput({
         store: options.artifacts.store,
