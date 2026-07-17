@@ -289,6 +289,67 @@ describe("memory candidate command", () => {
     }
   });
 
+  test(`Given a pending candidate and the statement length boundary,
+    When the user submits an over-limit edit followed by a boundary-length edit,
+    Then Keel reports a clean error and still accepts the valid edit`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-candidate-edit-length-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-candidate-edit-length-home-"),
+    );
+    const candidate = recordCandidateExtraction(
+      runtime(keelHome, NOW),
+      workspace,
+      extraction("edit-length", "mcex_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+      [proposal("edit-length", "Keep release validation deterministic.")],
+      false,
+    ).candidates[0];
+    expect(candidate).toBeDefined();
+
+    try {
+      // When
+      const overLimit = await command(
+        [
+          "memory",
+          "candidates",
+          "edit",
+          String(candidate?.id),
+          "x".repeat(1_001),
+        ],
+        workspace,
+        keelHome,
+      );
+      const atLimit = await command(
+        [
+          "memory",
+          "candidates",
+          "edit",
+          String(candidate?.id),
+          "x".repeat(1_000),
+        ],
+        workspace,
+        keelHome,
+      );
+
+      // Then
+      expect(overLimit.exitCode).toBe(1);
+      expect(overLimit.stderr).toBe(
+        "Error: project-memory candidate text must be at most 1000 characters.\n",
+      );
+      expect(overLimit.stderr).not.toContain("unexpected runtime failure");
+      expect(atLimit.exitCode, atLimit.stderr).toBe(0);
+      const shown = await command(
+        ["memory", "candidates", "show", String(candidate?.id)],
+        workspace,
+        keelHome,
+      );
+      expect(shown.stdout).toContain(`statement: ${"x".repeat(1_000)}`);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a non-interactive or declined candidate clear request,
     When confirmation is missing or refused,
     Then Keel fails safely or leaves the pending candidate unchanged`, async () => {

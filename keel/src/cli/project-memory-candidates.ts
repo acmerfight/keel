@@ -341,6 +341,11 @@ function validatedCandidateText(rawText: string): string {
   if (text === "") {
     fail("Error: project-memory candidate requires a non-empty statement.");
   }
+  if (text.length > 1_000) {
+    fail(
+      "Error: project-memory candidate text must be at most 1000 characters.",
+    );
+  }
   if (
     prohibitedSensitiveTextCategory(text) !== undefined ||
     hasPersistenceRedactionMarker(text)
