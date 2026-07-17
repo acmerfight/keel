@@ -103,7 +103,59 @@ The runtime rejects paraphrased or broadened text and records the complete
 authorizing user message as event provenance itself; the model cannot provide
 or forge that source evidence. `memory_forget` accepts one required active
 project-memory ID. Keel does not automatically extract, consolidate, or promote
-conversation text.
+conversation text into active memory.
+
+Automatic candidate extraction is a separate, off-by-default review workflow.
+It runs only when the user invokes one explicit, cost-bounded command for a
+completed, persisted root session:
+
+```bash
+keel memory candidates extract <session-id> --max-cost <usd>
+keel memory candidates list
+keel memory candidates show <candidate-id>
+keel memory candidates edit <candidate-id> "<replacement>"
+keel memory candidates approve <candidate-id>
+keel memory candidates reject <candidate-id>
+keel memory candidates purge <candidate-id>
+keel memory candidates clear --yes
+```
+
+Extraction sends only a bounded set of eligible current-user messages, never
+assistant or tool text, and rejects detected secrets and prohibited high-risk
+personal data before a provider request. Detection is best-effort defense in
+depth, not a general DLP guarantee. A successful run creates at most five
+inactive project-scoped candidates and reports the created/pending counts,
+provider usage, cost, attempts, and review command. The candidate list retains
+terminal extraction operations, including failures and admission rejections,
+so consumed provider cost remains observable even when no candidate is saved.
+
+Every candidate keeps its exact user-message evidence, reason, model operation,
+duplicate/conflict matches, and sensitivity-check result. Pending candidates
+expire after 30 days and are never loaded into an agent prompt. Only explicit
+approval creates a normal active memory ID; conflicts require `--keep` or
+`--supersede <memory-id>`, and exact duplicates cannot be approved. `--retry`
+is required to extract a session again after a successful extraction. Keel has
+no idle/background extractor, so ordinary session completion and app startup
+make zero candidate-provider requests and schedule no candidate notification.
+Before any candidate-provider request, extraction acquires the project-memory
+write boundary and holds it through terminal accounting. If that boundary
+remains busy, extraction fails without making a provider request or spending
+provider budget.
+Editing invalidates the model's earlier duplicate/conflict analysis. The review
+view marks that analysis as stale, exact duplicates are recomputed and blocked
+at approval, and activation requires an explicit `--keep` or `--supersede`
+decision against current active memory.
+
+Candidate reject and ordinary clear are logical removal. Candidate purge is
+application-level physical removal from addressable Keel-owned local storage.
+An approved candidate is linked to active memory, so its purge must name that
+memory explicitly with `--purge-memory <memory-id>`; bulk purge similarly
+requires `--purge-memories`. The linked payloads are then rewritten under the
+same project lock and atomic event-log generation. These operations cannot
+erase provider retention, exports, backups, filesystem snapshots, or storage
+media remnants. Content-free extraction accounting (terminal state, provider,
+attempts, usage, and cost) remains after candidate purge so provider spend does
+not disappear with the user payload.
 `--ephemeral` only disables the session ledger; it
 does not disable project memory. Use `--no-memory` when a run must skip memory
 identity discovery, storage reads, prompt injection, and memory observability.
@@ -122,7 +174,9 @@ private directory and file permissions. Storage assumes one machine and a
 reliable local filesystem; cloud-synced directories and concurrent multi-host
 writes are unsupported.
 
-Normal writes use an append-only event log in validated physical file order.
+Normal memory and candidate writes share one append-only event log in validated
+physical file order, so approval and linked purge cannot tear across separate
+stores.
 Each entry is `current`, `stale`, `superseded`, `expired`, or `forgotten`.
 `update` appends a replacement with an explicit `supersedes` relation; wall-clock
 timestamps never choose a winner. `reviewAfter` makes an entry stale but still

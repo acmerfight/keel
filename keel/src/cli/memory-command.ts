@@ -1,5 +1,9 @@
 import { createInterface } from "node:readline/promises";
 import type { CliArgs } from "./args.ts";
+import {
+  isMemoryCandidateCliArgs,
+  runMemoryCandidateCommand,
+} from "./memory-candidate-command.ts";
 import { escapeTerminalText } from "./output.ts";
 import {
   addProjectMemory,
@@ -29,8 +33,18 @@ const MEMORY_HELP = `Usage:
   keel memory forget <id>
   keel memory purge <id>
   keel memory clear [--purge] [--yes]
+  keel memory candidates extract <completed-root-session-id> --max-cost <usd> [--provider <id>] [--model <id>] [--retry]
+  keel memory candidates list
+  keel memory candidates show <candidate-id>
+  keel memory candidates edit <candidate-id> <replacement>
+  keel memory candidates approve <candidate-id> [--keep | --supersede <memory-id>]
+  keel memory candidates reject <candidate-id>
+  keel memory candidates purge <candidate-id> [--purge-memory <memory-id>]
+  keel memory candidates clear [--purge] [--purge-memories] [--yes]
 
 Memory is saved only by these commands or a direct, unambiguous current-user “remember” request handled by the agent memory tool.
+Candidate extraction is off by default and runs only after an explicit extract command. It inspects bounded current-user evidence from one completed, persisted root session and creates inactive candidates; it never writes active memory directly.
+Review candidate sources, conflicts, sensitivity validation, provider usage, and cost before approving. Pending candidates expire after 30 days and are never injected into agent context.
 Direct “forget” requests must identify one active entry unambiguously; use an ID when needed.
 Save small, durable project facts that are not cheaply derivable from the repository.
 Memory is quoted low-authority context, not instructions or authorization. Current repository, tests, Git, configuration, live APIs, project instructions, and current user requests win conflicts.
@@ -51,12 +65,18 @@ function entryDetails(entry: ProjectMemoryEntry): readonly string[] {
     `supersedes: ${entry.supersedes.length === 0 ? "none" : entry.supersedes.join(",")}`,
     `superseded by: ${entry.supersededBy ?? "none"}`,
     `source: ${entry.source.type}:${entry.source.channel}`,
+    ...(entry.source.type === "user_approved"
+      ? [`source candidate: ${entry.source.candidateId}`]
+      : []),
     `text: ${escapeTerminalText(entry.text)}`,
   ];
 }
 
 function entryLine(entry: ProjectMemoryEntry): string {
   const relationships = [
+    ...(entry.source.type === "user_approved"
+      ? [`candidate=${entry.source.candidateId}`]
+      : []),
     ...(entry.supersedes.length === 0
       ? []
       : [`supersedes=${entry.supersedes.join(",")}`]),
@@ -99,6 +119,9 @@ export async function runMemoryCommand(
   runtime: CliRuntime,
 ): Promise<number> {
   try {
+    if (isMemoryCandidateCliArgs(cliArgs)) {
+      return runMemoryCandidateCommand(cliArgs, runtime);
+    }
     if (cliArgs.mode === "help") {
       runtime.writeStdout(MEMORY_HELP);
       return 0;

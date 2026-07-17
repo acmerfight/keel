@@ -1,9 +1,14 @@
 import { describe, expect, test } from "vitest";
-import { errorMessage, isAbortThrow } from "../../src/core/error.ts";
+import { errorMessage, isAbortThrow, KeelError } from "../../src/core/error.ts";
 
 class AbortCodeError extends Error {
   readonly code = "ABORT_ERR";
 }
+
+const normalizedAbortCodes: readonly ("provider_aborted" | "tool_aborted")[] = [
+  "provider_aborted",
+  "tool_aborted",
+];
 
 describe("Error Messages", () => {
   test(`Given an Error instance,
@@ -59,6 +64,12 @@ describe("Abort Throws", () => {
 
     // Then
     expect(isAbort).toBe(true);
+  });
+
+  test.each(normalizedAbortCodes)(`Given a normalized %s Keel error,
+    When Keel checks whether the throw is cancellation,
+    Then it preserves the abort classification across runtime boundaries`, (code) => {
+    expect(isAbortThrow(new KeelError(code, "operation aborted"))).toBe(true);
   });
 
   test(`Given an aborted signal,

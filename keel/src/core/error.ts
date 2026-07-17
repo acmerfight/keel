@@ -64,7 +64,10 @@ export function isAbortThrow(error: unknown, signal?: AbortSignal): boolean {
   return (
     error instanceof Error &&
     (error.name === "AbortError" ||
-      ("code" in error && error.code === "ABORT_ERR"))
+      ("code" in error &&
+        (error.code === "ABORT_ERR" ||
+          error.code === "provider_aborted" ||
+          error.code === "tool_aborted")))
   );
 }
 

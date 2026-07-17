@@ -286,7 +286,11 @@ describe("CLI project memory", () => {
           expect.objectContaining({
             id: memoryId,
             status: "current",
-            source: { type: "user_explicit", channel: "cli" },
+            source: {
+              type: "user_explicit",
+              channel: "cli",
+              candidateId: null,
+            },
             supersedes: [],
           }),
         ],
@@ -1481,10 +1485,10 @@ describe("CLI project memory", () => {
         .trimEnd()
         .split("\n")
         .map((line) => JSON.parse(line));
-      originalEvent.createdAt = "2999-01-01T00:00:00.000Z";
-      originalEvent.lastVerifiedAt = "2999-01-01T00:00:00.000Z";
-      replacementEvent.createdAt = "1960-01-01T00:00:00.000Z";
-      replacementEvent.lastVerifiedAt = "1960-01-01T00:00:00.000Z";
+      originalEvent.memory.createdAt = "2999-01-01T00:00:00.000Z";
+      originalEvent.memory.lastVerifiedAt = "2999-01-01T00:00:00.000Z";
+      replacementEvent.memory.createdAt = "1960-01-01T00:00:00.000Z";
+      replacementEvent.memory.lastVerifiedAt = "1960-01-01T00:00:00.000Z";
       await writeFile(
         eventsPath,
         `${JSON.stringify(originalEvent)}\n${JSON.stringify(replacementEvent)}\n`,
@@ -1729,9 +1733,12 @@ describe("CLI project memory", () => {
         eventsPath,
         `${JSON.stringify({
           ...firstEvent,
-          id: replacementId,
-          text: "One consolidated current claim.",
-          supersedes: [firstId, secondId],
+          memory: {
+            ...firstEvent.memory,
+            id: replacementId,
+            text: "One consolidated current claim.",
+            supersedes: [firstId, secondId],
+          },
         })}\n`,
         "utf8",
       );
@@ -2634,7 +2641,7 @@ describe("CLI project memory", () => {
       "events.jsonl",
     );
     const unsupported = (await readFile(eventsPath, "utf8"))
-      .replace('"version":3', '"version":4')
+      .replace('"version":4', '"version":5')
       .trimEnd();
     await writeFile(eventsPath, unsupported, "utf8");
 
@@ -2685,7 +2692,10 @@ describe("CLI project memory", () => {
       .trimEnd()
       .split("\n");
     const event = JSON.parse(String(eventLine));
-    const externalContent = `${JSON.stringify({ ...event, text: "z".repeat(5000) })}\n`;
+    const externalContent = `${JSON.stringify({
+      ...event,
+      memory: { ...event.memory, text: "z".repeat(5000) },
+    })}\n`;
     await writeFile(eventsPath, externalContent, "utf8");
     const transcriptPath = join(workspace, "must-not-exist.jsonl");
 
@@ -3069,7 +3079,7 @@ describe("CLI project memory", () => {
 
       const unsupportedComplete = JSON.stringify({
         ...JSON.parse(validLine),
-        version: 4,
+        version: 5,
       });
       await writeFile(eventsPath, `${unsupportedComplete}\n`, "utf8");
       const unsupported = await runCli(["memory", "list"], {
@@ -3090,9 +3100,12 @@ describe("CLI project memory", () => {
       const baseEvent = JSON.parse(validLine);
       const unknownSupersession = JSON.stringify({
         ...baseEvent,
-        id: "mem_11111111",
-        text: "Unknown target replacement.",
-        supersedes: ["mem_00000000"],
+        memory: {
+          ...baseEvent.memory,
+          id: "mem_11111111",
+          text: "Unknown target replacement.",
+          supersedes: ["mem_00000000"],
+        },
       });
       await writeFile(
         eventsPath,
@@ -3108,9 +3121,12 @@ describe("CLI project memory", () => {
 
       const duplicateSupersession = JSON.stringify({
         ...baseEvent,
-        id: "mem_22222222",
-        text: "Duplicate target replacement.",
-        supersedes: [baseEvent.id, baseEvent.id],
+        memory: {
+          ...baseEvent.memory,
+          id: "mem_22222222",
+          text: "Duplicate target replacement.",
+          supersedes: [baseEvent.memory.id, baseEvent.memory.id],
+        },
       });
       await writeFile(
         eventsPath,
@@ -3126,15 +3142,21 @@ describe("CLI project memory", () => {
 
       const firstReplacement = JSON.stringify({
         ...baseEvent,
-        id: "mem_33333333",
-        text: "First valid replacement.",
-        supersedes: [baseEvent.id],
+        memory: {
+          ...baseEvent.memory,
+          id: "mem_33333333",
+          text: "First valid replacement.",
+          supersedes: [baseEvent.memory.id],
+        },
       });
       const secondReplacement = JSON.stringify({
         ...baseEvent,
-        id: "mem_44444444",
-        text: "Competing replacement.",
-        supersedes: [baseEvent.id],
+        memory: {
+          ...baseEvent.memory,
+          id: "mem_44444444",
+          text: "Competing replacement.",
+          supersedes: [baseEvent.memory.id],
+        },
       });
       await writeFile(
         eventsPath,
@@ -3149,7 +3171,7 @@ describe("CLI project memory", () => {
       expect(alreadySuperseded.stderr).toContain("invalid supersession target");
 
       const invalidForget = JSON.stringify({
-        version: 3,
+        version: 4,
         type: "forget",
         targetId: "mem_00000000-0000-4000-8000-000000000000",
         source: {
@@ -3365,20 +3387,22 @@ describe("CLI project memory", () => {
     );
     const events = Array.from({ length: 101 }, (_, index) =>
       JSON.stringify({
-        version: 3,
+        version: 4,
         type: "add",
-        id: `mem_${index.toString(16).padStart(8, "0")}`,
-        text: "x",
-        source: {
-          type: "user_explicit",
-          channel: "cli",
-          evidence: `memory add x ${index}`,
+        memory: {
+          id: `mem_${index.toString(16).padStart(8, "0")}`,
+          text: "x",
+          source: {
+            type: "user_explicit",
+            channel: "cli",
+            evidence: `memory add x ${index}`,
+          },
+          createdAt: "2026-07-15T00:00:00.000Z",
+          lastVerifiedAt: "2026-07-15T00:00:00.000Z",
+          supersedes: [],
+          reviewAfter: null,
+          expiresAt: null,
         },
-        createdAt: "2026-07-15T00:00:00.000Z",
-        lastVerifiedAt: "2026-07-15T00:00:00.000Z",
-        supersedes: [],
-        reviewAfter: null,
-        expiresAt: null,
       }),
     ).join("\n");
     await writeFile(eventsPath, `${events}\n`, "utf8");

@@ -49,10 +49,17 @@ export interface RunReportMemory {
 export interface RunReportMemoryEntry {
   readonly id: string;
   readonly status: ActiveProjectMemoryEntry["status"];
-  readonly source: {
-    readonly type: "user_explicit";
-    readonly channel: "agent" | "cli";
-  };
+  readonly source:
+    | {
+        readonly type: "user_explicit";
+        readonly channel: "agent" | "cli";
+        readonly candidateId: null;
+      }
+    | {
+        readonly type: "user_approved";
+        readonly channel: "cli";
+        readonly candidateId: string;
+      };
   readonly createdAt: string;
   readonly lastVerifiedAt: string;
   readonly supersedes: readonly string[];
@@ -67,10 +74,18 @@ export function projectMemoryReportEntry(
   return {
     id: entry.id,
     status: entry.status,
-    source: {
-      type: entry.source.type,
-      channel: entry.source.channel,
-    },
+    source:
+      entry.source.type === "user_approved"
+        ? {
+            type: entry.source.type,
+            channel: entry.source.channel,
+            candidateId: entry.source.candidateId,
+          }
+        : {
+            type: entry.source.type,
+            channel: entry.source.channel,
+            candidateId: null,
+          },
     createdAt: entry.createdAt,
     lastVerifiedAt: entry.lastVerifiedAt,
     supersedes: entry.supersedes,
@@ -117,7 +132,7 @@ export interface RunReportGoalOutcome {
 }
 
 interface RunReport {
-  readonly schemaVersion: 15;
+  readonly schemaVersion: 16;
   readonly tasks: readonly RunReportTask[];
   readonly humanInterventionCount: number;
   readonly modelOperations: readonly RunReportModelOperation[];
@@ -173,7 +188,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
   const accounting = accountModelOperations(input.modelOperations);
   const costBudgetUsd = input.end.cost.maxUsd;
   const report: RunReport = {
-    schemaVersion: 15,
+    schemaVersion: 16,
     tasks: input.tasks,
     humanInterventionCount: input.tasks.reduce(
       (total, task) => total + task.humanInterventionCount,

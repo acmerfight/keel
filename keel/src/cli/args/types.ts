@@ -182,6 +182,57 @@ export type MemoryCliArgs =
       readonly mode: "clear";
       readonly confirmed: boolean;
       readonly purge: boolean;
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "candidates-extract";
+      readonly sessionId: string;
+      readonly maxCostUsd: number;
+      readonly providerId: ProviderId | null;
+      readonly model: string | null;
+      readonly retry: boolean;
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "candidates-list";
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "candidates-show";
+      readonly id: string;
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "candidates-reject";
+      readonly id: string;
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "candidates-purge";
+      readonly id: string;
+      readonly purgeMemoryId: string | null;
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "candidates-edit";
+      readonly id: string;
+      readonly text: string;
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "candidates-approve";
+      readonly id: string;
+      readonly conflictResolution:
+        | { readonly type: "none" }
+        | { readonly type: "keep" }
+        | { readonly type: "supersede"; readonly memoryId: string };
+    }
+  | {
+      readonly command: "memory";
+      readonly mode: "candidates-clear";
+      readonly confirmed: boolean;
+      readonly purge: boolean;
+      readonly purgeLinkedMemories: boolean;
     };
 
 export interface RunCliArgs {
