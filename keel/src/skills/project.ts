@@ -45,7 +45,15 @@ import { parseSkillDocument, validateSkillName } from "./schema.ts";
 const LOCAL_SKILL_ROOT = join(".agents", "skills");
 const SKILL_FILE = "SKILL.md";
 const MAX_WORKFLOW_SKILL_BYTES = 50 * 1024;
-const QUALIFIED_SKILL_PATTERN = /^(repo|user|system|extra):(.+)$/u;
+const QUALIFIED_SKILL_PREFIXES: readonly {
+  readonly prefix: `${SkillScope}:`;
+  readonly scope: SkillScope;
+}[] = [
+  { prefix: "repo:", scope: "repo" },
+  { prefix: "user:", scope: "user" },
+  { prefix: "system:", scope: "system" },
+  { prefix: "extra:", scope: "extra" },
+];
 
 interface SkillRoot {
   readonly scope: SkillScope;
@@ -59,6 +67,11 @@ interface ReadSkill {
   readonly descriptor: SkillDescriptor;
   readonly skill: WorkflowSkill;
   readonly findings: readonly SkillAuditFinding[];
+}
+
+interface CatalogedSkill {
+  readonly descriptor: SkillDescriptor;
+  readonly root: SkillRoot;
 }
 
 interface SkillResourceInventory {
@@ -630,72 +643,69 @@ function skillAuditErrorMessage(
   return `Error: workflow skill ${JSON.stringify(redactSecretLikeText(qualifiedName))} is blocked by deterministic audit [${blocker.code}] at ${redactSecretLikeText(blocker.relativePath)}: ${redactSecretLikeText(blocker.message)}.`;
 }
 
-function lookupParts(lookup: string): {
-  readonly scope?: SkillScope;
-  readonly name: string;
-} {
-  const qualified = QUALIFIED_SKILL_PATTERN.exec(lookup);
-  if (qualified === null) {
+type SkillLookupParts =
+  | {
+      readonly kind: "unqualified";
+      readonly name: string;
+    }
+  | {
+      readonly kind: "scoped";
+      readonly scope: SkillScope;
+      readonly name: string;
+      readonly rootQualified: boolean;
+    };
+
+function lookupParts(lookup: string): SkillLookupParts {
+  const qualified = QUALIFIED_SKILL_PREFIXES.find(
+    ({ prefix }) => lookup.startsWith(prefix) && lookup.length > prefix.length,
+  );
+  if (qualified === undefined) {
     validateSkillName(lookup);
-    return { name: lookup };
+    return { kind: "unqualified", name: lookup };
   }
-  const scope = qualified[1];
-  /* v8 ignore next -- QUALIFIED_SKILL_PATTERN restricts the captured scope. */
-  if (
-    scope !== "repo" &&
-    scope !== "user" &&
-    scope !== "system" &&
-    scope !== "extra"
-  ) {
-    throw new WorkflowSkillError("Error: qualified skill scope is invalid.");
-  }
-  const qualifiedRemainder = qualified[2];
-  /* v8 ignore next 3 -- QUALIFIED_SKILL_PATTERN requires a non-empty remainder. */
-  if (qualifiedRemainder === undefined) {
-    throw new WorkflowSkillError("Error: qualified skill name is incomplete.");
-  }
-  const segments = qualifiedRemainder.split(":");
-  if (segments.length > 2) {
+  const qualifiedRemainder = lookup.slice(qualified.prefix.length);
+  const rootSeparator = qualifiedRemainder.indexOf(":");
+  if (rootSeparator !== qualifiedRemainder.lastIndexOf(":")) {
     throw new WorkflowSkillError(
       "Error: qualified skill names use scope:name or scope:root-id:name.",
     );
   }
-  const name = segments.at(-1);
-  /* v8 ignore next 3 -- splitting a defined string always yields one segment. */
-  if (name === undefined) {
-    throw new WorkflowSkillError("Error: qualified skill name is incomplete.");
-  }
+  const name = qualifiedRemainder.slice(rootSeparator + 1);
   validateSkillName(name);
-  return { scope, name };
+  return {
+    kind: "scoped",
+    scope: qualified.scope,
+    name,
+    rootQualified: rootSeparator !== -1,
+  };
 }
 
-function matchingDescriptors(
-  skills: readonly SkillDescriptor[],
+function resolveSkillValue<Value extends object>(
+  values: readonly Value[],
   lookup: string,
-): readonly SkillDescriptor[] {
+  descriptorFor: (value: Value) => SkillDescriptor,
+): Value {
   const parts = lookupParts(lookup);
-  if (parts.scope !== undefined && lookup.split(":").length === 3) {
-    return skills.filter((skill) => skill.qualifiedName === lookup);
+  let match: Value | undefined;
+  const matchingDescriptors: SkillDescriptor[] = [];
+  for (const value of values) {
+    const descriptor = descriptorFor(value);
+    const matches =
+      parts.kind === "scoped" && parts.rootQualified
+        ? descriptor.qualifiedName === lookup
+        : descriptor.name === parts.name &&
+          (parts.kind === "unqualified" || descriptor.scope === parts.scope);
+    if (!matches) continue;
+    match ??= value;
+    matchingDescriptors.push(descriptor);
   }
-  return skills.filter(
-    (skill) =>
-      skill.name === parts.name &&
-      (parts.scope === undefined || skill.scope === parts.scope),
-  );
-}
-
-export function resolveSkillDescriptor(
-  skills: readonly SkillDescriptor[],
-  lookup: string,
-): SkillDescriptor {
-  const matches = matchingDescriptors(skills, lookup);
-  if (matches.length === 0) {
+  if (match === undefined) {
     throw new WorkflowSkillError(
       `Error: workflow skill ${JSON.stringify(lookup)} was not found.`,
     );
   }
-  if (matches.length > 1) {
-    const choices = matches
+  if (matchingDescriptors.length > 1) {
+    const choices = matchingDescriptors
       .map(
         (skill) =>
           `${JSON.stringify(skill.qualifiedName)} (${skill.relativePath})`,
@@ -705,12 +715,14 @@ export function resolveSkillDescriptor(
       `Error: workflow skill ${JSON.stringify(lookup)} is ambiguous; choose one of: ${choices}.`,
     );
   }
-  const descriptor = matches[0];
-  /* v8 ignore next 3 -- the zero-match case returns above. */
-  if (descriptor === undefined) {
-    throw new WorkflowSkillError("Error: resolved workflow skill disappeared.");
-  }
-  return descriptor;
+  return match;
+}
+
+export function resolveSkillDescriptor(
+  skills: readonly SkillDescriptor[],
+  lookup: string,
+): SkillDescriptor {
+  return resolveSkillValue(skills, lookup, (skill) => skill);
 }
 
 function searchScore(skill: SkillDescriptor, query: string): number {
@@ -789,9 +801,8 @@ function invalidPackageErrorMessage(
 export function discoverSkillCatalog(
   options: SkillDiscoveryOptions,
 ): SkillCatalog {
-  const rootsById = new Map<string, SkillRoot>();
   const seenRoots = new Set<string>();
-  const skills: SkillDescriptor[] = [];
+  const skills: CatalogedSkill[] = [];
   const discoveredAudits: DiscoveredSkillAudit[] = [];
   const recordInvalidPackage = (
     root: SkillRoot,
@@ -849,8 +860,7 @@ export function discoverSkillCatalog(
         if (blocker !== undefined) {
           continue;
         }
-        skills.push(read.descriptor);
-        rootsById.set(read.descriptor.id, root);
+        skills.push({ descriptor: read.descriptor, root });
       } catch (error) {
         /* v8 ignore next 3: unexpected filesystem/runtime faults must propagate. */
         if (!(error instanceof WorkflowSkillError)) throw error;
@@ -864,15 +874,20 @@ export function discoverSkillCatalog(
   }
   const duplicateCounts = new Map<string, number>();
   for (const skill of skills) {
-    const key = `${skill.scope}:${skill.name}`;
+    const key = `${skill.descriptor.scope}:${skill.descriptor.name}`;
     duplicateCounts.set(key, (duplicateCounts.get(key) ?? 0) + 1);
   }
   const collisionSafeSkills = skills.map((skill) => ({
     ...skill,
-    qualifiedName:
-      duplicateCounts.get(`${skill.scope}:${skill.name}`) === 1
-        ? `${skill.scope}:${skill.name}`
-        : `${skill.scope}:${skill.rootKey}:${skill.name}`,
+    descriptor: {
+      ...skill.descriptor,
+      qualifiedName:
+        duplicateCounts.get(
+          `${skill.descriptor.scope}:${skill.descriptor.name}`,
+        ) === 1
+          ? `${skill.descriptor.scope}:${skill.descriptor.name}`
+          : `${skill.descriptor.scope}:${skill.descriptor.rootKey}:${skill.descriptor.name}`,
+    },
   }));
   const auditDuplicateCounts = new Map<string, number>();
   for (const audit of discoveredAudits) {
@@ -908,24 +923,22 @@ export function discoverSkillCatalog(
     .toSorted((left, right) =>
       left.qualifiedName.localeCompare(right.qualifiedName),
     );
-  const sortedSkills = collisionSafeSkills.toSorted(
+  const sortedCatalogedSkills = collisionSafeSkills.toSorted(
     (left, right) =>
-      left.name.localeCompare(right.name) ||
-      left.scope.localeCompare(right.scope) ||
-      left.relativePath.localeCompare(right.relativePath),
+      left.descriptor.name.localeCompare(right.descriptor.name) ||
+      left.descriptor.scope.localeCompare(right.descriptor.scope) ||
+      left.descriptor.relativePath.localeCompare(right.descriptor.relativePath),
   );
+  const sortedSkills = sortedCatalogedSkills.map((skill) => skill.descriptor);
   const loadFrom = (
-    candidates: readonly SkillDescriptor[],
+    candidates: readonly CatalogedSkill[],
     lookup: string,
   ): WorkflowSkill => {
-    const descriptor = resolveSkillDescriptor(candidates, lookup);
-    const root = rootsById.get(descriptor.id);
-    /* v8 ignore next 4 -- descriptors and roots are populated atomically above. */
-    if (root === undefined) {
-      throw new WorkflowSkillError(
-        `Error: workflow skill ${JSON.stringify(lookup)} is no longer available.`,
-      );
-    }
+    const { descriptor, root } = resolveSkillValue(
+      candidates,
+      lookup,
+      (skill) => skill.descriptor,
+    );
     const current = readSkillFile(root, descriptor.name, true);
     assertSkillAuditPass(descriptor.qualifiedName, current.findings);
     if (
@@ -938,14 +951,17 @@ export function discoverSkillCatalog(
     }
     return { ...current.skill, qualifiedName: descriptor.qualifiedName };
   };
-  const implicitSkills = sortedSkills.filter(
-    (skill) => skill.activationPolicy === "implicit",
+  const implicitCatalogedSkills = sortedCatalogedSkills.filter(
+    (skill) => skill.descriptor.activationPolicy === "implicit",
+  );
+  const implicitSkills = implicitCatalogedSkills.map(
+    (skill) => skill.descriptor,
   );
   const warningForLookup = (
     lookup: string,
   ): SkillCatalogWarning | undefined => {
     const parts = lookupParts(lookup);
-    if (parts.scope !== undefined && lookup.split(":").length === 3) {
+    if (parts.kind === "scoped" && parts.rootQualified) {
       return warnings.find((warning) => warning.name === lookup);
     }
     const matches = warnings.filter((warning) => {
@@ -954,13 +970,13 @@ export function discoverSkillCatalog(
       const name = warningParts.at(-1);
       return (
         name === parts.name &&
-        (parts.scope === undefined || scope === parts.scope)
+        (parts.kind === "unqualified" || scope === parts.scope)
       );
     });
     return matches.length === 1 ? matches[0] : undefined;
   };
   const loadWithWarning = (
-    candidates: readonly SkillDescriptor[],
+    candidates: readonly CatalogedSkill[],
     lookup: string,
   ): WorkflowSkill => {
     try {
@@ -982,16 +998,14 @@ export function discoverSkillCatalog(
     implicitSkills,
     warnings,
     audits,
-    load: (lookup) => loadWithWarning(sortedSkills, lookup),
-    loadImplicit: (lookup) => loadWithWarning(implicitSkills, lookup),
+    load: (lookup) => loadWithWarning(sortedCatalogedSkills, lookup),
+    loadImplicit: (lookup) => loadWithWarning(implicitCatalogedSkills, lookup),
     loadPackage: (packageId) => {
-      const descriptor = sortedSkills.find(
-        (skill) => skill.packageId === packageId,
+      const catalogedSkill = sortedCatalogedSkills.find(
+        (skill) => skill.descriptor.packageId === packageId,
       );
-      if (descriptor === undefined) return undefined;
-      const root = rootsById.get(descriptor.id);
-      /* v8 ignore next -- descriptors and roots are populated atomically above. */
-      if (root === undefined) return undefined;
+      if (catalogedSkill === undefined) return undefined;
+      const { descriptor, root } = catalogedSkill;
       const current = readSkillFile(root, descriptor.name, true);
       assertSkillAuditPass(descriptor.qualifiedName, current.findings);
       return { ...current.skill, qualifiedName: descriptor.qualifiedName };
@@ -1013,14 +1027,11 @@ export function discoverSkillCatalog(
           "Error: skill resource paths must stay under references/, scripts/, or assets/.",
         );
       }
-      const descriptor = resolveSkillDescriptor(sortedSkills, lookup);
-      const root = rootsById.get(descriptor.id);
-      /* v8 ignore next 4 -- descriptors and roots are populated atomically above. */
-      if (root === undefined) {
-        throw new WorkflowSkillError(
-          `Error: workflow skill ${JSON.stringify(lookup)} is no longer available.`,
-        );
-      }
+      const { descriptor, root } = resolveSkillValue(
+        sortedCatalogedSkills,
+        lookup,
+        (skill) => skill.descriptor,
+      );
       const current = readSkillFile(root, descriptor.name, true);
       assertSkillAuditPass(descriptor.qualifiedName, current.findings);
       if (current.descriptor.digest !== descriptor.digest) {
@@ -1046,21 +1057,15 @@ export function discoverSkillCatalog(
           "Error: skill resource paths must stay under references/, scripts/, or assets/.",
         );
       }
-      const descriptor = sortedSkills.find(
-        (skill) => skill.packageId === packageId,
+      const catalogedSkill = sortedCatalogedSkills.find(
+        (skill) => skill.descriptor.packageId === packageId,
       );
-      if (descriptor === undefined) {
+      if (catalogedSkill === undefined) {
         throw new WorkflowSkillError(
           `Error: active workflow skill package ${JSON.stringify(packageId)} is no longer available.`,
         );
       }
-      const root = rootsById.get(descriptor.id);
-      /* v8 ignore next 4 -- descriptors and roots are populated atomically above. */
-      if (root === undefined) {
-        throw new WorkflowSkillError(
-          `Error: active workflow skill package ${JSON.stringify(packageId)} is no longer available.`,
-        );
-      }
+      const { descriptor, root } = catalogedSkill;
       const current = readSkillFile(root, descriptor.name, true);
       assertSkillAuditPass(descriptor.qualifiedName, current.findings);
       if (current.skill.digest !== digest) {
