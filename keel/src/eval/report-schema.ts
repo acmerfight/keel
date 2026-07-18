@@ -183,7 +183,7 @@ const runReportMemorySchema = z
           }),
           z.object({
             type: z.literal("user_approved"),
-            channel: z.literal("cli"),
+            channel: z.enum(["cli", "interactive"]),
             candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
           }),
         ]),
@@ -211,6 +211,16 @@ const runReportMemorySchema = z
           scope: z.object({ kind: z.literal("project"), id: z.string() }),
           outcome: z.literal("forgotten"),
         }),
+        z.object({
+          operation: z.literal("propose"),
+          candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
+          memoryId: z
+            .string()
+            .regex(/^mem_[0-9a-f-]+$/u)
+            .nullable(),
+          scope: z.object({ kind: z.literal("project"), id: z.string() }),
+          outcome: z.enum(["approved", "rejected", "pending"]),
+        }),
       ]),
     ),
     error: z.string().optional(),
@@ -237,7 +247,7 @@ const runReportMemorySchema = z
   });
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(16),
+  schemaVersion: z.literal(17),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),

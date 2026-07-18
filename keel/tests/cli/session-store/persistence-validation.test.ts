@@ -119,6 +119,66 @@ describe("Session Store Persistence Validation", () => {
     }
   });
 
+  test(`Given reserved session-message IDs lose their message or collide,
+    When persistence binds provenance to the transcript,
+    Then it rejects both cases before appending ambiguous IDs`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const currentUser: Message = {
+      role: "user",
+      content: "Release validation uses pnpm test:coverage.",
+      origin: { type: "user_prompt" },
+    };
+    const assistant: Message = {
+      role: "assistant",
+      content: "Understood.",
+      toolCalls: [],
+    };
+
+    try {
+      const session = createSessionStore({
+        sessionId: "reserved-message-validation",
+        workspace,
+        runtime: runtime(home),
+      });
+      expect(() =>
+        persistSessionMessages({
+          session,
+          previousMessages: [],
+          currentMessages: [currentUser, assistant],
+          runtime: runtime(home, 1),
+          reason: "turn",
+          reservedMessageIds: [
+            {
+              message: {
+                role: "user",
+                content: currentUser.content,
+                origin: { type: "user_prompt" },
+              },
+              id: "msg_missing",
+            },
+          ],
+        }),
+      ).toThrow("reserved message is no longer present");
+      expect(() =>
+        persistSessionMessages({
+          session,
+          previousMessages: [],
+          currentMessages: [currentUser, assistant],
+          runtime: runtime(home, 2),
+          reason: "turn",
+          reservedMessageIds: [
+            { message: currentUser, id: "msg_first" },
+            { message: currentUser, id: "msg_second" },
+          ],
+        }),
+      ).toThrow("reserved message id is not unique");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given no new messages were added after the last persisted state,
     When persistence is asked to save again,
     Then the ledger is left unchanged`, async () => {

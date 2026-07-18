@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROJECT_MEMORY_SCHEMA_VERSION = 4;
+export const PROJECT_MEMORY_SCHEMA_VERSION = 5;
 export const MEMORY_ID_PATTERN = /^mem_[0-9a-f-]+$/u;
 export const CANDIDATE_ID_PATTERN = /^cand_[0-9a-f-]+$/u;
 const EXTRACTION_ID_PATTERN = /^mcex_[0-9a-f-]+$/u;
@@ -29,7 +29,7 @@ const projectMemorySourceSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("user_approved"),
-      channel: z.literal("cli"),
+      channel: z.enum(["cli", "interactive"]),
       evidence: z.string().min(1),
       candidateId: z.string().regex(CANDIDATE_ID_PATTERN),
     })
@@ -235,6 +235,38 @@ const candidateExtractionEventSchema = z
     }
   });
 
+const candidateProposalOriginSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    messageId: z.string().min(1),
+    providerId: z.enum(["fake", "deepseek", "kimi", "qwen"]),
+    model: z.string().min(1),
+    createdAt: projectMemoryTimestampSchema,
+  })
+  .strict();
+
+const candidateProposalEventSchema = z
+  .object({
+    version: z.literal(PROJECT_MEMORY_SCHEMA_VERSION),
+    type: z.literal("candidate_proposal"),
+    origin: candidateProposalOriginSchema,
+    candidate: candidateRecordSchema,
+  })
+  .strict()
+  .superRefine((event, context) => {
+    if (
+      event.candidate.sources.length !== 1 ||
+      event.candidate.sources[0]?.sessionId !== event.origin.sessionId ||
+      event.candidate.sources[0]?.messageId !== event.origin.messageId
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "current-turn proposal must cite exactly its originating session message",
+      });
+    }
+  });
+
 const candidateEditEventSchema = z
   .object({
     version: z.literal(PROJECT_MEMORY_SCHEMA_VERSION),
@@ -269,6 +301,7 @@ export const projectMemoryEventSchema = z.discriminatedUnion("type", [
   forgetEventSchema,
   verifyEventSchema,
   candidateExtractionEventSchema,
+  candidateProposalEventSchema,
   candidateEditEventSchema,
   candidateRejectEventSchema,
   candidateApproveEventSchema,
@@ -286,6 +319,9 @@ export type CandidateExtractionFailure = z.infer<
 export type CandidateKind = z.infer<typeof candidateKindSchema>;
 export type CandidateSource = z.infer<typeof candidateSourceSchema>;
 export type CandidateRecord = z.infer<typeof candidateRecordSchema>;
+export type CandidateProposalOrigin = z.infer<
+  typeof candidateProposalOriginSchema
+>;
 export type CandidateApproveEvent = z.infer<typeof candidateApproveEventSchema>;
 
 export function memoryRecordFromEvent(
@@ -332,6 +368,12 @@ export function eventsWithoutCandidateArtifacts(
           discardedCandidateIds,
         },
       ];
+    }
+    if (
+      event.type === "candidate_proposal" &&
+      candidateIds.has(event.candidate.id)
+    ) {
+      return [];
     }
     if (
       (event.type === "candidate_edit" || event.type === "candidate_approve") &&

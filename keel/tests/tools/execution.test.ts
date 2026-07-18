@@ -106,6 +106,7 @@ describe("Tool Execution", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-tool-memory-"));
     let addCalls = 0;
     const memory: AgentMemoryToolContext = {
+      proposal: null,
       capability: {
         list: () => [],
         add: () => {
@@ -164,6 +165,7 @@ describe("Tool Execution", () => {
     claimedMessages.add(currentUserMessage);
     let addCalls = 0;
     const memory: AgentMemoryToolContext = {
+      proposal: null,
       capability: {
         list: () => [],
         add: (text, source) => {
@@ -247,6 +249,7 @@ describe("Tool Execution", () => {
     };
     let forgetCalls = 0;
     const memory: AgentMemoryToolContext = {
+      proposal: null,
       capability: {
         list: () => [
           { id: "mem_release", text: "The release tag prefix is v." },
@@ -304,6 +307,7 @@ describe("Tool Execution", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-tool-memory-"));
     let forgetCalls = 0;
     const memory: AgentMemoryToolContext = {
+      proposal: null,
       capability: {
         list: () => [
           { id: "mem_release", text: "The release tag prefix is v." },
@@ -360,6 +364,7 @@ describe("Tool Execution", () => {
     };
     let forgetCalls = 0;
     const memory: AgentMemoryToolContext = {
+      proposal: null,
       capability: {
         list: () => [
           { id: "mem_release", text: "The release tag prefix is v." },
@@ -731,6 +736,289 @@ describe("Tool Execution", () => {
       // Then
       expectRecoverableToolFailure(longNameResult, "ENAMETOOLONG");
       expectRecoverableToolFailure(nulResult, "null bytes");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given reviewed memory is bound to one saved current-user source,
+    When the provider invents a quote and then submits two valid proposals,
+    Then Runtime rejects the invented evidence and permits only the first valid proposal`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tool-memory-"));
+    const currentUserMessage = {
+      role: "user" as const,
+      content: "Our release validation command is pnpm test:coverage.",
+      origin: { type: "user_prompt" as const },
+    };
+    const claimed = new WeakSet<Extract<Message, { readonly role: "user" }>>();
+    let proposalCalls = 0;
+    let persistedSources = 0;
+    const memory: AgentMemoryToolContext = {
+      capability: {
+        list: () => [],
+        add: () => {
+          throw new Error("add should not run");
+        },
+        forget: () => {
+          throw new Error("forget should not run");
+        },
+      },
+      proposal: {
+        capability: {
+          propose: async (proposal, source, review, signal) => {
+            proposalCalls++;
+            expect(proposal.sourceQuote).toBe("pnpm test:coverage");
+            expect(source).toMatchObject({
+              sessionId: "session_review",
+              messageId: "msg_review",
+              providerId: "fake",
+              model: "fake",
+            });
+            expect(
+              await review(
+                {
+                  candidateId: "cand_review",
+                  scope: { kind: "project", id: "project_review" },
+                  kind: proposal.kind,
+                  statement: proposal.statement,
+                  why: proposal.why,
+                  sourceQuote: proposal.sourceQuote,
+                  conflictMemoryIds: proposal.conflictMemoryIds,
+                },
+                signal,
+              ),
+            ).toEqual({ type: "approve" });
+            return {
+              candidateId: "cand_review",
+              memoryId: "mem_review",
+              scope: { kind: "project", id: "project_review" },
+              outcome: "approved",
+            };
+          },
+        },
+        sourceFor: (message) =>
+          message === currentUserMessage
+            ? {
+                sessionId: "session_review",
+                messageId: "msg_review",
+                providerId: "fake",
+                model: "fake",
+              }
+            : undefined,
+        persistSource: (message) => {
+          expect(message).toBe(currentUserMessage);
+          persistedSources++;
+        },
+        review: async () => ({ type: "approve" }),
+      },
+      currentUserMessage: () => currentUserMessage,
+      claimSourceMutation: (message) => {
+        if (claimed.has(message)) return false;
+        claimed.add(message);
+        return true;
+      },
+    };
+    const proposal = {
+      id: "memory_propose_1",
+      tool: "memory_propose" as const,
+      kind: "project_context" as const,
+      statement: "Release validation uses pnpm test:coverage.",
+      why: "Likely to be reused.",
+      sourceQuote: "pnpm test:coverage",
+      conflictMemoryIds: [],
+    };
+
+    try {
+      const invented = await executeToolCall({
+        workspace,
+        toolCall: {
+          ...proposal,
+          id: "memory_propose_invented",
+          sourceQuote: "pnpm deploy",
+        },
+        signal: new AbortController().signal,
+        allowBash: false,
+        memory,
+      });
+      const approved = await executeToolCall({
+        workspace,
+        toolCall: proposal,
+        signal: new AbortController().signal,
+        allowBash: false,
+        memory,
+      });
+      const repeated = await executeToolCall({
+        workspace,
+        toolCall: { ...proposal, id: "memory_propose_2" },
+        signal: new AbortController().signal,
+        allowBash: false,
+        memory,
+      });
+
+      expect(invented.ok).toBe(false);
+      expect(invented.content).toContain(
+        "sourceQuote must be one exact contiguous span",
+      );
+      expect(approved).toMatchObject({
+        ok: true,
+        memoryOperation: {
+          operation: "propose",
+          candidateId: "cand_review",
+          memoryId: "mem_review",
+          outcome: "approved",
+        },
+      });
+      expect(repeated.ok).toBe(false);
+      expect(repeated.content).toContain(
+        "current-user source already authorized one memory mutation",
+      );
+      expect(proposalCalls).toBe(1);
+      expect(persistedSources).toBe(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given reviewed memory is unavailable, ungrounded, rejected, or deferred,
+    When memory_propose executes at each boundary,
+    Then failures remain recoverable and inactive outcomes remain explicit`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tool-memory-"));
+    const currentUserMessage = {
+      role: "user" as const,
+      content: "Our release validation command is pnpm test:coverage.",
+      origin: { type: "user_prompt" as const },
+    };
+    const toolCall = {
+      id: "memory_propose_boundary",
+      tool: "memory_propose" as const,
+      kind: "project_context" as const,
+      statement: "Release validation uses pnpm test:coverage.",
+      why: "Likely to be reused.",
+      sourceQuote: "pnpm test:coverage",
+      conflictMemoryIds: [],
+    };
+    const capability: AgentMemoryToolContext["capability"] = {
+      list: () => [],
+      add: () => {
+        throw new Error("add should not run");
+      },
+      forget: () => {
+        throw new Error("forget should not run");
+      },
+    };
+    const source = {
+      sessionId: "session_review",
+      messageId: "msg_review",
+      providerId: "fake" as const,
+      model: "fake",
+    };
+    const contextForOutcome = (
+      outcome: "rejected" | "pending",
+    ): AgentMemoryToolContext => ({
+      capability,
+      proposal: {
+        capability: {
+          propose: async () => ({
+            candidateId: `cand_${outcome}`,
+            memoryId: null,
+            scope: { kind: "project", id: "project_review" },
+            outcome,
+          }),
+        },
+        sourceFor: () => source,
+        persistSource: () => {},
+        review: async () => ({ type: "reject" }),
+      },
+      currentUserMessage: () => currentUserMessage,
+      claimSourceMutation: () => true,
+    });
+
+    try {
+      const missingContext = await executeToolCall({
+        workspace,
+        toolCall,
+        signal: new AbortController().signal,
+        allowBash: false,
+      });
+      const missingProposal = await executeToolCall({
+        workspace,
+        toolCall: { ...toolCall, id: "memory_propose_no_capability" },
+        signal: new AbortController().signal,
+        allowBash: false,
+        memory: {
+          capability,
+          proposal: null,
+          currentUserMessage: () => currentUserMessage,
+          claimSourceMutation: () => true,
+        },
+      });
+      const missingUser = await executeToolCall({
+        workspace,
+        toolCall: { ...toolCall, id: "memory_propose_no_user" },
+        signal: new AbortController().signal,
+        allowBash: false,
+        memory: {
+          ...contextForOutcome("pending"),
+          currentUserMessage: () => null,
+        },
+      });
+      const missingSource = await executeToolCall({
+        workspace,
+        toolCall: { ...toolCall, id: "memory_propose_no_source" },
+        signal: new AbortController().signal,
+        allowBash: false,
+        memory: {
+          capability,
+          proposal: {
+            capability: {
+              propose: async () => ({
+                candidateId: "cand_pending",
+                memoryId: null,
+                scope: { kind: "project", id: "project_review" },
+                outcome: "pending",
+              }),
+            },
+            sourceFor: () => undefined,
+            persistSource: () => {},
+            review: async () => ({ type: "reject" }),
+          },
+          currentUserMessage: () => currentUserMessage,
+          claimSourceMutation: () => true,
+        },
+      });
+      const rejected = await executeToolCall({
+        workspace,
+        toolCall: { ...toolCall, id: "memory_propose_rejected" },
+        signal: new AbortController().signal,
+        allowBash: false,
+        memory: contextForOutcome("rejected"),
+      });
+      const pending = await executeToolCall({
+        workspace,
+        toolCall: { ...toolCall, id: "memory_propose_pending" },
+        signal: new AbortController().signal,
+        allowBash: false,
+        memory: contextForOutcome("pending"),
+      });
+
+      for (const failure of [
+        missingContext,
+        missingProposal,
+        missingUser,
+        missingSource,
+      ]) {
+        expectRecoverableToolFailure(failure, "reviewed memory is unavailable");
+      }
+      expect(rejected).toMatchObject({
+        ok: true,
+        content: expect.stringContaining("Rejected project-memory candidate"),
+        memoryOperation: { outcome: "rejected", memoryId: null },
+      });
+      expect(pending).toMatchObject({
+        ok: true,
+        content: expect.stringContaining("remains pending"),
+        memoryOperation: { outcome: "pending", memoryId: null },
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

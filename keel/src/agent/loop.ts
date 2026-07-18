@@ -25,6 +25,7 @@ import type { SkillActivationCapability } from "../skills/model.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
 import type {
   AgentMemoryMutationCapability,
+  AgentMemoryProposalToolCapability,
   AgentMemoryToolContext,
 } from "../tools/memory.ts";
 import {
@@ -100,6 +101,11 @@ const DUPLICATE_BLOCKED_GOAL_PROPOSAL_TOOL_RESULT =
   "Tool failed: update_goal blocked proposal already recorded for this agent turn.\nRecovery: Continue working, or wait until the next agent turn before proposing the blocked goal state again.";
 const COST_BUDGET_ADMISSION_TOOL_RESULT =
   "Goal completion was not evaluated because the remaining session cost budget could not admit the assertion evaluator request.";
+const REVIEWED_MEMORY_TOOL_CHOICE_SYSTEM_PROMPT = `
+Reviewed project-memory tool choice for the latest current-user message:
+- Use memory_add only when the user explicitly makes storing a claim in memory the requested action, such as “remember X”, “save X to memory”, or “请记住 X”.
+- A durable, future-facing, repeated, emphatic, or useful ordinary statement is not direct memory authorization. For such a statement, use memory_propose so the user reviews the exact candidate; never substitute memory_add.
+- Make this semantic distinction from the current user request. Do not infer direct authorization merely because a fact would help later.`;
 
 export interface RunAgentOptions {
   readonly workspace: string;
@@ -133,6 +139,7 @@ export interface RunAgentTurnOptions {
   readonly systemPrompt: string;
   readonly memoryPrompt?: () => string;
   readonly memoryMutation?: AgentMemoryMutationCapability;
+  readonly memoryProposal?: AgentMemoryProposalToolCapability;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
   readonly hiddenWorkspacePaths?: readonly string[];
@@ -576,6 +583,7 @@ export async function* runAgentTurn(
       ? undefined
       : {
           capability: options.memoryMutation,
+          proposal: options.memoryProposal ?? null,
           currentUserMessage: currentMemoryUserMessage,
           claimSourceMutation: (message) => {
             if (claimedMemorySourceMessages.has(message)) return false;
@@ -684,19 +692,28 @@ export async function* runAgentTurn(
 
   for (let completedTurns = 1; ; completedTurns++) {
     const currentMemorySource = currentMemoryUserMessage();
-    const allowMemory =
+    const exposeMemoryTools =
       options.memoryMutation !== undefined &&
       currentMemorySource !== null &&
       !memoryToolsExposedForMessages.has(currentMemorySource);
-    if (allowMemory) {
+    const allowMemory = exposeMemoryTools;
+    const allowMemoryProposal =
+      exposeMemoryTools &&
+      options.memoryProposal !== undefined &&
+      currentMemorySource !== null &&
+      options.memoryProposal.sourceFor(currentMemorySource) !== undefined;
+    if (exposeMemoryTools) {
       memoryToolsExposedForMessages.add(currentMemorySource);
     }
-    const baseTurnSystemPrompt = appendWorkflowSkillsToSystemPrompt(
+    const workflowSystemPrompt = appendWorkflowSkillsToSystemPrompt(
       systemPrompt,
       options.skillActivation === undefined
         ? []
         : options.skillActivation.active().map(workflowSkillFromActivation),
     );
+    const baseTurnSystemPrompt = allowMemoryProposal
+      ? `${workflowSystemPrompt}\n${REVIEWED_MEMORY_TOOL_CHOICE_SYSTEM_PROMPT}`
+      : workflowSystemPrompt;
     const memoryPrompt = options.memoryPrompt;
     const requestSystemPrompt =
       memoryPrompt === undefined
@@ -723,6 +740,7 @@ export async function* runAgentTurn(
         allowBash,
         allowSkill,
         allowMemory,
+        allowMemoryProposal,
         modelOperationPurpose: "agent_turn",
       });
     } catch (error) {
@@ -802,6 +820,7 @@ export async function* runAgentTurn(
             allowBash,
             allowSkill,
             allowMemory: false,
+            allowMemoryProposal: false,
           },
           turnText: turnResult.text,
           turnReasoningContent: turnResult.reasoningContent,
@@ -970,7 +989,8 @@ export async function* runAgentTurn(
         ...(options.skillActivation !== undefined
           ? { skillActivation: options.skillActivation }
           : {}),
-        ...(memoryToolContext !== undefined && allowMemory
+        ...(memoryToolContext !== undefined &&
+        (allowMemory || allowMemoryProposal)
           ? { memory: memoryToolContext }
           : {}),
       });

@@ -26,6 +26,7 @@ export interface ContextCompactionRequestMetadata {
   readonly allowBash?: boolean;
   readonly allowSkill?: boolean;
   readonly allowMemory?: boolean;
+  readonly allowMemoryProposal?: boolean;
 }
 
 export interface ResolvedContextCompactionRequestMetadata {
@@ -33,6 +34,7 @@ export interface ResolvedContextCompactionRequestMetadata {
   readonly allowBash: boolean;
   readonly allowSkill: boolean;
   readonly allowMemory: boolean;
+  readonly allowMemoryProposal: boolean;
 }
 
 export function resolveContextCompactionOptions(
@@ -80,5 +82,7 @@ export function resolvedRequestMetadata(
     allowBash: toolChoice === "none" ? false : metadata?.allowBash === true,
     allowSkill: toolChoice === "none" ? false : metadata?.allowSkill === true,
     allowMemory: toolChoice === "none" ? false : metadata?.allowMemory === true,
+    allowMemoryProposal:
+      toolChoice === "none" ? false : metadata?.allowMemoryProposal === true,
   };
 }

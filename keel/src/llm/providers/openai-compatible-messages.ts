@@ -18,6 +18,7 @@ export function createChatCompletionsBody(
     options.allowBash === true,
     options.allowSkill === true,
     options.allowMemory === true,
+    options.allowMemoryProposal === true,
   );
 
   return JSON.stringify({

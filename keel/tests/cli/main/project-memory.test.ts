@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   access,
   appendFile,
@@ -209,7 +210,10 @@ describe("CLI project memory", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
       expect(result.stdout).toContain("keel memory add <durable-fact>");
-      expect(result.stdout).toContain("Memory is saved only by these commands");
+      expect(result.stdout).toContain(
+        "Memory is saved by these commands, a direct unambiguous current-user",
+      );
+      expect(result.stdout).toContain("saved interactive TTY session");
       expect(result.stdout).toContain("not instructions or authorization");
       expect(result.stdout).toContain("logical removal, not physical deletion");
       expect(result.stdout).toContain("Do not store credentials");
@@ -1868,7 +1872,11 @@ describe("CLI project memory", () => {
       expect(capturedBodies).toHaveLength(1);
       const request = requestWithToolsSchema.parse(capturedBodies[0]);
       expect(request.tools?.map((tool) => tool.function?.name)).not.toEqual(
-        expect.arrayContaining(["memory_add", "memory_forget"]),
+        expect.arrayContaining([
+          "memory_add",
+          "memory_forget",
+          "memory_propose",
+        ]),
       );
       await expect(
         access(join(workspace, ".git", "keel", "project-id")),
@@ -1933,6 +1941,88 @@ describe("CLI project memory", () => {
     }
   });
 
+  test(`Given reviewed memory is requested outside its saved real-TTY boundary,
+    When ephemeral non-TTY and no-memory runs build provider tool schemas,
+    Then none exposes memory_propose or performs hidden proposal work`, async () => {
+    const workspace = await createGitWorkspace(
+      "keel-reviewed-memory-boundary-",
+    );
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-reviewed-memory-boundary-home-"),
+    );
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(sseTextReplyWithUsage("Boundary checked."));
+      });
+    });
+    await listen(server);
+    const runBoundary = async (
+      args: readonly string[],
+      inputIsTTY: boolean,
+      forceInteractive: boolean,
+    ): Promise<void> => {
+      const input = new PassThrough();
+      const fixture = createRuntime(args, {
+        cwd: workspace,
+        input,
+        inputIsTTY,
+        env: {
+          ...(forceInteractive ? { KEEL_FORCE_INTERACTIVE: "1" } : {}),
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
+      const running = runCliMain(fixture.runtime);
+      input.write("What should we do next?\n");
+      await waitForOutputCount(fixture.stdout, "Boundary checked.", 1);
+      input.end();
+      expect(await running, fixture.stderr()).toBe(0);
+    };
+
+    try {
+      await runBoundary(["--ephemeral"], true, false);
+      await runBoundary(["--session", "non-tty-memory"], false, true);
+      await runBoundary(
+        ["--session", "disabled-reviewed-memory", "--no-memory"],
+        true,
+        false,
+      );
+
+      expect(capturedBodies).toHaveLength(3);
+      const exposedTools = capturedBodies.map((body) =>
+        requestWithToolsSchema
+          .parse(body)
+          .tools?.map((tool) => tool.function?.name),
+      );
+      expect(exposedTools[0]).not.toContain("memory_propose");
+      expect(exposedTools[1]).not.toContain("memory_propose");
+      expect(exposedTools[2]).not.toEqual(
+        expect.arrayContaining([
+          "memory_add",
+          "memory_forget",
+          "memory_propose",
+        ]),
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an interactive user explicitly asks to remember one fact,
     When the agent saves it through the governed memory tool,
     Then the final report records the agent memory operation`, async () => {
@@ -1975,16 +2065,19 @@ describe("CLI project memory", () => {
     });
     await listen(server);
     const input = new PassThrough();
-    const fixture = createRuntime(["--ephemeral", "--report", reportPath], {
-      cwd: workspace,
-      env: {
-        KEEL_FORCE_INTERACTIVE: "1",
-        KEEL_HOME: keelHome,
-        DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+    const fixture = createRuntime(
+      ["--session", "direct-memory", "--report", reportPath],
+      {
+        cwd: workspace,
+        inputIsTTY: true,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+        input,
       },
-      input,
-    });
+    );
 
     try {
       // When
@@ -1997,7 +2090,13 @@ describe("CLI project memory", () => {
       // Then
       expect(exitCode, fixture.stderr()).toBe(0);
       expect(fixture.stderr()).toContain("Tool: memory_add");
+      expect(fixture.stderr()).not.toContain("Approve project memory?");
       expect(capturedBodies).toHaveLength(2);
+      expect(
+        requestWithToolsSchema
+          .parse(capturedBodies[0])
+          .tools?.map((tool) => tool.function?.name),
+      ).toContain("memory_propose");
       const report = JSON.parse(await readFile(reportPath, "utf8"));
       const operation = report.memory.operations[0];
       expect(operation).toEqual({
@@ -2007,6 +2106,280 @@ describe("CLI project memory", () => {
         outcome: "saved",
       });
       expect(report.memory.loadedIds).toContain(operation.id);
+    } finally {
+      input.end();
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a saved interactive user states a durable project fact without asking to remember it,
+    When the agent proposes that fact and the user approves the displayed candidate,
+    Then Keel activates the reviewed memory with current-message provenance`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-interactive-memory-proposal-",
+    );
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-interactive-memory-proposal-home-"),
+    );
+    const reportPath = join(
+      workspace,
+      "interactive-memory-proposal-report.json",
+    );
+    const userMessage = "Our release validation command is pnpm test:coverage.";
+    const statement = "Release validation uses pnpm test:coverage.";
+    const sourceQuote = "pnpm test:coverage";
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_interactive_memory_propose", "memory_propose", {
+              kind: "project_context",
+              statement,
+              why: "This command is likely to be reused in later sessions.",
+              sourceQuote,
+              conflictMemoryIds: [],
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Reviewed memory saved."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    let approvalAnswered = false;
+    let sourcePersistedBeforeApproval = false;
+    const fixture = createRuntime(
+      ["--session", "reviewed-memory", "--report", reportPath],
+      {
+        cwd: workspace,
+        input,
+        inputIsTTY: true,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+        onStderr: (text) => {
+          if (text.includes("Approve project memory?") && !approvalAnswered) {
+            approvalAnswered = true;
+            sourcePersistedBeforeApproval = readFileSync(
+              join(keelHome, "sessions", "reviewed-memory", "ledger.jsonl"),
+              "utf8",
+            ).includes(userMessage);
+            queueMicrotask(() => {
+              input.write("y\n");
+            });
+          }
+        },
+      },
+    );
+
+    try {
+      // When
+      const running = runCliMain(fixture.runtime);
+      input.write(`${userMessage}\n`);
+      await waitForOutputCount(fixture.stdout, "Reviewed memory saved.", 1);
+      input.end();
+      const exitCode = await running;
+
+      // Then
+      expect(exitCode, fixture.stderr()).toBe(0);
+      expect(approvalAnswered).toBe(true);
+      expect(sourcePersistedBeforeApproval).toBe(true);
+      expect(fixture.stderr()).toContain("Approve project memory?");
+      expect(fixture.stderr()).toContain(`statement: ${statement}`);
+      expect(fixture.stderr()).toContain(`source: "${sourceQuote}"`);
+      expect(fixture.stderr()).toContain("Tool: memory_propose");
+      const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
+      expect(firstRequest.tools?.map((tool) => tool.function?.name)).toContain(
+        "memory_propose",
+      );
+      expect(providerSystemPrompt(capturedBodies[0])).toContain(
+        "never substitute memory_add",
+      );
+
+      const listed = await runCli(["memory", "list"], {
+        cwd: workspace,
+        env: { KEEL_HOME: keelHome },
+      });
+      expect(listed.exitCode, listed.stderr).toBe(0);
+      expect(listed.stdout).toContain(statement);
+      expect(listed.stdout).toContain("user_approved:interactive");
+      const projectId = /for ([a-f0-9-]+):/u.exec(listed.stdout)?.[1];
+      expect(projectId).toBeDefined();
+      const memoryEvents = (
+        await readFile(
+          join(
+            keelHome,
+            "memory",
+            "projects",
+            String(projectId),
+            "events.jsonl",
+          ),
+          "utf8",
+        )
+      )
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const proposalEvent = memoryEvents.find(
+        (event) => event.type === "candidate_proposal",
+      );
+      expect(proposalEvent).toMatchObject({
+        version: 5,
+        origin: {
+          sessionId: "reviewed-memory",
+          messageId: expect.stringMatching(/^msg_[a-f0-9-]+$/u),
+          providerId: "deepseek",
+        },
+        candidate: {
+          sources: [
+            {
+              sessionId: "reviewed-memory",
+              messageId: expect.stringMatching(/^msg_[a-f0-9-]+$/u),
+              quote: sourceQuote,
+            },
+          ],
+        },
+      });
+      expect(proposalEvent.origin.messageId).toBe(
+        proposalEvent.candidate.sources[0].messageId,
+      );
+      expect(
+        await readFile(
+          join(keelHome, "sessions", "reviewed-memory", "ledger.jsonl"),
+          "utf8",
+        ),
+      ).toContain(`"id":"${String(proposalEvent.origin.messageId)}"`);
+
+      const report = JSON.parse(await readFile(reportPath, "utf8"));
+      expect(report.memory.operations).toContainEqual({
+        operation: "propose",
+        candidateId: expect.stringMatching(/^cand_[a-f0-9-]+$/u),
+        memoryId: expect.stringMatching(/^mem_[a-f0-9-]+$/u),
+        scope: expect.objectContaining({ kind: "project" }),
+        outcome: "approved",
+      });
+    } finally {
+      input.end();
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a saved interactive memory proposal is displayed,
+    When the user rejects it,
+    Then the candidate is auditable but never enters active project memory`, async () => {
+    const workspace = await createGitWorkspace(
+      "keel-interactive-memory-reject-",
+    );
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-interactive-memory-reject-home-"),
+    );
+    const reportPath = join(workspace, "memory-reject-report.json");
+    const capturedBodies: unknown[] = [];
+    const server = createServer((req, res) => {
+      if (req.url !== "/chat/completions") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          res.write(
+            sseToolCall("call_rejected_memory_propose", "memory_propose", {
+              kind: "user_preference",
+              statement: "Prefer compact release notes.",
+              why: "This preference may affect later release work.",
+              sourceQuote: "I prefer compact release notes",
+              conflictMemoryIds: [],
+            }),
+          );
+          res.write(sseToolFinish());
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        res.end(sseTextReplyWithUsage("The proposal was not saved."));
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    const fixture = createRuntime(
+      ["--session", "rejected-memory", "--report", reportPath],
+      {
+        cwd: workspace,
+        input,
+        inputIsTTY: true,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+        onStderr: (text) => {
+          if (text.includes("Approve project memory?")) {
+            queueMicrotask(() => input.write("n\n"));
+          }
+        },
+      },
+    );
+
+    try {
+      const running = runCliMain(fixture.runtime);
+      input.write("I prefer compact release notes for this project.\n");
+      await waitForOutputCount(
+        fixture.stdout,
+        "The proposal was not saved.",
+        1,
+      );
+      input.end();
+      expect(await running, fixture.stderr()).toBe(0);
+
+      const listed = await runCli(["memory", "list"], {
+        cwd: workspace,
+        env: { KEEL_HOME: keelHome },
+      });
+      expect(listed.stdout).toContain("No active project memory");
+      const operation = JSON.parse(await readFile(reportPath, "utf8")).memory
+        .operations[0];
+      expect(operation).toMatchObject({
+        operation: "propose",
+        memoryId: null,
+        outcome: "rejected",
+      });
+      const candidates = await runCli(["memory", "candidates", "list"], {
+        cwd: workspace,
+        env: { KEEL_HOME: keelHome },
+      });
+      expect(candidates.stdout).toContain(
+        `${String(operation.candidateId)}\trejected`,
+      );
     } finally {
       input.end();
       await close(server);
@@ -2641,7 +3014,7 @@ describe("CLI project memory", () => {
       "events.jsonl",
     );
     const unsupported = (await readFile(eventsPath, "utf8"))
-      .replace('"version":4', '"version":5')
+      .replace('"version":5', '"version":6')
       .trimEnd();
     await writeFile(eventsPath, unsupported, "utf8");
 
@@ -3079,7 +3452,7 @@ describe("CLI project memory", () => {
 
       const unsupportedComplete = JSON.stringify({
         ...JSON.parse(validLine),
-        version: 5,
+        version: 6,
       });
       await writeFile(eventsPath, `${unsupportedComplete}\n`, "utf8");
       const unsupported = await runCli(["memory", "list"], {
@@ -3171,7 +3544,7 @@ describe("CLI project memory", () => {
       expect(alreadySuperseded.stderr).toContain("invalid supersession target");
 
       const invalidForget = JSON.stringify({
-        version: 4,
+        version: 5,
         type: "forget",
         targetId: "mem_00000000-0000-4000-8000-000000000000",
         source: {
@@ -3387,7 +3760,7 @@ describe("CLI project memory", () => {
     );
     const events = Array.from({ length: 101 }, (_, index) =>
       JSON.stringify({
-        version: 4,
+        version: 5,
         type: "add",
         memory: {
           id: `mem_${index.toString(16).padStart(8, "0")}`,

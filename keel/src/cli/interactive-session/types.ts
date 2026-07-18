@@ -21,7 +21,10 @@ import type {
   SkillLifecycleState,
   WorkflowSkill,
 } from "../../skills/model.ts";
-import type { AgentMemoryMutationCapability } from "../../tools/memory.ts";
+import type {
+  AgentMemoryMutationCapability,
+  AgentMemoryProposalCapability,
+} from "../../tools/memory.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
 import type { ModelSource, ProviderSelection } from "../provider-config.ts";
 import type { RunReportMemory } from "../report.ts";
@@ -113,6 +116,8 @@ export interface InteractiveSessionOptions {
   readonly reportRecorder?: AgentEventReportRecorder;
   readonly memoryPrompt?: () => string;
   readonly memoryMutation?: AgentMemoryMutationCapability;
+  readonly memoryProposal?: AgentMemoryProposalCapability;
+  readonly reserveSessionMessageId?: () => string;
   readonly memoryStatus?: () => RunReportMemory;
   readonly exitOnTurnAbort?: boolean;
   readonly now?: () => number;
@@ -129,6 +134,10 @@ export interface InteractiveSessionOptions {
     reason: SessionPersistenceReason,
     consumedInputIds: readonly string[],
     skillState?: SkillLifecycleState,
+    reservedMessageIds?: readonly {
+      readonly message: Message;
+      readonly id: string;
+    }[],
   ) => void;
   readonly persistSessionTitle?: (titleRecord: {
     readonly title: string;

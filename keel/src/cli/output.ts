@@ -27,9 +27,19 @@ interface StableInteractiveOutputRuntime {
 export type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 
 function formatMemoryOperation(operation: AgentMemoryOperation): string {
-  return operation.outcome === "saved"
-    ? `Saved project memory ${operation.id} for ${operation.scope.id}.`
-    : `Forgot project memory ${operation.id} for ${operation.scope.id}.`;
+  if (operation.operation === "add") {
+    return `Saved project memory ${operation.id} for ${operation.scope.id}.`;
+  }
+  if (operation.operation === "forget") {
+    return `Forgot project memory ${operation.id} for ${operation.scope.id}.`;
+  }
+  if (operation.outcome === "approved") {
+    return `Approved project-memory candidate ${operation.candidateId} as ${String(operation.memoryId)} for ${operation.scope.id}.`;
+  }
+  if (operation.outcome === "rejected") {
+    return `Rejected project-memory candidate ${operation.candidateId} for ${operation.scope.id}.`;
+  }
+  return `Project-memory candidate ${operation.candidateId} remains pending for ${operation.scope.id}. Review it with: keel memory candidates show ${operation.candidateId}; approve with: keel memory candidates approve ${operation.candidateId} (add --keep or --supersede <memory-id> when required).`;
 }
 
 function formatUsd(value: number): string {

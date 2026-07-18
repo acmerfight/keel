@@ -357,6 +357,54 @@ describe("CLI Tool Progress", () => {
     ]);
   });
 
+  test(`Given reviewed memory is rejected or remains pending,
+    When classic CLI output prints the proposal operations,
+    Then each inactive outcome is reported without implying activation`, async () => {
+    async function* events(): AsyncIterable<AgentEvent> {
+      for (const [candidateId, outcome] of [
+        ["cand_rejected", "rejected"],
+        ["cand_pending", "pending"],
+      ] as const) {
+        yield {
+          type: "tool_end",
+          toolCall: {
+            id: `memory_propose_${outcome}`,
+            tool: "memory_propose",
+            kind: "project_context",
+            statement: "Release validation uses pnpm test:coverage.",
+            why: "Useful in later release work.",
+            sourceQuote: "pnpm test:coverage",
+            conflictMemoryIds: [],
+          },
+          ok: true,
+          memoryOperation: {
+            operation: "propose",
+            candidateId,
+            memoryId: null,
+            scope: { kind: "project", id: "project_release" },
+            outcome,
+          },
+        };
+      }
+    }
+    let stderr = "";
+
+    await printAgentEvents(events(), {
+      writeStdout() {},
+      writeStderr(text) {
+        stderr += text;
+      },
+    });
+
+    expect(stderr).toBe(
+      [
+        "Rejected project-memory candidate cand_rejected for project_release.",
+        "Project-memory candidate cand_pending remains pending for project_release. Review it with: keel memory candidates show cand_pending; approve with: keel memory candidates approve cand_pending (add --keep or --supersede <memory-id> when required).",
+        "",
+      ].join("\n"),
+    );
+  });
+
   test(`Given an agent updates the visible session goal,
     When classic CLI output prints agent events,
     Then stderr shows the deterministic goal summary`, async () => {

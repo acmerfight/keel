@@ -82,6 +82,7 @@ import {
 import {
   acquireSessionLock,
   consumeSessionQueuedInputs,
+  createSessionMessageId,
   createSessionStore,
   ensureSessionCanBeCreated,
   forkSessionStore,
@@ -906,6 +907,10 @@ async function runSessionCli(
               reason: SessionPersistenceReason,
               consumedInputIds: readonly string[],
               skillState?: SkillLifecycleState,
+              reservedMessageIds?: readonly {
+                readonly message: Message;
+                readonly id: string;
+              }[],
             ) => void;
             readonly persistSessionTitle: (titleRecord: {
               readonly title: string;
@@ -1061,6 +1066,10 @@ async function runSessionCli(
             reason: SessionPersistenceReason,
             consumedInputIds: readonly string[],
             skillState?: SkillLifecycleState,
+            reservedMessageIds?: readonly {
+              readonly message: Message;
+              readonly id: string;
+            }[],
           ) => {
             const activeSession = activeSessionForPersistence();
             const persistedSkillState =
@@ -1081,6 +1090,9 @@ async function runSessionCli(
                 ? { skillState: persistedSkillState }
                 : {}),
               consumedInputIds,
+              ...(reservedMessageIds !== undefined
+                ? { reservedMessageIds }
+                : {}),
             });
           },
           persistSessionTitle: (titleRecord: {
@@ -1325,6 +1337,11 @@ async function runSessionCli(
       };
       interactiveDisplay?.writeIntro();
       interactiveTerminalDisplay?.start();
+      const reviewedMemoryEnabled =
+        cliArgs.memoryEnabled &&
+        mode.kind === "interactive" &&
+        activeSessionId !== undefined &&
+        runtime.input.isTTY === true;
       const interactiveSessionOptions: InteractiveSessionOptions = {
         cliArgs,
         workspace,
@@ -1332,6 +1349,12 @@ async function runSessionCli(
         ...(cliArgs.memoryEnabled ? { memoryPrompt: loadMemoryPrompt } : {}),
         ...(cliArgs.memoryEnabled
           ? { memoryMutation: agentMemory.capability }
+          : {}),
+        ...(reviewedMemoryEnabled
+          ? {
+              memoryProposal: agentMemory.proposalCapability,
+              reserveSessionMessageId: createSessionMessageId,
+            }
           : {}),
         memoryStatus: inspectMemoryStatus,
         ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),

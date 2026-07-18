@@ -31,6 +31,7 @@ const recoverableAgentStateToolNames = [
   "update_goal",
   "memory_add",
   "memory_forget",
+  "memory_propose",
 ] as const;
 
 type RecoverableAgentStateToolName =
@@ -72,6 +73,8 @@ const INVALID_MEMORY_ADD_RECOVERY =
   "Provide one exact contiguous durable-claim span copied from the latest current-user message.";
 const INVALID_MEMORY_FORGET_RECOVERY =
   "Provide one exact active project-memory ID selected from the current project memory block.";
+const INVALID_MEMORY_PROPOSE_RECOVERY =
+  "Provide a complete reviewed-memory proposal with one exact current-user source quote and an explicit conflictMemoryIds array.";
 
 const agentStateRecovery: Readonly<
   Record<RecoverableAgentStateToolName, string>
@@ -80,6 +83,7 @@ const agentStateRecovery: Readonly<
   update_goal: INVALID_UPDATE_GOAL_RECOVERY,
   memory_add: INVALID_MEMORY_ADD_RECOVERY,
   memory_forget: INVALID_MEMORY_FORGET_RECOVERY,
+  memory_propose: INVALID_MEMORY_PROPOSE_RECOVERY,
 };
 
 const builtinToolNames: ReadonlySet<string> = new Set(
@@ -105,6 +109,7 @@ function isRecoverableAgentStateToolName(
     case "update_goal":
     case "memory_add":
     case "memory_forget":
+    case "memory_propose":
       return true;
     /* v8 ignore next 2: current agent-state tools are exactly the recoverable tools above; registry tests pin the set. */
     default:
@@ -187,13 +192,15 @@ export function openAICompatibleTools(
   allowBash: boolean,
   allowSkill: boolean,
   allowMemory: boolean,
+  allowMemoryProposal: boolean,
 ): readonly OpenAICompatibleToolDefinition[] {
   return builtinTools
     .filter(
       (tool) =>
         (allowBash || tool.risk.kind !== "trusted-shell") &&
         (allowSkill || tool.availability !== "skill-catalog") &&
-        (allowMemory || tool.availability !== "memory"),
+        (allowMemory || tool.availability !== "memory") &&
+        (allowMemoryProposal || tool.availability !== "memory-proposal"),
     )
     .map(toOpenAICompatibleToolDefinition);
 }
