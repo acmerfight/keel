@@ -210,6 +210,45 @@ describe("git process lifecycle", () => {
     }
   });
 
+  test(`Given a timed-out git process handles termination with exit zero,
+    When the caller validates the numeric exit code,
+    Then timeout attribution still takes precedence`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-git-process-timeout-exit-zero-"),
+    );
+    const source = [
+      'process.on("SIGTERM", () => process.exit(0));',
+      "setInterval(() => {}, 1_000);",
+    ].join("\n");
+
+    try {
+      await withFakeGit(source, async () => {
+        // When
+        const result = await runGitProcess(
+          "git_process_test",
+          workspace,
+          ["wait"],
+          { timeoutMs: 2_000 },
+        );
+
+        // Then
+        expect(result).toMatchObject({
+          exitCode: 0,
+          timedOut: true,
+          timeoutMs: 2_000,
+        });
+        expect(() =>
+          expectGitExitCode("git_process_test", "wait", result, new Set([0])),
+        ).toThrowError(
+          "git_process_test failed: git wait timed out after 2000ms",
+        );
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given git is unavailable on the process path,
     When runGitProcess starts a command,
     Then it rejects with an actionable unavailable-tool error`, async () => {

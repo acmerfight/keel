@@ -2,10 +2,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { executeToolCall } from "../../src/tools/execution.ts";
 import { executeGitDiff } from "../../src/tools/git-diff.ts";
+import { GIT_ARTIFACT_OUTPUT_MAX_BYTES } from "../../src/tools/git-process.ts";
 
 const GIT_EXTERNAL_DIFF_ENV = "GIT_EXTERNAL_DIFF";
 const GIT_CONFIG_COUNT_ENV = "GIT_CONFIG_COUNT";
@@ -14,6 +15,7 @@ const GIT_CONFIG_VALUE_0_ENV = "GIT_CONFIG_VALUE_0";
 const GIT_CONFIG_PARAMETERS_ENV = "GIT_CONFIG_PARAMETERS";
 const GIT_CONFIG_GLOBAL_ENV = "GIT_CONFIG_GLOBAL";
 const GIT_CONFIG_SYSTEM_ENV = "GIT_CONFIG_SYSTEM";
+const PATH_ENV = "PATH";
 
 function freshSignal(): AbortSignal {
   return new AbortController().signal;
@@ -55,6 +57,7 @@ interface ExecutableGitDiffHelperFixture {
 
 async function configureExecutableGitDiffHelpers(
   workspace: string,
+  driver = "keel",
 ): Promise<ExecutableGitDiffHelperFixture> {
   const marker = join(workspace, "helper-ran");
   const helper = join(workspace, "helper.sh");
@@ -72,13 +75,13 @@ async function configureExecutableGitDiffHelpers(
   execFileSync("git", ["config", "core.fsmonitor", helper], {
     cwd: workspace,
   });
-  execFileSync("git", ["config", "filter.keel.clean", helper], {
+  execFileSync("git", ["config", `filter.${driver}.clean`, helper], {
     cwd: workspace,
   });
-  execFileSync("git", ["config", "filter.keel.process", helper], {
+  execFileSync("git", ["config", `filter.${driver}.process`, helper], {
     cwd: workspace,
   });
-  execFileSync("git", ["config", "filter.keel.required", "true"], {
+  execFileSync("git", ["config", `filter.${driver}.required`, "true"], {
     cwd: workspace,
   });
   const previousEnv = new Map<string, string | undefined>([
@@ -99,6 +102,153 @@ async function configureExecutableGitDiffHelpers(
   process.env[GIT_CONFIG_SYSTEM_ENV] = helper;
 
   return { marker, restore: () => restoreEnv(previousEnv) };
+}
+
+interface FakeGitDiffOptions {
+  readonly configOutput?: string;
+  readonly configExitCode?: number;
+  readonly configExtraOutputBytes?: number;
+  readonly nameStatusOutput?: string;
+  readonly nameStatusExtraOutputBytes?: number;
+  readonly nameStatusExitCode?: number;
+  readonly diffOutput?: string;
+  readonly diffStderr?: string;
+  readonly diffExitCode?: number;
+  readonly refOutput?: string;
+  readonly refExtraOutputBytes?: number;
+  readonly refSignal?: boolean;
+  readonly mergeBaseOutput?: string;
+  readonly mergeBaseExtraOutputBytes?: number;
+  readonly mergeBaseExitCode?: number;
+  readonly mergeBaseSignal?: boolean;
+  readonly untrackedOutput?: string;
+  readonly untrackedExtraOutputBytes?: number;
+}
+
+async function withFakeGitDiff<T>(
+  options: FakeGitDiffOptions,
+  callback: (workspace: string) => Promise<T>,
+): Promise<T> {
+  const workspace = await mkdtemp(join(tmpdir(), "keel-git-diff-metadata-"));
+  const bin = await mkdtemp(join(tmpdir(), "keel-fake-git-diff-"));
+  const fakeGitPath = join(bin, "git");
+  await writeFile(
+    fakeGitPath,
+    `#!/usr/bin/env node
+const { writeSync } = require("node:fs");
+const configOutput = ${JSON.stringify(options.configOutput ?? "")};
+const configExitCode = ${options.configExitCode ?? 1};
+const configExtraOutputBytes = ${options.configExtraOutputBytes ?? 0};
+const nameStatusOutput = ${JSON.stringify(
+      options.nameStatusOutput ?? "M\0tracked.txt\0",
+    )};
+const nameStatusExtraOutputBytes = ${options.nameStatusExtraOutputBytes ?? 0};
+const nameStatusExitCode = ${options.nameStatusExitCode ?? 0};
+const diffOutput = ${JSON.stringify(
+      options.diffOutput ??
+        "diff --git a/tracked.txt b/tracked.txt\\n-old\\n+new\\n",
+    )};
+const diffStderr = ${JSON.stringify(options.diffStderr ?? "")};
+const diffExitCode = ${options.diffExitCode ?? 0};
+const refOutput = ${JSON.stringify(options.refOutput ?? `${"1".repeat(40)}\n`)};
+const refExtraOutputBytes = ${options.refExtraOutputBytes ?? 0};
+const refSignal = ${options.refSignal ?? false};
+const mergeBaseOutput = ${JSON.stringify(
+      options.mergeBaseOutput ?? `${"1".repeat(40)}\n`,
+    )};
+const mergeBaseExtraOutputBytes = ${options.mergeBaseExtraOutputBytes ?? 0};
+const mergeBaseExitCode = ${options.mergeBaseExitCode ?? 0};
+const mergeBaseSignal = ${options.mergeBaseSignal ?? false};
+const untrackedOutput = ${JSON.stringify(options.untrackedOutput ?? "")};
+const untrackedExtraOutputBytes = ${options.untrackedExtraOutputBytes ?? 0};
+const args = process.argv.slice(2);
+while (
+  args[0] === "--no-pager" ||
+  args[0] === "--no-optional-locks" ||
+  args[0] === "-c"
+) {
+  if (args[0] === "-c") {
+    args.splice(0, 2);
+  } else {
+    args.shift();
+  }
+}
+if (args[0] === "rev-parse" && args.includes("--show-toplevel")) {
+  writeSync(1, process.cwd() + "\\n");
+  process.exit(0);
+}
+if (args[0] === "rev-parse") {
+  if (refSignal) {
+    process.kill(process.pid, "SIGTERM");
+    setInterval(() => {}, 1_000);
+  } else {
+  writeSync(1, refOutput);
+  if (refExtraOutputBytes > 0) writeSync(1, " ".repeat(refExtraOutputBytes));
+  process.exit(0);
+  }
+}
+if (args[0] === "config") {
+  writeSync(1, configOutput);
+  if (configExtraOutputBytes > 0) writeSync(1, "x".repeat(configExtraOutputBytes));
+  process.exit(configExitCode);
+}
+if (args[0] === "merge-base") {
+  if (mergeBaseSignal) {
+    process.kill(process.pid, "SIGTERM");
+    setInterval(() => {}, 1_000);
+  } else {
+  writeSync(1, mergeBaseOutput);
+  if (mergeBaseExtraOutputBytes > 0) {
+    writeSync(1, " ".repeat(mergeBaseExtraOutputBytes));
+  }
+  process.exit(mergeBaseExitCode);
+  }
+}
+if (args[0] === "diff" && args.includes("--name-status")) {
+  writeSync(1, nameStatusOutput);
+  if (nameStatusExtraOutputBytes > 0) {
+    writeSync(1, "x".repeat(nameStatusExtraOutputBytes));
+  }
+  process.exit(nameStatusExitCode);
+}
+if (args[0] === "diff") {
+  writeSync(1, diffOutput);
+  writeSync(2, diffStderr);
+  process.exit(diffExitCode);
+}
+if (args[0] === "ls-files") {
+  writeSync(1, untrackedOutput);
+  if (untrackedExtraOutputBytes > 0) {
+    writeSync(1, "x".repeat(untrackedExtraOutputBytes));
+  }
+  process.exit(0);
+}
+if (
+  !(refSignal && args[0] === "rev-parse") &&
+  !(mergeBaseSignal && args[0] === "merge-base")
+) {
+  process.stderr.write(\`unexpected fake git command: \${args.join(" ")}\\n\`);
+  process.exit(2);
+}
+`,
+    "utf8",
+  );
+  await chmod(fakeGitPath, 0o755);
+  const originalPath = process.env[PATH_ENV];
+  process.env[PATH_ENV] =
+    originalPath === undefined ? bin : `${bin}${delimiter}${originalPath}`;
+
+  try {
+    return await callback(workspace);
+  } finally {
+    if (originalPath === undefined) {
+      delete process.env[PATH_ENV];
+    } else {
+      process.env[PATH_ENV] = originalPath;
+    }
+    await rm(bin, { recursive: true, force: true });
+    await rm(workspace, { recursive: true, force: true });
+  }
 }
 
 describe("git_diff tool", () => {
@@ -173,6 +323,406 @@ describe("git_diff tool", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  test(`Given git returns incomplete changed-path metadata,
+    When git_diff inspects current changes,
+    Then it fails instead of silently reporting no changes`, async () => {
+    // Given
+    await withFakeGitDiff(
+      { nameStatusOutput: "R100\0tracked.txt\0" },
+      async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          allowBash: false,
+          toolCall: {
+            id: "malformed_name_status",
+            tool: "git_diff",
+            mode: "unstaged",
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toContain(
+          "git diff --name-status returned malformed output",
+        );
+      },
+    );
+  });
+
+  test(`Given git returns unterminated or internally empty changed-path metadata,
+    When git_diff inspects current changes,
+    Then it rejects the incomplete record stream before filtering paths`, async () => {
+    // Given
+    const outputs = [
+      "M\0tracked.txt",
+      "M\0tracked.txt\0\0M\0later.txt\0",
+      "Z\0tracked.txt\0",
+      "R\0old.txt\0new.txt\0",
+    ];
+
+    for (const nameStatusOutput of outputs) {
+      await withFakeGitDiff({ nameStatusOutput }, async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          allowBash: false,
+          toolCall: {
+            id: "incomplete_name_status_stream",
+            tool: "git_diff",
+            mode: "unstaged",
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toContain(
+          "git diff --name-status returned malformed output",
+        );
+      });
+    }
+  });
+
+  test(`Given git metadata exceeds the complete capture limit,
+    When git_diff reads filters changed paths or untracked files,
+    Then every metadata source fails instead of returning a partial diff`, async () => {
+    // Given
+    const extraOutputBytes = GIT_ARTIFACT_OUTPUT_MAX_BYTES + 1;
+    const scenarios: readonly FakeGitDiffOptions[] = [
+      {
+        configOutput: "filter.keel.clean\0",
+        configExitCode: 0,
+        configExtraOutputBytes: extraOutputBytes,
+      },
+      {
+        configExitCode: 1,
+        configExtraOutputBytes: extraOutputBytes,
+      },
+      { nameStatusExtraOutputBytes: extraOutputBytes },
+      {
+        untrackedOutput: "untracked.txt\0",
+        untrackedExtraOutputBytes: extraOutputBytes,
+      },
+    ];
+
+    for (const options of scenarios) {
+      await withFakeGitDiff(options, async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          allowBash: false,
+          toolCall: {
+            id: "truncated_git_metadata",
+            tool: "git_diff",
+            mode: "unstaged",
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toContain("returned truncated metadata");
+      });
+    }
+  });
+
+  test(`Given git returns malformed filter metadata or omits a discovered diff,
+    When git_diff inspects current changes,
+    Then it fails closed instead of running with incomplete safety metadata`, async () => {
+    // Given
+    const scenarios: readonly FakeGitDiffOptions[] = [
+      {
+        configOutput: "",
+        configExitCode: 0,
+      },
+      {
+        configOutput: "filter.keel.unsupported\0",
+        configExitCode: 0,
+      },
+      {
+        configOutput: "filter.keel.clean\0",
+        configExitCode: 1,
+      },
+      { diffOutput: "" },
+    ];
+
+    for (const options of scenarios) {
+      await withFakeGitDiff(options, async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          allowBash: false,
+          toolCall: {
+            id: "malformed_git_metadata",
+            tool: "git_diff",
+            mode: "unstaged",
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toContain("returned malformed output");
+      });
+    }
+  });
+
+  test(`Given git writes a large warning alongside a valid diff,
+    When git_diff captures the process output,
+    Then the warning and its truncation are visible without losing the diff`, async () => {
+    // Given
+    const diffStderr = "warning from git\n".repeat(10_000);
+
+    await withFakeGitDiff({ diffStderr }, async (workspace) => {
+      // When
+      const result = await executeGitDiff(workspace, { mode: "unstaged" });
+
+      // Then
+      expect(result.hasChanges).toBe(true);
+      expect(result.content).toContain(
+        "diff --git a/tracked.txt b/tracked.txt",
+      );
+      expect(result.content).toContain("git stderr:\nwarning from git");
+      expect(result.content).toContain("[git_diff stderr truncated:");
+      expect(result.sourceTruncated).toBe(true);
+      expect(result.artifactContent).toContain("git stderr:\nwarning from git");
+      expect(result.artifactSourceTruncated).toBe(false);
+    });
+  });
+
+  test(`Given git resolves a requested ref to malformed or truncated metadata,
+    When git_diff compares committed refs,
+    Then it rejects the ref before diffing`, async () => {
+    // Given
+    const scenarios: readonly FakeGitDiffOptions[] = [
+      { refOutput: "not-an-object-id\n" },
+      { refOutput: ` ${"1".repeat(40)}\n` },
+      { refExtraOutputBytes: GIT_ARTIFACT_OUTPUT_MAX_BYTES + 1 },
+    ];
+
+    for (const options of scenarios) {
+      await withFakeGitDiff(options, async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          allowBash: false,
+          toolCall: {
+            id: "malformed_ref_oid",
+            tool: "git_diff",
+            baseRef: "HEAD~1",
+            headRef: "HEAD",
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toMatch(
+          /git rev-parse returned (?:malformed output|truncated metadata)/u,
+        );
+      });
+    }
+  });
+
+  test(`Given git returns malformed merge-base metadata or an unexpected exit,
+    When git_diff compares the merge base,
+    Then it reports the external command failure instead of diffing`, async () => {
+    // Given
+    const scenarios = [
+      {
+        options: { mergeBaseOutput: "not-an-object-id\n" },
+        expected: "git merge-base returned malformed output",
+      },
+      {
+        options: { mergeBaseOutput: `${"1".repeat(40)} \n` },
+        expected: "git merge-base returned malformed output",
+      },
+      {
+        options: {
+          mergeBaseExtraOutputBytes: GIT_ARTIFACT_OUTPUT_MAX_BYTES + 1,
+        },
+        expected: "git merge-base returned truncated metadata",
+      },
+      {
+        options: { mergeBaseExitCode: 2 },
+        expected: "git merge-base exited with code 2",
+      },
+    ] satisfies readonly {
+      readonly options: FakeGitDiffOptions;
+      readonly expected: string;
+    }[];
+
+    for (const scenario of scenarios) {
+      await withFakeGitDiff(scenario.options, async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          allowBash: false,
+          toolCall: {
+            id: "invalid_merge_base",
+            tool: "git_diff",
+            baseRef: "HEAD~1",
+            headRef: "HEAD",
+            mergeBase: true,
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toContain(scenario.expected);
+      });
+    }
+  });
+
+  test(`Given ref resolution or merge-base terminates from a process signal,
+    When git_diff compares committed refs,
+    Then it attributes the unknown exit to the command that was interrupted`, async () => {
+    // Given
+    const scenarios = [
+      {
+        options: { refSignal: true },
+        mergeBase: false,
+        expected: "git rev-parse exited with code unknown",
+      },
+      {
+        options: { mergeBaseSignal: true },
+        mergeBase: true,
+        expected: "git merge-base exited with code unknown",
+      },
+    ] satisfies readonly {
+      readonly options: FakeGitDiffOptions;
+      readonly mergeBase: boolean;
+      readonly expected: string;
+    }[];
+
+    for (const scenario of scenarios) {
+      await withFakeGitDiff(scenario.options, async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          allowBash: false,
+          toolCall: {
+            id: "signalled_ref_command",
+            tool: "git_diff",
+            baseRef: "HEAD~1",
+            headRef: "HEAD",
+            mergeBase: scenario.mergeBase,
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toContain(scenario.expected);
+      });
+    }
+  });
+
+  test(`Given tracked git commands return the no-index difference exit code,
+    When git_diff reads changed paths or their diff,
+    Then it reports the abnormal tracked-command exit`, async () => {
+    // Given
+    const scenarios = [
+      {
+        options: { nameStatusExitCode: 1 },
+        expected: "git diff --name-status exited with code 1",
+      },
+      {
+        options: { diffExitCode: 1 },
+        expected: "git diff exited with code 1",
+      },
+    ] satisfies readonly {
+      readonly options: FakeGitDiffOptions;
+      readonly expected: string;
+    }[];
+
+    for (const scenario of scenarios) {
+      await withFakeGitDiff(scenario.options, async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          allowBash: false,
+          toolCall: {
+            id: "tracked_diff_exit_one",
+            tool: "git_diff",
+            mode: "unstaged",
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toContain(scenario.expected);
+      });
+    }
+  });
+
+  test(`Given the final added diff line has trailing spaces,
+    When git_diff inspects the real working tree,
+    Then it preserves the spaces in provider-visible output`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-diff-trailing-spaces-",
+    );
+    await writeFile(join(workspace, "tracked.txt"), "after   \n", "utf8");
+
+    try {
+      // When
+      const result = await executeGitDiff(workspace, { mode: "unstaged" });
+
+      // Then
+      expect(result.content).toContain("+after   ");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the final added diff line uses CRLF content,
+    When git_diff inspects the real working tree,
+    Then it removes only Git's terminating LF byte`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-diff-crlf-");
+    await writeFile(join(workspace, "tracked.txt"), "after\r\n", "utf8");
+
+    try {
+      // When
+      const result = await executeGitDiff(workspace, { mode: "unstaged" });
+
+      // Then
+      expect(result.content).toContain("+after\r");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a real diff contains text that resembles a truncation marker,
+    When git_diff returns the complete process output,
+    Then it does not claim the source was truncated`, async () => {
+    // Given
+    const diffOutput = [
+      "diff --git a/tracked.txt b/tracked.txt",
+      "-before",
+      "+[git_diff stdout truncated: ordinary file content]",
+      "",
+    ].join("\n");
+
+    await withFakeGitDiff({ diffOutput }, async (workspace) => {
+      // When
+      const result = await executeGitDiff(workspace, { mode: "unstaged" });
+
+      // Then
+      expect(result.content).toContain(
+        "+[git_diff stdout truncated: ordinary file content]",
+      );
+      expect(result.sourceTruncated).toBeUndefined();
+      expect(result.artifactContent).toBeUndefined();
+      expect(result.artifactSourceTruncated).toBeUndefined();
+    });
   });
 
   test(`Given the workspace is a git repository subdirectory,
@@ -928,8 +1478,45 @@ describe("git_diff tool", () => {
       });
 
       // Then
-      expect(result.ok).toBe(true);
+      expect(result.ok, result.content).toBe(true);
       expect(result.content).toContain("+after helper");
+      expect(existsSync(helperFixture.marker)).toBe(false);
+    } finally {
+      helperFixture.restore();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a filter driver name cannot be represented by a safe command override,
+    When git_diff inspects a file that uses the executable filter,
+    Then it fails closed without running the helper`, async () => {
+    // Given
+    const workspace = await createGitWorkspace(
+      "keel-git-diff-ambiguous-filter-",
+    );
+    const helperFixture = await configureExecutableGitDiffHelpers(
+      workspace,
+      "a=b",
+    );
+    await writeFile(join(workspace, ".gitattributes"), "*.txt filter=a=b\n");
+    await writeFile(join(workspace, "tracked.txt"), "after helper\n", "utf8");
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        allowBash: false,
+        toolCall: {
+          id: "ambiguous_filter_diff",
+          tool: "git_diff",
+          mode: "unstaged",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("git config returned malformed output");
       expect(existsSync(helperFixture.marker)).toBe(false);
     } finally {
       helperFixture.restore();
