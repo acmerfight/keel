@@ -70,7 +70,6 @@ const modelOperationBase = {
       agentRunOrdinal: z.number().int().positive(),
     }),
     z.object({ type: z.literal("session") }),
-    z.object({ type: z.literal("invocation") }),
   ]),
   purpose: z.enum([
     "agent_turn",
@@ -98,7 +97,7 @@ const modelOperationSchema = z.object(modelOperationBase);
 
 const modelOperationReportSchema = z
   .object({
-    schemaVersion: z.literal(16),
+    schemaVersion: z.literal(17),
     modelOperations: z.array(modelOperationSchema),
     modelOperationCount: z.number().int().nonnegative(),
     providerRequestAttemptCount: z.number().int().nonnegative(),
@@ -458,7 +457,7 @@ describe("CLI Run Report - Model Operations", () => {
     expect(stderr).toContain("Context compacted: manual");
     expect(result.report).toBeDefined();
     const rawReport = {
-      schemaVersion: 16,
+      schemaVersion: 17,
       tasks: result.report?.tasks ?? [],
       modelOperations: result.report?.modelOperations ?? [],
       modelOperationCount: result.report?.modelOperationCount ?? 0,
