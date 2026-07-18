@@ -21,13 +21,11 @@ export type ModelOperationOutcome =
 
 export type ModelOperationOwner =
   | { readonly type: "current_agent_run" }
-  | { readonly type: "session" }
-  | { readonly type: "invocation" };
+  | { readonly type: "session" };
 
-export interface ModelOperationRecoveryTarget {
-  readonly operationToken: symbol;
-  readonly attemptToken: symbol;
-}
+export type ModelOperationRecoveryTarget = (
+  recoveryOperationOrdinal: number,
+) => void;
 
 export interface ModelOperationInstrumentation {
   readonly recorder: ModelOperationRecorder;

@@ -135,7 +135,6 @@ const modelOperationBase = {
       agentRunOrdinal: z.number().int().positive(),
     }),
     z.object({ type: z.literal("session") }),
-    z.object({ type: z.literal("invocation") }),
   ]),
   purpose: z.enum([
     "agent_turn",
@@ -237,7 +236,7 @@ const runReportMemorySchema = z
   });
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(16),
+  schemaVersion: z.literal(17),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),

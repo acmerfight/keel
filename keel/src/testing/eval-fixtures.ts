@@ -88,7 +88,7 @@ export function evalRunReport(
     };
   });
   return {
-    schemaVersion: 16,
+    schemaVersion: 17,
     tasks: [
       {
         ordinal: 1,
