@@ -85,7 +85,10 @@ import {
   WorkflowSkillError,
 } from "./workflow-skills.ts";
 
-type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
+type OneShotRunCliArgs = Extract<
+  CliArgs,
+  { readonly command: "run"; readonly mode: "one-shot" }
+>;
 
 function denyOneShotBashPermissionDecision(): BashPermissionDecision {
   return {
@@ -142,10 +145,10 @@ function oneShotBashPermissionPolicy(
 }
 
 export async function runOneShotCli(
-  cliArgs: RunCliArgs,
+  cliArgs: OneShotRunCliArgs,
   runtime: CliRuntime,
-  originalUserMessage: string,
 ): Promise<number> {
+  const originalUserMessage = cliArgs.userMessage;
   const abortController = new AbortController();
   const abort = () => {
     abortController.abort();
@@ -353,7 +356,7 @@ export async function runOneShotCli(
       ...(resolved.contextCompaction !== undefined
         ? { contextCompaction: resolved.contextCompaction }
         : {}),
-      ...(cliArgs.transcriptFile !== undefined
+      ...(cliArgs.transcriptFile !== null
         ? {
             onTranscriptReady: (messages) => {
               transcriptMessages = messages;
@@ -415,10 +418,7 @@ export async function runOneShotCli(
         memory: memoryReport(),
       });
     }
-    if (
-      cliArgs.transcriptFile !== undefined &&
-      transcriptMessages !== undefined
-    ) {
+    if (cliArgs.transcriptFile !== null && transcriptMessages !== undefined) {
       writeRunTranscript(cliArgs.transcriptFile, {
         provider: resolved.provider.id,
         model: resolved.model,

@@ -14,7 +14,7 @@ import {
   requireOptionValue,
   requireSeparatedOptionValue,
 } from "./shared.ts";
-import type { RunCliArgs } from "./types.ts";
+import type { InteractiveSessionCliIntent, RunCliArgs } from "./types.ts";
 
 const RUN_OPTIONS = [
   "--allow-bash",
@@ -46,7 +46,10 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   let ephemeral = false;
   let memoryEnabled = true;
   let sessionId: string | undefined;
-  let resumeSession: RunCliArgs["resumeSession"] | undefined;
+  let resumeSession:
+    | { readonly kind: "id"; readonly sessionId: string }
+    | { readonly kind: "latest" }
+    | undefined;
   let resumePick = false;
   let forkSessionId: string | undefined;
   let forkBeforeMessage: string | undefined;
@@ -56,6 +59,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   let skillsEnabled = true;
   const skillNames: string[] = [];
   let userMessage: string | undefined;
+  let positionalMessagePresent = false;
   const maxCostPrefix = "--max-cost=";
   const reportPrefix = "--report=";
   const transcriptPrefix = "--transcript=";
@@ -343,6 +347,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       const message = args.slice(index + 1).join(" ");
       if (message !== "") {
         userMessage = message;
+        positionalMessagePresent = true;
       }
       break;
     }
@@ -351,7 +356,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       return parseError(`Error: unknown option "${arg}"`, "unknownOption");
     }
 
-    userMessage = args.slice(index).join(" ");
+    const message = args.slice(index).join(" ");
+    positionalMessagePresent = true;
+    if (message !== "") {
+      userMessage = message;
+    }
     break;
   }
 
@@ -391,7 +400,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       "Error: --resume --pick cannot be combined with --fork-before-message.",
     );
   }
-  if (resumePick && userMessage !== undefined) {
+  if (resumePick && positionalMessagePresent) {
     return parseError(
       "Error: --resume --pick cannot be combined with a message.",
     );
@@ -402,7 +411,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     );
   }
   const hasResumeSessionId = resumeSession?.kind === "id";
-  if (forkPoints && !hasResumeSessionId) {
+  if (forkPoints && resumeSession?.kind !== "id") {
     return parseError("Error: --fork-points requires --resume <id>.");
   }
   if (forkPoints && forkSessionId !== undefined) {
@@ -413,7 +422,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       "Error: --fork-points cannot be combined with --fork-before-message.",
     );
   }
-  if (forkPoints && userMessage !== undefined) {
+  if (forkPoints && positionalMessagePresent) {
     return parseError(
       "Error: --fork-points cannot be combined with a message.",
     );
@@ -434,31 +443,85 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   if (forkSessionId !== undefined && !hasResumeSessionId) {
     return parseError("Error: --fork requires --resume <id>.");
   }
-  const parsedResumeSession: RunCliArgs["resumeSession"] | undefined =
-    resumePick ? { kind: "pick" } : resumeSession;
   if (!skillsEnabled && skillNames.length > 0) {
     return parseError("Error: --no-skills cannot be combined with --skill.");
   }
 
-  return parseOk({
+  if (
+    positionalMessagePresent &&
+    (sessionId !== undefined || resumeSession !== undefined)
+  ) {
+    return parseError(
+      "Error: --session and --resume are only supported for interactive sessions.",
+    );
+  }
+  if (positionalMessagePresent && ephemeral) {
+    return parseError(
+      "Error: --ephemeral is only supported for interactive sessions.",
+    );
+  }
+  if (userMessage === undefined && transcriptFile !== undefined) {
+    return parseError(
+      "Error: --transcript is only supported for one-shot runs.",
+    );
+  }
+  const forkPointsSessionId =
+    forkPoints && resumeSession?.kind === "id" ? resumeSession.sessionId : null;
+
+  const common = {
     command: "run",
     bashMode,
     skillsEnabled,
-    ...(userMessage !== undefined ? { userMessage } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(reportFile !== undefined ? { reportFile } : {}),
-    ...(transcriptFile !== undefined ? { transcriptFile } : {}),
-    ephemeral,
     memoryEnabled,
-    ...(sessionId !== undefined ? { sessionId } : {}),
-    ...(parsedResumeSession !== undefined
-      ? { resumeSession: parsedResumeSession }
-      : {}),
-    ...(forkSessionId !== undefined ? { forkSessionId } : {}),
-    ...(forkBeforeMessage !== undefined ? { forkBeforeMessage } : {}),
-    ...(forkPoints ? { forkPoints } : {}),
     ...(providerId !== undefined ? { providerId } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(skillNames.length > 0 ? { skillNames } : {}),
+  } as const;
+
+  if (userMessage !== undefined) {
+    return parseOk({
+      ...common,
+      mode: "one-shot",
+      userMessage,
+      transcriptFile: transcriptFile ?? null,
+    });
+  }
+
+  if (forkPointsSessionId !== null) {
+    return parseOk({
+      ...common,
+      mode: "fork-points",
+      sessionId: forkPointsSessionId,
+    });
+  }
+
+  let session: InteractiveSessionCliIntent;
+  if (ephemeral) {
+    session = { kind: "ephemeral" };
+  } else if (sessionId !== undefined) {
+    session = { kind: "create", sessionId };
+  } else if (resumePick) {
+    session = { kind: "resume-pick" };
+  } else if (resumeSession?.kind === "id" && forkSessionId !== undefined) {
+    session = {
+      kind: "fork",
+      sourceSessionId: resumeSession.sessionId,
+      targetSessionId: forkSessionId,
+      beforeMessageId: forkBeforeMessage ?? null,
+    };
+  } else if (resumeSession?.kind === "id") {
+    session = { kind: "resume", sessionId: resumeSession.sessionId };
+  } else if (resumeSession?.kind === "latest") {
+    session = { kind: "resume-latest" };
+  } else {
+    session = { kind: "automatic" };
+  }
+
+  return parseOk({
+    ...common,
+    mode: "interactive",
+    session,
   });
 }

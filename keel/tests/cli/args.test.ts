@@ -246,6 +246,7 @@ describe("CLI Args", () => {
       ok: true,
       value: {
         command: "run",
+        mode: "one-shot",
         skillsEnabled: false,
         userMessage: "review without skills",
       },
@@ -1258,7 +1259,8 @@ describe("CLI Args", () => {
       ok: true,
       value: {
         command: "run",
-        ephemeral: true,
+        mode: "interactive",
+        session: { kind: "ephemeral" },
         memoryEnabled: true,
       },
     });
@@ -1266,9 +1268,49 @@ describe("CLI Args", () => {
       ok: true,
       value: {
         command: "run",
+        mode: "one-shot",
         userMessage: "inspect",
         memoryEnabled: false,
       },
+    });
+  });
+
+  test(`Given the user passes an empty positional message,
+    When the CLI parses the run,
+    Then it preserves the automatic interactive-session entrypoint`, () => {
+    expect(parseCliArgs([""])).toMatchObject({
+      ok: true,
+      value: {
+        command: "run",
+        mode: "interactive",
+        session: { kind: "automatic" },
+      },
+    });
+  });
+
+  test.each([
+    [
+      ["--session", "demo", ""],
+      "Error: --session and --resume are only supported for interactive sessions.",
+    ],
+    [
+      ["--ephemeral", ""],
+      "Error: --ephemeral is only supported for interactive sessions.",
+    ],
+    [
+      ["--resume", "--pick", ""],
+      "Error: --resume --pick cannot be combined with a message.",
+    ],
+    [
+      ["--resume", "source", "--fork-points", ""],
+      "Error: --fork-points cannot be combined with a message.",
+    ],
+  ])(`Given session-only options and an explicit empty message %j,
+    When the CLI parses the run,
+    Then it preserves the existing message-conflict error`, (args, message) => {
+    expect(parseCliArgs(args)).toEqual({
+      ok: false,
+      message,
     });
   });
 

@@ -19,6 +19,7 @@ import {
   listBashProjectApprovalGrants,
 } from "./bash-project-approvals.ts";
 import {
+  type HeadlessSessionCliArgs,
   type HeadlessSessionCliResult,
   runHeadlessSessionCli,
 } from "./interactive-run.ts";
@@ -208,20 +209,25 @@ function writeHeadlessGoalOutcome(
   }
 }
 
-function headlessGoalRunArgs(
-  cliArgs: GoalCliArgs,
-): Extract<CliArgs, { readonly command: "run" }> {
+function headlessGoalRunArgs(cliArgs: GoalCliArgs): HeadlessSessionCliArgs {
   return {
     command: "run",
+    mode: "interactive",
     bashMode: cliArgs.bashMode,
     skillsEnabled: cliArgs.skillsEnabled,
-    ephemeral: false,
     memoryEnabled: cliArgs.memoryEnabled,
-    ...(cliArgs.mode === "launch"
-      ? {
-          sessionId: cliArgs.sessionId ?? createAutomaticSessionId(),
-        }
-      : { resumeSession: cliArgs.resumeSession }),
+    session:
+      cliArgs.mode === "launch"
+        ? {
+            kind: "create",
+            sessionId: cliArgs.sessionId ?? createAutomaticSessionId(),
+          }
+        : cliArgs.resumeSession.kind === "id"
+          ? {
+              kind: "resume",
+              sessionId: cliArgs.resumeSession.sessionId,
+            }
+          : { kind: "resume-latest" },
     ...(cliArgs.maxCostUsd !== undefined
       ? { maxCostUsd: cliArgs.maxCostUsd }
       : {}),

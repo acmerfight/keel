@@ -130,7 +130,10 @@ import {
   WorkflowSkillError,
 } from "./workflow-skills.ts";
 
-type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
+type InteractiveRunCliArgs = Extract<
+  CliArgs,
+  { readonly command: "run"; readonly mode: "interactive" }
+>;
 
 function activeSkillPackageIdsByDescriptor(
   state: SkillLifecycleState,
@@ -199,10 +202,17 @@ async function runInteractiveSessionWithTerminalDisplay(
     terminalDisplay?.stop();
   }
 }
-type DirectResumeSessionCliArg = Exclude<
-  NonNullable<RunCliArgs["resumeSession"]>,
-  { readonly kind: "pick" }
+type DirectInteractiveSessionCliIntent = Exclude<
+  InteractiveRunCliArgs["session"],
+  { readonly kind: "resume-pick" }
 >;
+type HeadlessSessionCliIntent = Extract<
+  InteractiveRunCliArgs["session"],
+  { readonly kind: "create" | "resume" | "resume-latest" }
+>;
+export type HeadlessSessionCliArgs = Omit<InteractiveRunCliArgs, "session"> & {
+  readonly session: HeadlessSessionCliIntent;
+};
 
 const RESUME_PICK_REQUIRES_TTY_ERROR =
   "Error: --resume --pick requires a real TTY so the session choice cannot be read from piped input. Use keel --resume for the latest session or keel --resume <id> for automation.";
@@ -247,7 +257,7 @@ type InteractiveSessionStart =
       readonly kind: "fork";
       readonly sourceSessionId: string;
       readonly targetSessionId: string;
-      readonly beforeMessageId?: string;
+      readonly beforeMessageId: string | null;
     };
 
 type PromptedInteractiveSessionStart =
@@ -265,14 +275,8 @@ interface BareKeelPromptCatalog {
   readonly latestSession: SessionCatalogEntry;
 }
 
-function interactiveSessionStartFromCliArgs(
-  cliArgs: {
-    readonly ephemeral: boolean;
-    readonly sessionId?: string;
-    readonly resumeSession?: DirectResumeSessionCliArg;
-    readonly forkSessionId?: string;
-    readonly forkBeforeMessage?: string;
-  },
+function interactiveSessionStartFromIntent(
+  intent: DirectInteractiveSessionCliIntent,
   options: {
     readonly workspace: string;
     readonly runtime: CliRuntime;
@@ -281,34 +285,28 @@ function interactiveSessionStartFromCliArgs(
     ) => SessionGoalResumeAssessment;
   },
 ): InteractiveSessionStart {
-  if (cliArgs.ephemeral) {
-    return { kind: "ephemeral" };
+  switch (intent.kind) {
+    case "automatic":
+      return { kind: "create", sessionId: createAutomaticSessionId() };
+    case "ephemeral":
+      return { kind: "ephemeral" };
+    case "create":
+      return { kind: "create", sessionId: intent.sessionId };
+    case "resume":
+      return { kind: "resume", sessionId: intent.sessionId };
+    case "resume-latest": {
+      const sessionId = latestSessionIdForWorkspace(options);
+      options.runtime.writeStderr(`Resuming latest session: ${sessionId}\n`);
+      return { kind: "resume", sessionId };
+    }
+    case "fork":
+      return {
+        kind: "fork",
+        sourceSessionId: intent.sourceSessionId,
+        targetSessionId: intent.targetSessionId,
+        beforeMessageId: intent.beforeMessageId,
+      };
   }
-  if (cliArgs.sessionId !== undefined) {
-    return { kind: "create", sessionId: cliArgs.sessionId };
-  }
-  if (
-    cliArgs.resumeSession?.kind === "id" &&
-    cliArgs.forkSessionId !== undefined
-  ) {
-    return {
-      kind: "fork",
-      sourceSessionId: cliArgs.resumeSession.sessionId,
-      targetSessionId: cliArgs.forkSessionId,
-      ...(cliArgs.forkBeforeMessage !== undefined
-        ? { beforeMessageId: cliArgs.forkBeforeMessage }
-        : {}),
-    };
-  }
-  if (cliArgs.resumeSession?.kind === "id") {
-    return { kind: "resume", sessionId: cliArgs.resumeSession.sessionId };
-  }
-  if (cliArgs.resumeSession?.kind === "latest") {
-    const sessionId = latestSessionIdForWorkspace(options);
-    options.runtime.writeStderr(`Resuming latest session: ${sessionId}\n`);
-    return { kind: "resume", sessionId };
-  }
-  return { kind: "create", sessionId: createAutomaticSessionId() };
 }
 
 function latestSessionIdForWorkspace(options: {
@@ -348,18 +346,13 @@ function latestSessionIdForWorkspace(options: {
 }
 
 function shouldPromptForSavedSessionOnBareKeel(
-  cliArgs: RunCliArgs,
+  cliArgs: InteractiveRunCliArgs,
   runtime: CliRuntime,
 ): boolean {
   return (
     runtime.args.length === 0 &&
     runtime.input.isTTY === true &&
-    !cliArgs.ephemeral &&
-    cliArgs.sessionId === undefined &&
-    cliArgs.resumeSession === undefined &&
-    cliArgs.forkSessionId === undefined &&
-    cliArgs.forkBeforeMessage === undefined &&
-    cliArgs.forkPoints !== true
+    cliArgs.session.kind === "automatic"
   );
 }
 
@@ -495,7 +488,7 @@ function activeSessionIdForStart(
 }
 
 async function runSessionCli(
-  cliArgs: RunCliArgs,
+  cliArgs: InteractiveRunCliArgs,
   runtime: CliRuntime,
   mode: SessionCliMode,
 ): Promise<number> {
@@ -503,7 +496,7 @@ async function runSessionCli(
 
   if (
     mode.kind === "interactive" &&
-    cliArgs.resumeSession?.kind === "pick" &&
+    cliArgs.session.kind === "resume-pick" &&
     runtime.input.isTTY !== true
   ) {
     runtime.writeStderr(`${RESUME_PICK_REQUIRES_TTY_ERROR}\n`);
@@ -552,7 +545,7 @@ async function runSessionCli(
     let sessionStart: InteractiveSessionStart;
     let initialInputLines: readonly string[] =
       mode.kind === "headless-goal" ? [mode.initialCommand] : [];
-    if (cliArgs.resumeSession?.kind === "pick") {
+    if (cliArgs.session.kind === "resume-pick") {
       const pickedSession = await pickedSessionIdForWorkspace({
         workspace,
         runtime,
@@ -573,10 +566,8 @@ async function runSessionCli(
         runtime,
       });
       if (promptCatalog === null) {
-        sessionStart = interactiveSessionStartFromCliArgs(
-          {
-            ephemeral: cliArgs.ephemeral,
-          },
+        sessionStart = interactiveSessionStartFromIntent(
+          { kind: "automatic" },
           {
             workspace,
             runtime,
@@ -594,36 +585,16 @@ async function runSessionCli(
         initialInputLines = promptedSessionStart.initialInputLines;
       }
     } else {
-      const directResumeSession: DirectResumeSessionCliArg | undefined =
-        cliArgs.resumeSession;
-      sessionStart = interactiveSessionStartFromCliArgs(
-        {
-          ephemeral: cliArgs.ephemeral,
-          ...(cliArgs.sessionId !== undefined
-            ? { sessionId: cliArgs.sessionId }
-            : {}),
-          ...(directResumeSession !== undefined
-            ? { resumeSession: directResumeSession }
-            : {}),
-          ...(cliArgs.forkSessionId !== undefined
-            ? { forkSessionId: cliArgs.forkSessionId }
-            : {}),
-          ...(cliArgs.forkBeforeMessage !== undefined
-            ? { forkBeforeMessage: cliArgs.forkBeforeMessage }
-            : {}),
-        },
-        {
-          workspace,
-          runtime,
-          ...(latestGoalResumeAssessment !== undefined
-            ? {
-                latestSessionAssessment: (
-                  catalogSession: SessionCatalogEntry,
-                ) => latestGoalResumeAssessment(catalogSession.goal),
-              }
-            : {}),
-        },
-      );
+      sessionStart = interactiveSessionStartFromIntent(cliArgs.session, {
+        workspace,
+        runtime,
+        ...(latestGoalResumeAssessment !== undefined
+          ? {
+              latestSessionAssessment: (catalogSession: SessionCatalogEntry) =>
+                latestGoalResumeAssessment(catalogSession.goal),
+            }
+          : {}),
+      });
     }
     try {
       if (sessionStart.kind === "fork") {
@@ -685,7 +656,7 @@ async function runSessionCli(
           session = forkSessionStore({
             source: resumedSession,
             targetSessionId: sessionStart.targetSessionId,
-            ...(sessionStart.beforeMessageId !== undefined
+            ...(sessionStart.beforeMessageId !== null
               ? {
                   forkPoint: {
                     beforeMessageId: sessionStart.beforeMessageId,
@@ -1566,7 +1537,7 @@ export interface HeadlessSessionCliResult {
 }
 
 export async function runHeadlessSessionCli(
-  cliArgs: RunCliArgs,
+  cliArgs: HeadlessSessionCliArgs,
   runtime: CliRuntime,
   initialCommand: string,
   bashPermission: SessionBashPermissionPolicy | undefined,
@@ -1612,7 +1583,7 @@ export async function runHeadlessSessionCli(
 }
 
 export async function runInteractiveCli(
-  cliArgs: RunCliArgs,
+  cliArgs: InteractiveRunCliArgs,
   runtime: CliRuntime,
 ): Promise<number> {
   return await runSessionCli(cliArgs, runtime, { kind: "interactive" });
