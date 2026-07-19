@@ -1,5 +1,7 @@
 import { realpathSync } from "node:fs";
+import { isAbsolute, sep } from "node:path";
 import { z } from "zod";
+import { KeelError } from "../core/error.ts";
 import {
   assertGitPathFiltersAllowed,
   expectGitExitCode,
@@ -11,12 +13,11 @@ import {
   resolveGitWorkTreeScope,
   runGitProcess,
 } from "./git-process.ts";
-import { limitCountedOutput } from "./output-limit.ts";
+import { type CapturedByteOutput, limitCountedOutput } from "./output-limit.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import type { ToolResult } from "./types.ts";
 
 const STATUS_ENTRY_LIMIT = 200;
-const STATUS_CODE_PATTERN = /^[.MADRCUTU?!]{2}$/u;
 
 export interface GitStatusOptions {
   readonly paths?: readonly string[];
@@ -42,28 +43,120 @@ interface ParsedGitStatus {
   readonly entries: readonly GitStatusEntry[];
 }
 
-const gitStatusPathSchema = z
+interface GitStatusBranchState {
+  readonly head: string | null;
+  readonly upstream: string | null;
+  readonly aheadBehind: {
+    readonly ahead: number;
+    readonly behind: number;
+  } | null;
+}
+
+type GitObjectIdLength = 40 | 64;
+
+interface ParsedTrackedStatusEntry {
+  readonly entry: GitStatusEntry;
+  readonly objectIdLength: GitObjectIdLength;
+}
+
+function isValidGitStatusPath(value: string): boolean {
+  if (value.includes("\0") || isAbsolute(value)) return false;
+  const components = value.replaceAll(sep, "/").split("/");
+  return components.every(
+    (component) => component !== "" && component !== "." && component !== "..",
+  );
+}
+
+const gitStatusPathSchema = z.string().min(1).refine(isValidGitStatusPath);
+const ordinaryStatusCodeSchema = z.enum([
+  ".A",
+  ".M",
+  ".T",
+  ".D",
+  "M.",
+  "MM",
+  "MT",
+  "MD",
+  "T.",
+  "TM",
+  "TT",
+  "TD",
+  "A.",
+  "AM",
+  "AT",
+  "AD",
+  "D.",
+]);
+const renamedStatusCodeSchema = z.enum(["R.", "RM", "RT", "RD", ".R"]);
+const unmergedStatusCodeSchema = z.enum([
+  "DD",
+  "AU",
+  "UD",
+  "UA",
+  "DU",
+  "AA",
+  "UU",
+]);
+const gitStatusSubmoduleSchema = z
   .string()
-  .min(1)
-  .refine((value) => !value.includes("\0"));
-const gitStatusCodeSchema = z.string().regex(STATUS_CODE_PATTERN);
+  .regex(/^(?:N\.\.\.|S[.C][.M][.U])$/u);
+const gitStatusModeSchema = z.string().regex(/^[0-7]{6}$/u);
+const gitObjectIdSchema = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u);
+const renameScoreSchema = z.string().regex(/^R(?:100|[1-9]?[0-9])$/u);
+const gitStatusBranchValueSchema = z.string().min(1);
+const gitStatusRecordsSchema = z.array(z.string().min(1));
 const branchAheadSchema = z
   .string()
   .regex(/^\+\d+$/u)
+  .refine((value) => Number.isSafeInteger(Number(value.slice(1))))
   .transform((value) => Number.parseInt(value.slice(1), 10));
 const branchBehindSchema = z
   .string()
   .regex(/^-\d+$/u)
+  .refine((value) => Number.isSafeInteger(Number(value.slice(1))))
   .transform((value) => Number.parseInt(value.slice(1), 10));
 const branchAheadBehindSchema = z.tuple([
   branchAheadSchema,
   branchBehindSchema,
 ]);
+const ordinaryStatusFieldsSchema = z.tuple([
+  z.literal("1"),
+  ordinaryStatusCodeSchema,
+  gitStatusSubmoduleSchema,
+  gitStatusModeSchema,
+  gitStatusModeSchema,
+  gitStatusModeSchema,
+  gitObjectIdSchema,
+  gitObjectIdSchema,
+]);
+const renamedStatusFieldsSchema = z.tuple([
+  z.literal("2"),
+  renamedStatusCodeSchema,
+  gitStatusSubmoduleSchema,
+  gitStatusModeSchema,
+  gitStatusModeSchema,
+  gitStatusModeSchema,
+  gitObjectIdSchema,
+  gitObjectIdSchema,
+  renameScoreSchema,
+]);
+const unmergedStatusFieldsSchema = z.tuple([
+  z.literal("u"),
+  unmergedStatusCodeSchema,
+  gitStatusSubmoduleSchema,
+  gitStatusModeSchema,
+  gitStatusModeSchema,
+  gitStatusModeSchema,
+  gitStatusModeSchema,
+  gitObjectIdSchema,
+  gitObjectIdSchema,
+  gitObjectIdSchema,
+]);
 
 const ordinaryStatusEntrySchema = z
   .object({
     kind: z.literal("ordinary"),
-    xy: gitStatusCodeSchema,
+    xy: ordinaryStatusCodeSchema,
     path: gitStatusPathSchema,
   })
   .strict();
@@ -71,7 +164,7 @@ const ordinaryStatusEntrySchema = z
 const renamedStatusEntrySchema = z
   .object({
     kind: z.literal("renamed"),
-    xy: gitStatusCodeSchema,
+    xy: renamedStatusCodeSchema,
     path: gitStatusPathSchema,
     oldPath: gitStatusPathSchema,
   })
@@ -80,7 +173,7 @@ const renamedStatusEntrySchema = z
 const unmergedStatusEntrySchema = z
   .object({
     kind: z.literal("unmerged"),
-    xy: gitStatusCodeSchema,
+    xy: unmergedStatusCodeSchema,
     path: gitStatusPathSchema,
   })
   .strict();
@@ -101,153 +194,261 @@ const gitStatusEntrySchema = z.discriminatedUnion("kind", [
 
 type GitStatusEntry = z.infer<typeof gitStatusEntrySchema>;
 
-function parseOrdinaryStatusEntry(record: string): GitStatusEntry | null {
+interface ParsedRenamedStatusMetadata {
+  readonly xy: z.infer<typeof renamedStatusCodeSchema>;
+  readonly path: string;
+  readonly objectIdLength: GitObjectIdLength;
+}
+
+function malformedGitStatusOutput(): never {
+  throw new KeelError(
+    "tool_unavailable",
+    "git_status failed: git status returned malformed output",
+    "Retry git_status, or inspect the workspace directly with git status.",
+  );
+}
+
+function consistentGitObjectIdLength(
+  currentLength: GitObjectIdLength | null,
+  objectIds: readonly [string, ...string[]],
+): GitObjectIdLength {
+  const recordLength: GitObjectIdLength = objectIds[0].length === 40 ? 40 : 64;
+  if (
+    objectIds.some((objectId) => objectId.length !== recordLength) ||
+    (currentLength !== null && currentLength !== recordLength)
+  ) {
+    malformedGitStatusOutput();
+  }
+  return recordLength;
+}
+
+function completedGitStatusRecords(
+  output: CapturedByteOutput,
+): readonly string[] {
+  let recordText: string;
+  if (output.truncated) {
+    const lastTerminator = output.text.lastIndexOf("\0");
+    if (lastTerminator === -1) return [];
+    recordText = output.text.slice(0, lastTerminator);
+  } else {
+    if (!output.text.endsWith("\0")) malformedGitStatusOutput();
+    recordText = output.text.slice(0, -1);
+  }
+  const parsed = gitStatusRecordsSchema.safeParse(recordText.split("\0"));
+  if (!parsed.success) malformedGitStatusOutput();
+  return parsed.data;
+}
+
+function parseOrdinaryStatusEntry(
+  record: string,
+  objectIdLength: GitObjectIdLength | null,
+): ParsedTrackedStatusEntry {
   const fields = record.split(" ");
+  const metadata = ordinaryStatusFieldsSchema.safeParse(fields.slice(0, 8));
+  if (!metadata.success) malformedGitStatusOutput();
   const parsed = ordinaryStatusEntrySchema.safeParse({
     kind: "ordinary",
-    xy: fields[1],
+    xy: metadata.data[1],
     path: fields.slice(8).join(" "),
   });
-  /* v8 ignore next: malformed ordinary records are rejected defensively; Git owns this external shape. */
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success) malformedGitStatusOutput();
+  return {
+    entry: parsed.data,
+    objectIdLength: consistentGitObjectIdLength(objectIdLength, [
+      metadata.data[6],
+      metadata.data[7],
+    ]),
+  };
+}
+
+function parseRenamedStatusMetadata(
+  record: string,
+  objectIdLength: GitObjectIdLength | null,
+): ParsedRenamedStatusMetadata {
+  const fields = record.split(" ");
+  const metadata = renamedStatusFieldsSchema.safeParse(fields.slice(0, 9));
+  if (!metadata.success) malformedGitStatusOutput();
+  const path = gitStatusPathSchema.safeParse(fields.slice(9).join(" "));
+  if (!path.success) malformedGitStatusOutput();
+  return {
+    xy: metadata.data[1],
+    path: path.data,
+    objectIdLength: consistentGitObjectIdLength(objectIdLength, [
+      metadata.data[6],
+      metadata.data[7],
+    ]),
+  };
 }
 
 function parseRenamedStatusEntry(
-  record: string,
-  oldPath: string | undefined,
-): GitStatusEntry | null {
-  const fields = record.split(" ");
+  metadata: ParsedRenamedStatusMetadata,
+  oldPath: string,
+): GitStatusEntry {
   const parsed = renamedStatusEntrySchema.safeParse({
     kind: "renamed",
-    xy: fields[1],
-    path: fields.slice(9).join(" "),
+    xy: metadata.xy,
+    path: metadata.path,
     oldPath,
   });
-  /* v8 ignore next: malformed rename records are rejected defensively; Git owns this external shape. */
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success) malformedGitStatusOutput();
+  return parsed.data;
 }
 
-function parseUnmergedStatusEntry(record: string): GitStatusEntry | null {
+function parseUnmergedStatusEntry(
+  record: string,
+  objectIdLength: GitObjectIdLength | null,
+): ParsedTrackedStatusEntry {
   const fields = record.split(" ");
+  const metadata = unmergedStatusFieldsSchema.safeParse(fields.slice(0, 10));
+  if (!metadata.success) malformedGitStatusOutput();
   const parsed = unmergedStatusEntrySchema.safeParse({
     kind: "unmerged",
-    xy: fields[1],
+    xy: metadata.data[1],
     path: fields.slice(10).join(" "),
   });
-  /* v8 ignore next: malformed unmerged records are rejected defensively; Git owns this external shape. */
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success) malformedGitStatusOutput();
+  return {
+    entry: parsed.data,
+    objectIdLength: consistentGitObjectIdLength(objectIdLength, [
+      metadata.data[7],
+      metadata.data[8],
+      metadata.data[9],
+    ]),
+  };
 }
 
-function parseUntrackedStatusEntry(record: string): GitStatusEntry | null {
+function parseUntrackedStatusEntry(record: string): GitStatusEntry {
   const parsed = untrackedStatusEntrySchema.safeParse({
     kind: "untracked",
     path: record.slice(2),
   });
-  /* v8 ignore next: malformed untracked records are rejected defensively; Git owns this external shape. */
-  return parsed.success ? parsed.data : null;
-}
-
-function appendParsedStatusEntry(
-  entries: GitStatusEntry[],
-  entry: GitStatusEntry | null,
-): void {
-  /* v8 ignore next: malformed porcelain records are ignored at the parser boundary. */
-  if (entry !== null) entries.push(entry);
+  if (!parsed.success) malformedGitStatusOutput();
+  return parsed.data;
 }
 
 function branchWithHead(
-  branch: GitStatusBranch,
+  branch: GitStatusBranchState,
   head: string,
-): GitStatusBranch {
+): GitStatusBranchState {
   return { ...branch, head };
 }
 
 function branchWithUpstream(
-  branch: GitStatusBranch,
+  branch: GitStatusBranchState,
   upstream: string,
-): GitStatusBranch {
+): GitStatusBranchState {
   return { ...branch, upstream };
 }
 
 function branchWithAheadBehind(
-  branch: GitStatusBranch,
+  branch: GitStatusBranchState,
   ahead: number,
   behind: number,
-): GitStatusBranch {
+): GitStatusBranchState {
   return { ...branch, aheadBehind: { ahead, behind } };
 }
 
 function parseBranchHeader(
-  branch: GitStatusBranch,
+  branch: GitStatusBranchState,
   record: string,
-): GitStatusBranch {
-  if (record.startsWith("# branch.head ")) {
-    return branchWithHead(branch, record.slice("# branch.head ".length));
+): GitStatusBranchState {
+  if (record === "# branch.head" || record.startsWith("# branch.head ")) {
+    const parsed = gitStatusBranchValueSchema.safeParse(
+      record.slice("# branch.head ".length),
+    );
+    if (!parsed.success) malformedGitStatusOutput();
+    return branchWithHead(branch, parsed.data);
   }
-  if (record.startsWith("# branch.upstream ")) {
-    return branchWithUpstream(
-      branch,
+  if (
+    record === "# branch.upstream" ||
+    record.startsWith("# branch.upstream ")
+  ) {
+    const parsed = gitStatusBranchValueSchema.safeParse(
       record.slice("# branch.upstream ".length),
     );
+    if (!parsed.success) malformedGitStatusOutput();
+    return branchWithUpstream(branch, parsed.data);
   }
-  if (record.startsWith("# branch.ab ")) {
+  if (record === "# branch.ab" || record.startsWith("# branch.ab ")) {
     const parsed = branchAheadBehindSchema.safeParse(
       record.slice("# branch.ab ".length).split(" "),
     );
-    /* v8 ignore next: malformed branch.ab headers are ignored defensively; Git owns this external shape. */
-    if (!parsed.success) return branch;
+    if (!parsed.success) malformedGitStatusOutput();
     return branchWithAheadBehind(branch, ...parsed.data);
   }
   return branch;
 }
 
-function parseGitStatusOutput(output: string): ParsedGitStatus {
-  const records = output.split("\0");
+function finalizedGitStatusBranch(
+  branch: GitStatusBranchState,
+  producerTruncated: boolean,
+): GitStatusBranch {
+  if (branch.head === null) {
+    if (!producerTruncated) malformedGitStatusOutput();
+    return { ...branch, head: "unknown" };
+  }
+  return {
+    head: branch.head,
+    upstream: branch.upstream,
+    aheadBehind: branch.aheadBehind,
+  };
+}
+
+function parseGitStatusOutput(output: CapturedByteOutput): ParsedGitStatus {
+  const records = completedGitStatusRecords(output);
   const entries: GitStatusEntry[] = [];
-  let branch: GitStatusBranch = {
-    head: "unknown",
+  let branch: GitStatusBranchState = {
+    head: null,
     upstream: null,
     aheadBehind: null,
   };
-  let skipNextRecord = false;
+  let objectIdLength: GitObjectIdLength | null = null;
 
-  for (const [index, record] of records.entries()) {
-    if (skipNextRecord) {
-      skipNextRecord = false;
-      continue;
-    }
-    if (record === "") break;
-
+  const iterator = records[Symbol.iterator]();
+  for (const record of iterator) {
     if (record.startsWith("# ")) {
       branch = parseBranchHeader(branch, record);
       continue;
     }
 
     if (record.startsWith("? ")) {
-      appendParsedStatusEntry(entries, parseUntrackedStatusEntry(record));
+      entries.push(parseUntrackedStatusEntry(record));
       continue;
     }
 
     if (record.startsWith("1 ")) {
-      appendParsedStatusEntry(entries, parseOrdinaryStatusEntry(record));
+      const parsed = parseOrdinaryStatusEntry(record, objectIdLength);
+      entries.push(parsed.entry);
+      objectIdLength = parsed.objectIdLength;
       continue;
     }
 
     if (record.startsWith("2 ")) {
-      appendParsedStatusEntry(
-        entries,
-        parseRenamedStatusEntry(record, records[index + 1]),
-      );
-      skipNextRecord = true;
+      const metadata = parseRenamedStatusMetadata(record, objectIdLength);
+      const oldPath = iterator.next().value;
+      if (oldPath === undefined) {
+        if (output.truncated) break;
+        malformedGitStatusOutput();
+      }
+      entries.push(parseRenamedStatusEntry(metadata, oldPath));
+      objectIdLength = metadata.objectIdLength;
       continue;
     }
 
     if (record.startsWith("u ")) {
-      appendParsedStatusEntry(entries, parseUnmergedStatusEntry(record));
+      const parsed = parseUnmergedStatusEntry(record, objectIdLength);
+      entries.push(parsed.entry);
+      objectIdLength = parsed.objectIdLength;
+      continue;
     }
+
+    malformedGitStatusOutput();
   }
 
-  return { branch, entries };
+  return {
+    branch: finalizedGitStatusBranch(branch, output.truncated),
+    entries,
+  };
 }
 
 function entryPaths(entry: GitStatusEntry): readonly string[] {
@@ -425,7 +626,7 @@ export async function executeGitStatus(
     result,
     new Set([0]),
   ).artifactStdout;
-  const parsed = parseGitStatusOutput(output.text);
+  const parsed = parseGitStatusOutput(output);
   const limited = limitCountedOutput(
     visibleStatusEntries(
       workspacePath,
